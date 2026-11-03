@@ -1,0 +1,19 @@
+[package]
+name = "p2-physics"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+p2-math.workspace = true
+rapier3d.workspace = true
+rustc-hash.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p2-assets.workspace = true
+
+[lints]
+workspace = true

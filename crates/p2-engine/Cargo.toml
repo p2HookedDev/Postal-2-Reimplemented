@@ -1,0 +1,37 @@
+[package]
+name = "p2-engine"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+p2-math.workspace = true
+bevy = { workspace = true, features = ["3d", "bevy_audio", "wav", "vorbis", "pbr_clustered_decals", "bevy_sprite_render"] }
+bevy_egui.workspace = true
+dirs.workspace = true
+rustc-hash.workspace = true
+rfd.workspace = true
+wgpu-types.workspace = true
+p2-assets.workspace = true
+p2-bevy-assets.workspace = true
+p2-package.workspace = true
+p2-script.workspace = true
+p2-vm.workspace = true
+p2-movie.workspace = true
+p2-collision.workspace = true
+p2-particles.workspace = true
+p2-render-cpu.workspace = true
+thiserror.workspace = true
+steamlocate.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+
+[dev-dependencies]
+naga = { workspace = true, features = ["wgsl-in"] }
+wesl.workspace = true
+
+[lints]
+workspace = true

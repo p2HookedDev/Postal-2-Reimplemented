@@ -1,0 +1,119 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+license = "MIT"
+repository = "https://github.com/p2HookedDev/Postal-2-Reimplemented"
+
+[workspace.dependencies]
+memmap2 = "0.9"
+p2-package = { path = "crates/p2-package" }
+p2-assets = { path = "crates/p2-assets" }
+p2-bevy-assets = { path = "crates/p2-bevy-assets" }
+p2-script = { path = "crates/p2-script" }
+p2-vm = { path = "crates/p2-vm" }
+p2-collision = { path = "crates/p2-collision" }
+p2-engine = { path = "crates/p2-engine" }
+p2-particles = { path = "crates/p2-particles" }
+p2-render-cpu = { path = "crates/p2-render-cpu" }
+p2-physics = { path = "crates/p2-physics" }
+p2-math = { path = "crates/p2-math" }
+p2-movie = { path = "crates/p2-movie" }
+anyhow = "1"
+rapier3d = "0.36"
+rayon = "1"
+bevy = { version = "0.20", default-features = false }
+bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }
+dirs = "7"
+rfd = "0.17"
+# Same major version as bevy_image 0.20 uses; bevy only re-exports it through bevy_render.
+wgpu-types = { version = "30", default-features = false }
+# The shader compiler wgpu 30 uses; tests validate the engine's own WGSL with it.
+naga = { version = "30", default-features = false }
+# The WESL composer bevy_shader 0.20 uses (same features); a test composes the engine's shaders with it.
+wesl = { version = "0.6", features = ["naga-ext"] }
+thiserror = "2"
+winreg = "0.55"
+# Finds Steam and its libraries (install detection).
+steamlocate = "2"
+# Local date and time (the engine's `appSystemTime` reads local time): holidays, `GetMillisecondsFrom`.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Save games (`p2-vm` `save.rs`): derives + a compact binary format.
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+# FxHash maps for the VM's hot lookups (`FxHashMap` / `FxHashSet`).
+rustc-hash = "2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+doc_markdown = "warn"
+manual_let_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+undocumented_unsafe_blocks = "warn"
+allow_attributes_without_reason = "warn"
+print_stdout = "warn"
+# Bevy query types trip it on every wide query.
+type_complexity = "allow"
+# Code-quality plan: thresholds in clippy.toml.
+too_many_arguments = "warn"
+too_many_lines = "warn"
+fn_params_excessive_bools = "warn"
+struct_excessive_bools = "warn"
+trivially_copy_pass_by_ref = "warn"
+# Release review 2026-11-02: cheap patterns that were found by hand and fixed, held by the lint from now on.
+assigning_clones = "warn"
+cloned_instead_of_copied = "warn"
+format_push_string = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+needless_collect = "warn"
+redundant_clone = "warn"
+unnecessary_wraps = "warn"
+use_self = "warn"
+
+# Bevy-recommended: light opt for our code, full opt for dependencies.
+# Debug info: line tables only for our code (keeps panic locations), none for dependencies.
+# Full debug info made `target` ~20 GB (multi-GB .pdb files per Bevy-linked binary).
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+# The engine-agnostic crates do the per-frame CPU work (the VM's tick is the frame's critical path) and loading:
+# full optimisation in debug builds too (assertions and overflow checks stay on).
+[profile.dev.package.p2-vm]
+opt-level = 3
+[profile.dev.package.p2-script]
+opt-level = 3
+[profile.dev.package.p2-collision]
+opt-level = 3
+[profile.dev.package.p2-assets]
+opt-level = 3
+[profile.dev.package.p2-package]
+opt-level = 3
+[profile.dev.package.p2-particles]
+opt-level = 3
+[profile.dev.package.p2-physics]
+opt-level = 3
+[profile.dev.package.p2-math]
+opt-level = 3
+# The VM is generic (`Vm<L: LoaderRef>`): its code is compiled where it is instantiated, and the game's
+# `Vm<Arc<Loader>>` is instantiated here. At opt-level 1 the whole VM tick ran barely optimised despite p2-vm's 3.
+[profile.dev.package.p2-engine]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

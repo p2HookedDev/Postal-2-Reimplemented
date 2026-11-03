@@ -1,0 +1,24 @@
+/target
+
+# Game data must never be committed
+*.u
+*.utx
+*.usx
+*.ukx
+*.uax
+*.fuk
+*.dll
+*.exe
+*.ini
+*.int
+*.ogg
+*.wav
+*.ka
+*.dds
+*.tga
+*.bmp
+*.mp3
+# Crash dumps from shell tools.
+*.stackdump
+/target-*/
+

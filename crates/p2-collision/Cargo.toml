@@ -1,0 +1,18 @@
+[package]
+name = "p2-collision"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+p2-math.workspace = true
+p2-assets.workspace = true
+
+[dev-dependencies]
+p2-package.workspace = true
+p2-script.workspace = true
+
+[lints]
+workspace = true

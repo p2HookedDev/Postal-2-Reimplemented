@@ -1,0 +1,25 @@
+[package]
+name = "p2-viewer"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Faster incremental builds during development. Never for release builds.
+dev = ["bevy/dynamic_linking"]
+
+[dependencies]
+bevy = { workspace = true, features = ["3d", "bevy_audio", "wav", "vorbis", "pbr_clustered_decals"] }
+bevy_egui.workspace = true
+p2-assets.workspace = true
+p2-bevy-assets.workspace = true
+p2-package.workspace = true
+p2-script.workspace = true
+p2-collision.workspace = true
+p2-engine.workspace = true
+p2-math.workspace = true
+
+[lints]
+workspace = true

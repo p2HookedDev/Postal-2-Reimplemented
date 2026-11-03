@@ -1,0 +1,24 @@
+[package]
+name = "p2-game"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Faster incremental builds during development. Never for release builds.
+dev = ["bevy/dynamic_linking"]
+# Developer builds only: Tracy profiler spans.
+tracy = ["bevy/trace_tracy"]
+
+[dependencies]
+anyhow.workspace = true
+bevy = { workspace = true, features = ["3d", "bevy_audio", "wav", "vorbis", "pbr_clustered_decals"] }
+# The launcher's "Copy details" button puts text on the system clipboard (arboard is already in the tree via Bevy).
+bevy_egui = { workspace = true, features = ["manage_clipboard"] }
+p2-engine.workspace = true
+p2-package.workspace = true
+
+[lints]
+workspace = true
