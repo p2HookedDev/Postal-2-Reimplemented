@@ -183,7 +183,6 @@ mod tests {
             friction: 0.3,
             restitution: 0.0,
             asleep: false,
-            safe_point: [0.0; 3].into(),
         })
     }
 

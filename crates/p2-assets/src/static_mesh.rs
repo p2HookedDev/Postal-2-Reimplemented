@@ -22,6 +22,7 @@ static STATIC_MESH_LAYOUT: LazyLock<StructLayout> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Clone, Default)]
+#[expect(clippy::struct_excessive_bools, reason = "mirrors the mesh's saved collision flags")]
 pub struct StaticMesh {
     pub sections: Vec<MeshSection>,
     pub positions: Vec<[f32; 3]>,
@@ -40,6 +41,7 @@ pub struct StaticMesh {
     pub collision_nodes: usize,
     pub use_simple_box_collision: bool,
     pub use_simple_line_collision: bool,
+    pub use_simple_karma_collision: bool,
     pub physics_props: i32,
 }
 
@@ -64,6 +66,7 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
     let use_vertex_color = flag("UseVertexColor", false);
     let use_simple_box_collision = flag("UseSimpleBoxCollision", true);
     let use_simple_line_collision = flag("UseSimpleLineCollision", false);
+    let use_simple_karma_collision = flag("UseSimpleKarmaCollision", true);
 
     skip_primitive(r)?;
 
@@ -123,6 +126,7 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
         collision_nodes,
         use_simple_box_collision,
         use_simple_line_collision,
+        use_simple_karma_collision,
         physics_props,
     })
 }

@@ -40,7 +40,7 @@ fn terrain() -> Terrain {
 
 fn add_terrain(world: &mut World, terrain: &Terrain) {
     let triangles = terrain.karma_triangles().into_iter().map(|t| t.map(|i| i as u32)).collect();
-    world.add_static_mesh(&terrain.vertices, triangles, true).unwrap();
+    world.add_static_mesh(&terrain.vertices, triangles).unwrap();
 }
 
 fn surface(terrain: &Terrain, x: f32, y: f32) -> f32 {
@@ -107,7 +107,6 @@ fn chain(start: [f32; 3], velocity: [f32; 3]) -> RagdollParams {
         friction: 0.7,
         restitution: 0.3,
         asleep: false,
-        safe_point: start.into(),
     }
 }
 

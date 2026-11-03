@@ -6,6 +6,7 @@ pub struct ActorFrame {
     pub location: Vector,
     pub rotation: Rotator,
     pub scale: Vector,
+    pub pre_pivot: Vector,
     /// An emitter spawns its particles along its path through the frame.
     pub velocity: Vector,
     /// Player-owned emitters ignore `TimeDilation` (`Vm::particle_time_scale`).

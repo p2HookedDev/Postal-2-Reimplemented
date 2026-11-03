@@ -443,7 +443,7 @@ fn follow_bones(
         }
         let Some(&bone) = poses.bones.get(&follow.base).and_then(|pose| pose.get(follow.bone)) else { continue };
         let body = match base {
-            Some(base) => follow.base_follow.mesh_matrix(base.location, base.rotation).unwrap_or(follow.body),
+            Some(base) => FollowActor { pre_pivot: base.pre_pivot, ..follow.base_follow }.mesh_matrix(base.location, base.rotation).unwrap_or(follow.body),
             None => follow.body,
         };
         let frame = follow.frame(body, bone);

@@ -53,6 +53,7 @@ struct Body {
 
 pub(crate) struct MeshShape {
     props: Option<KMeshProps>,
+    use_simple_collision: bool,
     min: Vector,
     max: Vector,
     pub(crate) points: Vec<[f32; 3]>,
@@ -226,14 +227,19 @@ impl<L: LoaderRef> Vm<L> {
         let phase = self.profile_start();
         let gravity = self.object_of(actor, Prop::PhysicsVolume).map_or(DEFAULT_GRAVITY, |v| self.vector(v, Prop::Gravity));
         let mut world = p2_physics::World::new(gravity);
-        for crate::world::LevelMesh { vertices, triangles, one_sided } in self.level_meshes() {
-            if let Err(e) = world.add_static_mesh(&vertices, triangles, one_sided) {
+        for crate::world::LevelMesh { vertices, triangles } in self.level_meshes() {
+            if let Err(e) = world.add_static_mesh(&vertices, triangles) {
                 self.diagnostics.log.push(format!("Karma level geometry: {e}"));
             }
         }
         for points in self.karma_blocking_hulls() {
             if let Err(e) = world.add_static_hull(&points) {
                 self.diagnostics.log.push(format!("Karma blocking volume: {e}"));
+            }
+        }
+        for (shape, location, rotation) in self.karma_static_shapes() {
+            if let Err(e) = world.add_static_shape(&shape, location, rotation) {
+                self.diagnostics.log.push(format!("Karma static mesh: {e}"));
             }
         }
         self.karma.world = Some(Background::new(world));
@@ -264,6 +270,32 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
+    /// As retail, only static meshes with `bBlockKarma` stop Karma bodies, and never by their triangles: simple collision
+    /// gives the mesh's `KPhysicsProps` shapes, or nothing without them; otherwise one convex hull of all its points.
+    fn karma_static_shapes(&mut self) -> Vec<(Shape, Vector, [f32; 4])> {
+        let actors: Vec<ObjectId> = self
+            .actors()
+            .filter(|&a| !self.is_deleted(a) && self.flag_of(a, Prop::bStatic) && self.flag_of(a, Prop::bBlockKarma))
+            .filter(|&a| self.draw_type_of(a) == Some(crate::enums::EDrawType::StaticMesh))
+            .collect();
+        let mut placed = Vec::new();
+        for actor in actors {
+            let Some(mesh) = self.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh)) else { continue };
+            let placement = self.drawn_placement(actor);
+            let shapes = match (mesh.use_simple_collision, &mesh.props) {
+                (true, Some(props)) => shapes::mesh_shapes(Some(props), (mesh.min, mesh.max), placement.scale, placement.pre_pivot),
+                (true, None) => continue,
+                (false, _) => {
+                    let place = |p: &[f32; 3]| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i]);
+                    vec![Shape::Hull(mesh.points.iter().map(place).collect())]
+                }
+            };
+            let rotation = matrix_to_quat(placement.rotation.axes().map(Vector::from));
+            placed.extend(shapes.into_iter().map(|shape| (shape, placement.location, rotation)));
+        }
+        placed
+    }
+
     fn karma_shapes(&mut self, actor: ObjectId) -> Vec<Shape> {
         let placement = self.drawn_placement(actor);
         let mesh = self.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh));
@@ -292,7 +324,7 @@ impl<L: LoaderRef> Vm<L> {
                     max[i] = max[i].max(p[i]);
                 }
             }
-            (!m.positions.is_empty()).then(|| Arc::new(MeshShape { props, min: min.into(), max: max.into(), points: m.positions }))
+            (!m.positions.is_empty()).then(|| Arc::new(MeshShape { props, use_simple_collision: m.use_simple_karma_collision, min: min.into(), max: max.into(), points: m.positions }))
         };
         let shape = match self.loader.loaded_export_by_path_of_class(&path, "StaticMesh") {
             Some((package, export)) => {

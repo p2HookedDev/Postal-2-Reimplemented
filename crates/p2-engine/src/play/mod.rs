@@ -519,6 +519,9 @@ fn follow_actors(
         if follow.scale != actor.scale {
             follow.scale = actor.scale;
         }
+        if follow.pre_pivot != actor.pre_pivot {
+            follow.pre_pivot = actor.pre_pivot;
+        }
         transform.set_if_neq(follow.transform(actor.location, actor.rotation));
     }
     times.add("follow actors", started);

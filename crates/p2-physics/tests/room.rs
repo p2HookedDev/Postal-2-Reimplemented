@@ -1,4 +1,4 @@
-use p2_physics::{BodyId, JointLimit, JointParams, PartParams, RagdollParams, Shape, World};
+use p2_physics::{BodyId, BodyParams, JointLimit, JointParams, PartParams, RagdollParams, Shape, World};
 
 const GRAVITY: [f32; 3] = [0.0, 0.0, -950.0];
 const HALF: [f32; 3] = [300.0, 300.0, 150.0];
@@ -17,13 +17,13 @@ fn add_room(world: &mut World) {
     ];
     let vertices: Vec<[f32; 3]> = walls.iter().flatten().copied().collect();
     let triangles = (0..6u32).flat_map(|w| [[w * 4, w * 4 + 1, w * 4 + 2], [w * 4, w * 4 + 2, w * 4 + 3]]).collect();
-    world.add_static_mesh(&vertices, triangles, true).unwrap();
+    world.add_static_mesh(&vertices, triangles).unwrap();
 }
 
-fn add_slab(world: &mut World, near: f32, far: f32, one_sided: bool) {
+fn add_slab(world: &mut World, near: f32, far: f32) {
     let (y, z) = (HALF[1], HALF[2]);
     let vertices = [[near, -y, -z], [near, -y, z], [near, y, z], [near, y, -z], [far, -y, -z], [far, y, -z], [far, y, z], [far, -y, z]];
-    world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]], one_sided).unwrap();
+    world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]]).unwrap();
 }
 
 fn outside(p: p2_math::Vector) -> f32 {
@@ -70,7 +70,7 @@ fn corpse(at: [f32; 3]) -> RagdollParams {
             });
         }
     }
-    RagdollParams { parts, joints, linear_damping: 0.2, angular_damping: 0.2, friction: 0.3, restitution: 0.0, asleep: false, safe_point: at.into() }
+    RagdollParams { parts, joints, linear_damping: 0.2, angular_damping: 0.2, friction: 0.3, restitution: 0.0, asleep: false }
 }
 
 struct Lcg(u32);
@@ -117,11 +117,11 @@ fn limbs_started_through_a_wall_come_back() {
 
 #[test]
 fn limbs_started_through_a_thin_wall_come_back_without_a_fling() {
-    for (one_sided, thickness) in [(true, 8.0), (true, 0.0), (false, 8.0), (false, 0.0)] {
+    for thickness in [64.0, 0.0] {
         let (near, far) = (100.0 - thickness, 100.0);
         let mut world = World::new(GRAVITY.into());
         add_room(&mut world);
-        add_slab(&mut world, near, far, one_sided);
+        add_slab(&mut world, near, far);
         let bodies = world.add_ragdoll(&corpse([near - 20.0, 0.0, -HALF[2] + 30.0]));
         let mut top = 0.0f32;
         for _ in 0..240 {
@@ -129,8 +129,8 @@ fn limbs_started_through_a_thin_wall_come_back_without_a_fling() {
             top = bodies.iter().map(|&b| length(world.velocity(b).unwrap())).fold(top, f32::max);
         }
         let past = centres(&world, &bodies).into_iter().map(|p| p[0] - near).fold(f32::MIN, f32::max);
-        assert!(past < 0.0, "one sided {one_sided}, thickness {thickness}: a part is {past} past the wall");
-        assert!(top < 600.0, "one sided {one_sided}, thickness {thickness}: top speed {top}");
+        assert!(past < 0.0, "thickness {thickness}: a part is {past} past the wall");
+        assert!(top < 600.0, "thickness {thickness}: top speed {top}");
     }
 }
 
@@ -159,7 +159,7 @@ fn a_corpse_fired_at_a_thin_wall_stays_on_its_side() {
         let (near, far) = (92.0, 100.0);
         let mut world = World::new(GRAVITY.into());
         add_room(&mut world);
-        add_slab(&mut world, near, far, true);
+        add_slab(&mut world, near, far);
         let bodies = world.add_ragdoll(&corpse([near - 60.0, 0.0, 0.0]));
         for &b in &bodies {
             world.set_velocity(b, [20000.0, 0.0, 0.0].into());
@@ -207,4 +207,102 @@ fn a_kick_moves_a_sleeping_pile_at_full_strength() {
     }
     let moved = centres(&world, &all).into_iter().zip(before).map(|(now, then)| length(now - then)).fold(0.0, f32::max);
     assert!(moved > 10.0, "the most any part moved is {moved}");
+}
+
+fn q_axis(axis: [f32; 3], angle: f32) -> [f32; 4] {
+    let (s, c) = (angle / 2.0).sin_cos();
+    [axis[0] * s, axis[1] * s, axis[2] * s, c]
+}
+
+/// `sink` is how far the shins' axis lies under the floor.
+fn kneeling(sink: f32) -> RagdollParams {
+    let floor = -HALF[2];
+    let upright = q_axis([0.0, 1.0, 0.0], -std::f32::consts::FRAC_PI_2);
+    let flat = [0.0, 0.0, 0.0, 1.0];
+    let (knee, hip) = (floor - sink, floor - sink + 36.0);
+    let bones: [(usize, [f32; 3], [f32; 3], [f32; 4], f32, f32); 11] = [
+        (0, [0.0; 3], [0.0, 0.0, hip], upright, 20.0, 12.0),
+        (0, [20.0, 0.0, 0.0], [0.0, 0.0, hip + 20.0], upright, 30.0, 12.0),
+        (1, [30.0, 0.0, 0.0], [0.0, 0.0, hip + 50.0], upright, 0.0, 9.0),
+        (1, [26.0, 16.0, 0.0], [0.0, 16.0, hip + 46.0], upright, 22.0, 5.0),
+        (3, [22.0, 0.0, 0.0], [0.0, 16.0, hip + 68.0], upright, 22.0, 4.0),
+        (1, [26.0, -16.0, 0.0], [0.0, -16.0, hip + 46.0], upright, 22.0, 5.0),
+        (5, [22.0, 0.0, 0.0], [0.0, -16.0, hip + 68.0], upright, 22.0, 4.0),
+        (0, [0.0, 9.0, 0.0], [0.0, 9.0, hip], upright, -36.0, 7.0),
+        (7, [-36.0, 0.0, 0.0], [0.0, 9.0, knee], flat, -36.0, 5.0),
+        (0, [0.0, -9.0, 0.0], [0.0, -9.0, hip], upright, -36.0, 7.0),
+        (9, [-36.0, 0.0, 0.0], [0.0, -9.0, knee], flat, -36.0, 5.0),
+    ];
+    let mut parts = Vec::new();
+    let mut joints = Vec::new();
+    for (i, &(parent, anchor, location, rotation, length, radius)) in bones.iter().enumerate() {
+        let shape = if length == 0.0 { Shape::Sphere([0.0; 3].into(), radius) } else { Shape::Capsule([0.0; 3].into(), [length, 0.0, 0.0].into(), radius) };
+        parts.push(PartParams {
+            shapes: vec![shape.clone()],
+            location: location.into(),
+            rotation,
+            mass: 0.05,
+            center_of_mass: [length / 2.0, 0.0, 0.0].into(),
+            inertia: p2_physics::shapes_inertia(&[shape], 0.05).unwrap(),
+            velocity: [0.0; 3].into(),
+        });
+        if i > 0 {
+            joints.push(JointParams {
+                child: i,
+                parent,
+                child_anchor: [0.0; 3].into(),
+                child_axes: [[1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into()],
+                parent_anchor: anchor.into(),
+                parent_axes: [[1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into()],
+                limit: JointLimit::Cone { swing: Some([1.8, 1.8]), twist: Some(0.4) },
+            });
+        }
+    }
+    RagdollParams { parts, joints, linear_damping: 0.2, angular_damping: 0.2, friction: 0.3, restitution: 0.0, asleep: false }
+}
+
+#[test]
+fn a_kneeling_corpse_is_not_thrown() {
+    for sink in [-6.0, -2.0, 0.0, 2.0, 4.0, 6.0, 8.0, 12.0, 20.0] {
+        let mut world = World::new(GRAVITY.into());
+        add_room(&mut world);
+        let bodies = world.add_ragdoll(&kneeling(sink));
+        let start = centres(&world, &bodies);
+        let (mut top, mut rise) = (0.0f32, 0.0f32);
+        for _ in 0..240 {
+            step(&mut world, &bodies, STEP);
+            top = bodies.iter().map(|&b| length(world.velocity(b).unwrap())).fold(top, f32::max);
+            rise = centres(&world, &bodies).iter().zip(&start).map(|(now, then)| now[2] - then[2]).fold(rise, f32::max);
+        }
+        let lowest = centres(&world, &bodies).iter().map(|p| p[2] + HALF[2]).fold(f32::MAX, f32::min);
+        assert!(top < 600.0, "sink {sink}: top speed {top}");
+        assert!(rise < 60.0, "sink {sink}: a part rose {rise}");
+        assert!(lowest > 0.0, "sink {sink}: a part is {lowest} above the floor");
+    }
+}
+
+#[test]
+fn a_prop_with_its_origin_under_the_floor_stays_on_it() {
+    let floor = -HALF[2];
+    let mut world = World::new(GRAVITY.into());
+    add_room(&mut world);
+    let corners: Vec<[f32; 3]> = (0..8).map(|i| [if i & 1 == 0 { -20.0 } else { 20.0 }, if i & 2 == 0 { -20.0 } else { 20.0 }, if i & 4 == 0 { 10.0 } else { 50.0 }]).collect();
+    let prop = world.add_body(&BodyParams {
+        shapes: vec![Shape::Hull(corners)],
+        location: [0.0, 0.0, floor - 9.0].into(),
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        mass: 1.0,
+        linear_damping: 0.1,
+        angular_damping: 0.1,
+        friction: 0.7,
+        restitution: 0.0,
+        asleep: false,
+        stay_upright: false,
+        allow_yaw: false,
+    });
+    for _ in 0..180 {
+        world.step(STEP);
+    }
+    let origin = world.pose(prop).unwrap().0[2] - floor;
+    assert!((-14.0..0.0).contains(&origin), "the origin ended {origin} from the floor");
 }

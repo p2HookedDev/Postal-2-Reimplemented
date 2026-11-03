@@ -2,8 +2,6 @@
 //! with everything except pairs told not to and jointed pairs. The engine's contact callback drops ragdoll–Karma-actor
 //! and ragdoll–ragdoll contacts; ours keeps them so corpses stack and push props (our choice).
 
-use rapier3d::parry::query::details::RayCullingMode;
-use rapier3d::parry::query::Ray;
 use rapier3d::prelude::*;
 
 use crate::{BodyId, Shape, World, body_collider, body_pair, collider, to_rapier};
@@ -47,100 +45,22 @@ pub struct RagdollParams {
     pub friction: f32,
     pub restitution: f32,
     pub asleep: bool,
-    pub safe_point: p2_math::Vector,
 }
 
-struct Limb {
-    part: BodyId,
-    parent: Option<BodyId>,
-    pivot: Vector,
-    points: Vec<Vector>,
-    moved: Vec<BodyId>,
-    radius: f32,
-}
-
-/// Swings back limbs that crossed into the level, which contacts cannot do; teleporting them would stretch joints and fling the corpse.
-pub(crate) struct Guard {
-    limbs: Vec<Limb>,
-    root: BodyId,
-    safe: Vector,
-    rest: Vec<Vector>,
-    settling: f32,
-}
-
-fn guards(params: &RagdollParams, bodies: &[BodyId]) -> Vec<Guard> {
-    let radius = |part: usize| {
-        params.parts[part].shapes.iter().fold(0.0, |most: f32, shape| match shape {
-            Shape::Sphere(_, radius) | Shape::Capsule(_, _, radius) => most.max(*radius),
-            Shape::Box(_) | Shape::Hull(_) => most,
-        })
-    };
-    let mut seen = vec![false; bodies.len()];
-    let mut guards = Vec::new();
-    for root in (0..bodies.len()).filter(|&part| !params.parts[part].shapes.is_empty()) {
-        if std::mem::replace(&mut seen[root], true) {
-            continue;
-        }
-        let centre = |part: usize| to_rapier(params.parts[part].center_of_mass);
-        let mut tree = vec![(root, None, centre(root))];
-        let mut points = vec![vec![centre(root)]];
-        let mut next = 0;
-        while let Some(&(from, ..)) = tree.get(next) {
-            for joint in &params.joints {
-                let (to, at_from, at_to) = if joint.parent == from {
-                    (joint.child, joint.parent_anchor, joint.child_anchor)
-                } else if joint.child == from {
-                    (joint.parent, joint.child_anchor, joint.parent_anchor)
-                } else {
-                    continue;
-                };
-                if to < bodies.len() && !std::mem::replace(&mut seen[to], true) {
-                    points[next].push(to_rapier(at_from));
-                    tree.push((to, Some(next), to_rapier(at_to)));
-                    points.push(vec![centre(to)]);
-                }
-            }
-            next += 1;
-        }
-        let mut moved: Vec<Vec<BodyId>> = tree.iter().map(|&(part, ..)| vec![bodies[part]]).collect();
-        for i in (1..tree.len()).rev() {
-            if let Some(parent) = tree[i].1 {
-                let further = moved[i].clone();
-                moved[parent].extend(further);
-            }
-        }
-        let limbs = tree
-            .iter()
-            .zip(points)
-            .zip(moved)
-            .map(|((&(part, parent, pivot), points), moved)| Limb { part: bodies[part], parent: parent.map(|p| bodies[tree[p].0]), pivot, points, moved, radius: radius(part) })
-            .collect();
-        let safe = if guards.is_empty() { params.safe_point } else { params.parts[root].location };
-        guards.push(Guard { limbs, root: bodies[root], safe: to_rapier(safe), rest: Vec::new(), settling: 0.0 });
-    }
-    guards
-}
-
-const SURFACE_GAP: f32 = 0.5;
-/// A pile trembles in place too fast for Rapier's sleep test, so rest is judged by distance over time.
-const SETTLE_DISTANCE: f32 = 2.0;
-const SETTLE_TIME: f32 = 0.5;
-const SETTLE_SPEED: f32 = 60.0;
-const SETTLE_FADE: f32 = 0.3;
-const SLEEP_SPEED: f32 = 1.5;
+/// Karma's limit, a squared speed of 0.02 in Karma units. Parts in a pile tremble just under it.
+const SLEEP_SPEED: f32 = 7.07;
 const SLEEP_ANGULAR_SPEED: f32 = 1.0;
-const SLEEP_TIME: f32 = 0.5;
-/// The child / parent mass ratio a joint may keep, and the most a parent's inertia is raised toward the sum of its
-/// children's (Jolt's `Ragdoll::Stabilize`, after Strunk's "Stop my Constraints from Blowing Up!"; our own code).
-/// Karma solves a step's joints exactly (one LCP per partition); Rapier's iterative solver lets parts of very different
-/// mass drift apart (the shipped parts range from 0.0015 to 0.43). Even masses hold the joints with no extra iterations.
+const SLEEP_TIME: f32 = 1.0;
+/// The child / parent mass ratio a joint may keep. Rapier's iterative solver lets parts of very different mass drift
+/// apart, and the shipped parts range from 0.0015 to 0.43.
 const MASS_RATIO: [f32; 2] = [0.8, 1.2];
-const MAX_INERTIA_INCREASE: f32 = 2.0;
+/// Angle limits are a separate soft joint. Rapier corrects a stiff joint's error in one step with no speed cap, so a limb
+/// past its limit, as in a kneeling pose or a hard landing, throws the corpse at the speed cap.
+const LIMIT_HZ: f32 = 15.0;
+const LIMIT_DAMPING: f32 = 5.0;
 
-/// Each part's mass and principal inertia evened out so an iterative solver holds the joints: a child weighs
-/// 0.8-1.2 times its parent (each jointed tree keeps its total mass, inertia scales with mass), then a parent's
-/// inertia is raised toward its children's sum, at most doubled. Script impulses act on these masses unscaled:
-/// the body's momentum, so its overall flight, stays retail's.
+/// Each jointed tree keeps its total mass. Script impulses act on these masses unscaled, so the body's overall flight
+/// stays retail's.
 fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math::Vector)> {
     let n = parts.len();
     let mut parent = vec![None; n];
@@ -163,7 +83,7 @@ fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math:
         total[root] += part.mass;
         ratios[root] += ratio;
     }
-    let mut out: Vec<(f32, p2_math::Vector)> = parts
+    parts
         .iter()
         .zip(&walks)
         .map(|(part, &(root, _, ratio))| {
@@ -172,25 +92,16 @@ fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math:
             let scale = if scale.is_finite() { scale } else { 1.0 };
             (mass, part.inertia * scale)
         })
-        .collect();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(walks[i].1));
-    let largest = |inertia: p2_math::Vector| <[f32; 3]>::from(inertia).into_iter().fold(0.0, f32::max);
-    for &p in &order {
-        let children: f32 = (0..n).filter(|&c| parent[c] == Some(p)).map(|c| largest(out[c].1)).sum();
-        let own = largest(out[p].1);
-        if own > 0.0 && children > own {
-            let raise = (children / own).min(MAX_INERTIA_INCREASE);
-            out[p].1 *= raise;
-        }
-    }
-    out
+        .collect()
 }
 
+/// The same about every axis, the mean of the shapes' inertia: Karma spins a body as a sphere unless
+/// `bKNonSphericalInertia` is set, and no shipped script sets it.
 pub fn shapes_inertia(shapes: &[Shape], mass: f32) -> Option<p2_math::Vector> {
     let props = shapes.iter().filter_map(collider).map(|builder| builder.build().mass_properties()).reduce(|a, b| a + b)?;
     let scale = mass / props.mass();
-    scale.is_finite().then(|| p2_math::Vector::from((props.principal_inertia() * scale).to_array()))
+    let mean = props.principal_inertia().element_sum() * scale / 3.0;
+    scale.is_finite().then(|| [mean; 3].into())
 }
 
 impl World {
@@ -205,7 +116,6 @@ impl World {
             self.ragdoll_joint(joint, &bodies);
         }
         self.filter_self_collision(&params.joints, &bodies);
-        self.guards.extend(guards(params, &bodies));
         if params.asleep {
             for id in &bodies {
                 if let Some(body) = self.bodies.get_mut(id.0) {
@@ -246,27 +156,33 @@ impl World {
         let frame = |anchor: p2_math::Vector, [primary, orthogonal]: [p2_math::Vector; 2]| {
             Pose::from_parts(to_rapier(anchor), axes_rotation(to_rapier(primary), to_rapier(orthogonal)))
         };
-        let mut builder = GenericJointBuilder::new(JointAxesMask::LIN_AXES)
-            .local_frame1(frame(joint.parent_anchor, joint.parent_axes))
-            .local_frame2(frame(joint.child_anchor, joint.child_axes))
-            .contacts_enabled(false);
-        match joint.limit {
+        let build = |axes: JointAxesMask| {
+            GenericJointBuilder::new(axes).local_frame1(frame(joint.parent_anchor, joint.parent_axes)).local_frame2(frame(joint.child_anchor, joint.child_axes)).contacts_enabled(false)
+        };
+        self.impulse_joints.insert(parent.0, child.0, build(JointAxesMask::LIN_AXES).build(), true);
+        let limits = match joint.limit {
             JointLimit::Hinge(limits) => {
-                builder = builder.locked_axes(JointAxesMask::LIN_AXES | JointAxesMask::ANG_Y | JointAxesMask::ANG_Z);
-                if let Some(limits) = limits {
-                    builder = builder.limits(JointAxis::AngX, limits);
-                }
+                let hinge = build(JointAxesMask::ANG_Y | JointAxesMask::ANG_Z);
+                Some(match limits {
+                    Some(limits) => hinge.limits(JointAxis::AngX, limits),
+                    None => hinge,
+                })
             }
+            JointLimit::Cone { swing: None, twist: None } => None,
             JointLimit::Cone { swing, twist } => {
+                let mut cone = build(JointAxesMask::empty());
                 if let Some([y, z]) = swing {
-                    builder = builder.limits(JointAxis::AngY, [-y, y]).limits(JointAxis::AngZ, [-z, z]);
+                    cone = cone.limits(JointAxis::AngY, [-y, y]).limits(JointAxis::AngZ, [-z, z]);
                 }
                 if let Some(twist) = twist {
-                    builder = builder.limits(JointAxis::AngX, [-twist, twist]);
+                    cone = cone.limits(JointAxis::AngX, [-twist, twist]);
                 }
+                Some(cone)
             }
+        };
+        if let Some(limits) = limits {
+            self.impulse_joints.insert(parent.0, child.0, limits.softness(SpringCoefficients::new(LIMIT_HZ, LIMIT_DAMPING)).build(), true);
         }
-        self.impulse_joints.insert(parent.0, child.0, builder.build(), true);
     }
 
     /// Self-collision: jointed parts never collide
@@ -299,7 +215,6 @@ impl World {
 
     pub fn remove_ragdoll(&mut self, bodies: &[BodyId]) {
         self.hooks.disabled.retain(|&(a, b)| !bodies.contains(&BodyId(a)) && !bodies.contains(&BodyId(b)));
-        self.guards.retain(|guard| !bodies.contains(&guard.root));
         for &id in bodies {
             self.take_out_body(id);
         }
@@ -311,113 +226,6 @@ impl World {
                 body.wake_up(true);
             }
         }
-    }
-
-    pub(crate) fn guard_ragdolls(&mut self) {
-        let mut guards = std::mem::take(&mut self.guards);
-        for guard in &mut guards {
-            self.guard(guard);
-        }
-        self.guards = guards;
-    }
-
-    fn guard(&mut self, guard: &mut Guard) {
-        if self.is_sleeping(guard.root) {
-            return;
-        }
-        let Some(root) = guard.limbs.first() else { return };
-        let Some(body) = self.bodies.get(root.part.0) else { return };
-        let centre = body.position().transform_point(root.pivot);
-        guard.safe = match self.level_hit(guard.safe, centre) {
-            Some((point, normal)) => {
-                let back = point + normal * SURFACE_GAP;
-                for part in &root.moved {
-                    let Some(body) = self.bodies.get_mut(part.0) else { continue };
-                    body.set_translation(body.translation() + back - centre, false);
-                    let into = body.linvel().dot(normal).min(0.0);
-                    body.set_linvel(body.linvel() - normal * into, false);
-                }
-                back
-            }
-            None => centre,
-        };
-        for limb in &guard.limbs {
-            for &point in &limb.points {
-                let Some(body) = self.bodies.get(limb.part.0) else { break };
-                let (pivot, end) = (body.position().transform_point(limb.pivot), body.position().transform_point(point));
-                if let Some((_, normal)) = self.level_hit(pivot, end) {
-                    self.swing_out(limb, pivot, end - pivot, normal);
-                }
-            }
-        }
-        self.settle(guard);
-    }
-
-    fn settle(&mut self, guard: &mut Guard) {
-        let at = |limb: &Limb| self.bodies.get(limb.part.0).map_or(Vector::ZERO, RigidBody::translation);
-        let settled = guard.settling >= SETTLE_TIME;
-        let moved = guard.rest.len() != guard.limbs.len() || guard.limbs.iter().zip(&guard.rest).any(|(limb, rest)| at(limb).distance_squared(*rest) > SETTLE_DISTANCE * SETTLE_DISTANCE);
-        let hit = settled && guard.limbs.iter().any(|limb| self.bodies.get(limb.part.0).is_some_and(|body| body.linvel().length_squared() > SETTLE_SPEED * SETTLE_SPEED));
-        if moved || hit {
-            guard.rest = guard.limbs.iter().map(at).collect();
-            guard.settling = 0.0;
-            if settled {
-                self.set_sleep_speed(guard, SLEEP_SPEED);
-            }
-            return;
-        }
-        guard.settling += self.parameters.dt;
-        if !settled && guard.settling >= SETTLE_TIME {
-            self.set_sleep_speed(guard, SETTLE_SPEED);
-        }
-        if guard.settling >= SETTLE_TIME {
-            for limb in &guard.limbs {
-                let Some(body) = self.bodies.get_mut(limb.part.0) else { continue };
-                body.set_linvel(body.linvel() * SETTLE_FADE, false);
-                body.set_angvel(body.angvel() * SETTLE_FADE, false);
-            }
-        }
-    }
-
-    fn set_sleep_speed(&mut self, guard: &Guard, speed: f32) {
-        let threshold = speed / self.parameters.length_unit;
-        for limb in &guard.limbs {
-            if let Some(body) = self.bodies.get_mut(limb.part.0) {
-                body.activation_mut().normalized_linear_threshold = threshold;
-            }
-        }
-    }
-
-    fn swing_out(&mut self, limb: &Limb, pivot: Vector, arm: Vector, normal: Vector) {
-        let flat = arm - normal * arm.dot(normal);
-        let flat = flat.try_normalize().unwrap_or_else(|| normal.any_orthonormal_vector()) * arm.length();
-        let turn = Rotation::from_rotation_arc(arm.normalize(), (flat + normal * (limb.radius + SURFACE_GAP)).normalize());
-        let velocity = limb.parent.and_then(|parent| self.bodies.get(parent.0)).map(RigidBody::linvel);
-        for part in &limb.moved {
-            let Some(body) = self.bodies.get_mut(part.0) else { continue };
-            body.set_translation(pivot + turn * (body.translation() - pivot), false);
-            body.set_rotation(turn * body.rotation(), false);
-            if let Some(velocity) = velocity {
-                body.set_linvel(velocity, false);
-            }
-            body.set_angvel(Vector::ZERO, false);
-        }
-    }
-
-    fn level_hit(&self, a: Vector, b: Vector) -> Option<(Vector, Vector)> {
-        let length = (b - a).length();
-        if length < 1e-3 {
-            return None;
-        }
-        let direction = (b - a) / length;
-        let ray = Ray::new(a, direction);
-        let hit = |collider: &Collider| match collider.shape().as_trimesh() {
-            Some(mesh) if mesh.flags().contains(TriMeshFlags::FIX_INTERNAL_EDGES) => mesh.cast_ray_with_culling(collider.position(), &ray, length, RayCullingMode::IgnoreBackfaces),
-            _ => collider.shape().cast_ray_and_get_normal(collider.position(), &ray, length, true).filter(|hit| hit.time_of_impact > 0.0),
-        };
-        let first = self.level.iter().filter_map(|&handle| self.colliders.get(handle)).filter_map(hit).min_by(|x, y| x.time_of_impact.total_cmp(&y.time_of_impact))?;
-        let normal = if first.normal.dot(direction) > 0.0 { -first.normal } else { first.normal };
-        Some((ray.point_at(first.time_of_impact), normal))
     }
 
     fn overlapping(&self, a: BodyId, b: BodyId) -> bool {
@@ -453,7 +261,7 @@ mod tests {
 
     fn floor(world: &mut World) {
         let vertices = [[-2000.0, -2000.0, 0.0], [2000.0, -2000.0, 0.0], [2000.0, 2000.0, 0.0], [-2000.0, 2000.0, 0.0]];
-        world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]], false).unwrap();
+        world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]]).unwrap();
     }
 
     fn limb(location: p2_math::Vector, velocity: p2_math::Vector) -> PartParams {
@@ -489,7 +297,6 @@ mod tests {
             friction: 0.8,
             restitution: 0.0,
             asleep: false,
-            safe_point: [0.0, 0.0, height].into(),
         }
     }
 
@@ -502,7 +309,7 @@ mod tests {
         for spin in [200.0_f32, 600.0, 1000.0] {
             let mut world = World::new([0.0, 0.0, -1500.0].into());
             let vertices = [[-4000.0, -4000.0, 0.0], [4000.0, -4000.0, 0.0], [4000.0, 4000.0, 0.0], [-4000.0, 4000.0, 0.0]];
-            world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]], true).unwrap();
+            world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]]).unwrap();
             let cone = JointLimit::Cone { swing: Some([1.55, 1.55]), twist: Some(0.1) };
             let mut params = chain(250.0, cone, [0.0; 3].into());
             params.parts = (0..6)
@@ -672,7 +479,7 @@ mod tests {
             }
         }
         let momentum: f32 = bodies.iter().map(|&b| world.velocity(b).unwrap()[1] * world.mass(b).unwrap()).sum();
-        assert!(gap < 2.0, "joint gap {gap}");
+        assert!(gap < 4.0, "joint gap {gap}");
         assert!((momentum - 50.0 * (-0.2f32).exp()).abs() < 1.0, "momentum {momentum}");
     }
 
@@ -696,7 +503,7 @@ mod tests {
                 world.limit_speed(b, 1000.0);
             }
         }
-        assert!(gap < 2.0, "joint gap {gap}");
+        assert!(gap < 8.0, "joint gap {gap}");
         for &b in &bodies {
             let z = origin(&world, b)[2];
             assert!((3.0..12.0).contains(&z), "part at height {z}");

@@ -700,6 +700,7 @@ impl Simulation {
             location,
             rotation,
             scale: actor_scale(vm, actor),
+            pre_pivot: vector(vm, actor, Prop::PrePivot),
             velocity: vm.velocity(actor),
             time_scale: vm.particle_time_scale(actor),
             gone: vm.is_deleted(actor),

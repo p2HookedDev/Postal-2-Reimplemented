@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use p2_assets::{
-    Model, Terrain, fan_triangles, poly_flags, read_level, read_model, read_static_mesh, read_static_mesh_materials, read_terrain, read_texture,
+    Model, Terrain, fan_triangles, poly_flags, read_level, read_model, read_static_mesh_materials, read_terrain, read_texture,
     texture_heights,
 };
 use p2_collision::{
@@ -14,7 +14,6 @@ use p2_script::{Objects, Source};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::enums::EDrawType;
 use crate::native_id::Native;
 use crate::natives::vector_arg;
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
@@ -38,7 +37,6 @@ struct ShapeGrid {
 pub(crate) struct LevelMesh {
     pub(crate) vertices: Vec<[f32; 3]>,
     pub(crate) triangles: Vec<[u32; 3]>,
-    pub(crate) one_sided: bool,
 }
 
 fn grid_cells(min: Vector, max: Vector) -> Option<(std::ops::RangeInclusive<i32>, std::ops::RangeInclusive<i32>)> {
@@ -192,8 +190,7 @@ impl<L: LoaderRef> Vm<L> {
         self.world.line_grid = ShapeGrid::new(&self.world.lines);
     }
 
-    /// Not the engine's set (unverified): static meshes with `bBlockKarma` by collision triangles,
-    /// or `KPhysicsProps` hulls with `UseSimpleKarmaCollision`.
+    /// Karma's level triangles: BSP and terrain, never static meshes.
     pub(crate) fn level_meshes(&self) -> Vec<LevelMesh> {
         const NF_NOT_CSG: u8 = 0x01;
         let mut meshes = Vec::new();
@@ -213,31 +210,12 @@ impl<L: LoaderRef> Vm<L> {
                     face_along(&positions, &mut triangles[first..], [node.plane[0], node.plane[1], node.plane[2]].into());
                 }
             }
-            meshes.push(LevelMesh { vertices: positions, triangles, one_sided: true });
+            meshes.push(LevelMesh { vertices: positions, triangles });
         }
         for terrain in &self.world.terrains {
             let triangles = terrain.karma_triangles().into_iter().map(|t| t.map(|i| i as u32)).collect();
-            meshes.push(LevelMesh { vertices: terrain.vertices.clone(), triangles, one_sided: true });
+            meshes.push(LevelMesh { vertices: terrain.vertices.clone(), triangles });
         }
-        let (mut positions, mut triangles) = (Vec::new(), Vec::new());
-        let loader = self.loader.clone();
-        let mut read = FxHashMap::default();
-        for actor in self.actors() {
-            let blocking = [Prop::bStatic, Prop::bCollideActors, Prop::bBlockActors].into_iter().all(|f| self.flag_of(actor, f));
-            let Some(mesh) = self.object_of(actor, Prop::StaticMesh).filter(|_| blocking && self.draw_type_of(actor) == Some(EDrawType::StaticMesh)) else { continue };
-            let Some((package, export)) = loader.loaded_export_by_path_of_class(&self.object(mesh).path, "StaticMesh") else { continue };
-            let mesh = read.entry((package, export)).or_insert_with(|| {
-                let source = loader.package(package);
-                read_static_mesh(&source.package, &source.data, &source.package.exports[export]).ok()
-            });
-            let Some(mesh) = mesh.as_ref() else { continue };
-            let scale = self.vector(actor, Prop::DrawScale3D).map(|s| s * self.float_of(actor, Prop::DrawScale));
-            let placed = MeshCollision::new(mesh, self.vector(actor, Prop::Location), self.rotator_of(actor, Prop::Rotation), scale, self.vector(actor, Prop::PrePivot));
-            for triangle in placed.triangles() {
-                fan(&mut positions, &mut triangles, triangle);
-            }
-        }
-        meshes.push(LevelMesh { vertices: positions, triangles, one_sided: false });
         meshes.retain(|mesh| !mesh.triangles.is_empty());
         meshes
     }

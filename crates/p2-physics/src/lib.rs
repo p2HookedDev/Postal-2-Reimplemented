@@ -9,6 +9,7 @@ use rustc_hash::FxHashSet;
 
 mod background;
 mod hit;
+mod level_contact;
 mod ragdoll;
 
 pub use background::Background;
@@ -137,6 +138,10 @@ impl PhysicsHooks for Hooks {
         }
         Some(SolverFlags::COMPUTE_RIGID_IMPULSES)
     }
+
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        level_contact::push_to_front(context);
+    }
 }
 
 pub struct World {
@@ -159,7 +164,6 @@ pub struct World {
     dormant: FxHashSet<RigidBodyHandle>,
     forced: Vec<RigidBodyHandle>,
     level: Vec<ColliderHandle>,
-    guards: Vec<ragdoll::Guard>,
 }
 
 impl World {
@@ -185,19 +189,17 @@ impl World {
             dormant: FxHashSet::default(),
             forced: Vec::new(),
             level: Vec::new(),
-            guards: Vec::new(),
         }
     }
 
-    /// Fixed level geometry (BSP, terrain, static meshes) as a triangle mesh. `one_sided`: a triangle only pushes
-    /// bodies out of its front (the side its corners run counter-clockwise from, about the right-handed normal), and
-    /// contacts on edges between triangles take the faces' normals, like Karma's level triangles:
-    /// a body part that got behind the surface is not held there. Otherwise both sides
-    /// push.
-    pub fn add_static_mesh(&mut self, vertices: &[[f32; 3]], triangles: Vec<[u32; 3]>, one_sided: bool) -> Result<(), Error> {
+    /// Level triangles (BSP, terrain). A triangle's front is the side its corners run counter-clockwise from.
+    pub fn add_static_mesh(&mut self, vertices: &[[f32; 3]], triangles: Vec<[u32; 3]>) -> Result<(), Error> {
         let vertices = vertices.iter().copied().map(Vector::from_array).collect();
-        let flags = if one_sided { TriMeshFlags::FIX_INTERNAL_EDGES | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES } else { TriMeshFlags::empty() };
-        let collider = ColliderBuilder::trimesh_with_flags(vertices, triangles, flags).map_err(|e| Error::Mesh(e.to_string()))?;
+        let flags = TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;
+        let collider = ColliderBuilder::trimesh_with_flags(vertices, triangles, flags)
+            .map_err(|e| Error::Mesh(e.to_string()))?
+            .user_data(level_contact::ONE_SIDED)
+            .active_hooks(ActiveHooks::MODIFY_SOLVER_CONTACTS);
         self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
         Ok(())
     }
@@ -206,6 +208,13 @@ impl World {
         let points: Vec<Vector> = points.iter().copied().map(Vector::from_array).collect();
         let collider = ColliderBuilder::convex_hull(&points).ok_or_else(|| Error::Mesh(format!("no convex hull of {} points", points.len())))?;
         self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
+        Ok(())
+    }
+
+    pub fn add_static_shape(&mut self, shape: &Shape, location: p2_math::Vector, rotation: [f32; 4]) -> Result<(), Error> {
+        let Some(collider) = collider(shape) else { return Err(Error::Mesh("no convex hull".to_owned())) };
+        let pose = Pose::from_parts(to_rapier(location), Rotation::from_array(rotation).normalize());
+        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION).position(pose)));
         Ok(())
     }
 
@@ -403,7 +412,6 @@ impl World {
                 &self.hooks,
                 &self.hooks,
             );
-            self.guard_ragdolls();
             let started = self.hooks.started.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default();
             for s in started {
                 let bodies = s.colliders.map(|c| self.colliders.get(c).and_then(Collider::parent));
@@ -566,7 +574,7 @@ mod tests {
 
     fn floor(world: &mut World) {
         let vertices = [[-1000.0, -1000.0, 0.0], [1000.0, -1000.0, 0.0], [1000.0, 1000.0, 0.0], [-1000.0, 1000.0, 0.0]];
-        world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]], false).unwrap();
+        world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]]).unwrap();
     }
 
     #[test]

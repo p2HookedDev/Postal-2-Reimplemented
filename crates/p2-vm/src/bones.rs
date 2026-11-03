@@ -401,7 +401,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 }
 
-fn reference_frame(bone: usize, q: [f32; 4], position: [f32; 3]) -> Frame {
+pub(crate) fn reference_frame(bone: usize, q: [f32; 4], position: [f32; 3]) -> Frame {
     let q = if bone == 0 { q } else { [-q[0], -q[1], -q[2], q[3]] };
     let length = q.iter().map(|c| c * c).sum::<f32>().sqrt().max(1e-8);
     Frame::from_quat(q.map(|c| c / length), 1.0, position)

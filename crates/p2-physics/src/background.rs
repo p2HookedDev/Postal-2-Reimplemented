@@ -156,7 +156,7 @@ mod tests {
     fn impacts_of_background_steps_reach_the_caller() {
         let mut world = World::new([0.0, 0.0, -950.0].into());
         let vertices = [[-100.0, -100.0, 0.0], [100.0, -100.0, 0.0], [100.0, 100.0, 0.0], [-100.0, 100.0, 0.0]];
-        world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]], false).unwrap();
+        world.add_static_mesh(&vertices, vec![[0, 1, 2], [0, 2, 3]]).unwrap();
         let id = ball(&mut world);
         world.set_pose(id, [0.0, 0.0, 50.0].into(), [0.0, 0.0, 0.0, 1.0]);
         let mut background = Background::new(world);
