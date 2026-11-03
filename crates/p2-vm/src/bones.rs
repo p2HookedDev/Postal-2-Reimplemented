@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use p2_assets::pose::{Frame, LocalBone, blend_local, bone_frames, channel_weight, mesh_to_world, subtree, turn_local};
+use p2_assets::pose::{Frame, LocalBone, blend_local, bone_frames, channel_weight, mesh_to_world, subtree, turn_local, tween_pose};
 use p2_assets::{MeshAnimation, SkeletalMesh, read_mesh_animation, read_primitive_sphere, read_skeletal_mesh};
 
 use p2_math::{Rotator, Vector};
@@ -56,7 +56,7 @@ const POSE_CACHE_LIMIT: usize = 256;
 #[derive(Debug, PartialEq, Eq)]
 struct PoseKey {
     mesh: ObjectId,
-    channels: Vec<(NameId, NameId, Option<ObjectId>, [u32; 2])>,
+    channels: Vec<(NameId, NameId, Option<ObjectId>, [u32; 2], Option<usize>)>,
     scales: Vec<(NameId, u32)>,
     turns: Vec<(NameId, Rotator)>,
     rotation: Rotator,
@@ -74,7 +74,7 @@ impl PoseKey {
         let bits = |v: Vector| <[f32; 3]>::from(v).map(f32::to_bits);
         Self {
             mesh,
-            channels: channels.iter().map(|&(c, a)| (c.sequence, c.blend_bone, a, [c.frame.to_bits(), c.blend_alpha.to_bits()])).collect(),
+            channels: channels.iter().map(|&(c, a)| (c.sequence, c.blend_bone, a, [c.frame.to_bits(), c.blend_alpha.to_bits()], c.tween().map(|(from, _)| Arc::as_ptr(from).addr()))).collect(),
             scales: scales.iter().map(|&(bone, scale)| (bone, scale.to_bits())).collect(),
             turns: turns.to_vec(),
             rotation,
@@ -215,7 +215,14 @@ impl<L: LoaderRef> Vm<L> {
         map
     }
 
-    fn pose_world_bone_frames(&mut self, actor: ObjectId, mesh_object: ObjectId, mesh: &PosedMesh) -> Vec<Frame> {
+    /// The local pose a tween starts from: `None` when no channel plays yet, so that a first animation starts at once.
+    pub(crate) fn kept_pose(&mut self, actor: ObjectId) -> Option<Arc<[LocalBone]>> {
+        let mesh_object = self.object_of(actor, Prop::Mesh)?;
+        let mesh = self.posed_mesh(mesh_object)?;
+        self.local_bone_pose(actor, mesh_object, &mesh).map(Into::into)
+    }
+
+    fn local_bone_pose(&mut self, actor: ObjectId, mesh_object: ObjectId, mesh: &PosedMesh) -> Option<Vec<LocalBone>> {
         let bind: Vec<LocalBone> = mesh.mesh.bones.iter().map(|b| (b.orientation, b.position)).collect();
         let mut local: Option<Vec<LocalBone>> = None;
         for channel in 0.. {
@@ -229,7 +236,10 @@ impl<L: LoaderRef> Vm<L> {
             let frames = animation.animation.sequences[sequence].num_frames.max(1) as f32;
             let pose = animation.animation.pose_at(sequence, state.frame.max(0.0) * frames);
             let tracks = self.bone_map(mesh_object, mesh, animation_object, &animation);
-            let posed: Vec<LocalBone> = tracks.iter().zip(&bind).map(|(&track, &bound)| track.and_then(|t| pose.get(t)).unwrap_or(bound)).collect();
+            let mut posed: Vec<LocalBone> = tracks.iter().zip(&bind).map(|(&track, &bound)| track.and_then(|t| pose.get(t)).unwrap_or(bound)).collect();
+            if let Some((from, weight)) = state.tween() {
+                tween_pose(from, &mut posed, weight);
+            }
             match &mut local {
                 None => local = Some(posed),
                 Some(base) => {
@@ -238,7 +248,11 @@ impl<L: LoaderRef> Vm<L> {
                 }
             }
         }
-        let mut local = local.unwrap_or(bind);
+        local
+    }
+
+    fn pose_world_bone_frames(&mut self, actor: ObjectId, mesh_object: ObjectId, mesh: &PosedMesh) -> Vec<Frame> {
+        let mut local = self.local_bone_pose(actor, mesh_object, mesh).unwrap_or_else(|| mesh.mesh.bones.iter().map(|b| (b.orientation, b.position)).collect());
         for (bone, turn) in self.bone_rotations(actor).to_vec() {
             if let Some(index) = self.mesh_bone(mesh_object, mesh, bone) {
                 local[index].0 = turn_local(local[index].0, turn.into());

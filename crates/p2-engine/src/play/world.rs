@@ -530,6 +530,7 @@ pub struct ChannelPose {
     pub animation: Arc<PlayedAnimation>,
     pub sequence: usize,
     pub time: f32,
+    pub tween: Option<(Arc<[p2_assets::pose::LocalBone]>, f32)>,
 }
 
 #[cfg(test)]

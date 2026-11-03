@@ -17,7 +17,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes, entity_aabb
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::time::Time;
 use p2_math::{Rotator, Vector};
-use p2_assets::pose::blend_local;
+use p2_assets::pose::{blend_local, tween_pose};
 use p2_assets::{MeshAnimation, SkeletalMesh};
 use p2_bevy_assets::{bone_matrices, scaled_bone_matrices_into, unreal_mesh_matrix, unreal_to_bevy};
 use p2_vm::ObjectId;
@@ -324,6 +324,7 @@ fn animate(
                 let mut key = std::hash::DefaultHasher::new();
                 for (channel, alpha, bone) in pose_channels(actor_pose) {
                     (Arc::as_ptr(&channel.animation), channel.sequence, channel.time.to_bits(), alpha.to_bits(), bone).hash(&mut key);
+                    channel.tween.as_ref().map(|(from, weight)| (Arc::as_ptr(from).addr(), weight.to_bits())).hash(&mut key);
                 }
                 scales.iter().for_each(|(bone, scale)| (&**bone, scale.to_bits()).hash(&mut key));
                 turns.iter().for_each(|(bone, turn)| (&**bone, turn).hash(&mut key));
@@ -335,7 +336,10 @@ fn animate(
                 let mut local = None;
                 for (channel, alpha, bone) in pose_channels(actor_pose) {
                     let map = Arc::clone(item.vm_bone_maps.entry(Arc::clone(&channel.animation.path)).or_insert_with(|| map_bones(&item.bone_names, &channel.animation.bone_names).into()));
-                    let pose = item.local_pose(&channel.animation.animation, channel.sequence, channel.time, &map);
+                    let mut pose = item.local_pose(&channel.animation.animation, channel.sequence, channel.time, &map);
+                    if let Some((from, weight)) = &channel.tween {
+                        tween_pose(from, &mut pose, *weight);
+                    }
                     match &mut local {
                         None => local = Some(pose),
                         Some(base) => blend_local(base, &pose, alpha, &item.subtree(bone)),

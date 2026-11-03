@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
+use p2_assets::pose::LocalBone;
 use p2_assets::read_skeletal_mesh;
 use p2_package::PackageId;
 use p2_script::{ScriptObject, read_export};
@@ -58,6 +59,20 @@ pub struct AnimChannel {
     pub blend_bone: NameId,
     pub global_pose: bool,
     blending: Option<(f32, f32)>,
+    tween_from: Option<Arc<[LocalBone]>>,
+    tween_start: f32,
+}
+
+impl AnimChannel {
+    /// The pose kept when this tween began, and how far the channel has moved from it. The start pose's share falls
+    /// linearly with the frame.
+    pub fn tween(&self) -> Option<(&Arc<[LocalBone]>, f32)> {
+        self.tween_from.as_ref().filter(|_| self.frame < 0.0).map(|from| (from, 1.0 - self.frame / self.tween_start))
+    }
+
+    fn begin_tween(&mut self, from: Option<Arc<[LocalBone]>>) {
+        (self.tween_from, self.tween_start) = if self.frame < 0.0 { (from, self.frame) } else { (None, 0.0) };
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +292,7 @@ impl<L: LoaderRef> Vm<L> {
                     }
                     remaining = leftover(remaining, state.frame, state.frame - old);
                     state.frame = 0.0;
+                    state.tween_from = None;
                     state.rate == 0.0
                 } else {
                     let rate = if state.rate < 0.0 { (-state.rate * velocity.size()).max(MIN_SPEED_RATE) } else { state.rate };
@@ -357,6 +373,8 @@ impl<L: LoaderRef> Vm<L> {
         };
         let animating = self.is_animating(actor, channel);
         let velocity = self.vec3_of(actor, Prop::Velocity);
+        let keeps_looping = looping && animating && self.channel(actor, channel).is_some_and(|state| state.looping && state.sequence == sequence);
+        let from = if !keeps_looping && (tween > 0.0 || tween == -1.0 || frames <= 1.0) { self.kept_pose(actor) } else { None };
         let Some(state) = self.valid_channel(actor, channel) else { return false };
         state.animation = animation;
         if frames <= 0.0 || (!looping && rate < 0.0) {
@@ -372,6 +390,7 @@ impl<L: LoaderRef> Vm<L> {
             state.old_rate = 0.0;
             state.orig_rate = orig_rate;
             (state.tween_rate, state.frame) = if tween > 0.0 { (1.0 / (frames * tween), -1.0 / frames) } else { (0.0, 0.0) };
+            state.begin_tween(from);
             return true;
         }
         if looping && state.sequence == sequence && state.looping && animating {
@@ -410,6 +429,7 @@ impl<L: LoaderRef> Vm<L> {
             state.frame = if looping { START_LOOP } else { START_ONCE };
             state.old_rate = state.rate;
         }
+        state.begin_tween(from);
         true
     }
 
@@ -768,4 +788,29 @@ fn channel_animating(state: &AnimChannel) -> bool {
 
 fn leftover(remaining: f32, over: f32, moved: f32) -> f32 {
     if moved > 0.0 { remaining * over / moved } else { 0.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tween_runs_while_the_frame_is_negative() {
+        let from: Arc<[LocalBone]> = Arc::new([([0.0, 0.0, 0.0, 1.0], [0.0; 3])]);
+        let mut channel = AnimChannel { frame: -0.2, ..AnimChannel::default() };
+        channel.begin_tween(Some(from));
+        assert_eq!(channel.tween().map(|(_, weight)| weight), Some(0.0));
+        channel.frame = -0.05;
+        assert_eq!(channel.tween().map(|(_, weight)| weight), Some(0.75));
+        channel.frame = 0.0;
+        assert!(channel.tween().is_none());
+    }
+
+    #[test]
+    fn a_start_without_a_tween_keeps_no_pose() {
+        let from: Arc<[LocalBone]> = Arc::new([([0.0, 0.0, 0.0, 1.0], [0.0; 3])]);
+        let mut channel = AnimChannel { frame: 0.001, ..AnimChannel::default() };
+        channel.begin_tween(Some(from));
+        assert!(channel.tween_from.is_none());
+    }
 }

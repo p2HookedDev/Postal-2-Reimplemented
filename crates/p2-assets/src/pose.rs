@@ -101,12 +101,29 @@ pub fn channel_weight(alpha: f32, frame: f32, blend_in_time: f32) -> f32 {
 pub fn blend_local(base: &mut [LocalBone], over: &[LocalBone], alpha: f32, bones: &[bool]) {
     let alpha = alpha.clamp(0.0, 1.0);
     for ((base, over), _) in base.iter_mut().zip(over).zip(bones).filter(|(_, inside)| **inside) {
-        let (a, mut b) = (normalize(base.0), normalize(over.0));
-        if dot(a, b) < 0.0 {
-            b = b.map(|c| -c);
-        }
-        let rotation = slerp(a, b, alpha);
-        *base = (rotation, [0, 1, 2].map(|i| base.1[i] + (over.1[i] - base.1[i]) * alpha));
+        blend_bone(base, over, alpha);
+    }
+}
+
+fn blend_bone(base: &mut LocalBone, over: &LocalBone, alpha: f32) {
+    let (a, mut b) = (normalize(base.0), normalize(over.0));
+    if dot(a, b) < 0.0 {
+        b = b.map(|c| -c);
+    }
+    let rotation = slerp(a, b, alpha);
+    *base = (rotation, [0, 1, 2].map(|i| base.1[i] + (over.1[i] - base.1[i]) * alpha));
+}
+
+/// Moves `pose` from the kept pose `from` towards itself. A kept pose of another mesh is ignored.
+pub fn tween_pose(from: &[LocalBone], pose: &mut [LocalBone], weight: f32) {
+    if from.len() != pose.len() {
+        return;
+    }
+    let weight = weight.clamp(0.0, 1.0);
+    for (from, bone) in from.iter().zip(pose) {
+        let mut mixed = *from;
+        blend_bone(&mut mixed, bone, weight);
+        *bone = mixed;
     }
 }
 
@@ -211,6 +228,25 @@ mod tests {
             assert!(close(*axis, unit), "{back:?}");
         }
         assert!(close(back.origin, [0.0; 3]), "{back:?}");
+    }
+
+    #[test]
+    fn a_tween_goes_from_the_kept_pose_to_the_target() {
+        let from = [([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0])];
+        let target = ([0.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0]);
+        for (weight, x) in [(0.0, 0.0), (0.25, 2.5), (1.0, 10.0)] {
+            let mut pose = [target];
+            tween_pose(&from, &mut pose, weight);
+            assert!((pose[0].1[0] - x).abs() < 1e-4, "weight {weight}: {}", pose[0].1[0]);
+        }
+    }
+
+    #[test]
+    fn a_tween_from_another_mesh_changes_nothing() {
+        let target = ([0.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0]);
+        let mut pose = [target];
+        tween_pose(&[target, target], &mut pose, 0.0);
+        assert_eq!(pose[0], target);
     }
 
     #[test]

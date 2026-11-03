@@ -768,8 +768,8 @@ impl Simulation {
 
     pub(super) fn pose_of(&mut self, actor: ObjectId, index: usize) -> Option<ChannelPose> {
         let (channel, animation) = self.vm.anim_channel(actor, index)?;
-        // Negative frames tween towards frame 0 (shown as frame 0 for now).
         let (sequence, frame) = (channel.sequence, channel.frame.max(0.0));
+        let tween = channel.tween().map(|(from, weight)| (Arc::clone(from), weight));
         let object = animation?;
         let vm = &mut self.vm;
         let animation = self
@@ -783,7 +783,7 @@ impl Simulation {
         let index = *self.sequences.entry((object, sequence)).or_insert_with(|| animation.sequences.get(&self.vm.name(sequence).to_ascii_lowercase()).copied());
         let index = index?;
         let frames = animation.animation.sequences[index].num_frames.max(1) as f32;
-        Some(ChannelPose { animation, sequence: index, time: frame * frames })
+        Some(ChannelPose { animation, sequence: index, time: frame * frames, tween })
     }
 }
 
