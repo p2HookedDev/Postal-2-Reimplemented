@@ -107,6 +107,7 @@ fn chain(start: [f32; 3], velocity: [f32; 3]) -> RagdollParams {
         friction: 0.7,
         restitution: 0.3,
         asleep: false,
+        safe_point: start.into(),
     }
 }
 

@@ -383,7 +383,8 @@ impl<L: LoaderRef> Vm<L> {
             self.karma.ragdolls.failed.insert(actor);
             return;
         };
-        let params = RagdollParams { parts: built.parts, joints: built.joint_params, linear_damping, angular_damping, friction, restitution, asleep };
+        let safe_point = self.vector(actor, Prop::Location);
+        let params = RagdollParams { parts: built.parts, joints: built.joint_params, linear_damping, angular_damping, friction, restitution, asleep, safe_point };
         self.karma_world(actor);
         let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return };
         let all = world.add_ragdoll(&params);

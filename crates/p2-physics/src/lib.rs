@@ -158,15 +158,20 @@ pub struct World {
     /// resting on the floor).
     dormant: FxHashSet<RigidBodyHandle>,
     forced: Vec<RigidBodyHandle>,
+    level: Vec<ColliderHandle>,
+    guards: Vec<ragdoll::Guard>,
 }
 
 impl World {
     pub fn new(gravity: p2_math::Vector) -> Self {
         let parameters = IntegrationParameters { length_unit: UNITS_PER_METER, ..IntegrationParameters::default() };
+        let mut pipeline = PhysicsPipeline::new();
+        let threads = std::thread::available_parallelism().map_or(2, |cores| cores.get() / 4).clamp(2, 4);
+        pipeline.configure_thread_pool(threads).ok();
         Self {
             gravity: to_rapier(gravity),
             parameters,
-            pipeline: PhysicsPipeline::new(),
+            pipeline,
             islands: IslandManager::new(),
             broad_phase: DefaultBroadPhase::new(),
             narrow_phase: NarrowPhase::new(),
@@ -179,6 +184,8 @@ impl World {
             hooks: Hooks::default(),
             dormant: FxHashSet::default(),
             forced: Vec::new(),
+            level: Vec::new(),
+            guards: Vec::new(),
         }
     }
 
@@ -189,16 +196,16 @@ impl World {
     /// push.
     pub fn add_static_mesh(&mut self, vertices: &[[f32; 3]], triangles: Vec<[u32; 3]>, one_sided: bool) -> Result<(), Error> {
         let vertices = vertices.iter().copied().map(Vector::from_array).collect();
-        let flags = if one_sided { TriMeshFlags::FIX_INTERNAL_EDGES } else { TriMeshFlags::empty() };
+        let flags = if one_sided { TriMeshFlags::FIX_INTERNAL_EDGES | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES } else { TriMeshFlags::empty() };
         let collider = ColliderBuilder::trimesh_with_flags(vertices, triangles, flags).map_err(|e| Error::Mesh(e.to_string()))?;
-        self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION));
+        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
         Ok(())
     }
 
     pub fn add_static_hull(&mut self, points: &[[f32; 3]]) -> Result<(), Error> {
         let points: Vec<Vector> = points.iter().copied().map(Vector::from_array).collect();
         let collider = ColliderBuilder::convex_hull(&points).ok_or_else(|| Error::Mesh(format!("no convex hull of {} points", points.len())))?;
-        self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION));
+        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
         Ok(())
     }
 
@@ -396,6 +403,7 @@ impl World {
                 &self.hooks,
                 &self.hooks,
             );
+            self.guard_ragdolls();
             let started = self.hooks.started.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default();
             for s in started {
                 let bodies = s.colliders.map(|c| self.colliders.get(c).and_then(Collider::parent));

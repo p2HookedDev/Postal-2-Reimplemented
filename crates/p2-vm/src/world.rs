@@ -206,12 +206,14 @@ impl<L: LoaderRef> Vm<L> {
             let (mut positions, mut triangles) = (Vec::new(), Vec::new());
             let skip = poly_flags::PORTAL | poly_flags::FAKE_BACKDROP;
             for polygon in model.polygons() {
-                let solid = model.nodes.get(polygon.node).is_some_and(|n| n.node_flags & NF_NOT_CSG == 0);
-                if solid && polygon.poly_flags & skip == 0 {
+                let Some(node) = model.nodes.get(polygon.node).filter(|n| n.node_flags & NF_NOT_CSG == 0) else { continue };
+                if polygon.poly_flags & skip == 0 {
+                    let first = triangles.len();
                     fan(&mut positions, &mut triangles, &polygon.positions);
+                    face_along(&positions, &mut triangles[first..], [node.plane[0], node.plane[1], node.plane[2]].into());
                 }
             }
-            meshes.push(LevelMesh { vertices: positions, triangles, one_sided: false });
+            meshes.push(LevelMesh { vertices: positions, triangles, one_sided: true });
         }
         for terrain in &self.world.terrains {
             let triangles = terrain.karma_triangles().into_iter().map(|t| t.map(|i| i as u32)).collect();
@@ -691,6 +693,15 @@ pub(crate) mod trace {
     pub const ALL_COLLIDING: u32 = 0x9f;
 }
 
+fn face_along(positions: &[[f32; 3]], triangles: &mut [[u32; 3]], normal: Vector) {
+    for triangle in triangles {
+        let [a, b, c] = triangle.map(|i| Vector::from(positions[i as usize]));
+        if (b - a).cross(c - a).dot(normal) < 0.0 {
+            triangle.swap(1, 2);
+        }
+    }
+}
+
 fn brush_corners(model: &Model) -> impl Iterator<Item = [f32; 3]> + '_ {
     model.nodes.iter().flat_map(move |node| {
         (node.vert_pool..node.vert_pool + usize::from(node.num_vertices)).filter_map(move |i| model.verts.get(i).and_then(|v| model.points.get(v.point)).copied())
@@ -700,6 +711,16 @@ fn brush_corners(model: &Model) -> impl Iterator<Item = [f32; 3]> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fans_face_along_the_node_plane() {
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut triangles = [[0, 1, 2]];
+        face_along(&positions, &mut triangles, [0.0, 0.0, 1.0].into());
+        assert_eq!(triangles, [[0, 1, 2]]);
+        face_along(&positions, &mut triangles, [0.0, 0.0, -1.0].into());
+        assert_eq!(triangles, [[0, 2, 1]]);
+    }
 
     #[test]
     fn brush_corners_are_the_nodes_pool_points() {

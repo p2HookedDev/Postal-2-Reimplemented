@@ -23,7 +23,7 @@ p2-physics = { path = "crates/p2-physics" }
 p2-math = { path = "crates/p2-math" }
 p2-movie = { path = "crates/p2-movie" }
 anyhow = "1"
-rapier3d = "0.36"
+rapier3d = { version = "0.36", features = ["parallel"] }
 rayon = "1"
 bevy = { version = "0.20", default-features = false }
 bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }

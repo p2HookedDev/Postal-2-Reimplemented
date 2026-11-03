@@ -2,6 +2,8 @@
 //! with everything except pairs told not to and jointed pairs. The engine's contact callback drops ragdoll–Karma-actor
 //! and ragdoll–ragdoll contacts; ours keeps them so corpses stack and push props (our choice).
 
+use rapier3d::parry::query::details::RayCullingMode;
+use rapier3d::parry::query::Ray;
 use rapier3d::prelude::*;
 
 use crate::{BodyId, Shape, World, body_collider, body_pair, collider, to_rapier};
@@ -45,8 +47,86 @@ pub struct RagdollParams {
     pub friction: f32,
     pub restitution: f32,
     pub asleep: bool,
+    pub safe_point: p2_math::Vector,
 }
 
+struct Limb {
+    part: BodyId,
+    parent: Option<BodyId>,
+    pivot: Vector,
+    points: Vec<Vector>,
+    moved: Vec<BodyId>,
+    radius: f32,
+}
+
+/// Swings back limbs that crossed into the level, which contacts cannot do; teleporting them would stretch joints and fling the corpse.
+pub(crate) struct Guard {
+    limbs: Vec<Limb>,
+    root: BodyId,
+    safe: Vector,
+    rest: Vec<Vector>,
+    settling: f32,
+}
+
+fn guards(params: &RagdollParams, bodies: &[BodyId]) -> Vec<Guard> {
+    let radius = |part: usize| {
+        params.parts[part].shapes.iter().fold(0.0, |most: f32, shape| match shape {
+            Shape::Sphere(_, radius) | Shape::Capsule(_, _, radius) => most.max(*radius),
+            Shape::Box(_) | Shape::Hull(_) => most,
+        })
+    };
+    let mut seen = vec![false; bodies.len()];
+    let mut guards = Vec::new();
+    for root in (0..bodies.len()).filter(|&part| !params.parts[part].shapes.is_empty()) {
+        if std::mem::replace(&mut seen[root], true) {
+            continue;
+        }
+        let centre = |part: usize| to_rapier(params.parts[part].center_of_mass);
+        let mut tree = vec![(root, None, centre(root))];
+        let mut points = vec![vec![centre(root)]];
+        let mut next = 0;
+        while let Some(&(from, ..)) = tree.get(next) {
+            for joint in &params.joints {
+                let (to, at_from, at_to) = if joint.parent == from {
+                    (joint.child, joint.parent_anchor, joint.child_anchor)
+                } else if joint.child == from {
+                    (joint.parent, joint.child_anchor, joint.parent_anchor)
+                } else {
+                    continue;
+                };
+                if to < bodies.len() && !std::mem::replace(&mut seen[to], true) {
+                    points[next].push(to_rapier(at_from));
+                    tree.push((to, Some(next), to_rapier(at_to)));
+                    points.push(vec![centre(to)]);
+                }
+            }
+            next += 1;
+        }
+        let mut moved: Vec<Vec<BodyId>> = tree.iter().map(|&(part, ..)| vec![bodies[part]]).collect();
+        for i in (1..tree.len()).rev() {
+            if let Some(parent) = tree[i].1 {
+                let further = moved[i].clone();
+                moved[parent].extend(further);
+            }
+        }
+        let limbs = tree
+            .iter()
+            .zip(points)
+            .zip(moved)
+            .map(|((&(part, parent, pivot), points), moved)| Limb { part: bodies[part], parent: parent.map(|p| bodies[tree[p].0]), pivot, points, moved, radius: radius(part) })
+            .collect();
+        let safe = if guards.is_empty() { params.safe_point } else { params.parts[root].location };
+        guards.push(Guard { limbs, root: bodies[root], safe: to_rapier(safe), rest: Vec::new(), settling: 0.0 });
+    }
+    guards
+}
+
+const SURFACE_GAP: f32 = 0.5;
+/// A pile trembles in place too fast for Rapier's sleep test, so rest is judged by distance over time.
+const SETTLE_DISTANCE: f32 = 2.0;
+const SETTLE_TIME: f32 = 0.5;
+const SETTLE_SPEED: f32 = 60.0;
+const SETTLE_FADE: f32 = 0.3;
 const SLEEP_SPEED: f32 = 1.5;
 const SLEEP_ANGULAR_SPEED: f32 = 1.0;
 const SLEEP_TIME: f32 = 0.5;
@@ -125,6 +205,7 @@ impl World {
             self.ragdoll_joint(joint, &bodies);
         }
         self.filter_self_collision(&params.joints, &bodies);
+        self.guards.extend(guards(params, &bodies));
         if params.asleep {
             for id in &bodies {
                 if let Some(body) = self.bodies.get_mut(id.0) {
@@ -144,7 +225,6 @@ impl World {
             .additional_mass_properties(mass)
             .linear_damping(params.linear_damping)
             .angular_damping(params.angular_damping)
-            .ccd_enabled(true)
             .build();
         let handle = self.bodies.insert(body);
         if let Some(body) = self.bodies.get_mut(handle) {
@@ -219,6 +299,7 @@ impl World {
 
     pub fn remove_ragdoll(&mut self, bodies: &[BodyId]) {
         self.hooks.disabled.retain(|&(a, b)| !bodies.contains(&BodyId(a)) && !bodies.contains(&BodyId(b)));
+        self.guards.retain(|guard| !bodies.contains(&guard.root));
         for &id in bodies {
             self.take_out_body(id);
         }
@@ -230,6 +311,113 @@ impl World {
                 body.wake_up(true);
             }
         }
+    }
+
+    pub(crate) fn guard_ragdolls(&mut self) {
+        let mut guards = std::mem::take(&mut self.guards);
+        for guard in &mut guards {
+            self.guard(guard);
+        }
+        self.guards = guards;
+    }
+
+    fn guard(&mut self, guard: &mut Guard) {
+        if self.is_sleeping(guard.root) {
+            return;
+        }
+        let Some(root) = guard.limbs.first() else { return };
+        let Some(body) = self.bodies.get(root.part.0) else { return };
+        let centre = body.position().transform_point(root.pivot);
+        guard.safe = match self.level_hit(guard.safe, centre) {
+            Some((point, normal)) => {
+                let back = point + normal * SURFACE_GAP;
+                for part in &root.moved {
+                    let Some(body) = self.bodies.get_mut(part.0) else { continue };
+                    body.set_translation(body.translation() + back - centre, false);
+                    let into = body.linvel().dot(normal).min(0.0);
+                    body.set_linvel(body.linvel() - normal * into, false);
+                }
+                back
+            }
+            None => centre,
+        };
+        for limb in &guard.limbs {
+            for &point in &limb.points {
+                let Some(body) = self.bodies.get(limb.part.0) else { break };
+                let (pivot, end) = (body.position().transform_point(limb.pivot), body.position().transform_point(point));
+                if let Some((_, normal)) = self.level_hit(pivot, end) {
+                    self.swing_out(limb, pivot, end - pivot, normal);
+                }
+            }
+        }
+        self.settle(guard);
+    }
+
+    fn settle(&mut self, guard: &mut Guard) {
+        let at = |limb: &Limb| self.bodies.get(limb.part.0).map_or(Vector::ZERO, RigidBody::translation);
+        let settled = guard.settling >= SETTLE_TIME;
+        let moved = guard.rest.len() != guard.limbs.len() || guard.limbs.iter().zip(&guard.rest).any(|(limb, rest)| at(limb).distance_squared(*rest) > SETTLE_DISTANCE * SETTLE_DISTANCE);
+        let hit = settled && guard.limbs.iter().any(|limb| self.bodies.get(limb.part.0).is_some_and(|body| body.linvel().length_squared() > SETTLE_SPEED * SETTLE_SPEED));
+        if moved || hit {
+            guard.rest = guard.limbs.iter().map(at).collect();
+            guard.settling = 0.0;
+            if settled {
+                self.set_sleep_speed(guard, SLEEP_SPEED);
+            }
+            return;
+        }
+        guard.settling += self.parameters.dt;
+        if !settled && guard.settling >= SETTLE_TIME {
+            self.set_sleep_speed(guard, SETTLE_SPEED);
+        }
+        if guard.settling >= SETTLE_TIME {
+            for limb in &guard.limbs {
+                let Some(body) = self.bodies.get_mut(limb.part.0) else { continue };
+                body.set_linvel(body.linvel() * SETTLE_FADE, false);
+                body.set_angvel(body.angvel() * SETTLE_FADE, false);
+            }
+        }
+    }
+
+    fn set_sleep_speed(&mut self, guard: &Guard, speed: f32) {
+        let threshold = speed / self.parameters.length_unit;
+        for limb in &guard.limbs {
+            if let Some(body) = self.bodies.get_mut(limb.part.0) {
+                body.activation_mut().normalized_linear_threshold = threshold;
+            }
+        }
+    }
+
+    fn swing_out(&mut self, limb: &Limb, pivot: Vector, arm: Vector, normal: Vector) {
+        let flat = arm - normal * arm.dot(normal);
+        let flat = flat.try_normalize().unwrap_or_else(|| normal.any_orthonormal_vector()) * arm.length();
+        let turn = Rotation::from_rotation_arc(arm.normalize(), (flat + normal * (limb.radius + SURFACE_GAP)).normalize());
+        let velocity = limb.parent.and_then(|parent| self.bodies.get(parent.0)).map(RigidBody::linvel);
+        for part in &limb.moved {
+            let Some(body) = self.bodies.get_mut(part.0) else { continue };
+            body.set_translation(pivot + turn * (body.translation() - pivot), false);
+            body.set_rotation(turn * body.rotation(), false);
+            if let Some(velocity) = velocity {
+                body.set_linvel(velocity, false);
+            }
+            body.set_angvel(Vector::ZERO, false);
+        }
+    }
+
+    fn level_hit(&self, a: Vector, b: Vector) -> Option<(Vector, Vector)> {
+        let length = (b - a).length();
+        if length < 1e-3 {
+            return None;
+        }
+        let direction = (b - a) / length;
+        let ray = Ray::new(a, direction);
+        let hit = |collider: &Collider| match collider.shape().as_trimesh() {
+            Some(mesh) if mesh.flags().contains(TriMeshFlags::FIX_INTERNAL_EDGES) => mesh.cast_ray_with_culling(collider.position(), &ray, length, RayCullingMode::IgnoreBackfaces),
+            _ => collider.shape().cast_ray_and_get_normal(collider.position(), &ray, length, true).filter(|hit| hit.time_of_impact > 0.0),
+        };
+        let first = self.level.iter().filter_map(|&handle| self.colliders.get(handle)).filter_map(hit).min_by(|x, y| x.time_of_impact.total_cmp(&y.time_of_impact))?;
+        let normal = if first.normal.dot(direction) > 0.0 { -first.normal } else { first.normal };
+        Some((ray.point_at(first.time_of_impact), normal))
     }
 
     fn overlapping(&self, a: BodyId, b: BodyId) -> bool {
@@ -301,6 +489,7 @@ mod tests {
             friction: 0.8,
             restitution: 0.0,
             asleep: false,
+            safe_point: [0.0, 0.0, height].into(),
         }
     }
 
