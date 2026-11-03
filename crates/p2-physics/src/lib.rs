@@ -16,15 +16,11 @@ pub use background::Background;
 pub use hit::{Hit, Throw};
 pub use ragdoll::{JointLimit, JointParams, PartParams, RagdollParams, shapes_inertia};
 
-/// Unreal units per meter, for Rapier's length-dependent tolerances (Karma's scale is 50, unverified
-/// as the right choice here).
 const UNITS_PER_METER: f32 = 50.0;
-/// Longest step Rapier is given; longer frames are split. Rapier's contacts and joints are tuned for
-/// 60 Hz: at 30 Hz ragdoll parts sink into the ground by over half their radius on landing.
+/// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing.
 const MAX_STEP: f32 = 1.0 / 60.0;
 const MAX_SUBSTEPS: f32 = 30.0;
-/// Friction and restitution of level geometry. Pairs multiply their coefficients (like Karma's `KFriction`,
-/// "multiplied pairwise"), so the level leaves a body's own values in charge (unverified for Karma's level).
+/// Pairs multiply their coefficients, so the level leaves a body's own values in charge.
 const LEVEL_FRICTION: f32 = 1.0;
 const LEVEL_RESTITUTION: f32 = 1.0;
 
@@ -192,7 +188,7 @@ impl World {
         }
     }
 
-    /// Level triangles (BSP, terrain). A triangle's front is the side its corners run counter-clockwise from.
+    /// A triangle's front is the side its corners run counter-clockwise from.
     pub fn add_static_mesh(&mut self, vertices: &[[f32; 3]], triangles: Vec<[u32; 3]>) -> Result<(), Error> {
         let vertices = vertices.iter().copied().map(Vector::from_array).collect();
         let flags = TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;

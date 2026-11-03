@@ -14,17 +14,14 @@ use crate::bones::PosedMesh;
 use crate::karma::{IMPULSE_SCALE, matrix_to_quat};
 use crate::{ClassId, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
 
-/// Each part's speed cap after a step: 20 Karma units/s (×50 = 1000), as retail.
 const MAX_SPEED: f32 = 1000.0;
-/// A corpse's friction, in place of `KFriction` (0.7 on a pawn): 0.3, as Karma corpses slide 200-500 units
-/// to rest (unverified); the level's is 1.0 and pairs multiply.
+/// In place of `KFriction` (0.7 on a pawn): Karma corpses slide 200-500 units to rest (unverified).
 const CORPSE_FRICTION: f32 = 0.3;
-/// Every `.ka` cone half angle is widened by this: corpses sprawl rather than fold ...
+/// Corpses sprawl rather than fold ...
 const CONE_SCALE: f32 = 1.3;
-/// ... up to this: wider cones let limbs wrap around the body.
+/// ... but wider cones let limbs wrap around the body.
 const MAX_CONE: f32 = 1.55;
-/// The least twist a skeletal joint allows: a fixed twist held at exactly 0 fights the
-/// cone and makes limbs flip.
+/// A fixed twist held at exactly 0 fights the cone and makes limbs flip.
 const MIN_TWIST: f32 = 0.1;
 const THROWS: [(&str, Throw); 9] = [
     ("ShotGunDamage", Throw { per_damage: 11.0, ceiling: 650.0, lift: 0.3, falloff: true, tumble: false }),
@@ -38,7 +35,6 @@ const THROWS: [(&str, Throw); 9] = [
     ("BludgeonDamage", Throw { per_damage: 10.0, ceiling: 550.0, lift: 0.25, falloff: false, tumble: false }),
 ];
 const HIT_TICKS: u64 = 2;
-/// A bone whose `SetBoneScale` (times its parents') is below this is cut away: no body, drawn shrunk to nothing.
 /// Scripts cut with 0 or 1/1000; a 0.2 stump keeps its body.
 const CUT_SCALE: f32 = 0.01;
 
@@ -47,7 +43,6 @@ struct SeenHit {
     tick: u64,
     hit: Hit,
 }
-/// A joint whose two ends drift further apart than 1 Karma unit (×50) sends `KExcessiveJointError`.
 const MAX_JOINT_ERROR: f32 = 50.0;
 
 #[derive(Default)]
@@ -89,14 +84,11 @@ struct Ragdoll {
     frames: Arc<[Frame]>,
     fresh: bool,
     posed_asleep: Option<bool>,
-    /// Where its parts were after the last step applied (or when made): lines and impulses test these while the
-    /// world steps, in step with the actor's `Location`.
+    /// Lines and impulses test these while the world steps.
     parts: Parts,
     scales: ResolvedScales,
     cut_refused: bool,
-    /// The first bone with a body, and the root bone's frame relative to that body as made: the root has no body and moves
-    /// with it, or a cut corpse's root stays where the cut was and `SetBoneScale` pins the drawn top half there
-    /// (`ChopInHalf`).
+    /// A bodiless root moves with this body, or `SetBoneScale` pins a cut corpse's drawn top half at the cut.
     root_offset: Option<(usize, Frame)>,
 }
 
@@ -121,7 +113,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(world.iter().map(|frame| to_mesh.then(frame)).collect())
     }
 
-    /// `SetBoneScale` applies over the ragdoll's pose as over an animation's, so a cut limb or head stays gone on the corpse.
     pub(crate) fn ragdoll_world_frames(&self, actor: ObjectId) -> Option<Arc<[Frame]>> {
         let ragdolls = &self.karma.ragdolls;
         let live = ragdolls.live.get(&actor);
@@ -158,12 +149,11 @@ impl<L: LoaderRef> Vm<L> {
         (!scales.is_empty()).then(|| mesh.names.iter().map(|name| scales.iter().filter(|(n, _)| n == name).map(|(_, s)| s).product()).collect())
     }
 
-    /// For a live ragdoll. Retail's frozen-ragdoll box is not modelled: a kept pose keeps the cylinder.
+    /// Retail's frozen-ragdoll box is not modelled: a kept pose keeps the cylinder.
     pub(crate) fn ragdoll_box(&self, actor: ObjectId) -> Option<(Vector, Vector)> {
         self.karma.ragdolls.live.get(&actor)?.parts.bounds()
     }
 
-    /// For a line: no pull-back. `None` when the actor is not in `PHYS_KarmaRagDoll`: check its cylinder.
     pub(crate) fn ragdoll_line_check(&self, actor: ObjectId, start: Vector, end: Vector) -> Option<Option<p2_collision::Hit>> {
         if self.physics_of(actor) != Some(EPhysics::KarmaRagDoll) {
             return None;
@@ -176,7 +166,7 @@ impl<L: LoaderRef> Vm<L> {
         }))
     }
 
-    /// Entering makes the ragdoll now, so `KSetSkelVel` and `KAddImpulse` right after it reach the bodies.
+    /// Now, so that `KSetSkelVel` and `KAddImpulse` right after it reach the bodies.
     pub(crate) fn ragdoll_physics_changed(&mut self, actor: ObjectId, old: Option<EPhysics>) {
         let physics = self.physics_of(actor);
         if old == Some(EPhysics::KarmaRagDoll) && physics != Some(EPhysics::KarmaRagDoll) {
@@ -227,8 +217,6 @@ impl<L: LoaderRef> Vm<L> {
         self.rebuild_cut_ragdolls();
     }
 
-    /// Corpses with a body on a bone the script has since cut away are made again from their pose without it; one that would
-    /// keep fewer than two bodies stays as it is and is not tried again.
     fn rebuild_cut_ragdolls(&mut self) {
         let changed: Vec<(ObjectId, ResolvedScales)> = self
             .karma
@@ -280,11 +268,7 @@ impl<L: LoaderRef> Vm<L> {
         for actor in actors {
             let Some((location, velocity, torn)) = self.pose_ragdoll(actor) else { continue };
             self.set_vector(actor, Prop::Velocity, velocity);
-            // Retail's move passes the rotation (0,0,0) every step: the bodies carry the pose, and the bones are drawn
-            // in mesh space at the actor's rotation now (`ragdoll_pose`), so the drawn pose does not change.
             self.set(actor, Prop::Rotation, Value::Rotator([0; 3].into()));
-            // Retail moves the actor to the root body with a move that touches; `set_location` does not,
-            // so the touch update follows the placement.
             if self.vector(actor, Prop::Location) != location
                 && let Err(e) = self.set_location(actor, location).and_then(|()| self.update_touching(actor))
             {
@@ -358,8 +342,7 @@ impl<L: LoaderRef> Vm<L> {
             self.karma.ragdolls.failed.insert(actor);
             return;
         };
-        // A fresh ragdoll is drawn from these frames as they are (`ragdoll_world_frames`): a cut corpse's pose takes
-        // the bone scales the animated one already has, or the cut limb shows again until the first step.
+        // Or the cut limb shows again until the first step.
         let frames: Arc<[Frame]> = match pose.filter(|pose| pose.len() == animated.len()) {
             Some(mut pose) => {
                 if let Some(own) = self.bone_scale_factors(actor, &mesh) {
@@ -373,8 +356,7 @@ impl<L: LoaderRef> Vm<L> {
         let cut = cut_of(own.as_deref(), &mesh.parents);
         let k = |name: Prop, default: f32| self.get(params, name).as_ref().map_or(default, crate::interp::float);
         let (linear_damping, angular_damping) = (k(Prop::KLinearDamping, 0.2), k(Prop::KAngularDamping, 0.2));
-        // Corpses do not bounce (restitution 0; `KRestitution` 0.3 against the level's 1.0
-        // made them hop).
+        // `KRestitution` made corpses hop.
         let (friction, restitution) = (CORPSE_FRICTION, 0.0);
         let asleep = !self.flag_of(params, Prop::KStartEnabled);
         let velocity = self.vector(actor, Prop::Velocity);
@@ -458,8 +440,6 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 Some(Ok(None))
             }
-            // Traces do not record bones here: a ragdoll made this tick takes it on its first bone's body,
-            // an older one on the body nearest the given position.
             Native::KAddImpulse if live => {
                 let impulse = crate::natives::vec3(args.first()).map(|c| c * IMPULSE_SCALE);
                 let at = crate::natives::vec3(args.get(1));
@@ -473,8 +453,7 @@ impl<L: LoaderRef> Vm<L> {
                 let seen = self.take_hit(this);
                 let (Some(world), Some(ragdoll)) = (self.karma.world.as_mut(), self.karma.ragdolls.live.get(&this)) else { return Some(Ok(None)) };
                 let target = if let Some(index) = named {
-                    // A bone without a body (`BONE_PELVIS` on a corpse cut in half) passes the hit to the body nearest
-                    // it: else every shot and kick on the top half was lost.
+                    // Else every shot and kick on a cut corpse's top half is lost.
                     index.and_then(|i| ragdoll.bodies.get(i).copied().flatten()).or_else(|| ragdoll.parts.nearest_body(at))
                 } else if ragdoll.fresh {
                     ragdoll.bodies.iter().flatten().next().copied()
@@ -557,8 +536,7 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// In file name order like retail's asset load; of assets with the same id the first file's is found,
-    /// so `Avg_Fem.ka` wins over `Avg_Fem_Skel.ka`.
+    /// In file name order, as retail: `Avg_Fem.ka` wins over `Avg_Fem_Skel.ka`.
     pub(crate) fn karma_assets(&mut self) -> &HashMap<String, Arc<KarmaAsset>> {
         if self.karma.ragdolls.assets.is_none() {
             let phase = self.profile_start();
@@ -646,9 +624,7 @@ fn build(asset: &KarmaAsset, mesh: &PosedMesh, frames: &[Frame], velocity: Vecto
                 })
                 .collect()
         });
-        // A cut leaves out a shapeless body none of whose joints remain: the root's (`dynamics_only`) hangs only on
-        // the cut pelvis; colliding with nothing, it fell through the level and the drawn top half went with it.
-        // Shapeless bodies inside the chain (neck, clavicles, `spine1`) keep their joints and stay.
+        // Colliding with nothing, such a body falls through the level and takes the drawn top half with it.
         let jointed = || {
             asset.joints.iter().any(|joint| {
                 let [a, b] = &joint.parts;
@@ -659,7 +635,7 @@ fn build(asset: &KarmaAsset, mesh: &PosedMesh, frames: &[Frame], velocity: Vecto
             continue;
         }
         let frame = &frames[bone];
-        // Inertia from the collision shapes; the file's (Karma's 1 m sphere placeholder) only for a shapeless part.
+        // The file's inertia is a placeholder.
         let file_inertia = [model.inertia[0], model.inertia[3], model.inertia[5]].map(|i| i * asset.mass_scale * to_unreal * to_unreal).into();
         let inertia = p2_physics::shapes_inertia(&shapes, model.mass * asset.mass_scale).unwrap_or(file_inertia);
         part_of_bone[bone] = Some(parts.len());
@@ -709,8 +685,7 @@ fn build(asset: &KarmaAsset, mesh: &PosedMesh, frames: &[Frame], velocity: Vecto
             }
             KaJointKind::Other(_) => JointLimit::Cone { swing: None, twist: None },
         };
-        // The joint sits at the child's end as the bones are now; the engine takes the parent's end from the asset
-        // (POS2), which differs from the mesh's bones by up to ~8 units (ours: no jolt at the start).
+        // Retail takes the parent's end from the asset, up to ~8 units off the bones; ours has no jolt at the start.
         let child_anchor = unreal(joint.positions[0].into());
         let world_anchor = unit(child_bone).transform_point(child_anchor.into());
         let parent_anchor = unit(parent_bone).inverse().map_or(child_anchor, |inv| inv.transform_point(world_anchor).into());
@@ -735,8 +710,7 @@ fn orthonormal([x, y, _]: [Vector; 3]) -> [Vector; 3] {
     [x, y, x.cross(y)]
 }
 
-/// In each bone's local space before the chain, as retail: a bone at 0 collapses its whole chain
-/// onto its joint. Parents come before their children.
+/// A bone at 0 collapses its whole chain onto its joint. Parents come before their children.
 fn scale_frames(frames: &mut [Frame], own: &[f32], parents: &[usize]) {
     let original = frames.to_vec();
     let mut changed = vec![false; frames.len()];

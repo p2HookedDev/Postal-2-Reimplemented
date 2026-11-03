@@ -215,7 +215,7 @@ impl<L: LoaderRef> Vm<L> {
         map
     }
 
-    /// The local pose a tween starts from: `None` when no channel plays yet, so that a first animation starts at once.
+    /// `None` when no channel plays yet: a first animation starts at once.
     pub(crate) fn kept_pose(&mut self, actor: ObjectId) -> Option<Arc<[LocalBone]>> {
         let mesh_object = self.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;

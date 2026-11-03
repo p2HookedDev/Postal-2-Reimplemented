@@ -1,6 +1,4 @@
-//! Ragdolls: a body per part, joints between parts. A ragdoll's parts collide
-//! with everything except pairs told not to and jointed pairs. The engine's contact callback drops ragdoll–Karma-actor
-//! and ragdoll–ragdoll contacts; ours keeps them so corpses stack and push props (our choice).
+//! Retail drops contacts between ragdolls and with props; ours keeps them so corpses stack and push props.
 
 use rapier3d::prelude::*;
 
@@ -47,20 +45,17 @@ pub struct RagdollParams {
     pub asleep: bool,
 }
 
-/// Karma's limit, a squared speed of 0.02 in Karma units. Parts in a pile tremble just under it.
+/// Karma's limit. Piles tremble just under it.
 const SLEEP_SPEED: f32 = 7.07;
 const SLEEP_ANGULAR_SPEED: f32 = 1.0;
 const SLEEP_TIME: f32 = 1.0;
-/// The child / parent mass ratio a joint may keep. Rapier's iterative solver lets parts of very different mass drift
-/// apart, and the shipped parts range from 0.0015 to 0.43.
+/// Rapier's iterative solver lets parts of very different mass drift apart.
 const MASS_RATIO: [f32; 2] = [0.8, 1.2];
-/// Angle limits are a separate soft joint. Rapier corrects a stiff joint's error in one step with no speed cap, so a limb
-/// past its limit, as in a kneeling pose or a hard landing, throws the corpse at the speed cap.
+/// Rapier corrects a stiff limit in one step with no speed cap, which throws the corpse.
 const LIMIT_HZ: f32 = 15.0;
 const LIMIT_DAMPING: f32 = 5.0;
 
-/// Each jointed tree keeps its total mass. Script impulses act on these masses unscaled, so the body's overall flight
-/// stays retail's.
+/// Each jointed tree keeps its total mass, so the body's flight stays retail's.
 fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math::Vector)> {
     let n = parts.len();
     let mut parent = vec![None; n];
@@ -95,8 +90,7 @@ fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math:
         .collect()
 }
 
-/// The same about every axis, the mean of the shapes' inertia: Karma spins a body as a sphere unless
-/// `bKNonSphericalInertia` is set, and no shipped script sets it.
+/// Spherical, as Karma without `bKNonSphericalInertia`, which no script sets.
 pub fn shapes_inertia(shapes: &[Shape], mass: f32) -> Option<p2_math::Vector> {
     let props = shapes.iter().filter_map(collider).map(|builder| builder.build().mass_properties()).reduce(|a, b| a + b)?;
     let scale = mass / props.mass();
@@ -185,10 +179,8 @@ impl World {
         }
     }
 
-    /// Self-collision: jointed parts never collide
-    /// (Jolt's `DisableParentChildCollisions`; a jointed pair colliding fights its joint and flings the corpse);
-    /// other parts at most two joints apart (siblings too) only not when they already touch where the ragdoll
-    /// starts. The `.ka` file's no-collision table, which turns off nearly every pair, is not used.
+    /// Parts two joints apart collide unless they touch at the start. The `.ka` no-collision table, which turns off
+    /// nearly every pair, is not used.
     fn filter_self_collision(&mut self, joints: &[JointParams], bodies: &[BodyId]) {
         let n = bodies.len();
         let mut near = vec![vec![false; n]; n];

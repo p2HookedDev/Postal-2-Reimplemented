@@ -114,7 +114,6 @@ fn blend_bone(base: &mut LocalBone, over: &LocalBone, alpha: f32) {
     *base = (rotation, [0, 1, 2].map(|i| base.1[i] + (over.1[i] - base.1[i]) * alpha));
 }
 
-/// Moves `pose` from the kept pose `from` towards itself. A kept pose of another mesh is ignored.
 pub fn tween_pose(from: &[LocalBone], pose: &mut [LocalBone], weight: f32) {
     if from.len() != pose.len() {
         return;

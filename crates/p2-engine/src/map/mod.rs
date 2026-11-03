@@ -79,8 +79,9 @@ pub fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGl
         Camera {
             // After the 3D view (0), the HUD's actors and canvas layers (1 to 8) and the gamma ramp (9).
             order: 10,
+            // Additive canvas tiles have colour but no alpha.
             output_mode: CameraOutputMode::Write {
-                blend_state: Some(BlendState::ALPHA_BLENDING),
+                blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                 clear_color: ClearColorConfig::None,
             },
             clear_color: ClearColorConfig::Custom(Color::NONE),

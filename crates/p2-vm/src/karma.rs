@@ -270,8 +270,7 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    /// As retail, only static meshes with `bBlockKarma` stop Karma bodies, and never by their triangles: simple collision
-    /// gives the mesh's `KPhysicsProps` shapes, or nothing without them; otherwise one convex hull of all its points.
+    /// As retail, never by triangles: `KPhysicsProps` shapes with simple collision, otherwise one convex hull.
     fn karma_static_shapes(&mut self) -> Vec<(Shape, Vector, [f32; 4])> {
         let actors: Vec<ObjectId> = self
             .actors()

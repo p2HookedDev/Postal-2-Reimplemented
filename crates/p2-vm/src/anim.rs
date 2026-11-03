@@ -64,8 +64,6 @@ pub struct AnimChannel {
 }
 
 impl AnimChannel {
-    /// The pose kept when this tween began, and how far the channel has moved from it. The start pose's share falls
-    /// linearly with the frame.
     pub fn tween(&self) -> Option<(&Arc<[LocalBone]>, f32)> {
         self.tween_from.as_ref().filter(|_| self.frame < 0.0).map(|from| (from, 1.0 - self.frame / self.tween_start))
     }

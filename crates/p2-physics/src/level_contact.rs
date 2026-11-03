@@ -1,11 +1,10 @@
-//! Contacts with one-sided level triangles, as Karma makes them: the normal is the face's even when the shape's centre
-//! is behind the triangle, so a part that got behind the level is pushed back out. Rapier alone would push it further in.
+//! As Karma, a shape behind a level triangle is pushed to its front; Rapier alone would push it further in.
 
 use rapier3d::prelude::*;
 
 pub(crate) const ONE_SIDED: u128 = 1;
 
-/// Other shapes count as a point at their bounding box's centre: an actor's origin can lie outside the shape.
+/// Not the origin for other shapes: an actor's origin can lie outside its shape.
 fn axis(collider: &Collider) -> ([Vector; 2], Option<f32>) {
     let pose = collider.position();
     if let Some(capsule) = collider.shape().as_capsule() {

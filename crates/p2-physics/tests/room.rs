@@ -214,7 +214,6 @@ fn q_axis(axis: [f32; 3], angle: f32) -> [f32; 4] {
     [axis[0] * s, axis[1] * s, axis[2] * s, c]
 }
 
-/// `sink` is how far the shins' axis lies under the floor.
 fn kneeling(sink: f32) -> RagdollParams {
     let floor = -HALF[2];
     let upright = q_axis([0.0, 1.0, 0.0], -std::f32::consts::FRAC_PI_2);
