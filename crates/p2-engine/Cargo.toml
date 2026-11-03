@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 p2-math.workspace = true
-bevy = { workspace = true, features = ["3d", "bevy_audio", "wav", "vorbis", "pbr_clustered_decals", "bevy_sprite_render"] }
+bevy = { workspace = true, features = ["async_executor", "bevy_asset", "bevy_log", "bevy_state", "std", "bevy_winit", "bevy_clipboard", "multi_threaded", "bevy_camera", "bevy_color", "bevy_curve", "bevy_image", "bevy_mesh", "bevy_shader", "bevy_material", "bevy_window", "bevy_light", "bevy_mikktspace", "bevy_render", "bevy_core_pipeline", "bevy_anti_alias", "bevy_pbr", "bevy_post_process", "bevy_audio", "wav", "vorbis", "pbr_clustered_decals", "bevy_sprite_render"] }
 bevy_egui.workspace = true
 dirs.workspace = true
 rustc-hash.workspace = true

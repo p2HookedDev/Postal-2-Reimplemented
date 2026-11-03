@@ -205,8 +205,13 @@ impl Game {
     }
 
     fn script_loader(system: &Path) -> Result<Loader, ResolveError> {
-        let own = crate::game_dir::config_folder().map(|dir| dir.join("Packages").join("*.u"));
-        let mut loader = Loader::open_with(system, &own.map(|path| path.to_string_lossy().into_owned()).into_iter().collect::<Vec<_>>())?;
+        let beside_exe = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.to_path_buf()));
+        let own: Vec<String> = [crate::game_dir::config_folder(), beside_exe]
+            .into_iter()
+            .flatten()
+            .map(|dir| dir.join("Packages").join("*.u").to_string_lossy().into_owned())
+            .collect();
+        let mut loader = Loader::open_with(system, &own)?;
         loader.load_scripts()?;
         Ok(loader)
     }

@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build
+        run: cargo build --release --workspace
+        env:
+          RUSTFLAGS: -Ctarget-feature=+crt-static
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $exe = "target/release/p2-game.exe"
+          if (Select-String -Path $exe -SimpleMatch "VCRUNTIME140" -Quiet) { throw "the exe needs VCRUNTIME140.dll" }
+          New-Item -ItemType Directory -Force dist/P2Reimplemented/Packages | Out-Null
+          # Our menu package needs the game's editor to compile, so it comes from a fixed release, not from git.
+          gh release download p2modern-package --pattern P2Modern.u --dir dist/P2Reimplemented/Packages
+          Copy-Item $exe, LICENSE, README.md dist/P2Reimplemented/
+          Compress-Archive dist/P2Reimplemented "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip"
+
+      - name: Publish
+        shell: pwsh
+        run: gh release create $env:GITHUB_REF_NAME "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip" --verify-tag --generate-notes

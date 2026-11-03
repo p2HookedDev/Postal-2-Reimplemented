@@ -116,4 +116,39 @@ opt-level = 3
 
 [profile.release]
 codegen-units = 1
-lto = "thin"
+lto = "fat"
+strip = true
+
+# Dependencies are built for size, except those on the frame's critical path.
+[profile.release.package."*"]
+opt-level = "s"
+[profile.release.package.bevy_ecs]
+opt-level = 3
+[profile.release.package.bevy_render]
+opt-level = 3
+[profile.release.package.bevy_pbr]
+opt-level = 3
+[profile.release.package.bevy_core_pipeline]
+opt-level = 3
+[profile.release.package.bevy_transform]
+opt-level = 3
+[profile.release.package.bevy_camera]
+opt-level = 3
+[profile.release.package.bevy_light]
+opt-level = 3
+[profile.release.package.wgpu]
+opt-level = 3
+[profile.release.package.wgpu-core]
+opt-level = 3
+[profile.release.package.wgpu-hal]
+opt-level = 3
+[profile.release.package.rapier3d]
+opt-level = 3
+[profile.release.package.parry3d]
+opt-level = 3
+[profile.release.package.nalgebra]
+opt-level = 3
+[profile.release.package.simba]
+opt-level = 3
+[profile.release.package.glam]
+opt-level = 3
