@@ -2,6 +2,7 @@
 
 # Game data must never be committed
 *.u
+!script/P2Modern/P2Modern.u
 *.utx
 *.usx
 *.ukx

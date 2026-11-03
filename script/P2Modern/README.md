@@ -16,8 +16,7 @@ menu helpers, so it looks like the retail pages.
 
 ## Building
 
-Build time only: UCC and the `EditPackages` line are needed to compile, never to play. Only the `.uc` sources live
-in git; the built `P2Modern.u` ships in the build zips. A rebuild needs the POSTAL 2 editor: only its `System\UCC.exe`
+Build time only: UCC and the `EditPackages` line are needed to compile, never to play. The built `P2Modern.u` is our own file and lives in git here, so a release needs no editor. A rebuild needs the POSTAL 2 editor: only its `System\UCC.exe`
 compiles this package.
 
 To build, from the install
