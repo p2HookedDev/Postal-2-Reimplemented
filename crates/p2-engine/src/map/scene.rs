@@ -62,6 +62,12 @@ impl PendingAssets {
         }
     }
 
+    pub(super) fn add_image_as(&mut self, handle: Handle<Image>, image: Image) -> Handle<Image> {
+        self.image_sizes.insert(handle.id(), image.size());
+        self.images.push((handle.clone(), image));
+        handle
+    }
+
     pub fn insert(self, t: &mut SceneTargets) {
         for (image, source) in self.wet {
             t.assets.wet.add(image, source);
@@ -86,9 +92,7 @@ impl SceneAssets for PendingAssets {
 
     fn add_image(&mut self, image: Image) -> Handle<Image> {
         let handle = self.image_ids.reserve_handle().typed::<Image>();
-        self.image_sizes.insert(handle.id(), image.size());
-        self.images.push((handle.clone(), image));
-        handle
+        self.add_image_as(handle, image)
     }
 
     fn add_bindposes(&mut self, bindposes: SkinnedMeshInverseBindposes) -> Handle<SkinnedMeshInverseBindposes> {
@@ -119,6 +123,7 @@ impl ActorTexture {
 }
 
 pub(crate) struct PreparedScene {
+    emitter_models: HashMap<spawned::ModelKey, Option<spawned::SpawnModel>>,
     package: String,
     game: Game,
     animations: HashMap<PackageId, Arc<[Arc<MeshAnimation>]>>,
@@ -418,8 +423,12 @@ impl Session {
     }
 
     pub(super) fn show_scene(&mut self, prepared: PreparedScene, t: &mut SceneTargets) -> Result<String, LoadError> {
-        let PreparedScene { package, game: built, animations, vm_animations, assets, scene, played, animated, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches } = prepared;
+        let PreparedScene { emitter_models, package, game: built, animations, vm_animations, assets, scene, played, animated, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches } = prepared;
         assets.insert(t);
+        for model in emitter_models.values() {
+            spawned::keep_static_meshes(t, model.as_ref());
+        }
+        self.spawn_models.extend(emitter_models);
         self.hud_assets = hud;
         let (game, _) = self.library.open(&self.root, &package)?;
         game.adopt(&built);
@@ -607,6 +616,11 @@ impl PreparedScene {
         for path in emitter_textures.chain(sprites.iter().map(|sprite| sprite.texture.as_str())).chain(coronas.iter().map(|corona| corona.texture.as_str())) {
             actor_textures.entry(path.to_owned()).or_insert_with(|| ActorTexture::read(game, path, |image| t.add_image(image)));
         }
+        let emitter_meshes = emitters.iter().flat_map(|(_, emitter)| emitter.emitters.iter().zip(&emitter.meshes)).filter(|((p, _), _)| p.kind == p2_particles::EmitterKind::Mesh).filter_map(|(_, mesh)| mesh.as_deref());
+        let mut emitter_models = HashMap::new();
+        for path in emitter_meshes {
+            emitter_models.entry(spawned::static_model_key(path, &[])).or_insert_with(|| spawned::build_static_model(game, t, path, &[]));
+        }
         phase("actors");
         let projector_count = projectors.len();
         let decals: Vec<_> = projectors.iter().filter_map(|projector| projector_decal(game, t, projector)).collect();
@@ -672,7 +686,7 @@ impl PreparedScene {
         };
         phase("rest");
         bevy::log::info!("load: {package} scene built in {} ms ({})", clock.elapsed().as_millis(), times.join(", "));
-        Ok(Self { package: package.to_owned(), game: built, animations, vm_animations, assets, scene, played, animated: animated_meshes, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches })
+        Ok(Self { emitter_models, package: package.to_owned(), game: built, animations, vm_animations, assets, scene, played, animated: animated_meshes, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches })
     }
 }
 

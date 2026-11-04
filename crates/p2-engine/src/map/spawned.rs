@@ -1,4 +1,5 @@
 use super::*;
+use crate::map::particles::attach_late_pools;
 use crate::mesh_view::ActorMaterialKey;
 use super::scene::{PendingAssets, VmAnimations};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
@@ -20,13 +21,46 @@ pub(super) fn static_model_key(path: &str, skins: &[Option<String>]) -> ModelKey
     ModelKey::Static { path: path.to_owned(), skins: skins.to_vec() }
 }
 
+pub(super) struct TextureBuild {
+    path: String,
+    image: Handle<Image>,
+    task: Task<std::thread::Result<(Game, PendingAssets, Option<ActorTexture>)>>,
+}
+
+impl TextureBuild {
+    fn start(game: &Game, t: &SceneTargets, path: &str) -> Self {
+        let image = t.assets.images.get_handle_provider().reserve_handle().typed::<Image>();
+        let (mut built, mut assets, reserved, read_path) = (game.clone(), PendingAssets::new(t), image.clone(), path.to_owned());
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            catch_unwind(AssertUnwindSafe(move || {
+                let texture = ActorTexture::read(&mut built, &read_path, |read| assets.add_image_as(reserved, read));
+                (built, assets, texture)
+            }))
+        });
+        Self { path: path.to_owned(), image, task }
+    }
+}
+
+pub(super) fn actor_image(cache: &HashMap<String, Option<ActorTexture>>, builds: &mut Vec<TextureBuild>, game: &Game, t: &SceneTargets, path: &str) -> Option<Handle<Image>> {
+    if let Some(found) = cache.get(path) {
+        return found.as_ref().map(|texture| texture.image.clone());
+    }
+    if let Some(build) = builds.iter().find(|build| build.path == path) {
+        return Some(build.image.clone());
+    }
+    let build = TextureBuild::start(game, t, path);
+    let image = build.image.clone();
+    builds.push(build);
+    Some(image)
+}
+
 pub(super) fn static_model(game: &mut Game, t: &mut SceneTargets, path: &str, skins: &[Option<String>]) -> Option<SpawnModel> {
     let model = build_static_model(game, &mut t.assets, path, skins);
     keep_static_meshes(t, model.as_ref());
     model
 }
 
-fn build_static_model<S: SceneAssets>(game: &mut Game, t: &mut S, path: &str, skins: &[Option<String>]) -> Option<SpawnModel> {
+pub(super) fn build_static_model<S: SceneAssets>(game: &mut Game, t: &mut S, path: &str, skins: &[Option<String>]) -> Option<SpawnModel> {
     let (mesh_id, mesh_export) = game.export_by_path_of_class(path, "StaticMesh")?;
     let (mesh, materials) = {
         let (pkg, file) = game.data(mesh_id);
@@ -46,7 +80,7 @@ fn build_static_model<S: SceneAssets>(game: &mut Game, t: &mut S, path: &str, sk
     Some(SpawnModel::Static { mesh: Arc::new(mesh), sections })
 }
 
-fn keep_static_meshes(t: &mut SceneTargets, model: Option<&SpawnModel>) {
+pub(super) fn keep_static_meshes(t: &mut SceneTargets, model: Option<&SpawnModel>) {
     let Some(SpawnModel::Static { sections, .. }) = model else { return };
     for section in sections {
         if let Some(mut mesh) = t.assets.meshes.get_mut(&section.mesh) {
@@ -104,7 +138,7 @@ impl SpawnedActor {
 }
 
 pub(super) struct ModelBuild {
-    key: ModelKey,
+    pub(super) key: ModelKey,
     task: Task<std::thread::Result<BuiltModel>>,
 }
 
@@ -116,6 +150,17 @@ struct BuiltModel {
 }
 
 impl ModelBuild {
+    pub(super) fn start_static(game: &Game, t: &SceneTargets, key: ModelKey, path: String) -> Self {
+        let (mut built, mut assets) = (game.clone(), PendingAssets::new(t));
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            catch_unwind(AssertUnwindSafe(move || {
+                let model = build_static_model(&mut built, &mut assets, &path, &[]);
+                BuiltModel { game: built, assets, animations: HashMap::new(), model }
+            }))
+        });
+        Self { key, task }
+    }
+
     fn start(
         game: &Game,
         t: &SceneTargets,
@@ -229,18 +274,39 @@ impl Session {
             t.animated.0.retain(|item| item.actor.is_none_or(|actor| !restyled.contains(&actor)));
             self.spawn_waiting.retain(|waiting| !restyled.contains(&waiting.actor));
         }
-        if spawned.is_empty() && self.spawn_builds.is_empty() {
+        if spawned.is_empty() && self.spawn_builds.is_empty() && self.texture_builds.is_empty() {
             return;
         }
         let origin = world.origin();
         let emitters = spawned.iter_mut().filter_map(|s| s.emitter.take().map(|emitter| (s.actor, emitter))).collect();
         self.add_particles(emitters, origin, t);
-        let sprites = spawned.iter_mut().filter_map(|s| s.sprite.take()).collect();
-        self.add_sprites(sprites, origin, t);
-        let coronas = spawned.iter_mut().filter_map(|s| s.corona.take()).collect();
-        self.add_coronas(coronas, origin, t);
+        self.waiting_sprites.extend(spawned.iter_mut().filter_map(|s| s.sprite.take()));
+        self.waiting_coronas.extend(spawned.iter_mut().filter_map(|s| s.corona.take()));
         let found: Vec<SpawnedActor> = spawned.into_iter().filter_map(|s| SpawnedActor::new(s.actor, s.mesh, s.skeletal)).collect();
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
+        let (done, building): (Vec<TextureBuild>, Vec<TextureBuild>) = std::mem::take(&mut self.texture_builds).into_iter().partition(|build| build.task.is_finished());
+        self.texture_builds = building;
+        for TextureBuild { path, task, .. } in done {
+            let texture = match block_on(task) {
+                Ok((built, assets, texture)) => {
+                    assets.insert(t);
+                    game.adopt(&built);
+                    texture
+                }
+                Err(_) => {
+                    bevy::log::warn!("actor texture {path}: its read failed");
+                    None
+                }
+            };
+            self.actor_textures.insert(path, texture);
+        }
+        for texture in self.waiting_sprites.iter().map(|sprite| &sprite.texture).chain(self.waiting_coronas.iter().map(|corona| &corona.texture)) {
+            actor_image(&self.actor_textures, &mut self.texture_builds, game, t, texture);
+        }
+        let (sprites, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting_sprites).into_iter().partition(|sprite| self.actor_textures.contains_key(&sprite.texture));
+        self.waiting_sprites = waiting;
+        let (coronas, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting_coronas).into_iter().partition(|corona| self.actor_textures.contains_key(&corona.texture));
+        self.waiting_coronas = waiting;
         let (done, building): (Vec<ModelBuild>, Vec<ModelBuild>) = std::mem::take(&mut self.spawn_builds).into_iter().partition(|build| build.task.is_finished());
         self.spawn_builds = building;
         for ModelBuild { key, task } in done {
@@ -261,6 +327,7 @@ impl Session {
                 }
             };
             keep_static_meshes(t, model.as_ref());
+            attach_late_pools(&mut self.particles, model.as_ref(), &key, &mut self.pool_materials, t);
             self.spawn_models.insert(key, model);
         }
         // A severed limb wears its body's skin (`Limb.SetupLimb` sets `Skins[0]`). An actor whose model is not built yet waits
@@ -284,6 +351,8 @@ impl Session {
             }
             self.spawn_waiting.push(spawned);
         }
+        self.add_sprites(sprites, origin, t);
+        self.add_coronas(coronas, origin, t);
     }
 
     /// Splats abandon their projection for the time they live (`AbandonProjector(UseLife)`, which ends the projection in the

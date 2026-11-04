@@ -10,7 +10,7 @@ use p2_particles::{Beam, CollisionHit, DirectionUsage, EmitterKind, MeshParticle
 
 use super::*;
 use super::fluids::{camera_view, empty_quads, fill_beams, fill_strip};
-use super::spawned::{SpawnModel, static_model, static_model_key};
+use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
 use crate::mesh_view::alpha_key;
 use crate::emitter_changes::apply_command;
 use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS};
@@ -73,6 +73,7 @@ struct EmitterDraw {
     grid: Option<SpriteGrid>,
     disabled: bool,
     pool: Option<MeshPool>,
+    pending_model: Option<ModelKey>,
     name: String,
 }
 
@@ -339,17 +340,21 @@ impl Session {
             let mut props = Vec::new();
             for (index, ((p, texture), mesh)) in emitter.emitters.into_iter().zip(emitter_meshes).enumerate() {
                 let emitter_name = if p.kind == EmitterKind::Mesh { mesh.clone() } else { texture.clone() }.unwrap_or_else(|| "-".into());
-                let mut pool = None;
+                let (mut pool, mut pending_model) = (None, None);
                 if p.kind == EmitterKind::Mesh && let Some(path) = mesh {
-                    let model = self.spawn_models.entry(static_model_key(&path, &[])).or_insert_with(|| static_model(game, t, &path, &[]));
-                    if let Some(SpawnModel::Static { sections, .. }) = model {
-                        pool = Some(MeshPool::new(sections, &p, t, &mut self.pool_materials));
+                    let key = static_model_key(&path, &[]);
+                    match self.spawn_models.get(&key) {
+                        Some(Some(SpawnModel::Static { sections, .. })) => pool = Some(MeshPool::new(sections, &p, t, &mut self.pool_materials)),
+                        Some(_) => {}
+                        None => {
+                            if !self.spawn_builds.iter().any(|build| build.key == key) {
+                                self.spawn_builds.push(ModelBuild::start_static(game, t, key.clone(), path));
+                            }
+                            pending_model = Some(key);
+                        }
                     }
                 }
-                let image = texture.filter(|_| p.kind != EmitterKind::Mesh).and_then(|path| {
-                    let found = self.actor_textures.entry(path).or_insert_with_key(|path| ActorTexture::read(game, path, |image| t.assets.images.add(image)));
-                    found.as_ref().map(|texture| texture.image.clone())
-                });
+                let image = texture.filter(|_| p.kind != EmitterKind::Mesh).and_then(|path| actor_image(&self.actor_textures, &mut self.texture_builds, game, t, &path));
                 let grid = (image.is_some() && !matches!(p.kind, EmitterKind::Strip | EmitterKind::Beam)).then_some(SpriteGrid { quads: MIN_QUADS, first: None });
                 let emitter_mesh = image.map(|image| {
                     let mesh = if grid.is_some() {
@@ -370,7 +375,7 @@ impl Session {
                     let entity = t.commands.spawn((model, MeshMaterial3d(t.assets.particle_materials.add(material)))).id();
                     EmitterMesh { entity, mesh, shown: false }
                 });
-                draws.push(EmitterDraw { mesh: emitter_mesh, grid, disabled: p.disabled, pool, name: emitter_name });
+                draws.push(EmitterDraw { mesh: emitter_mesh, grid, disabled: p.disabled, pool, pending_model, name: emitter_name });
                 props.push(p);
             }
             let at = t.play.world().and_then(|world| world.actor(actor)).map(|frame| frame.location.map(|c| c.round()));
@@ -566,6 +571,20 @@ impl Session {
     }
 }
 
+
+pub(super) fn attach_late_pools(particles: &mut [ParticleActor], model: Option<&SpawnModel>, key: &ModelKey, shared: &mut HashMap<PoolMaterialKey, Handle<StandardMaterial>>, t: &mut SceneTargets) {
+    for p in particles {
+        for (index, draw) in p.draws.iter_mut().enumerate() {
+            if draw.pending_model.as_ref() != Some(key) {
+                continue;
+            }
+            draw.pending_model = None;
+            if let (Some(SpawnModel::Static { sections, .. }), Some(emitter)) = (model, p.simulation.emitters().get(index)) {
+                draw.pool = Some(MeshPool::new(sections, emitter.props(), t, shared));
+            }
+        }
+    }
+}
 
 fn log_removed(p: &ParticleActor, why: &str) {
     bevy::log::info!(

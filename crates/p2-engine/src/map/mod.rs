@@ -187,6 +187,9 @@ pub struct Session {
     spawn_models: HashMap<spawned::ModelKey, Option<spawned::SpawnModel>>,
     spawn_materials: HashMap<crate::mesh_view::ActorMaterialKey, SectionMaterial>,
     spawn_builds: Vec<spawned::ModelBuild>,
+    texture_builds: Vec<spawned::TextureBuild>,
+    waiting_sprites: Vec<SpriteActor>,
+    waiting_coronas: Vec<CoronaActor>,
     spawn_waiting: Vec<spawned::SpawnedActor>,
     particles: Vec<ParticleActor>,
     particle_emitters: FxHashMap<ObjectId, (usize, usize)>,
@@ -388,6 +391,9 @@ impl Session {
             spawn_models: HashMap::new(),
             spawn_materials: HashMap::new(),
             spawn_builds: Vec::new(),
+            texture_builds: Vec::new(),
+            waiting_sprites: Vec::new(),
+            waiting_coronas: Vec::new(),
             spawn_waiting: Vec::new(),
             particles: Vec::new(),
             particle_emitters: FxHashMap::default(),
@@ -436,6 +442,9 @@ impl Session {
         self.spawn_models.clear();
         self.spawn_materials.clear();
         self.spawn_builds.clear();
+        self.texture_builds.clear();
+        self.waiting_sprites.clear();
+        self.waiting_coronas.clear();
         self.spawn_waiting.clear();
         for particles in self.particles.drain(..) {
             t.commands.entity(particles.parent).despawn();
