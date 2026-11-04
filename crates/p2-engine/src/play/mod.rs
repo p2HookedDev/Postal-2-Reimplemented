@@ -17,6 +17,7 @@ use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::prelude::{ChildOf, Commands, Component, Entity, Has, Local, MessageReader, Query, Res, ResMut, Resource, SystemSet, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::SystemParam;
+use bevy::ecs::world::EntityWorldMut;
 use bevy::math::Vec3;
 use bevy::mesh::Mesh3d;
 use bevy::time::Time;
@@ -239,6 +240,21 @@ impl Fade {
     fn new(from: f32, to: f32, seconds: f32, despawn: bool) -> Self {
         Self { from, to, seconds, elapsed: 0.0, despawn }
     }
+
+    fn progress(&self) -> f32 {
+        if self.seconds > 0.0 { (self.elapsed / self.seconds).min(1.0) } else { 1.0 }
+    }
+
+    fn level(&self) -> f32 {
+        self.from + (self.to - self.from) * self.progress()
+    }
+}
+
+fn stop_fading(commands: &mut Commands, entity: Entity, seconds: f32) {
+    commands.entity(entity).queue(move |mut entity: EntityWorldMut| {
+        let from = entity.get::<Fade>().map_or(1.0, Fade::level);
+        entity.insert(Fade::new(from, 0.0, seconds, true));
+    });
 }
 
 fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Query<(Entity, &mut Fade, Option<&BaseVolume>, Option<&mut AudioSink>)>, mut heard: Query<&mut HeardSound>) {
@@ -247,15 +263,14 @@ fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Query<(Entity
             continue;
         }
         fade.elapsed += time.delta_secs();
-        let t = if fade.seconds > 0.0 { (fade.elapsed / fade.seconds).min(1.0) } else { 1.0 };
-        let level = fade.from + (fade.to - fade.from) * t;
+        let level = fade.level();
         if let (Some(base), Some(mut sink)) = (base, sink) {
             sink.set_volume(Volume::Linear(base.0 * level));
         }
         if let Ok(mut heard) = heard.get_mut(entity) {
             heard.fade = level;
         }
-        if t >= 1.0 {
+        if fade.progress() >= 1.0 {
             if fade.despawn {
                 commands.entity(entity).despawn();
             } else {
@@ -564,12 +579,12 @@ fn play_music(commands: &mut Commands, world: &mut PlayWorld, sources: &mut Asse
             }
             MusicCommand::StopAll { fade_out } => {
                 for (_, entity) in world.songs.drain() {
-                    commands.entity(entity).insert(Fade::new(1.0, 0.0, fade_out, true));
+                    stop_fading(commands, entity, fade_out);
                 }
             }
             MusicCommand::Stop { handle, fade_out } => {
                 if let Some(entity) = world.songs.remove(&handle) {
-                    commands.entity(entity).insert(Fade::new(1.0, 0.0, fade_out, true));
+                    stop_fading(commands, entity, fade_out);
                 }
             }
         }
@@ -629,7 +644,7 @@ fn play_zone_sounds(commands: &mut Commands, world: &mut PlayWorld, sources: &mu
     world.zone_sounds.retain(|key, &mut (entity, fade_out)| {
         let keep = keys.contains(key);
         if !keep {
-            commands.entity(entity).insert(Fade::new(1.0, 0.0, fade_out, true));
+            stop_fading(commands, entity, fade_out);
         }
         keep
     });
