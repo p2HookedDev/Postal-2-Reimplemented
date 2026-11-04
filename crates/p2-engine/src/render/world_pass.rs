@@ -598,7 +598,7 @@ fn is_stale(world: &World, built: &Built, draws: &WorldDraws) -> bool {
     }
     // The modern look's sun mask swaps a light map's image under the same handle.
     let images = world.resource::<RenderAssets<GpuImage>>();
-    if built.lightmap_views.iter().any(|(image, view)| images.get(*image).map(|image| image.texture_view.id()) != Some(*view)) {
+    if built.lightmap_views.iter().any(|(image, view)| images.get(*image).is_some_and(|image| image.texture_view.id() != *view)) {
         return true;
     }
     let materials = world.resource::<ErasedRenderAssets<PreparedMaterial>>();
@@ -609,7 +609,7 @@ fn is_stale(world: &World, built: &Built, draws: &WorldDraws) -> bool {
             && now.properties.material_key == built.material_key
             && now.properties.mesh_pipeline_key_bits == built.mesh_pipeline_key_bits
     };
-    if built.materials.iter().any(|(id, binding, properties)| materials.get(*id).is_none_or(|now| !same(now, binding, properties))) {
+    if built.materials.iter().any(|(id, binding, properties)| materials.get(*id).is_some_and(|now| !same(now, binding, properties))) {
         return true;
     }
     let allocator = world.resource::<MeshAllocator>();
