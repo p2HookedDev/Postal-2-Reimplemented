@@ -13,6 +13,7 @@ bevy_egui.workspace = true
 dirs.workspace = true
 rustc-hash.workspace = true
 rfd.workspace = true
+rodio.workspace = true
 wgpu-types.workspace = true
 p2-assets.workspace = true
 p2-bevy-assets.workspace = true

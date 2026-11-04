@@ -3996,6 +3996,7 @@ dependencies = [
  "p2-script",
  "p2-vm",
  "rfd",
+ "rodio",
  "rustc-hash 2.1.3",
  "steamlocate",
  "thiserror 2.0.21",

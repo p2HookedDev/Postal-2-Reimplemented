@@ -881,7 +881,14 @@ fn read_song(music_dir: &Path, song: &str) -> Option<Arc<[u8]>> {
     }
     let file = if Path::new(song).extension().is_some() { song.to_owned() } else { format!("{song}.ogg") };
     match std::fs::read(music_dir.join(&file)) {
-        Ok(bytes) => Some(bytes.into()),
+        Ok(bytes) => {
+            let bytes: Arc<[u8]> = bytes.into();
+            let opened = opens(&bytes);
+            if !opened {
+                bevy::log::warn!("music {song}: the audio decoder cannot open it; not played");
+            }
+            opened.then_some(bytes)
+        }
         Err(_) => {
             bevy::log::warn!("music {song} not found");
             None

@@ -29,6 +29,7 @@ bevy = { version = "0.20", default-features = false }
 bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }
 dirs = "7"
 rfd = "0.17"
+rodio = { version = "0.22", default-features = false }
 # Same major version as bevy_image 0.20 uses; bevy only re-exports it through bevy_render.
 wgpu-types = { version = "30", default-features = false }
 # The shader compiler wgpu 30 uses; tests validate the engine's own WGSL with it.

@@ -464,12 +464,17 @@ impl PlayWorld {
 /// `None` (warned once, the result kept per path) when Bevy's decoder cannot open its file: `AudioSource::decoder`
 /// unwraps the decoder, so such a sound would panic the frame it plays.
 fn loaded_sound(path: &str, sound: p2_assets::Sound, sources: &mut Assets<AudioSource>) -> Option<LoadedSound> {
-    if !decodable(&sound.data) {
+    let (duration, looping) = (sound.duration().unwrap_or(0.0), sound.loops());
+    let bytes: Arc<[u8]> = sound.data.into();
+    if !opens(&bytes) {
         bevy::log::warn!("sound {path}: {} file the audio decoder cannot open; not played", sound.file_type);
         return None;
     }
-    let (duration, looping) = (sound.duration().unwrap_or(0.0), sound.loops());
-    Some(LoadedSound { source: sources.add(AudioSource { bytes: sound.data.into() }), duration, looping })
+    Some(LoadedSound { source: sources.add(AudioSource { bytes }), duration, looping })
+}
+
+pub(super) fn opens(bytes: &Arc<[u8]>) -> bool {
+    decodable(bytes) && rodio::Decoder::builder().with_byte_len(bytes.len() as u64).with_data(std::io::Cursor::new(Arc::clone(bytes))).build().is_ok()
 }
 
 /// Whether rodio (`hound` for WAV, `lewton` for Ogg Vorbis) opens `data` without panicking: an Ogg stream, or a RIFF WAVE
@@ -536,7 +541,7 @@ pub struct ChannelPose {
 
 #[cfg(test)]
 mod tests {
-    use super::decodable;
+    use super::{decodable, opens};
 
     fn wav(tag: u16, channels: u16, rate: u32) -> Vec<u8> {
         let mut body = b"WAVEfmt ".to_vec();
@@ -563,5 +568,10 @@ mod tests {
         assert!(!decodable(&wav(1, 0, 22050)));
         assert!(!decodable(&wav(1, 1, 0)));
         assert!(!decodable(b"ID3 an mp3 file"));
+    }
+
+    #[test]
+    fn a_broken_song_does_not_open() {
+        assert!(!opens(&std::sync::Arc::from(&b"OggS and the rest of the stream"[..])));
     }
 }
