@@ -1,6 +1,6 @@
 use bevy::ecs::prelude::{MessageReader, Res, ResMut, Single};
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseButton};
+use bevy::input::mouse::{AccumulatedMouseMotion, MouseButton, MouseButtonInput, MouseWheel};
 use bevy::input::{ButtonInput, ButtonState};
 use bevy::window::{CursorGrabMode, CursorOptions, Window};
 use p2_engine::play::PlayerInput;
@@ -9,29 +9,52 @@ pub fn read_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
-    scroll: Res<AccumulatedMouseScroll>,
     window: Single<(&Window, &CursorOptions)>,
-    mut keyboard: MessageReader<KeyboardInput>,
+    (mut keyboard, mut clicks, mut wheel): (MessageReader<KeyboardInput>, MessageReader<MouseButtonInput>, MessageReader<MouseWheel>),
     mut input: ResMut<PlayerInput>,
 ) {
     let (window, cursor) = *window;
     if !window.focused {
         buttons.release_all();
     }
-    input.typed = keyboard.read().filter(|k| k.state == ButtonState::Pressed).filter_map(|k| k.text.as_deref()).collect();
+    input.typed.clear();
+    input.key_events.clear();
+    for key in keyboard.read() {
+        let pressed = key.state == ButtonState::Pressed;
+        if pressed && let Some(text) = &key.text {
+            input.typed.push_str(text);
+        }
+        let Some(name) = engine_key(key.key_code).filter(|_| window.focused && key.key_code != KeyCode::F10) else { continue };
+        if pressed || !keys.get_pressed().any(|&other| engine_key(other) == Some(name)) {
+            input.key_events.push((name, pressed));
+        }
+    }
+    for click in clicks.read().filter(|_| window.focused) {
+        if let Some(name) = mouse_key(click.button) {
+            input.key_events.push((name, click.state == ButtonState::Pressed));
+        }
+    }
+    for notch in wheel.read().filter(|notch| window.focused && notch.y != 0.0) {
+        let name = if notch.y > 0.0 { "MouseWheelUp" } else { "MouseWheelDown" };
+        input.key_events.extend([(name, true), (name, false)]);
+    }
     input.cursor = window.cursor_position().map(|position| position.to_array());
     input.playing = true;
     input.held.clear();
     input.held.extend(keys.get_pressed().filter(|&&key| key != KeyCode::F10).filter_map(|&key| engine_key(key)));
-    let names = [(MouseButton::Left, "LeftMouse"), (MouseButton::Right, "RightMouse"), (MouseButton::Middle, "MiddleMouse")];
-    input.held.extend(names.into_iter().filter(|(button, _)| buttons.pressed(*button)).map(|(_, name)| name));
-    if scroll.delta.y > 0.0 {
-        input.held.push("MouseWheelUp");
-    } else if scroll.delta.y < 0.0 {
-        input.held.push("MouseWheelDown");
-    }
+    input.held.extend(buttons.get_pressed().filter_map(|&button| mouse_key(button)));
     input.mouse = if cursor.grab_mode == CursorGrabMode::None || !window.focused { [0.0, 0.0] } else { [motion.delta.x, -motion.delta.y] };
 }
+
+fn mouse_key(button: MouseButton) -> Option<&'static str> {
+    match button {
+        MouseButton::Left => Some("LeftMouse"),
+        MouseButton::Right => Some("RightMouse"),
+        MouseButton::Middle => Some("MiddleMouse"),
+        _ => None,
+    }
+}
+
 fn engine_key(key: KeyCode) -> Option<&'static str> {
     Some(match key {
         KeyCode::KeyA => "A",

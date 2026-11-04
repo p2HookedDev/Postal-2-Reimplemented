@@ -119,6 +119,7 @@ pub(super) struct Job {
     pub(super) held: Vec<&'static str>,
     pub(super) mouse: [f32; 2],
     pub(super) typed: String,
+    pub(super) key_events: Vec<(&'static str, bool)>,
     pub(super) cursor: Option<[f32; 2]>,
     pub(super) canvas: [f32; 2],
     pub(super) followed: FxHashSet<ObjectId>,
@@ -219,7 +220,7 @@ impl Simulation {
                 bevy::log::warn!("{actor:?}: {error}");
             }
         }
-        if playing && let Err(error) = self.vm.player_input(&job.held, job.mouse) {
+        if playing && let Err(error) = job.key_events.iter().try_for_each(|&(key, pressed)| self.vm.key_event(key, pressed)).and_then(|()| self.vm.player_input(&job.held, job.mouse)) {
             bevy::log::warn!("input: {error}");
         }
         let errors = self.vm.tick_level(job.step);

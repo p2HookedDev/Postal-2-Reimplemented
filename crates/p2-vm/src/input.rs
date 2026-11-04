@@ -196,12 +196,10 @@ impl<L: LoaderRef> Vm<L> {
             .map(|(_, key)| Arc::from(key.to_ascii_lowercase()))
             .collect();
         for key in released {
-            self.host.input.held.retain(|k| *k != key);
-            self.input_event(&key, Action::Release, 0.0)?;
+            self.key_event(&key, false)?;
         }
         for key in pressed {
-            self.host.input.held.push(Arc::clone(&key));
-            self.input_event(&key, Action::Press, 0.0)?;
+            self.key_event(&key, true)?;
         }
         for (axis, value) in [("mousex", mouse[0]), ("mousey", mouse[1])] {
             if value != 0.0 {
@@ -209,6 +207,21 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         Ok(())
+    }
+
+    pub fn key_event(&mut self, key: &str, pressed: bool) -> Result<(), Error> {
+        let key: Arc<str> = Arc::from(key.to_ascii_lowercase());
+        match (pressed, self.key_down(&key)) {
+            (true, false) => {
+                self.host.input.held.push(Arc::clone(&key));
+                self.input_event(&key, Action::Press, 0.0)
+            }
+            (false, true) => {
+                self.host.input.held.retain(|k| *k != key);
+                self.input_event(&key, Action::Release, 0.0)
+            }
+            _ => Ok(()),
+        }
     }
 
     fn input_event(&mut self, key: &str, action: Action, delta: f32) -> Result<(), Error> {
