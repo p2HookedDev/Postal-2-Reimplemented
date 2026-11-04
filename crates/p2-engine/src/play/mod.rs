@@ -243,6 +243,9 @@ impl Fade {
 
 fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Query<(Entity, &mut Fade, Option<&BaseVolume>, Option<&mut AudioSink>)>, mut heard: Query<&mut HeardSound>) {
     for (entity, mut fade, base, sink) in &mut fades {
+        if base.is_some() && sink.is_none() {
+            continue;
+        }
         fade.elapsed += time.delta_secs();
         let t = if fade.seconds > 0.0 { (fade.elapsed / fade.seconds).min(1.0) } else { 1.0 };
         let level = fade.from + (fade.to - fade.from) * t;
