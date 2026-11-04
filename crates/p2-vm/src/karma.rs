@@ -24,6 +24,7 @@ use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop};
 pub(crate) const IMPULSE_SCALE: f32 = 0.01;
 /// The force reaches Karma unscaled (Karma lengths are 1/50 of Unreal's), so in Unreal units
 /// the acceleration is force × 50 / mass.
+const MAX_KARMA_TICK: f32 = 0.05;
 const FORCE_SCALE: f32 = 50.0;
 /// The torque reaches Karma unscaled; inertia in Unreal units is 50² times Karma's (unverified).
 const TORQUE_SCALE: f32 = 2500.0;
@@ -104,7 +105,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(world) = &mut self.karma.world
             && (!self.karma.bodies.is_empty() || !self.karma.ragdolls.is_empty() || !self.karma.limbs.is_empty())
         {
-            world.start(delta);
+            world.start(delta.min(MAX_KARMA_TICK));
         }
         errors
     }
