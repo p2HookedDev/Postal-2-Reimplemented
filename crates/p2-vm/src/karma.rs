@@ -101,7 +101,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.ragdolls_before_step(ragdolls);
         self.ragdoll_leftover_hits();
-        errors.extend(self.limbs_before_step(flying, delta));
+        errors.extend(self.limbs_before_step(flying, delta.min(MAX_KARMA_TICK)));
         if let Some(world) = &mut self.karma.world
             && (!self.karma.bodies.is_empty() || !self.karma.ragdolls.is_empty() || !self.karma.limbs.is_empty())
         {
