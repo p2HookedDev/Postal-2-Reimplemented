@@ -66,6 +66,11 @@ pub fn corona_color(hue: u8, saturation: u8, bright: f32) -> [f32; 3] {
     crate::lighting::hue_color(hue, saturation).map(|c| c * bright)
 }
 
+pub fn within_light_radius(distance: f32, light_radius: f32) -> bool {
+    let reach = 25.0 * (light_radius as i32 + 1) as f32;
+    light_radius == 0.0 || distance * distance < reach * reach
+}
+
 pub fn size_factor(distance: f32, light_sizes: Option<(f32, f32)>) -> f32 {
     let (min, max) = match light_sizes {
         Some((min, max)) => {
@@ -96,6 +101,13 @@ pub fn corona_quad(location: [f32; 3], right: [f32; 3], up: [f32; 3], draw_scale
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_corona_needs_the_eye_inside_its_light_radius() {
+        assert!(within_light_radius(599.0, 23.0));
+        assert!(!within_light_radius(600.0, 23.0));
+        assert!(within_light_radius(100_000.0, 0.0));
+    }
 
     #[test]
     fn a_seen_corona_lights_in_a_third_of_a_second_and_fades_as_fast() {

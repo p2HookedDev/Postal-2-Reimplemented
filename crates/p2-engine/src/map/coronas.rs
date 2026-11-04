@@ -8,7 +8,7 @@ use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::math::{Mat3, Quat};
 use bevy::time::{Real, Time};
 use p2_math::{Rotator, Vector};
-use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_square_scale, size_factor};
+use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_square_scale, size_factor, within_light_radius};
 use p2_vm::{LoaderRef, Prop, Value};
 
 const CORONA_SORT: f32 = 1.0e6;
@@ -25,6 +25,7 @@ pub struct CoronaActor {
     pub hue: u8,
     pub saturation: u8,
     pub sizes: Option<(f32, f32)>,
+    pub light_radius: f32,
 }
 
 fn corona_texture(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<ObjectId> {
@@ -67,6 +68,7 @@ pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaAc
         hue: byte("LightHue"),
         saturation: byte("LightSaturation"),
         sizes: vm.is_a(actor, "Light").then(|| (float("MinCoronaSize", 0.0), float("MaxCoronaSize", 0.0))),
+        light_radius: float("LightRadius", 0.0),
     })
 }
 
@@ -111,11 +113,15 @@ impl Session {
 
 /// The fade steps by 3 × the real seconds since the last frame. The VM's trace hits level geometry
 /// and movers, not pawns. Lit ones face the view, or lie on the light's axes when `DrawScale3D` X ≠ Y.
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 pub fn draw_coronas(
+    mut commands: Commands,
+    collision: Res<LevelCollision>,
     time: Res<Time<Real>>,
     play: Res<Play>,
     views: Query<&SceneView>,
-    mut quads: Query<(Entity, &mut CoronaQuad, &Mesh3d, &mut Transform, &mut Visibility)>,
+    mut quads: Query<(Entity, &mut CoronaQuad, &Mesh3d, &mut Transform, &mut Visibility, &ChildOf)>,
+    zones: Query<&Visibility, (With<ZoneCulled>, Without<CoronaQuad>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut coronas: bevy::ecs::system::Local<Coronas<Entity>>,
     mut lit: bevy::ecs::system::Local<HashMap<Entity, f32>>,
@@ -127,11 +133,26 @@ pub fn draw_coronas(
         None => (false, quad.corona.location, quad.corona.rotation),
     };
     let blocked = |quad: &CoronaQuad| world.is_some_and(|world| world.corona_blocked(quad.corona.object));
-    let seen = quads.iter().filter(|(_, quad, ..)| !placed(quad).0 && !blocked(quad)).map(|(entity, ..)| entity);
+    let model = collision.model();
+    let model = model.filter(|model| !model.leaves.is_empty());
+    for (_, quad, .., parent) in &quads {
+        if let Some(model) = model
+            && zones.get(parent.parent()).is_err()
+        {
+            let at: [f32; 3] = quad.corona.location.into();
+            commands.entity(parent.parent()).insert(ZoneCulled { zones: p2_collision::box_zones(model, at.into(), at.into()), min: at, max: at, only_from: None });
+        }
+    }
+    let in_reach = |quad: &CoronaQuad| {
+        let eye = view.position - quad.origin;
+        within_light_radius(eye.distance(Vec3::from(to_bevy(placed(quad).1))), quad.corona.light_radius)
+    };
+    let zone_seen = |parent: &ChildOf| zones.get(parent.parent()).is_ok_and(|shown| *shown != Visibility::Hidden);
+    let seen = quads.iter().filter(|(_, quad, .., parent)| !placed(quad).0 && !blocked(quad) && in_reach(quad) && zone_seen(parent)).map(|(entity, ..)| entity);
     coronas.step(fade_delta(time.delta_secs()), seen, |_| true);
     lit.clear();
     lit.extend(coronas.lit());
-    for (entity, mut quad, mesh, mut transform, mut shown) in &mut quads {
+    for (entity, mut quad, mesh, mut transform, mut shown, _) in &mut quads {
         let Some(&bright) = lit.get(&entity) else {
             shown.set_if_neq(Visibility::Hidden);
             continue;
