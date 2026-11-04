@@ -123,6 +123,7 @@ pub(crate) struct ParticleView<'w, 's> {
     pub(crate) projections: Query<'w, 's, &'static Projection, With<SceneView>>,
     pub(crate) zone_culled: Query<'w, 's, &'static Visibility, With<ZoneCulled>>,
     pub(crate) places: Option<Res<'w, crate::animation::AttachmentPlaces>>,
+    pub(crate) pool_slots: Query<'w, 's, &'static mut Transform, (With<particles::PoolSlot>, Without<FollowActor>, Without<SceneView>)>,
 }
 
 impl ParticleView<'_, '_> {

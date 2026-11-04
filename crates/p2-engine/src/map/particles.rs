@@ -1,4 +1,5 @@
 use bevy::camera::primitives::{Aabb, MeshAabb};
+use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::math::Vec3A;
 use bevy::mesh::MeshTag;
 use bevy::render::storage::ShaderBuffer;
@@ -80,6 +81,9 @@ struct EmitterMesh {
     mesh: Handle<Mesh>,
     shown: bool,
 }
+
+#[derive(bevy::ecs::component::Component)]
+pub(crate) struct PoolSlot;
 
 struct MeshPool {
     sections: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
@@ -538,7 +542,7 @@ impl Session {
             let mut writes = MeshWrites { commands: &mut t.commands, meshes: &mut t.assets.meshes, records: &mut records };
             let (drawn, newly_shown) = fill_emitter_meshes(&mut writes, p, &buffers.particles, &buffers.beams, seen, eye, mesh_reach);
             write_sprite_records(&mut writes, p, &buffers.particles, drawn);
-            place_mesh_particles(&mut t.commands, p, &buffers.meshes, seen);
+            place_mesh_particles(&mut t.commands, &mut t.particle_view, p, &buffers.meshes, seen);
             p.buffers = buffers;
             let changed = newly_shown || drawn != p.drawn_bounds;
             p.drawn_bounds = drawn;
@@ -577,16 +581,17 @@ fn log_removed(p: &ParticleActor, why: &str) {
     );
 }
 
-fn place_mesh_particles(commands: &mut Commands, p: &mut ParticleActor, meshes: &[(Vec<MeshParticle>, f32)], in_view: bool) {
+fn place_mesh_particles(commands: &mut Commands, view: &mut ParticleView, p: &mut ParticleActor, meshes: &[(Vec<MeshParticle>, f32)], in_view: bool) {
     let (overlay, parent) = (p.overlay, p.parent);
     for (draw, (particles, _)) in p.draws.iter_mut().zip(meshes) {
         let Some(pool) = &mut draw.pool else { continue };
         let shown = if in_view { particles.len() } else { 0 };
         while pool.slots.len() < shown {
             let layer = overlay.map_or_else(RenderLayers::default, |slot| RenderLayers::layer(OVERLAY_LAYERS[slot]));
+            let placed = particles.get(pool.slots.len()).map_or_else(Transform::default, mesh_transform);
             let slot: Vec<Entity> = (pool.sections.iter())
                 .map(|(mesh, material)| {
-                    let section = (Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden);
+                    let section = (Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), placed, Visibility::Hidden, PoolSlot);
                     commands.spawn((section, layer.clone(), ChildOf(parent))).id()
                 })
                 .collect();
@@ -597,12 +602,13 @@ fn place_mesh_particles(commands: &mut Commands, p: &mut ParticleActor, meshes: 
             let visibility = (now != (index < pool.shown)).then_some(if now { Visibility::Inherited } else { Visibility::Hidden });
             let transform = particles.get(index).filter(|_| now).map(mesh_transform);
             for &entity in slot {
-                let mut entity = commands.entity(entity);
-                if let Some(transform) = transform {
-                    entity.insert(transform);
+                if let Some(transform) = transform
+                    && let Ok(mut placed) = view.pool_slots.get_mut(entity)
+                {
+                    placed.set_if_neq(transform);
                 }
                 if let Some(visibility) = visibility {
-                    entity.insert(visibility);
+                    commands.entity(entity).insert(visibility);
                 }
             }
         }
@@ -990,6 +996,13 @@ mod tests {
         }
         assert_eq!(header_record(5)[7], 5);
         assert!(header_record(5).iter().enumerate().all(|(i, &w)| i == 7 || w == 0));
+    }
+
+    #[test]
+    fn scene_targets_queries_do_not_conflict() {
+        fn uses_scene_targets(_: SceneTargets) {}
+        let mut system = bevy::ecs::system::IntoSystem::into_system(uses_scene_targets);
+        bevy::ecs::system::System::initialize(&mut system, &mut bevy::ecs::world::World::new());
     }
 
     #[test]
