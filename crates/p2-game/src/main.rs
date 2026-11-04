@@ -7,6 +7,8 @@ use std::path::Path;
 
 use anyhow::Context;
 use bevy::DefaultPlugins;
+use bevy::render::RenderPlugin;
+use bevy::render::settings::{Backends, WgpuSettings};
 use bevy::app::{App, AppExit, PluginGroup, PostUpdate, Startup, Update};
 use bevy::ecs::error::Result;
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -23,7 +25,7 @@ use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::query::With;
 use bevy::window::{CursorGrabMode, CursorOptions, Monitor, PrimaryWindow, Window, WindowMode, WindowPlugin};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use p2_engine::diagnostics::{DiagnosticsPlugin, capture_layer, install_panic_hook};
+use p2_engine::diagnostics::{DiagnosticsPlugin, StageTimingPlugin, capture_layer, install_panic_hook};
 use p2_engine::display::{self, Display, Settings};
 use p2_engine::game_dir::known_game_dir;
 use p2_engine::map::{SceneTargets, Session, SessionHolder, map_package, present_session, spawn_hud_camera, travel_package};
@@ -88,10 +90,14 @@ fn run() {
     p2_engine::play::init_script_stacks();
     let mut app = App::new();
     app.add_plugins((
-        DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..Default::default() }).set(LogPlugin { custom_layer: capture_layer, ..Default::default() }),
+        DefaultPlugins
+            // Without DX12 among the backends Bevy turns off wgpu's validation of every indirect draw.
+            .set(RenderPlugin { render_creation: WgpuSettings { backends: Some(Backends::VULKAN), ..Default::default() }.into(), ..Default::default() })
+            .set(WindowPlugin { primary_window: Some(window), ..Default::default() }).set(LogPlugin { custom_layer: capture_layer, ..Default::default() }),
         EguiPlugin::default(),
         P2EnginePlugins,
         DiagnosticsPlugin::<Game>::default(),
+        StageTimingPlugin,
         LauncherPlugin,
     ))
     .add_systems(Startup, spawn_hud_camera)

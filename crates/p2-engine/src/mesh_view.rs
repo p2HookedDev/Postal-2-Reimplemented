@@ -6,13 +6,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
-use bevy::asset::{Assets, Handle};
+use bevy::asset::{Assets, Handle, UntypedAssetId};
 use bevy::camera::visibility::{RenderLayers, Visibility};
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::render::occlusion_culling::OcclusionCulling;
 use bevy::camera::{Camera, Camera3d, CameraUpdateSystems, ClearColorConfig, Exposure, PerspectiveProjection, Projection, Viewport};
 use bevy_egui::{EguiContext, EguiContextSettings, EguiPostUpdateSet};
 use bevy::math::Rect;
+use crate::render::world_pass::{WorldPlacement, WorldSeenZones, WorldTargets};
 use bevy::pbr::{DistanceFog, FogFalloff, Lightmap, ScreenSpaceAmbientOcclusion};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::color::{Alpha, Color, LinearRgba};
@@ -23,7 +24,7 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::prelude::Mut;
 use bevy::ecs::system::{EntityCommands, SystemParam};
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats, Image};
-use bevy::light::cluster::GlobalClusterSettings;
+use bevy::light::cluster::{ClusterConfig, ClusterZConfig, GlobalClusterSettings};
 use bevy::light::{AmbientLight, CascadeShadowConfig, ClusteredDecal};
 use bevy::material::AlphaMode;
 use bevy::math::{Affine2, Mat3, Quat, UVec2, Vec2, Vec3, Vec4};
@@ -72,6 +73,7 @@ impl Plugin for MeshViewPlugin {
             crate::render::lightmapped::LightmappedPlugin,
             crate::render::actor_light::ActorLightPlugin,
             crate::render::mesh_light::MeshLightPlugin,
+            crate::render::world_pass::WorldPassPlugin,
         ));
         app.init_resource::<MeshView>()
             .init_resource::<ShownScene>()
@@ -113,7 +115,7 @@ impl Default for MeshView {
             viewport: None,
             fov: 0.0,
             overlays: Vec::new(),
-            occlusion_culling: true,
+            occlusion_culling: false,
             canvas_layers: Vec::new(),
             canvas_below: [false; OVERLAY_LAYERS.len()],
             pending: None,
@@ -166,6 +168,7 @@ pub struct SectionView {
     pub tint: [f32; 4],
     pub alpha_map: Option<Handle<Image>>,
     pub terrain: Vec<TerrainPassLayer>,
+    pub chunks: Option<Arc<[crate::render::world_pass::Chunk]>>,
 }
 
 #[derive(Clone)]
@@ -212,6 +215,7 @@ impl SectionView {
             tint: state.color.map_or([1.0; 4], |color| color.map(|c| (f32::from(c) / 255.0).powf(2.2))),
             alpha_map: None,
             terrain: Vec::new(),
+            chunks: None,
         }
     }
 
@@ -228,7 +232,7 @@ impl SectionView {
             self.alpha_mode,
             self.no_scene_lights,
             self.depth_bias,
-            self.lightmap.as_ref().map(Handle::id),
+            self.lightmap.is_some(),
             self.two_sided,
             self.uv,
             self.tint,
@@ -462,6 +466,9 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
         Transform::default(),
         SceneView::default(),
+        crate::render::world_pass::WorldCamera,
+        // Assigning lights costs by the clusters they cover, on the main thread; a longer list per pixel costs far less.
+        ClusterConfig::FixedZ { total: 1536, z_slices: 16, z_config: ClusterZConfig::default(), dynamic_resizing: true },
         DistanceFog { color: Color::NONE, ..Default::default() },
         crate::play::sound_listener(),
         AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
@@ -474,6 +481,7 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
         Transform::default(),
         SkyCamera { position: None },
+        ClusterConfig::None,
         RenderLayers::layer(SKY_LAYER),
     ));
     for (slot, layer) in OVERLAY_LAYERS.into_iter().enumerate() {
@@ -490,6 +498,7 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
                 EguiContext::default(),
                 EguiContextSettings { enable_cursor_icon_updates: false, enable_ime: false, ..Default::default() },
                 CanvasLayer(slot),
+                ClusterConfig::None,
             ))
             .id();
         view.canvas_layers.push(canvas);
@@ -516,6 +525,17 @@ pub enum SectionMaterial {
 }
 
 impl SectionMaterial {
+    pub(crate) fn id(&self) -> UntypedAssetId {
+        match self {
+            Self::Standard(material) => material.id().untyped(),
+            Self::Blended(material) => material.id().untyped(),
+            Self::Terrain(material) => material.id().untyped(),
+            Self::TerrainPass(material) => material.id().untyped(),
+            Self::Lightmapped(material) => material.id().untyped(),
+            Self::MeshLit(material) => material.id().untyped(),
+        }
+    }
+
     fn insert(&self, entity: &mut EntityCommands) {
         match self {
             Self::Standard(material) => entity.insert(MeshMaterial3d(material.clone())),
@@ -577,10 +597,12 @@ fn apply_change(
     map_models: Query<Entity, With<MapModel>>,
     cameras: SceneCameras,
     shown_level: ShownLevel,
+    mut world: WorldTargets,
 ) {
     let SceneCameras { mut views, mut skies } = cameras;
     let ShownLevel { mut shown, mut level } = shown_level;
     let Some(change) = view.pending.take() else { return };
+    world.clear();
     section_materials.animated.textures.clear();
     section_materials.animated.speculars.clear();
     *shown = ShownScene::default();
@@ -621,6 +643,7 @@ fn apply_change(
         let material = |s: &SectionView| follower_material(s, &mut section_materials.materials, &mut section_materials.mesh_lit, &mut followers);
         spawn_actor_sections(&mut commands, parent, sections, transform, (follow.actor, follow), material, lit, ());
     }
+    let world_supported = world.supported();
     commands.entity(root).with_children(|parent| {
         for (image, transform, tag) in decals {
             parent.spawn((ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() }, transform));
@@ -636,11 +659,21 @@ fn apply_change(
                         uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
                         bicubic_sampling: false,
                     });
-                    (section.mesh, material, lightmap)
+                    let world_chunks = section.chunks.filter(|_| !in_sky && world_supported && model.zone.as_ref().is_none_or(|zone| zone.only_from.is_none()) && matches!(section.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)));
+                    (section.mesh, material, lightmap, world_chunks)
                 })
                 .collect();
             for instance in model.instances {
-                for (mesh, material, lightmap) in &sections {
+                for (mesh, material, lightmap, world_chunks) in &sections {
+                    if let Some(chunks) = world_chunks {
+                        let placement = WorldPlacement {
+                            world_from_local: Transform::from_translation(-center).compute_affine() * instance.compute_affine(),
+                            chunks: chunks.clone(),
+                            zone: model.zone.as_ref().filter(|zone| zone.zones.len() == 1).map(|zone| zone.zones[0]),
+                        };
+                        world.add(mesh, material, lightmap.as_ref().map(|lightmap| &lightmap.image), placement);
+                        continue;
+                    }
                     let mut entity = parent.spawn((Mesh3d(mesh.clone()), instance));
                     material.insert(&mut entity);
                     if let Some(lightmap) = lightmap {
@@ -656,6 +689,7 @@ fn apply_change(
             }
         }
     });
+    world.finish();
 }
 
 fn scene_section_material(section: &SectionView, center: Vec3, stores: &mut SectionMaterials, cache: &mut HashMap<(bool, String), SectionMaterial>) -> SectionMaterial {
@@ -964,14 +998,12 @@ fn restyle<M: bevy::asset::Asset>(
 
 fn zone_fog(
     time: Res<Time>,
-    settings: Option<Res<Settings>>,
     shown: Res<ShownScene>,
     collision: Res<LevelCollision>,
     mut cameras: Query<(&SceneView, &mut DistanceFog)>,
 ) {
     let model = collision.model();
-    let smooth = settings.is_some_and(|settings| settings.modern_smoothing());
-    let t = if smooth { 1.0 - (-time.delta_secs() / FOG_BLEND_SECONDS).exp() } else { 1.0 };
+    let t = 1.0 - (-time.delta_secs() / FOG_BLEND_SECONDS).exp();
     for (view, mut fog) in &mut cameras {
         let zone = model.and_then(|model| {
             let position = from_bevy(view.position - shown.origin);
@@ -995,6 +1027,7 @@ fn zone_fog(
     }
 }
 
+/// Retail snaps zone fog at a zone crossing; ours fades in both looks.
 const FOG_BLEND_SECONDS: f32 = 0.35;
 
 /// `target` `None` = no fog: the colour fades out where it is. Fog coming from none starts at the target's colour and
@@ -1053,6 +1086,7 @@ fn follower_zones(
 /// Scenes without BSP portals, and a view outside the world, show everything. While the modern sun casts ([`SunShadow`]),
 /// a dynamic object with a sun caster mesh ([`CASTER_LAYER`]) within the sun's last cascade stays shown:
 /// `Visibility::Hidden` takes a mesh out of the shadow pass too, so its shadow popped in and out with the view.
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn zone_visibility(
     shown: Res<ShownScene>,
     collision: Res<LevelCollision>,
@@ -1061,6 +1095,7 @@ fn zone_visibility(
     layers: Query<&RenderLayers>,
     mut culled: Query<(Entity, &ZoneCulled, &mut Visibility, Option<&Children>)>,
     mut shadow_only: ResMut<ShadowOnly>,
+    mut world_seen: ResMut<WorldSeenZones>,
 ) {
     shadow_only.0.clear();
     let model = collision.model();
@@ -1083,6 +1118,13 @@ fn zone_visibility(
         }
         _ => VisibleZones::all(),
     };
+    let mut seen_bits = [0u32; 8];
+    for zone in 0..=u8::MAX {
+        if seen.reached(zone) {
+            seen_bits[usize::from(zone >> 5)] |= 1 << (zone & 31);
+        }
+    }
+    world_seen.set_if_neq(WorldSeenZones(seen_bits));
     let sun = eye_seen.zip(suns.iter().next().and_then(|config| config.bounds.last().copied()));
     let caster = RenderLayers::layer(CASTER_LAYER);
     for (root, zone, mut visibility, children) in &mut culled {

@@ -4,10 +4,10 @@ class ModernMenuGraphics extends ShellMenuCW;
 
 const KeyPath = "ini:Engine.Engine.RenderDevice";
 
-var UWindowCheckbox     Boxes[8];
-var string              Keys[8];
-var localized string    Labels[8];
-var localized string    Helps[8];
+var UWindowCheckbox     Boxes[7];
+var string              Keys[7];
+var localized string    Labels[7];
+var localized string    Helps[7];
 
 var localized string    TitleText;
 var localized string    BackHelp;
@@ -101,7 +101,6 @@ defaultproperties
 	Keys(4)="ModernRelief"
 	Keys(5)="ModernSpecular"
 	Keys(6)="ModernPost"
-	Keys(7)="ModernSmoothing"
 
 	Labels(0)="Modern graphics"
 	Labels(1)="Sun shadows"
@@ -110,7 +109,6 @@ defaultproperties
 	Labels(4)="Surface relief"
 	Labels(5)="Generated specular"
 	Labels(6)="Bloom and sharpening"
-	Labels(7)="Smooth transitions"
 
 	Helps(0)="Turns all the new graphics on or off. Off gives the original look."
 	Helps(1)="Shadows cast by the sun across the level."
@@ -119,7 +117,6 @@ defaultproperties
 	Helps(4)="Bumps and depth on walls and floors, made from their own textures."
 	Helps(5)="Shine on surfaces, made from their own textures."
 	Helps(6)="A soft glow around bright light, smoother edges and a sharper picture."
-	Helps(7)="Lighting and effects fade in smoothly instead of popping."
 
 	DimTextColor=(R=110,G=110,B=110,A=255)
 

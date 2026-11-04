@@ -87,9 +87,13 @@ use_self = "warn"
 opt-level = 1
 debug = "line-tables-only"
 
+# Bevy and wgpu run every frame on the render thread: their overflow checks, debug assertions and wgpu's debug flags
+# (`InstanceFlags::from_build_config`) cost real time and find nothing in our code. Our own crates keep theirs.
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
+debug-assertions = false
+overflow-checks = false
 
 # The engine-agnostic crates do the per-frame CPU work (the VM's tick is the frame's critical path) and loading:
 # full optimisation in debug builds too (assertions and overflow checks stay on).

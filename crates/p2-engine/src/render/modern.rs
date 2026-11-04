@@ -4,13 +4,13 @@
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::app::{App, Plugin, Update};
-use bevy::asset::{Asset, Assets};
+use bevy::asset::{Asset, AssetEvent, Assets};
 use bevy::camera::Camera3d;
 use bevy::camera::visibility::RenderLayers;
 use bevy::color::{Color, LinearRgba};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
-use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, Or, Query, Res, ResMut, SystemSet, With};
+use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, MessageReader, Or, Query, Res, ResMut, SystemSet, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::ecs::world::EntityWorldMut;
@@ -114,12 +114,22 @@ impl ModernFlagged for TerrainMaterial {
     }
 }
 
-fn follow_flag<M: ModernFlagged>(settings: Res<Settings>, mut materials: ResMut<Assets<M>>) {
-    if !settings.is_changed() && !materials.is_changed() {
-        return;
-    }
+/// Animated materials change every frame, which must not rescan the whole store.
+fn follow_flag<M: ModernFlagged>(settings: Res<Settings>, mut events: MessageReader<AssetEvent<M>>, mut materials: ResMut<Assets<M>>) {
     let bits = modern_flag(&settings);
-    let stale: Vec<_> = materials.as_ref().iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect();
+    let store = materials.as_ref();
+    let stale: Vec<_> = if settings.is_changed() {
+        store.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect()
+    } else {
+        events
+            .read()
+            .filter_map(|event| match event {
+                AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(*id),
+                _ => None,
+            })
+            .filter(|&id| store.get(id).is_some_and(|material| material.flag() != bits))
+            .collect()
+    };
     for &id in &stale {
         if let Some(mut material) = materials.get_mut(id) {
             material.set_flag(bits);
@@ -344,6 +354,7 @@ fn caster_layers(layers: &RenderLayers, casts: bool) -> RenderLayers {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::message::Messages;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::world::World;
     use bevy::pbr::StandardMaterial;
@@ -375,6 +386,11 @@ mod tests {
         world.insert_resource(actors);
         world.insert_resource(terrain);
         world.insert_resource(terrain_layers);
+        world.init_resource::<Messages<AssetEvent<LightmappedMaterial>>>();
+        world.init_resource::<Messages<AssetEvent<MeshLitMaterial>>>();
+        world.init_resource::<Messages<AssetEvent<ActorLitMaterial>>>();
+        world.init_resource::<Messages<AssetEvent<TerrainMaterial>>>();
+        world.init_resource::<Messages<AssetEvent<TerrainLayerMaterial>>>();
         let mut flags = |on: bool| {
             let value = if on { "True" } else { "False" };
             world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() }));
@@ -402,6 +418,7 @@ mod tests {
         let mut materials = Assets::<LightmappedMaterial>::default();
         let ids: Vec<_> = (0..3).map(|_| materials.add(LightmappedMaterial { base: StandardMaterial::default(), extension: BakedLight::default() })).collect();
         world.insert_resource(materials);
+        world.init_resource::<Messages<AssetEvent<LightmappedMaterial>>>();
         world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
         world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
         let bits = modern_flag(world.resource::<Settings>());

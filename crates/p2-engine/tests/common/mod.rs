@@ -53,6 +53,11 @@ pub fn quad(half: f32, z: f32, color: [f32; 4]) -> Mesh {
     mesh
 }
 
+/// Read backs during this are not results: a frame stays black or clear for as long as a shader takes to compile.
+pub fn compiling(app: &App) -> bool {
+    app.get_sub_app(bevy::render::RenderApp).is_some_and(|render| render.world().resource::<bevy::render::render_resource::PipelineCache>().waiting_pipelines().next().is_some())
+}
+
 pub fn headless_renderer(app: &mut App) {
     app.add_plugins(
         DefaultPlugins

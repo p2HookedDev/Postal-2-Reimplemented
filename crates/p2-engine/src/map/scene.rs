@@ -156,7 +156,9 @@ pub(super) struct BspKey {
 }
 
 /// Invisible surfaces and portals are left out; fake backdrop surfaces too where a sky zone shows
-/// through them (unverified). A node is tested against its front zone, two-sided ones the eye's side.
+/// through them (unverified). Opaque and masked surfaces are not split by zone or place, to keep draws few; the depth test
+/// hides what is behind. Translucent ones are, as they sort by their mesh's centre: a node by its front zone, two-sided
+/// ones the eye's side.
 pub(super) fn bsp_groups<'a>(
     model: &Model,
     polygons: &'a [ModelPolygon],
@@ -169,7 +171,8 @@ pub(super) fn bsp_groups<'a>(
     for polygon in polygons.iter().filter(|p| p.poly_flags & hidden == 0) {
         let node = model.nodes.get(polygon.node);
         let in_sky = sky_zone.is_some_and(|zone| node.is_some_and(|node| node.zones[1] == zone));
-        let zones = node.filter(|_| !in_sky).map(|node| {
+        let translucent = polygon.poly_flags & poly_flags::TRANSLUCENT != 0;
+        let zones = node.filter(|_| translucent && !in_sky).map(|node| {
             let mut zones = if polygon.poly_flags & poly_flags::TWO_SIDED == 0 { vec![node.zones[1]] } else { node.zones.to_vec() };
             zones.sort_unstable();
             zones.dedup();
@@ -195,14 +198,19 @@ pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option
     Some(location_rotation(vm, sky))
 }
 
-pub fn static_mesh_sections<S: SceneAssets>(mesh: &StaticMesh, t: &mut S, mut texture: impl FnMut(&mut S, usize) -> Option<MaterialImages>) -> Vec<SectionView> {
+pub fn static_mesh_sections<S: SceneAssets>(mesh: &StaticMesh, t: &mut S, texture: impl FnMut(&mut S, usize) -> Option<MaterialImages>) -> Vec<SectionView> {
+    sections_of_static_mesh(mesh, t, false, texture)
+}
+
+fn sections_of_static_mesh<S: SceneAssets>(mesh: &StaticMesh, t: &mut S, chunked: bool, mut texture: impl FnMut(&mut S, usize) -> Option<MaterialImages>) -> Vec<SectionView> {
     static_mesh_to_meshes(mesh)
         .into_iter()
         .enumerate()
         .map(|(i, mut section)| {
             let found = texture(t, i);
             use_uv_stream(&mut section, mesh, found.as_ref());
-            SectionView::textured(t.add_mesh(section), found)
+            let chunks = if chunked { crate::render::world_pass::chunks_of(&mut section) } else { None };
+            SectionView { chunks, ..SectionView::textured(t.add_mesh(section), found) }
         })
         .collect()
 }
@@ -781,6 +789,7 @@ fn sector_sections(
         if !in_sky {
             keep_for_relighting(&mut mesh);
         }
+        let chunks = crate::render::world_pass::chunks_of(&mut mesh);
         let mesh = t.add_mesh(mesh);
         handles.push(mesh.clone());
         let terrain_layers = drawn
@@ -807,6 +816,7 @@ fn sector_sections(
             tint: [1.0; 4],
             alpha_map: None,
             terrain: terrain_layers,
+            chunks,
         }]
     } else {
         let mut first = true;
@@ -819,6 +829,7 @@ fn sector_sections(
                 if !in_sky {
                     keep_for_relighting(&mut mesh);
                 }
+                let chunks = if opaque { crate::render::world_pass::chunks_of(&mut mesh) } else { None };
                 let mesh = t.add_mesh(mesh);
                 handles.push(mesh.clone());
                 SectionView {
@@ -837,6 +848,7 @@ fn sector_sections(
                     tint: [1.0; 4],
                     alpha_map: Some(layer.alpha_map.clone()),
                     terrain: Vec::new(),
+                    chunks,
                 }
             })
             .collect()
@@ -860,7 +872,7 @@ fn decoration_models(
         let export = &pkg.exports[mesh_export];
         (read_static_mesh(pkg, file, export).ok()?, read_static_mesh_materials(pkg, file, export).unwrap_or_default())
     };
-    let sections = static_mesh_sections(&mesh, t, |t, i| texture(game, t, mesh_id, *materials.get(i)?));
+    let sections = sections_of_static_mesh(&mesh, t, true, |t, i| texture(game, t, mesh_id, *materials.get(i)?));
     let radius = mesh.positions.iter().map(|&p| Vector::from(p).size_squared()).fold(0.0_f32, f32::max).sqrt();
     let mut by_color: HashMap<([u8; 3], [i32; 2]), (Vec<Transform>, [f32; 3], [f32; 3])> = HashMap::new();
     for d in &placements {
@@ -906,8 +918,6 @@ struct BatchKey {
     material: String,
     has_uvs: bool,
     has_colors: bool,
-    cell: [i32; 2],
-    zones: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -916,7 +926,7 @@ struct StaticParts {
     sky_models: Vec<ModelView>,
     followers: Vec<MovingModel<FollowActor>>,
     collisions: Vec<MeshCollision>,
-    batches: BTreeMap<BatchKey, (SectionView, MeshBatch, Option<ZoneCulled>)>,
+    batches: BTreeMap<BatchKey, (SectionView, MeshBatch)>,
     lit_actors: usize,
 }
 
@@ -948,7 +958,7 @@ fn static_mesh_models(
     }
     let views: Vec<SectionView> =
         textures.iter().map(|found| SectionView { no_scene_lights: true, ..SectionView::textured(Handle::default(), found.clone()) }).collect();
-    let blended: Vec<bool> = views.iter().map(|view| view.alpha_mode == AlphaMode::Blend).collect();
+    let blended: Vec<bool> = views.iter().map(|view| !matches!(view.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_))).collect();
     let material_keys: Vec<String> = views.iter().map(SectionView::material_key).collect();
     let sections = |t: &mut PendingAssets, lighting: Option<&[[u8; 4]]>, relit: bool, mirrored: bool, keep: &dyn Fn(usize) -> bool| -> Vec<SectionView> {
         base.iter()
@@ -1012,13 +1022,9 @@ fn static_mesh_models(
         for (i, section) in base.iter().enumerate().filter(|&(i, _)| !blended[i]) {
             let view = &views[i];
             let colors = colors.as_deref().filter(|_| !view.fullbright);
-            let zones = zone.as_ref().map(|zone| zone.zones.clone());
-            let key = BatchKey { material: material_keys[i].clone(), has_uvs: section.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), has_colors: colors.is_some(), cell: cell(transform.translation), zones };
-            let (_, batch, culled) = parts.batches.entry(key).or_insert_with(|| (view.clone(), MeshBatch::default(), zone.clone()));
+            let key = BatchKey { material: material_keys[i].clone(), has_uvs: section.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), has_colors: colors.is_some() };
+            let (_, batch) = parts.batches.entry(key).or_insert_with(|| (view.clone(), MeshBatch::default()));
             batch.push(section, &transform, colors);
-            if let (Some(culled), Some(zone)) = (culled, &zone) {
-                (culled.min, culled.max) = merged_box((culled.min, culled.max), (zone.min, zone.max));
-            }
         }
         if blended.contains(&true) {
             match lighting {
@@ -1472,11 +1478,12 @@ fn bsp_models(
             lit += polygons.len() * usize::from(lightmap.is_some());
             let size = found.as_ref().and_then(|found| t.image_size(&found.image)).unwrap_or(UVec2::splat(128));
             let scale = [1.0 / size.x.max(1) as f32, 1.0 / size.y.max(1) as f32];
-            let mesh = model_polygons_to_mesh(polygons.iter().map(|(p, uvs)| (*p, uvs.as_deref())), scale);
+            let mut mesh = model_polygons_to_mesh(polygons.iter().map(|(p, uvs)| (*p, uvs.as_deref())), scale);
             let zone = zones.clone().zip(bounds(polygons.iter().flat_map(|(p, _)| p.positions.iter().copied())));
             let zone = zone.map(|(zones, (min, max))| ZoneCulled { zones, min, max, only_from: None });
+            let chunks = if zone.is_none() { crate::render::world_pass::chunks_of(&mut mesh) } else { None };
             let section = SectionView::textured(t.add_mesh(mesh), found);
-            let section = SectionView { no_scene_lights: true, lightmap: lightmap.filter(|_| !section.fullbright), ..section };
+            let section = SectionView { no_scene_lights: true, lightmap: lightmap.filter(|_| !section.fullbright), chunks, ..section };
             (in_sky, ModelView { sections: vec![section], instances: vec![Transform::IDENTITY], zone })
         })
         .partition(|(in_sky, _)| *in_sky);
@@ -1512,8 +1519,10 @@ fn static_models(
     }
     let batches = std::mem::take(&mut parts.batches);
     let merged = batches.len();
-    for (view, batch, zone) in batches.into_values() {
-        parts.models.push(ModelView { sections: vec![SectionView { mesh: t.add_mesh(batch.into_mesh()), ..view }], instances: vec![Transform::IDENTITY], zone });
+    for (view, batch) in batches.into_values() {
+        let mut mesh = batch.into_mesh();
+        let chunks = crate::render::world_pass::chunks_of(&mut mesh);
+        parts.models.push(ModelView { sections: vec![SectionView { mesh: t.add_mesh(mesh), chunks, ..view }], instances: vec![Transform::IDENTITY], zone: None });
     }
     (parts, missing, merged)
 }
@@ -1902,6 +1911,32 @@ mod tests {
             assert!(black_after <= black_before, "{black_after} > {black_before}");
             assert!(dark_among_lit * 100 <= props.len(), "{dark_among_lit} props near black among lit static meshes");
         }
+    }
+
+    #[test]
+    fn only_translucent_bsp_splits_by_place() {
+        let node = p2_assets::BspNode {
+            plane: [0.0; 4],
+            node_flags: 0,
+            vert_pool: 0,
+            surface: 0,
+            back: None,
+            front: None,
+            coplanar: None,
+            collision_bound: None,
+            render_bound: None,
+            zones: [1, 1],
+            num_vertices: 0,
+            leaves: [0; 2],
+            section: None,
+            first_vertex: 0,
+            light_map: None,
+        };
+        let model = Model { nodes: vec![node], ..Model::default() };
+        let polygon = |poly_flags, x| ModelPolygon { node: 0, surface: 0, material: 1, poly_flags, normal: [0.0; 3], positions: vec![[x, 0.0, 0.0]], uvs: Vec::new() };
+        let far = 1_000_000.0;
+        let polygons = [polygon(0, 0.0), polygon(0, far), polygon(poly_flags::TRANSLUCENT, 0.0), polygon(poly_flags::TRANSLUCENT, far)];
+        assert_eq!(bsp_groups(&model, &polygons, None).len(), 3);
     }
 
     #[test]

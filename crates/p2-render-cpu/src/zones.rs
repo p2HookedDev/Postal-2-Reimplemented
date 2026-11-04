@@ -229,7 +229,7 @@ impl VisibleZones {
     }
 
     pub fn reached(&self, zone: u8) -> bool {
-        self.volumes.as_ref().is_none_or(|(volumes, _)| !volumes[usize::from(zone)].is_empty())
+        self.volumes.as_ref().is_none_or(|(volumes, _)| volumes.get(usize::from(zone)).is_some_and(|volume| !volume.is_empty()))
     }
 
     pub fn sees(&self, zone: u8, min: Vector, max: Vector) -> bool {

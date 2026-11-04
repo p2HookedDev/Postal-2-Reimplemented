@@ -300,6 +300,10 @@ fn sprite_in_fog(fogged: bool) -> [u8; 3] {
     let mut same = 0;
     for _ in 0..2000 {
         app.update();
+        if common::compiling(&app) {
+            same = 0;
+            continue;
+        }
         let Some(now) = pixel().filter(|&p| p != [43, 44, 47]) else { continue };
         same = if last == Some(now) { same + 1 } else { 0 };
         last = Some(now);
@@ -366,6 +370,10 @@ fn blended_layer_under_a_transparent_decal(blended: bool) -> ([u8; 3], [u8; 3]) 
     let drawn = |p: &[u8; 3]| *p != [43, 44, 47] && *p != [128, 128, 128];
     for _ in 0..2000 {
         app.update();
+        if common::compiling(&app) {
+            same = 0;
+            continue;
+        }
         let Some(now) = read().filter(|(middle, corner)| drawn(middle) && drawn(corner)) else { continue };
         same = if last == Some(now) { same + 1 } else { 0 };
         last = Some(now);
@@ -426,6 +434,10 @@ fn projected_floor(vertex_lit: bool, floor: u8, texel: [u8; 3]) -> [u8; 3] {
     let mut same = 0;
     for _ in 0..2000 {
         app.update();
+        if common::compiling(&app) {
+            same = 0;
+            continue;
+        }
         let Some(now) = frames.lock().expect("lock").last().map(|f| pixel(f)).filter(|p| *p != [43, 44, 47]) else { continue };
         same = if last == Some(now) { same + 1 } else { 0 };
         last = Some(now);
@@ -673,6 +685,10 @@ fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {
     let (mut last, mut same) = (None, 0);
     for _ in 0..2000 {
         app.update();
+        if common::compiling(&app) {
+            same = 0;
+            continue;
+        }
         let Some(now) = pixel().filter(|p| p[0] > 60 && p[1] > 60) else { continue };
         same = if last == Some(now) { same + 1 } else { 0 };
         last = Some(now);
@@ -889,6 +905,10 @@ fn skinned_lit_quad(toward: Option<bool>) -> [u8; 3] {
     let mut same = 0;
     for _ in 0..2000 {
         app.update();
+        if common::compiling(&app) {
+            same = 0;
+            continue;
+        }
         let Some(now) = frames.lock().expect("lock").last().map(|f| pixel(f)).filter(|p| *p != [43, 44, 47]) else { continue };
         same = if last == Some(now) { same + 1 } else { 0 };
         last = Some(now);
@@ -948,6 +968,10 @@ fn dynamic_lit_quad(light_z: Option<f32>, mesh: Mesh, surface: impl FnOnce(&mut 
     let mut same = 0;
     for _ in 0..2000 {
         app.update();
+        if common::compiling(&app) {
+            same = 0;
+            continue;
+        }
         let Some(now) = frames.lock().expect("lock").last().map(|f| pixel(f)).filter(|p| *p != [43, 44, 47]) else { continue };
         same = if last == Some(now) { same + 1 } else { 0 };
         last = Some(now);

@@ -7,6 +7,7 @@ pub mod mesh_light;
 pub mod modern;
 pub mod particle_material;
 pub mod shader_layers;
+pub mod world_pass;
 pub(crate) mod shaders;
 pub(crate) mod sun_mask;
 pub(crate) mod terrain_light;

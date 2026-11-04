@@ -2,7 +2,7 @@
 
 Our own UnrealScript package that adds a "Modern Graphics" row to the Options menu and a page of checkboxes for
 the modern graphics (master switch, sun shadows, contact shadows, ambient occlusion, surface relief, generated
-specular, bloom and sharpening, smooth transitions). It is our code, not retail's; it uses only the stock Shell
+specular, bloom and sharpening). It is our code, not retail's; it uses only the stock Shell
 menu helpers, so it looks like the retail pages.
 
 ## Classes
@@ -12,7 +12,7 @@ menu helpers, so it looks like the retail pages.
 - `ModernMenuGraphics` extends `Shell.ShellMenuCW`: one checkbox per render device key. Each reads with
   `get ini:Engine.Engine.RenderDevice <Key>` on open and writes `set ini:Engine.Engine.RenderDevice <Key> True|False`
   on change. Keys: `ModernGraphics` (master), `ModernShadows`, `ModernContactShadows`, `ModernAO`, `ModernRelief`,
-  `ModernSpecular`, `ModernPost`, `ModernSmoothing`. Effect boxes are disabled and grey while the master is off.
+  `ModernSpecular`, `ModernPost`. Effect boxes are disabled and grey while the master is off.
 
 ## Building
 

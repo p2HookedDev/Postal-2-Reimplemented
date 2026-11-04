@@ -23,7 +23,6 @@ use p2_render_cpu::{HardwareKind, HardwareLight, MeshLight, MeshPlacement, actor
 use p2_bevy_assets::{lighting_colors, set_vertex_colors, to_bevy};
 use p2_vm::ObjectId;
 
-use crate::display::Settings;
 use crate::render::mesh_light::MeshLitMaterial;
 use crate::components::{CanvasDrawn, OVERLAY_LAYERS};
 use crate::shown_scene::ShownScene;
@@ -305,6 +304,7 @@ fn moved(old: (Vector, Rotator), new: (Vector, Rotator), rotation_counts: bool) 
 
 const VERTEX_UPDATES_PER_FRAME: usize = 64;
 
+/// Retail snaps an actor's light at a zone crossing; ours fades in both looks.
 const LIGHT_SETTLE_SECONDS: f32 = 0.3;
 
 const SAME_LIGHT_DISTANCE: f32 = 8.0;
@@ -373,7 +373,6 @@ pub(crate) struct ActorLightFrame<'w, F: ActorFrames> {
     play: Option<Res<'w, F>>,
     shown: Res<'w, ShownScene>,
     collision: Res<'w, LevelCollision>,
-    settings: Option<Res<'w, Settings>>,
     time: Res<'w, Time>,
 }
 
@@ -413,7 +412,6 @@ pub(crate) fn light_actors<F: ActorFrames>(
     let (Some(play), Some(environment)) = (frames.play.as_deref(), frames.shown.lighting.as_deref()) else { return };
     let (Some(origin), Some(model)) = (play.origin(), frames.collision.model()) else { return };
     let world = RelightWorld { environment, model, origin };
-    let modern = frames.settings.as_ref().is_some_and(|settings| settings.modern_smoothing());
     let step = 1.0 - (-frames.time.delta_secs() / LIGHT_SETTLE_SECONDS).exp();
     let mut colors: FxHashMap<ObjectId, Vec<[f32; 4]>> = FxHashMap::default();
     let hud_bases: FxHashMap<ObjectId, (f32, usize)> = models
@@ -427,7 +425,6 @@ pub(crate) fn light_actors<F: ActorFrames>(
             .then(|| play.attachment_base(lit.actor))
             .flatten()
             .and_then(|base| hud_bases.get(&base).map(|&sphere| (base, sphere)));
-        let overlay = canvas || base.is_some();
         let Some(frame) = play.actor_place(base.map_or(lit.actor, |(base, _)| base)) else { continue };
         if let Some((_, sphere)) = base {
             attach_to_hud_base(&mut lit, mesh, sphere, &mut assets.meshes);
@@ -442,7 +439,7 @@ pub(crate) fn light_actors<F: ActorFrames>(
             if !relight_vertices(&lit, frame, &mesh.0, &world, &mut colors, &mut assets.meshes) {
                 continue;
             }
-        } else if let Some(handle) = relight_tint(&mut lit, still, frame, (modern && overlay).then_some(step), &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
+        } else if let Some(handle) = relight_tint(&mut lit, still, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
             commands
                 .entity(entity)
                 .remove::<(MeshMaterial3d<StandardMaterial>, MeshMaterial3d<MeshLitMaterial>)>()
@@ -482,7 +479,7 @@ fn relight_vertices(lit: &ActorLit, frame: ActorPlace, target: &Handle<Mesh>, wo
     true
 }
 
-fn relight_tint(lit: &mut ActorLit, still: bool, frame: ActorPlace, blend: Option<f32>, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
+fn relight_tint(lit: &mut ActorLit, still: bool, frame: ActorPlace, step: f32, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
     let target = match lit.target {
         Some(target) if still => target,
         _ => world.environment.skinned_lighting(world.model, frame.location, lit.radius, frame.glow, lit.max_lights, world.origin),
@@ -497,10 +494,7 @@ fn relight_tint(lit: &mut ActorLit, still: bool, frame: ActorPlace, blend: Optio
         return Some(handle);
     };
     let shown = assets.lit_materials.get(handle).map(|m| m.extension.lighting);
-    let lighting = match (shown, blend) {
-        (Some(shown), Some(step)) => blend_lighting(&shown, &target, step),
-        _ => target,
-    };
+    let lighting = shown.map_or(target, |shown| blend_lighting(&shown, &target, step));
     if shown.is_some_and(|shown| shown != lighting)
         && let Some(mut material) = assets.lit_materials.get_mut(handle)
     {

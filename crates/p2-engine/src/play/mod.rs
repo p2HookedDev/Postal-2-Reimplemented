@@ -60,7 +60,8 @@ pub const SCRIPT_STACK: usize = 64 << 20;
 /// time). Call before the app is built: the compute pool made here is the one the app's `TaskPoolPlugin` keeps
 /// (`get_or_init`).
 pub fn init_script_stacks() {
-    let threads = (bevy::tasks::available_parallelism() / 2).max(1);
+    // Every core but those the main, render and VM threads keep busy.
+    let threads = bevy::tasks::available_parallelism().saturating_sub(3).max(1);
     bevy::tasks::ComputeTaskPool::get_or_init(|| {
         bevy::tasks::TaskPoolBuilder::new().num_threads(threads).stack_size(SCRIPT_STACK).thread_name("Compute Task Pool".into()).build()
     });

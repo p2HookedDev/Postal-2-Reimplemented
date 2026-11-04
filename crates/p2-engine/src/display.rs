@@ -95,7 +95,6 @@ pub const QUERIES: &[&str] = &[
     MODERN_RELIEF,
     MODERN_SPECULAR,
     MODERN_POST,
-    MODERN_SMOOTHING,
     MSAA,
 ];
 
@@ -123,7 +122,6 @@ pub const MODERN_AO: &str = "ini:Engine.Engine.RenderDevice ModernAO";
 pub const MODERN_RELIEF: &str = "ini:Engine.Engine.RenderDevice ModernRelief";
 pub const MODERN_SPECULAR: &str = "ini:Engine.Engine.RenderDevice ModernSpecular";
 pub const MODERN_POST: &str = "ini:Engine.Engine.RenderDevice ModernPost";
-pub const MODERN_SMOOTHING: &str = "ini:Engine.Engine.RenderDevice ModernSmoothing";
 
 /// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
 /// changing.
@@ -201,10 +199,6 @@ impl Settings {
 
     pub fn modern_post(&self) -> bool {
         self.modern_effect(MODERN_POST, true)
-    }
-
-    pub fn modern_smoothing(&self) -> bool {
-        self.modern_effect(MODERN_SMOOTHING, true)
     }
 }
 
@@ -289,7 +283,7 @@ mod tests {
         assert!(!settings.modern_graphics());
     }
 
-    fn effects(settings: &Settings) -> [bool; 7] {
+    fn effects(settings: &Settings) -> [bool; 6] {
         [
             settings.modern_shadows(),
             settings.modern_contact_shadows(),
@@ -297,25 +291,24 @@ mod tests {
             settings.modern_relief(),
             settings.modern_specular(),
             settings.modern_post(),
-            settings.modern_smoothing(),
         ]
     }
 
-    const EFFECTS: [&str; 7] =
-        [MODERN_SHADOWS, MODERN_CONTACT_SHADOWS, MODERN_AO, MODERN_RELIEF, MODERN_SPECULAR, MODERN_POST, MODERN_SMOOTHING];
+    const EFFECTS: [&str; 6] =
+        [MODERN_SHADOWS, MODERN_CONTACT_SHADOWS, MODERN_AO, MODERN_RELIEF, MODERN_SPECULAR, MODERN_POST];
 
     #[test]
     fn modern_effects_default_on_but_ao() {
         let master = |value: &str| Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() });
-        assert_eq!(effects(&master("True")), [true, true, false, true, true, true, true]);
-        assert_eq!(effects(&Settings::default()), [false; 7]);
-        assert_eq!(effects(&master("False")), [false; 7]);
+        assert_eq!(effects(&master("True")), [true, true, false, true, true, true]);
+        assert_eq!(effects(&Settings::default()), [false; 6]);
+        assert_eq!(effects(&master("False")), [false; 6]);
         let all = |on: &str| Settings::read(|query| if query == MODERN_GRAPHICS { on.to_owned() } else { "True".to_owned() });
-        assert_eq!(effects(&all("False")), [false; 7]);
-        assert_eq!(effects(&all("True")), [true; 7]);
+        assert_eq!(effects(&all("False")), [false; 6]);
+        assert_eq!(effects(&all("True")), [true; 6]);
         for (index, key) in EFFECTS.into_iter().enumerate() {
             let settings = Settings::read(|query| if query == key { "False".to_owned() } else { "True".to_owned() });
-            let mut wanted = [true; 7];
+            let mut wanted = [true; 6];
             wanted[index] = false;
             assert_eq!(effects(&settings), wanted, "{key}");
         }
