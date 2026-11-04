@@ -64,7 +64,7 @@ use movie::Movies;
 use particles::ParticleActor;
 pub use particles::ParticleReport;
 pub use particles::{emitter_sort_bias, pad_bounds};
-pub use sprites::face_sprites;
+pub use sprites::{SpriteQuad, face_sprites};
 pub use coronas::{CoronaActor, corona_actor, draw_coronas, is_corona};
 pub use scene::{SceneAssets, animate_mesh_with, skeletal_mesh_sections, skeletal_sections, static_mesh_sections};
 use scene::{ActorTexture, projector_image, projector_tag, projector_transform, scene_preparer};

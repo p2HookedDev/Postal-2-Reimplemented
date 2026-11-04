@@ -1077,21 +1077,25 @@ fn follower_zones(
     collision: Res<LevelCollision>,
     moved: Query<&ChildOf, (With<FollowActor>, Or<(Changed<Transform>, Changed<Aabb>)>)>,
     mut roots: Query<(&Children, Option<&mut ZoneCulled>), With<ActorModel>>,
-    sections: Query<(&Transform, &Aabb), With<FollowActor>>,
+    sections: Query<(&Transform, &Aabb, Has<crate::map::SpriteQuad>), With<FollowActor>>,
 ) {
     let model = collision.model();
     let Some(model) = model.filter(|model| !model.leaves.is_empty()) else { return };
     let dirty: HashSet<Entity> = moved.iter().map(ChildOf::parent).collect();
     for root in dirty {
         let Ok((children, culled)) = roots.get_mut(root) else { continue };
-        let corners = children.iter().filter_map(|&child| sections.get(child).ok()).flat_map(|(transform, aabb)| {
+        let corners = children.iter().filter_map(|&child| sections.get(child).ok()).flat_map(|(transform, aabb, sprite)| {
             let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
+            let any_facing = (half * transform.scale).length();
             (0..8).map(move |i| {
                 let sign = Vec3::new([-1.0, 1.0][i & 1], [-1.0, 1.0][(i >> 1) & 1], [-1.0, 1.0][i >> 2]);
-                from_bevy(transform.transform_point(center + sign * half))
+                from_bevy(if sprite { transform.translation + sign * any_facing } else { transform.transform_point(center + sign * half) })
             })
         });
         let Some((min, max)) = bounds(corners) else { continue };
+        if culled.as_ref().is_some_and(|zone| zone.min == min && zone.max == max) {
+            continue;
+        }
         let zone = ZoneCulled { zones: p2_collision::box_zones(model, min.into(), max.into()), min, max, only_from: None };
         match culled {
             Some(mut culled) => *culled = zone,
