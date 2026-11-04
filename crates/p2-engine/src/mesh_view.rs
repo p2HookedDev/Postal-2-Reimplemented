@@ -509,6 +509,7 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
             Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 10_000.0, ..Default::default() }),
             Transform::default(),
             RenderLayers::layer(layer),
+            ClusterConfig::Single,
             OverlayCamera(slot),
         ));
     }
