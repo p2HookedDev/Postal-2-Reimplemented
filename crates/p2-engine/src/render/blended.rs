@@ -79,13 +79,8 @@ pub struct TerrainLayer {
 
 impl TerrainLayer {
     pub fn new(alpha_map: Handle<Image>, layers: &Layers) -> Self {
-        Self {
-            layers: layers.params,
-            detail: layers.detail.clone(),
-            specular: layers.specular.clone(),
-            flat_specular: layers.flat_specular.clone(),
-            alpha_map: Some(alpha_map),
-        }
+        let [detail, specular, flat_specular] = layers.images();
+        Self { layers: layers.params, detail, specular, flat_specular, alpha_map: Some(alpha_map) }
     }
 }
 

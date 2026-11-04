@@ -116,29 +116,12 @@ pub fn mesh_box_overlaps<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>
 }
 
 pub fn terrain_box_check(terrain: &Terrain, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
-    if !crate::terrain_ready(terrain) {
-        return None;
-    }
     let (min, max) = swept_bounds(start, end, extent);
     let delta = end - start;
-    let mut best: Option<(f32, (usize, usize, usize), Vector)> = None;
-    for (entry, y, xs) in crate::terrain_rows(terrain, start, end, [extent.x, extent.y]) {
-        if best.is_some_and(|(t, ..)| entry > t) {
-            break;
-        }
-        for x in xs {
-            for (k, triangle) in terrain.quad_triangles(x, y).into_iter().enumerate() {
-                let tri = triangle.map(|i| terrain.vertices[i]);
-                if overlaps(min, max, &tri)
-                    && let Some((t, normal)) = box_triangle(start, delta, extent, tri)
-                    && best.is_none_or(|(best, key, _)| t.total_cmp(&best).then((y, x, k).cmp(&key)).is_lt())
-                {
-                    best = Some((t, (y, x, k), normal));
-                }
-            }
-        }
-    }
-    best.map(|(time, _, normal)| Hit { time, location: start.lerp(end, time), normal })
+    crate::terrain_first_hit(terrain, start, end, [extent.x, extent.y], 0.0, |triangle| {
+        let tri = triangle.map(|i| terrain.vertices[i]);
+        if overlaps(min, max, &tri) { box_triangle(start, delta, extent, tri) } else { None }
+    })
 }
 
 #[cfg(test)]

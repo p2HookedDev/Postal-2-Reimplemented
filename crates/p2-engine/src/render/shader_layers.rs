@@ -93,6 +93,10 @@ impl Layers {
         material
     }
 
+    pub fn images(&self) -> [Option<Handle<Image>>; 3] {
+        [self.detail.clone(), self.specular.clone(), self.flat_specular.clone()]
+    }
+
     pub fn key(&self) -> String {
         let id = |image: &Option<Handle<Image>>| image.as_ref().map(Handle::id);
         let (detail, specular, flat_specular) = (id(&self.detail), id(&self.specular), id(&self.flat_specular));
@@ -121,12 +125,8 @@ macro_rules! layered_extension {
 
         impl $name {
             pub fn new(layers: &crate::render::shader_layers::Layers) -> Self {
-                Self {
-                    layers: layers.params,
-                    detail: layers.detail.clone(),
-                    specular: layers.specular.clone(),
-                    flat_specular: layers.flat_specular.clone(),
-                }
+                let [detail, specular, flat_specular] = layers.images();
+                Self { layers: layers.params, detail, specular, flat_specular }
             }
         }
 

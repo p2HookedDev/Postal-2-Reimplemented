@@ -263,29 +263,47 @@ pub(crate) fn actor_standard(section: &SectionView, unlit: bool) -> StandardMate
     }
 }
 
+pub(crate) fn alpha_key(mode: AlphaMode) -> (std::mem::Discriminant<AlphaMode>, u32) {
+    (std::mem::discriminant(&mode), if let AlphaMode::Mask(cutoff) = mode { cutoff.to_bits() } else { 0 })
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub struct ActorMaterialKey {
+    texture: Option<bevy::asset::AssetId<Image>>,
+    layers: String,
+    alpha: (std::mem::Discriminant<AlphaMode>, u32),
+    no_scene_lights: bool,
+    two_sided: bool,
+    tint: [u32; 4],
+    vertex_lit: bool,
+}
+
+pub(crate) fn cached_actor_material(
+    cache: &mut HashMap<ActorMaterialKey, SectionMaterial>,
+    section: &SectionView,
+    materials: &mut Assets<StandardMaterial>,
+    mesh_lit: &mut Assets<MeshLitMaterial>,
+    standard: impl FnOnce() -> StandardMaterial,
+) -> SectionMaterial {
+    let key = ActorMaterialKey {
+        texture: section.texture.as_ref().map(Handle::id),
+        layers: section.layers.key(),
+        alpha: alpha_key(section.alpha_mode),
+        no_scene_lights: section.no_scene_lights,
+        two_sided: section.two_sided,
+        tint: section.tint.map(f32::to_bits),
+        vertex_lit: vertex_lit(section),
+    };
+    cache.entry(key).or_insert_with(|| section_material(section, standard(), materials, mesh_lit)).clone()
+}
+
 pub fn follower_material(
     section: &SectionView,
     materials: &mut Assets<StandardMaterial>,
     mesh_lit: &mut Assets<MeshLitMaterial>,
-    cache: &mut HashMap<String, SectionMaterial>,
+    cache: &mut HashMap<ActorMaterialKey, SectionMaterial>,
 ) -> SectionMaterial {
-    let key = format!(
-        "{:?} {} {:?} {} {} {:?} {}",
-        section.texture.as_ref().map(Handle::id),
-        section.layers.key(),
-        section.alpha_mode,
-        section.no_scene_lights,
-        section.two_sided,
-        section.tint,
-        vertex_lit(section)
-    );
-    cache
-        .entry(key)
-        .or_insert_with(|| {
-            let standard = StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, section.no_scene_lights) };
-            section_material(section, standard, materials, mesh_lit)
-        })
-        .clone()
+    cached_actor_material(cache, section, materials, mesh_lit, || StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, section.no_scene_lights) })
 }
 
 #[expect(clippy::too_many_arguments, reason = "one call per kind of actor model; the parts differ per caller")]

@@ -1,5 +1,6 @@
 use bevy::app::{App, Plugin};
-use bevy::asset::{Assets, Handle, uuid_handle};
+use bevy::asset::{AssetApp, Assets, Handle, uuid_handle};
+use bevy::pbr::{Material, MaterialPlugin};
 use bevy::render::RenderApp;
 use bevy::shader::Shader;
 
@@ -42,4 +43,17 @@ pub(crate) fn add_libraries(app: &mut App) {
     if !app.is_plugin_added::<ShaderLibraryPlugin>() {
         app.add_plugins(ShaderLibraryPlugin);
     }
+}
+
+pub(crate) fn add_material<M: Material>(app: &mut App, handle: Handle<Shader>, source: &'static str, path: &'static str)
+where
+    MaterialPlugin<M>: Plugin,
+{
+    if app.get_sub_app(RenderApp).is_none() {
+        app.init_asset::<M>();
+        return;
+    }
+    add_libraries(app);
+    add_shaders(app, [(handle, Shader::from_wesl(source, path))]);
+    app.add_plugins(MaterialPlugin::<M>::default());
 }

@@ -140,23 +140,28 @@ fn terrain_ready(terrain: &Terrain) -> bool {
 /// `terrain.vertices` must be filled (rebuilt from the heightmap if the saved ones were stale). Of hits at the same time,
 /// the quad first in heightmap order (row, then column, then triangle) wins.
 pub fn terrain_line_check(terrain: &Terrain, start: Vector, end: Vector) -> Option<Hit> {
+    terrain_first_hit(terrain, start, end, [0.0; 2], TIE_SLACK, |triangle| {
+        let [a, b, c] = triangle.map(|i| Vector::from(terrain.vertices[i]));
+        let t = segment_triangle(start, end, a, b, c)?;
+        Some((t, facing(triangle_normal(a, b, c), start, end)))
+    })
+}
+
+fn terrain_first_hit(terrain: &Terrain, start: Vector, end: Vector, extent: [f32; 2], row_slack: f32, hit: impl Fn([usize; 3]) -> Option<(f32, Vector)>) -> Option<Hit> {
     if !terrain_ready(terrain) {
         return None;
     }
     let mut best: Option<(f32, (usize, usize, usize), Vector)> = None;
-    for (entry, y, xs) in terrain_rows(terrain, start, end, [0.0; 2]) {
-        // A row entered a hair after the best hit can still hold an equal hit on the shared edge, which the
-        // heightmap order below must see (`TIE_SLACK`).
-        if best.is_some_and(|(t, ..)| entry > t + TIE_SLACK) {
+    for (entry, y, xs) in terrain_rows(terrain, start, end, extent) {
+        if best.is_some_and(|(t, ..)| entry > t + row_slack) {
             break;
         }
         for x in xs {
             for (k, triangle) in terrain.quad_triangles(x, y).into_iter().enumerate() {
-                let [a, b, c] = triangle.map(|i| Vector::from(terrain.vertices[i]));
-                if let Some(t) = segment_triangle(start, end, a, b, c)
-                    && best.is_none_or(|(best, key, _)| (t, (y, x, k)) < (best, key))
+                if let Some((t, normal)) = hit(triangle)
+                    && best.is_none_or(|(best, key, _)| t.total_cmp(&best).then((y, x, k).cmp(&key)).is_lt())
                 {
-                    best = Some((t, (y, x, k), facing(triangle_normal(a, b, c), start, end)));
+                    best = Some((t, (y, x, k), normal));
                 }
             }
         }

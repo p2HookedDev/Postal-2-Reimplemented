@@ -9,7 +9,8 @@ use p2_particles::{Beam, CollisionHit, DirectionUsage, EmitterKind, MeshParticle
 
 use super::*;
 use super::fluids::{camera_view, empty_quads, fill_beams, fill_strip};
-use super::spawned::{SpawnModel, alpha_key, static_model, static_model_key};
+use super::spawned::{SpawnModel, static_model, static_model_key};
+use crate::mesh_view::alpha_key;
 use crate::emitter_changes::apply_command;
 use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS};
 

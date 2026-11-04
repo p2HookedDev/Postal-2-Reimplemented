@@ -5,16 +5,15 @@ use std::sync::Arc;
 
 use bevy::app::{App, Plugin};
 use bevy::camera::visibility::RenderLayers;
-use bevy::asset::{Asset, AssetApp, Assets, Handle, RenderAssetUsages, uuid_handle};
+use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
 use bevy::ecs::prelude::{Commands, Component, Entity, Has, Query, Res, ResMut};
 use bevy::ecs::system::SystemParam;
 use bevy::time::Time;
 use bevy::math::{Vec3, Vec4};
 use bevy::image::Image;
 use bevy::mesh::{Mesh, Mesh3d};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin, MeshMaterial3d, StandardMaterial};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MeshMaterial3d, StandardMaterial};
 use bevy::reflect::Reflect;
-use bevy::render::RenderApp;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::{Shader, ShaderRef};
 use p2_math::{Rotator, Vector};
@@ -28,7 +27,7 @@ use crate::components::{CanvasDrawn, OVERLAY_LAYERS};
 use crate::shown_scene::ShownScene;
 use crate::level_collision::LevelCollision;
 use crate::render::shader_layers::{Layers, ShaderLayers};
-use crate::render::shaders::add_shaders;
+use crate::render::shaders::add_material;
 
 pub use p2_render_cpu::MAX_HARDWARE_LIGHTS;
 
@@ -159,13 +158,8 @@ pub struct HardwareLighting {
 
 impl HardwareLighting {
     pub fn new(lighting: SkinnedLighting, layers: &Layers) -> Self {
-        Self {
-            lighting,
-            layers: layers.params,
-            detail: layers.detail.clone(),
-            specular: layers.specular.clone(),
-            flat_specular: layers.flat_specular.clone(),
-        }
+        let [detail, specular, flat_specular] = layers.images();
+        Self { lighting, layers: layers.params, detail, specular, flat_specular }
     }
 }
 
@@ -231,14 +225,7 @@ pub struct ActorLightPlugin;
 
 impl Plugin for ActorLightPlugin {
     fn build(&self, app: &mut App) {
-        if app.get_sub_app(RenderApp).is_none() {
-            app.init_asset::<ActorLitMaterial>();
-            return;
-        }
-        crate::render::shaders::add_libraries(app);
-        let shader = Shader::from_wesl(include_str!("actor_light.wesl"), "p2_engine/actor_light.wesl");
-        add_shaders(app, [(ACTOR_LIGHT_SHADER, shader)]);
-        app.add_plugins(MaterialPlugin::<ActorLitMaterial>::default());
+        add_material::<ActorLitMaterial>(app, ACTOR_LIGHT_SHADER, include_str!("actor_light.wesl"), "p2_engine/actor_light.wesl");
     }
 }
 

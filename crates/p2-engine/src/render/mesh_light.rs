@@ -1,11 +1,10 @@
 use bevy::app::{App, Plugin};
-use bevy::asset::{AssetApp, Handle, uuid_handle};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin, StandardMaterial};
-use bevy::render::RenderApp;
+use bevy::asset::{Handle, uuid_handle};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial};
 use bevy::shader::{Shader, ShaderRef};
 
 use crate::render::shader_layers::ShaderLayers;
-use crate::render::shaders::{add_libraries, add_shaders};
+use crate::render::shaders::add_material;
 
 pub type MeshLitMaterial = ExtendedMaterial<StandardMaterial, DynamicLit>;
 
@@ -25,13 +24,6 @@ pub struct MeshLightPlugin;
 
 impl Plugin for MeshLightPlugin {
     fn build(&self, app: &mut App) {
-        if app.get_sub_app(RenderApp).is_none() {
-            app.init_asset::<MeshLitMaterial>();
-            return;
-        }
-        add_libraries(app);
-        let shader = Shader::from_wesl(include_str!("mesh_light.wesl"), "p2_engine/mesh_light.wesl");
-        add_shaders(app, [(MESH_LIGHT_SHADER, shader)]);
-        app.add_plugins(MaterialPlugin::<MeshLitMaterial>::default());
+        add_material::<MeshLitMaterial>(app, MESH_LIGHT_SHADER, include_str!("mesh_light.wesl"), "p2_engine/mesh_light.wesl");
     }
 }

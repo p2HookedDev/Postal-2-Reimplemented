@@ -1,4 +1,5 @@
 use super::*;
+use crate::mesh_view::ActorMaterialKey;
 use super::scene::{PendingAssets, VmAnimations};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -17,10 +18,6 @@ pub(super) enum ModelKey {
 
 pub(super) fn static_model_key(path: &str, skins: &[Option<String>]) -> ModelKey {
     ModelKey::Static { path: path.to_owned(), skins: skins.to_vec() }
-}
-
-pub(super) fn alpha_key(mode: AlphaMode) -> (std::mem::Discriminant<AlphaMode>, u32) {
-    (std::mem::discriminant(&mode), if let AlphaMode::Mask(cutoff) = mode { cutoff.to_bits() } else { 0 })
 }
 
 pub(super) fn static_model(game: &mut Game, t: &mut SceneTargets, path: &str, skins: &[Option<String>]) -> Option<SpawnModel> {
@@ -160,7 +157,7 @@ fn static_actor_sections(t: &mut SceneTargets, mesh: &Arc<StaticMesh>, sections:
     (sections, lit)
 }
 
-fn spawn_actor_model(model: &SpawnModel, spawned: SpawnedActor, origin: Vec3, shared: &mut HashMap<SpawnedMaterialKey, SectionMaterial>, t: &mut SceneTargets) {
+fn spawn_actor_model(model: &SpawnModel, spawned: SpawnedActor, origin: Vec3, shared: &mut HashMap<ActorMaterialKey, SectionMaterial>, t: &mut SceneTargets) {
     let SpawnedActor { actor, draw, .. } = spawned;
     let (sections, follow, lit) = match (model, draw) {
         (SpawnModel::Static { mesh, sections }, SpawnedDraw::Static(a)) => {
@@ -189,34 +186,13 @@ fn spawn_actor_model(model: &SpawnModel, spawned: SpawnedActor, origin: Vec3, sh
     spawn_actor_sections(&mut t.commands, parent, sections, placed, (actor, follow), material, lit, shown);
 }
 
-#[derive(PartialEq, Eq, Hash)]
-pub(super) struct SpawnedMaterialKey {
-    texture: Option<bevy::asset::AssetId<Image>>,
-    alpha: (std::mem::Discriminant<AlphaMode>, u32),
-    two_sided: bool,
-    tint: [u32; 4],
-    vertex_lit: bool,
-}
-
 fn spawned_material(
-    shared: &mut HashMap<SpawnedMaterialKey, SectionMaterial>,
+    shared: &mut HashMap<ActorMaterialKey, SectionMaterial>,
     materials: &mut Assets<StandardMaterial>,
     mesh_lit: &mut Assets<MeshLitMaterial>,
     section: &SectionView,
 ) -> SectionMaterial {
-    let key = SpawnedMaterialKey {
-        texture: section.texture.as_ref().map(Handle::id),
-        alpha: alpha_key(section.alpha_mode),
-        two_sided: section.two_sided,
-        tint: section.tint.map(f32::to_bits),
-        vertex_lit: vertex_lit(section),
-    };
-    shared
-        .entry(key)
-        .or_insert_with(|| {
-            section_material(section, crate::mesh_view::actor_standard(section, true), materials, mesh_lit)
-        })
-        .clone()
+    crate::mesh_view::cached_actor_material(shared, section, materials, mesh_lit, || crate::mesh_view::actor_standard(section, true))
 }
 
 fn material_images<S: SceneAssets>(game: &mut Game, t: &mut S, package: PackageId, material: i32) -> Option<MaterialImages> {

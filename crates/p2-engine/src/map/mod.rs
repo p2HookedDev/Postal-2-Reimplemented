@@ -43,7 +43,7 @@ use crate::library::{Game, Library, LoadError, LoadProgress, PlayLoaderTask};
 use crate::loading::ProgressBar;
 use crate::mesh_view::{
     ActorModel, CanvasDrawn, FollowActor, MaterialImages, MeshView, ModelView, MapModel, MovingModel, Scene, SectionMaterial, SectionView, Sky, SceneView, Skin,
-    ZoneCulled, OVERLAY_LAYERS, bounds, merged_box, section_material, spawn_actor_sections, vertex_lit,
+    ZoneCulled, OVERLAY_LAYERS, bounds, merged_box, spawn_actor_sections,
 };
 use crate::render::mesh_light::MeshLitMaterial;
 use crate::render::particle_material::ParticleMaterial;
@@ -184,7 +184,7 @@ pub struct Session {
     decal_images: HashMap<String, Option<(Handle<Image>, Vec2, Option<p2_assets::FinalBlend>)>>,
     switch_images: HashMap<(PackageId, usize), Vec<scene::SwitchImage>>,
     spawn_models: HashMap<spawned::ModelKey, Option<spawned::SpawnModel>>,
-    spawn_materials: HashMap<spawned::SpawnedMaterialKey, SectionMaterial>,
+    spawn_materials: HashMap<crate::mesh_view::ActorMaterialKey, SectionMaterial>,
     spawn_builds: Vec<spawned::ModelBuild>,
     spawn_waiting: Vec<spawned::SpawnedActor>,
     particles: Vec<ParticleActor>,
