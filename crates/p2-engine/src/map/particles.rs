@@ -1,6 +1,8 @@
 use bevy::camera::primitives::{Aabb, MeshAabb};
+use bevy::math::Vec3A;
 use bevy::mesh::MeshTag;
 use bevy::render::storage::ShaderBuffer;
+use bevy::shape::Aabb3d;
 use p2_math::Vector;
 use p2_collision::{Hit, line_check, mesh_line_check, terrain_line_check};
 use p2_particles::{Beam, CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner, StripPoint};
@@ -274,7 +276,14 @@ fn sprite_grid(quads: u32) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U32(indices));
+    // Transparent meshes sort by this centre, so the entity's transform sets the draw order.
+    mesh.final_aabb = Some(Aabb3d { min: Vec3A::ZERO, max: Vec3A::ZERO });
     mesh
+}
+
+fn grid_place(min: Vec3, max: Vec3) -> (Transform, Aabb) {
+    let centre = (min + max) / 2.0;
+    (Transform::from_translation(centre), occlusion_aabb(min - centre, max - centre))
 }
 
 fn grid_capacity(current: u32, count: usize) -> u32 {
@@ -282,15 +291,13 @@ fn grid_capacity(current: u32, count: usize) -> u32 {
     if count <= current { current } else { count.next_power_of_two().max(MIN_QUADS) }
 }
 
-/// A sprite as `particle.wesl`'s `SpriteRecord` (Bevy coordinates): centre, colour (RGBA8, the engine's bytes, with
-/// `BlendBetweenSubdivisions` the blend factor as alpha, as the engine's vertices have it), up, right, UV rectangle
-/// `[u0, v0, u1, v1]` and the next frame's (the same without blending). Words 7 (the header's count) and 11 unused.
-fn sprite_record(sprite: &SpriteParticle) -> [u32; RECORD_WORDS] {
+/// Fills `SpriteRecord` in `particle.wesl`, with the sprite's position relative to `grid_at`.
+fn sprite_record(sprite: &SpriteParticle, grid_at: Vec3) -> [u32; RECORD_WORDS] {
     let [r, g, b, a] = sprite.color;
     let (next, alpha) = sprite.blend.unwrap_or((sprite.uv, a));
     let mut record = [0; RECORD_WORDS];
     let floats = |v: Vector| to_bevy(v).map(f32::to_bits);
-    record[0..3].copy_from_slice(&floats(sprite.location));
+    record[0..3].copy_from_slice(&(bevy_vector(sprite.location) - grid_at).to_array().map(f32::to_bits));
     record[3] = u32::from_le_bytes([r, g, b, alpha]);
     record[4..7].copy_from_slice(&floats(sprite.up));
     record[8..11].copy_from_slice(&floats(sprite.right));
@@ -529,10 +536,9 @@ impl Session {
                 .reduce(|(lo, hi), (min, max)| (lo.min(min), hi.max(max)));
             let mut writes = MeshWrites { commands: &mut t.commands, meshes: &mut t.assets.meshes, records: &mut records };
             let (drawn, newly_shown) = fill_emitter_meshes(&mut writes, p, &buffers.particles, &buffers.beams, seen, eye, mesh_reach);
+            write_sprite_records(&mut writes, p, &buffers.particles, drawn);
             place_mesh_particles(&mut t.commands, p, &buffers.meshes, seen);
             p.buffers = buffers;
-            // Every drawn mesh of the actor sorts by the actor's drawn bounds, so its emitters keep their order however particles
-            // move. Bevy sorts by the `Aabb`'s centre: sprite grids have no bounds to pad and get the box only when it changed.
             let changed = newly_shown || drawn != p.drawn_bounds;
             p.drawn_bounds = drawn;
             p.bounds = seen_box;
@@ -640,13 +646,6 @@ fn fill_emitter_meshes(
                     *mesh = sprite_grid(quads);
                 }
             }
-            let first = u32::try_from(writes.records.len()).unwrap_or(u32::MAX);
-            writes.records.push(header_record(sprites.len()));
-            writes.records.extend(sprites.iter().map(sprite_record));
-            if grid.first != Some(first) {
-                grid.first = Some(first);
-                writes.commands.entity(*entity).insert(MeshTag::new(first));
-            }
             for (min, max) in sprites.iter().map(sprite_box) {
                 bounds = Some(bounds.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max))));
             }
@@ -665,6 +664,19 @@ fn fill_emitter_meshes(
     (bounds, newly_shown)
 }
 
+fn write_sprite_records(writes: &mut MeshWrites, p: &mut ParticleActor, particles: &[(Vec<StripPoint>, Vec<SpriteParticle>)], drawn: Option<(Vec3, Vec3)>) {
+    let grid_at = drawn.map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
+    for (draw, (_, sprites)) in p.draws.iter_mut().zip(particles) {
+        let (Some(EmitterMesh { entity, shown: true, .. }), Some(grid)) = (&draw.mesh, &mut draw.grid) else { continue };
+        let first = u32::try_from(writes.records.len()).unwrap_or(u32::MAX);
+        writes.records.push(header_record(sprites.len()));
+        writes.records.extend(sprites.iter().map(|sprite| sprite_record(sprite, grid_at)));
+        if grid.first != Some(first) {
+            grid.first = Some(first);
+            writes.commands.entity(*entity).insert(MeshTag::new(first));
+        }
+    }
+}
 
 fn apply_bounds(writes: &mut MeshWrites, p: &mut ParticleActor, changed: bool, (leaves, here): (Option<&Model>, Vec3)) {
     if let Some((min, max)) = p.drawn_bounds {
@@ -672,7 +684,7 @@ fn apply_bounds(writes: &mut MeshWrites, p: &mut ParticleActor, changed: bool, (
             let Some(EmitterMesh { entity, mesh, shown: true }) = &draw.mesh else { continue };
             if draw.grid.is_some() {
                 if changed {
-                    writes.commands.entity(*entity).insert(occlusion_aabb(min, max));
+                    writes.commands.entity(*entity).insert(grid_place(min, max));
                 }
                 continue;
             }
@@ -952,7 +964,7 @@ mod tests {
         for sprite in [sprite(None), sprite(Some(([0.5, 0.5, 0.75, 0.75], 200)))] {
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
             fill_sprites(&mut mesh, std::slice::from_ref(&sprite));
-            let record = sprite_record(&sprite);
+            let record = sprite_record(&sprite, Vec3::ZERO);
             let float = |i: usize| f32::from_bits(record[i]);
             let vec = |i: usize| Vec3::new(float(i), float(i + 1), float(i + 2));
             let (center, up, right) = (vec(0), vec(4), vec(8));
@@ -977,6 +989,29 @@ mod tests {
         }
         assert_eq!(header_record(5)[7], 5);
         assert!(header_record(5).iter().enumerate().all(|(i, &w)| i == 7 || w == 0));
+    }
+
+    #[test]
+    fn sprite_grids_sort_at_the_actors_box_centre() {
+        let (min, max) = (Vec3::new(100.0, -20.0, 7.0), Vec3::new(300.0, 40.0, 9.0));
+        let (place, aabb) = grid_place(min, max);
+        for quads in [MIN_QUADS, 64] {
+            let sort_centre = place.transform_point(Vec3::from(sprite_grid(quads).get_aabb().expect("bounds").center));
+            assert_eq!(sort_centre, (min + max) / 2.0);
+        }
+        let whole = occlusion_aabb(min, max);
+        assert_eq!(place.transform_point(Vec3::from(aabb.center)), Vec3::from(whole.center));
+        assert_eq!(aabb.half_extents, whole.half_extents);
+    }
+
+    #[test]
+    fn sprite_records_keep_their_place_on_a_moved_grid() {
+        let location: Vector = [50.0, -20.0, 7.0].into();
+        let sprite = SpriteParticle { location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None };
+        let grid_at = Vec3::new(40.0, 3.0, -9.0);
+        let record = sprite_record(&sprite, grid_at);
+        let centre = Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));
+        assert_eq!(centre + grid_at, bevy_vector(location));
     }
 
     #[test]
