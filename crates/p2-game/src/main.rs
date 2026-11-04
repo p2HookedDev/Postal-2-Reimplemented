@@ -16,9 +16,6 @@ use bevy::ecs::prelude::{Commands, Local, MessageWriter, Query, Res, ResMut, Res
 use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::state::prelude::{NextState, in_state};
 use bevy::time::{Real, Time};
-use bevy::input::ButtonInput;
-use bevy::input::keyboard::KeyCode;
-use bevy::input::mouse::MouseButton;
 use bevy::log::LogPlugin;
 use bevy::math::UVec2;
 use bevy::ecs::change_detection::DetectChangesMut;
@@ -197,21 +194,14 @@ fn apply_display(
     }
 }
 
-fn grab_cursor(mut cursor: Single<&mut CursorOptions>, mouse: Res<ButtonInput<MouseButton>>, keys: Res<ButtonInput<KeyCode>>, play: Res<Play>) {
-    if play.world().is_some_and(PlayWorld::shows_mouse) {
-        if !cursor.visible || cursor.grab_mode != CursorGrabMode::None {
-            cursor.visible = true;
-            cursor.grab_mode = CursorGrabMode::None;
-        }
-        return;
-    }
-    if mouse.just_pressed(MouseButton::Left) {
-        cursor.visible = false;
-        cursor.grab_mode = CursorGrabMode::Locked;
-    }
-    if keys.just_pressed(KeyCode::Escape) {
-        cursor.visible = true;
-        cursor.grab_mode = CursorGrabMode::None;
+fn grab_cursor(window: Single<(&Window, &mut CursorOptions)>, play: Res<Play>) {
+    let Some(world) = play.world() else { return };
+    let (window, mut cursor) = window.into_inner();
+    let free = world.shows_mouse() || !window.focused;
+    let grab_mode = if free { CursorGrabMode::None } else { CursorGrabMode::Locked };
+    if cursor.visible != free || cursor.grab_mode != grab_mode {
+        cursor.visible = free;
+        cursor.grab_mode = grab_mode;
     }
 }
 
