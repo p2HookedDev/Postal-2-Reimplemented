@@ -255,6 +255,14 @@ pub fn read_polys(pkg: &Package, file: &[u8], export: &Export) -> Result<Vec<Pol
     Ok(polys)
 }
 
+impl LightMap {
+    /// Lumel coordinates of (x, y, z, w) · `world_to_light_map` (columns 0 and 1): w is 1 for a point, 0 for a direction.
+    pub fn lumel(&self, [x, y, z]: [f32; 3], w: f32) -> [f32; 2] {
+        let m = &self.world_to_light_map;
+        [x * m[0] + y * m[4] + z * m[8] + w * m[12], x * m[1] + y * m[5] + z * m[9] + w * m[13]]
+    }
+}
+
 impl LightMapTexture {
     /// The atlas as a texture: format and size as saved, `data` as mips 0 and 1 (DXT1 512² in every lit map).
     /// Unlit levels store no data and meaningless format / size values: `None`.
@@ -291,14 +299,12 @@ impl Model {
         if width <= 0.0 || height <= 0.0 {
             return None;
         }
-        let m = &map.world_to_light_map;
         let (offset_u, offset_v) = (map.offset[0] as f32, map.offset[1] as f32);
         let uvs = polygon
             .positions
             .iter()
-            .map(|&[x, y, z]| {
-                let u = x * m[0] + y * m[4] + z * m[8] + m[12];
-                let v = x * m[1] + y * m[5] + z * m[9] + m[13];
+            .map(|&point| {
+                let [u, v] = map.lumel(point, 1.0);
                 [(offset_u + u) / width, (offset_v + v) / height]
             })
             .collect();

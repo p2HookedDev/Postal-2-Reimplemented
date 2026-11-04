@@ -632,8 +632,9 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
+    #[inline]
     pub fn is_deleted(&self, actor: ObjectId) -> bool {
-        self.flag_of(actor, Prop::bDeleteMe)
+        self.store.is_deleted(actor)
     }
 
     /// In retail's order: animation, `Tick` event, state code, timer and `LifeSpan`, physics.
@@ -913,6 +914,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn tick_level(&mut self, real: f32) -> Vec<(String, Error)> {
+        self.store.count_work = self.diagnostics.count_work;
         self.world.frame += 1;
         let mut delta = real;
         let mut paused = false;

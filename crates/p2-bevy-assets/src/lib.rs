@@ -494,19 +494,6 @@ pub fn texture_to_rgba_image(texture: &Texture, palette: Option<&[[u8; 4]]>) -> 
     texture_image(texture, palette, false)
 }
 
-fn mip_bytes(texture: &Texture, mip: &p2_assets::Mip) -> usize {
-    let (width, height) = (mip.width as usize, mip.height as usize);
-    let blocks = width.div_ceil(4) * height.div_ceil(4);
-    match texture.format {
-        TextureFormat::P8 => width * height,
-        TextureFormat::G16 => width * height * 2,
-        TextureFormat::Rgba8 => width * height * 4,
-        TextureFormat::Dxt1 => blocks * 8,
-        TextureFormat::Dxt3 | TextureFormat::Dxt5 => blocks * 16,
-        _ => 0,
-    }
-}
-
 fn texture_image(texture: &Texture, palette: Option<&[[u8; 4]]>, compressed: bool) -> Option<Image> {
     let base = texture.mips.first()?;
     let (format, block) = match texture.format {
@@ -530,24 +517,16 @@ fn texture_image(texture: &Texture, palette: Option<&[[u8; 4]]>, compressed: boo
     let mut levels = 0;
     for (level, mip) in texture.mips.iter().enumerate().take(32) {
         let expected = ((base.width >> level).max(1), (base.height >> level).max(1));
-        if mip.data.is_empty() || (mip.width, mip.height) != expected || mip.data.len() < mip_bytes(texture, mip) {
+        if mip.data.is_empty() || (mip.width, mip.height) != expected || mip.data.len() < texture.format.mip_bytes(mip.width, mip.height) {
             break;
         }
         match texture.format {
-            TextureFormat::P8 => data.extend(
-                mip.data.iter().flat_map(|&index| match index {
-                    0 if texture.masked => [0; 4],
-                    _ => palette.get(usize::from(index)).copied().unwrap_or_default(),
-                }),
-            ),
-            TextureFormat::G16 => {
-                data.extend(mip.data.as_chunks::<2>().0.iter().flat_map(|&[_, high]| [high, high, high, 255]));
-            }
-            TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5 if !compressed => {
-                let Some((_, _, texels)) = p2_assets::mip_rgba(texture, level, None) else { break };
+            TextureFormat::Rgba8 => data.extend_from_slice(&mip.data),
+            TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5 if compressed => data.extend_from_slice(&mip.data),
+            _ => {
+                let Some((_, _, texels)) = p2_assets::mip_rgba(texture, level, Some(palette)) else { break };
                 data.extend(texels.iter().flatten());
             }
-            _ => data.extend_from_slice(&mip.data),
         }
         levels += 1;
     }

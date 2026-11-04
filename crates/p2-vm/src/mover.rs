@@ -79,7 +79,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let base = field.word + key as u32 * field.words;
         let words = &self.object(mover).mem.words;
-        Some(self.script.memory.get(id).head.map(|(word, shape)| crate::memory::scalar(words.get((base + word) as usize).copied().unwrap_or(0), shape)))
+        Some(self.store.memory.get(id).head.map(|(word, shape)| crate::memory::scalar(words.get((base + word) as usize).copied().unwrap_or(0), shape)))
     }
 
     fn move_encroacher(&mut self, mover: ObjectId, location: Vector, rotation: Rotator) -> Result<bool, Error> {

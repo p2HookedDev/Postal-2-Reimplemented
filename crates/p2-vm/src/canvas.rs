@@ -5,10 +5,11 @@ use std::sync::Arc;
 use p2_assets::{Font, read_font};
 
 use p2_math::{Rotator, Vector};
+use rustc_hash::FxHashMap;
 use crate::native_id::Native;
 use crate::Prop;
 use crate::interp::{float, truthy};
-use crate::{Error, LoaderRef, ObjectId, Value, Vm};
+use crate::{Error, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const CHAR_WIDTH: f32 = 8.0;
 const CHAR_HEIGHT: f32 = 16.0;
@@ -23,15 +24,23 @@ pub enum CanvasItem {
     Actor { actor: ObjectId, clear_z: bool, fov: f32, location: Vector, rotation: Rotator, scale: Vector },
 }
 
+#[derive(Default)]
+pub(crate) struct Canvas {
+    pub(crate) object: Option<ObjectId>,
+    items: Vec<CanvasItem>,
+    paths: FxHashMap<ObjectId, Arc<str>>,
+    fonts: FxHashMap<ObjectId, Option<Arc<Font>>>,
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub fn render_hud(&mut self, controller: ObjectId, width: f32, height: f32) -> Result<Vec<CanvasItem>, Error> {
         let hud = self.object_of(controller, Prop::myHUD);
-        let canvas = match self.media.canvas {
+        let canvas = match self.media.canvas.object {
             Some(canvas) => canvas,
             None => {
                 let class = self.find_class("Engine", "Canvas")?;
                 let canvas = self.new_object(class, None);
-                self.media.canvas = Some(canvas);
+                self.media.canvas.object = Some(canvas);
                 canvas
             }
         };
@@ -45,19 +54,19 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(viewport) = self.viewport() {
             self.set(canvas, Prop::Viewport, Value::Object(Some(viewport)));
         }
-        self.media.canvas_items.clear();
+        self.media.canvas.items.clear();
         self.render_interactions("Process_PreRender", canvas)?;
         if let Some(hud) = hud {
             self.event(hud, "PostRender", [Value::Object(Some(canvas))])?;
         }
         self.render_interactions("Process_PostRender", canvas)?;
-        let next = Vec::with_capacity(self.media.canvas_items.len());
-        Ok(std::mem::replace(&mut self.media.canvas_items, next))
+        let next = Vec::with_capacity(self.media.canvas.items.len());
+        Ok(std::mem::replace(&mut self.media.canvas.items, next))
     }
 
-    fn font(&mut self, font: ObjectId) -> Option<Arc<Font>> {
-        if let Some(found) = self.media.fonts.get(&font) {
-            return found.clone();
+    fn load_font(&mut self, font: ObjectId) {
+        if self.media.canvas.fonts.contains_key(&font) {
+            return;
         }
         let path = self.object(font).path.clone();
         let found = match self.export_of(font) {
@@ -67,45 +76,56 @@ impl<L: LoaderRef> Vm<L> {
             }
             None => self.side_export(&path).and_then(|(side, export)| read_font(&side.package, &side.data, &side.package.exports[export]).ok().map(Arc::new)),
         };
-        self.media.fonts.insert(font, found.clone());
-        found
+        self.media.canvas.fonts.insert(font, found);
     }
 
-    fn canvas_path(&mut self, object: ObjectId) -> Arc<str> {
-        let path = self.object(object).path.as_str();
-        if let Some(kept) = self.media.canvas_paths.get(&object)
+    pub(crate) fn canvas_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
+        // Reading a font can open a side package, which needs `Vm`; `Canvas` then finds it in `fonts`.
+        if matches!(native, Native::StrLen | Native::TextSize | Native::DrawTextClipped | Native::DrawText)
+            && let Some(font) = this.and_then(|canvas| self.object_of(canvas, Prop::Font))
+        {
+            self.load_font(font);
+        }
+        self.media.canvas.native(&mut self.store, native, this, args)
+    }
+}
+
+impl Canvas {
+    fn canvas_path(&mut self, store: &ObjectStore, object: ObjectId) -> Arc<str> {
+        let path = store.object(object).path.as_str();
+        if let Some(kept) = self.paths.get(&object)
             && &**kept == path
         {
             return kept.clone();
         }
         let kept: Arc<str> = Arc::from(path);
-        self.media.canvas_paths.insert(object, kept.clone());
+        self.paths.insert(object, kept.clone());
         kept
     }
 
-    fn canvas_font(&mut self, canvas: ObjectId) -> CanvasFont {
-        let scale = [self.float_of(canvas, Prop::FontScaleX), self.float_of(canvas, Prop::FontScaleY)].map(|s| if s == 0.0 { 1.0 } else { s });
-        let font = self.object_of(canvas, Prop::Font).and_then(|font| self.font(font).map(|found| (self.canvas_path(font), found)));
-        CanvasFont { font, scale, space_x: self.float_of(canvas, Prop::SpaceX) }
+    fn canvas_font(&mut self, store: &ObjectStore, canvas: ObjectId) -> CanvasFont {
+        let scale = [store.float_of(canvas, Prop::FontScaleX), store.float_of(canvas, Prop::FontScaleY)].map(|s| if s == 0.0 { 1.0 } else { s });
+        let font = store.object_of(canvas, Prop::Font).and_then(|font| self.fonts.get(&font).cloned().flatten().map(|found| (self.canvas_path(store, font), found)));
+        CanvasFont { font, scale, space_x: store.float_of(canvas, Prop::SpaceX) }
     }
 
     #[expect(clippy::unnecessary_wraps, reason = "every native dispatcher has this shape: `natives::call` returns its result")]
-    pub(crate) fn canvas_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
+    fn native(&mut self, store: &mut ObjectStore, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let Some(canvas) = this else { return Ok(None) };
-        let float_of = |vm: &Self, property: Prop| vm.float_of(canvas, property);
+        let float_of = |store: &ObjectStore, property: Prop| store.float_of(canvas, property);
         let string = |args: &[Value]| match args.first() {
             Some(Value::Str(text)) => text.clone(),
             _ => String::new(),
         };
-        let color = |vm: &mut Self| vm.color_of(canvas, Prop::DrawColor).unwrap_or([255; 4]);
-        let style = |vm: &Self| match vm.get(canvas, Prop::Style) {
+        let color = |store: &mut ObjectStore| store.color_of(canvas, Prop::DrawColor).unwrap_or([255; 4]);
+        let style = |store: &ObjectStore| match store.get(canvas, Prop::Style) {
             Some(Value::Byte(style)) => style,
             _ => 1,
         };
         match native {
             // Sizes of a string: `StrLen` (wrapped) and `TextSize` (clipped) alike for now.
             Native::StrLen | Native::TextSize => {
-                let [width, height] = self.canvas_font(canvas).size(&string(args));
+                let [width, height] = self.canvas_font(store, canvas).size(&string(args));
                 for (slot, value) in args.iter_mut().skip(1).zip([width, height]) {
                     *slot = Value::Float(value);
                 }
@@ -114,81 +134,81 @@ impl<L: LoaderRef> Vm<L> {
             // Retail cuts a glyph at the clip edge; we draw it whole (dropping it hid text in tight menus).
             Native::DrawTextClipped => {
                 let text = string(args);
-                let font = self.canvas_font(canvas);
-                let (org, clip) = ([float_of(self, Prop::OrgX), float_of(self, Prop::OrgY)], [float_of(self, Prop::ClipX), float_of(self, Prop::ClipY)]);
-                let (x, y) = (float_of(self, Prop::CurX).round(), float_of(self, Prop::CurY).round());
+                let font = self.canvas_font(store, canvas);
+                let (org, clip) = ([float_of(store, Prop::OrgX), float_of(store, Prop::OrgY)], [float_of(store, Prop::ClipX), float_of(store, Prop::ClipY)]);
+                let (x, y) = (float_of(store, Prop::CurX).round(), float_of(store, Prop::CurY).round());
                 let (kept, start) = clip_text(x, &font.glyphs(&text).collect::<Vec<_>>(), clip[0]);
                 let height = font.size(&text)[1];
-                if let Some(start) = start.filter(|_| style(self) != STY_NONE && y < clip[1] && y + height > 0.0) {
-                    let color = color(self);
-                    self.media.canvas_items.push(CanvasItem::Text { text: kept, position: [org[0] + start, org[1] + y], scale: font.scale, color, font: font.path() });
+                if let Some(start) = start.filter(|_| style(store) != STY_NONE && y < clip[1] && y + height > 0.0) {
+                    let color = color(store);
+                    self.items.push(CanvasItem::Text { text: kept, position: [org[0] + start, org[1] + y], scale: font.scale, color, font: font.path() });
                 }
             }
             Native::DrawText => {
                 let text = string(args);
-                let font = self.canvas_font(canvas);
+                let font = self.canvas_font(store, canvas);
                 let [width, height] = font.size(&text);
-                let position = [float_of(self, Prop::OrgX) + float_of(self, Prop::CurX), float_of(self, Prop::OrgY) + float_of(self, Prop::CurY)];
-                let x = if self.flag_of(canvas, Prop::bCenter) {
-                    float_of(self, Prop::OrgX) + (float_of(self, Prop::ClipX) - width) / 2.0
+                let position = [float_of(store, Prop::OrgX) + float_of(store, Prop::CurX), float_of(store, Prop::OrgY) + float_of(store, Prop::CurY)];
+                let x = if store.flag_of(canvas, Prop::bCenter) {
+                    float_of(store, Prop::OrgX) + (float_of(store, Prop::ClipX) - width) / 2.0
                 } else {
                     position[0]
                 };
-                if style(self) != STY_NONE {
-                    let color = color(self);
-                    self.media.canvas_items.push(CanvasItem::Text { text, position: [x, position[1]], scale: font.scale, color, font: font.path() });
+                if style(store) != STY_NONE {
+                    let color = color(store);
+                    self.items.push(CanvasItem::Text { text, position: [x, position[1]], scale: font.scale, color, font: font.path() });
                 }
                 if args.get(1).is_some_and(truthy) {
-                    self.set(canvas, Prop::CurX, Value::Float(0.0));
-                    self.set(canvas, Prop::CurY, Value::Float(float_of(self, Prop::CurY) + height));
+                    store.set(canvas, Prop::CurX, Value::Float(0.0));
+                    store.set(canvas, Prop::CurY, Value::Float(float_of(store, Prop::CurY) + height));
                 } else {
-                    self.set(canvas, Prop::CurX, Value::Float(float_of(self, Prop::CurX) + width));
+                    store.set(canvas, Prop::CurX, Value::Float(float_of(store, Prop::CurX) + width));
                 }
-                self.set(canvas, Prop::CurYL, Value::Float(height));
+                store.set(canvas, Prop::CurYL, Value::Float(height));
             }
             Native::DrawTileClipped => {
                 let material = match args.first() {
-                    Some(&Value::Object(Some(material))) => self.canvas_path(material),
+                    Some(&Value::Object(Some(material))) => self.canvas_path(store, material),
                     _ => return Ok(None),
                 };
                 let f = |n: usize| args.get(n).map_or(0.0, float);
-                let (org, clip) = ([float_of(self, Prop::OrgX), float_of(self, Prop::OrgY)], [float_of(self, Prop::ClipX), float_of(self, Prop::ClipY)]);
-                let at = [float_of(self, Prop::CurX), float_of(self, Prop::CurY)];
+                let (org, clip) = ([float_of(store, Prop::OrgX), float_of(store, Prop::OrgY)], [float_of(store, Prop::ClipX), float_of(store, Prop::ClipY)]);
+                let at = [float_of(store, Prop::CurX), float_of(store, Prop::CurY)];
                 if let Some((at, size, uv)) = clip_tile(at, [f(1), f(2)], [f(3), f(4), f(5), f(6)], clip) {
-                    let style = style(self);
+                    let style = style(store);
                     if style != STY_NONE {
                         let position = [org[0] + at[0], org[1] + at[1]];
-                        let color = color(self);
-                        self.media.canvas_items.push(CanvasItem::Tile { material, position, size, uv, color, style });
+                        let color = color(store);
+                        self.items.push(CanvasItem::Tile { material, position, size, uv, color, style });
                     }
-                    self.set(canvas, Prop::CurX, Value::Float(at[0] + size[0] + float_of(self, Prop::SpaceX)));
-                    self.set(canvas, Prop::CurYL, Value::Float(float_of(self, Prop::CurYL).max(size[1])));
+                    store.set(canvas, Prop::CurX, Value::Float(at[0] + size[0] + float_of(store, Prop::SpaceX)));
+                    store.set(canvas, Prop::CurYL, Value::Float(float_of(store, Prop::CurYL).max(size[1])));
                 }
             }
             Native::DrawTile => {
                 let material = match args.first() {
-                    Some(&Value::Object(Some(material))) => self.canvas_path(material),
+                    Some(&Value::Object(Some(material))) => self.canvas_path(store, material),
                     _ => return Ok(None),
                 };
                 let f = |n: usize| args.get(n).map_or(0.0, float);
                 let size = [f(1), f(2)];
-                let style = style(self);
+                let style = style(store);
                 if style != STY_NONE {
-                    let position = [float_of(self, Prop::OrgX) + float_of(self, Prop::CurX), float_of(self, Prop::OrgY) + float_of(self, Prop::CurY)];
-                    let color = color(self);
-                    self.media.canvas_items.push(CanvasItem::Tile { material, position, size, uv: [f(3), f(4), f(5), f(6)], color, style });
+                    let position = [float_of(store, Prop::OrgX) + float_of(store, Prop::CurX), float_of(store, Prop::OrgY) + float_of(store, Prop::CurY)];
+                    let color = color(store);
+                    self.items.push(CanvasItem::Tile { material, position, size, uv: [f(3), f(4), f(5), f(6)], color, style });
                 }
-                self.set(canvas, Prop::CurX, Value::Float(float_of(self, Prop::CurX) + size[0]));
-                self.set(canvas, Prop::CurYL, Value::Float(size[1]));
+                store.set(canvas, Prop::CurX, Value::Float(float_of(store, Prop::CurX) + size[0]));
+                store.set(canvas, Prop::CurYL, Value::Float(size[1]));
             }
             Native::DrawActor => {
                 if let Some(&Value::Object(Some(actor))) = args.first() {
                     let clear_z = args.get(2).is_some_and(truthy);
                     let fov = args.get(3).map_or(0.0, float);
-                    let draw_scale = self.float_of(actor, Prop::DrawScale);
-                    let scale = self.vector(actor, Prop::DrawScale3D).map(|s| s * draw_scale);
-                    let (location, rotation) = (self.location(actor), self.rotation(actor));
-                    self.media.canvas_items.push(CanvasItem::Actor { actor, clear_z, fov, location, rotation, scale });
+                    let draw_scale = store.float_of(actor, Prop::DrawScale);
+                    let scale = store.vector(actor, Prop::DrawScale3D).map(|s| s * draw_scale);
+                    let (location, rotation) = (store.location(actor), store.rotation(actor));
+                    self.items.push(CanvasItem::Actor { actor, clear_z, fov, location, rotation, scale });
                 }
             }
             _ => {}

@@ -454,8 +454,8 @@ impl<L: LoaderRef> Vm<L> {
         if id == NameId::NONE {
             return -1;
         }
-        let field = self.script.memory.get(self.class(class).mem).fields[index];
-        let Value::Array(ids) = self.script.memory.read_field(&field, &self.object(manager).mem) else { return -1 };
+        let field = self.store.memory.get(self.class(class).mem).fields[index];
+        let Value::Array(ids) = self.store.memory.read_field(&field, &self.object(manager).mem) else { return -1 };
         let name = self.name(id);
         ids.iter().rposition(|entry| matches!(entry, Value::Name(entry) if self.name(*entry).eq_ignore_ascii_case(name))).map_or(-1, |at| at as i32)
     }

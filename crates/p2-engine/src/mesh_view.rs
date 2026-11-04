@@ -15,6 +15,7 @@ use bevy_egui::{EguiContext, EguiContextSettings, EguiPostUpdateSet};
 use bevy::math::Rect;
 use crate::render::world_pass::{WorldPlacement, WorldSeenZones, WorldTargets};
 use bevy::pbr::{DistanceFog, FogFalloff, Lightmap, ScreenSpaceAmbientOcclusion};
+use bevy::render::camera::MipBias;
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::color::{Alpha, Color, LinearRgba};
 use bevy::camera::primitives::Aabb;
@@ -464,8 +465,11 @@ pub const NEAR_CLIPPING_PLANE: f32 = 5.0;
 #[derive(Component)]
 struct OverlayCamera(usize);
 
-fn plain_output() -> (Msaa, Tonemapping, DebandDither) {
-    (Msaa::Off, Tonemapping::None, DebandDither::Disabled)
+/// `DefaultTexMipBias` as `Postal2.ini` ships it.
+const DEFAULT_MIP_BIAS: f32 = -0.5;
+
+fn plain_output() -> (Msaa, Tonemapping, DebandDither, MipBias) {
+    (Msaa::Off, Tonemapping::None, DebandDither::Disabled, MipBias(DEFAULT_MIP_BIAS))
 }
 
 #[derive(Resource)]

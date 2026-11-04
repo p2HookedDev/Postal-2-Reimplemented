@@ -4,11 +4,12 @@
 import bevy_pbr::render::{
     mesh_functions::{get_world_from_local, get_tag},
     view_transformations::position_world_to_clip,
+    mesh_view_bindings::view,
 };
 
 @if(DISTANCE_FOG)
 import bevy_pbr::render::{
-    mesh_view_bindings::{view, fog},
+    mesh_view_bindings::fog,
     mesh_view_types::FOG_MODE_LINEAR,
 };
 
@@ -146,12 +147,12 @@ fn over_background(source: vec3<f32>, keep: f32) -> vec3<f32> {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let style = params.style;
-    let first = textureSample(particle_texture, particle_sampler, in.uv);
+    let first = textureSampleBias(particle_texture, particle_sampler, in.uv, view.mip_bias);
     var texel = vec4(linear_to_srgb(first.rgb), first.a);
     var alpha = texel.a * in.color.a;
     var color = texel.rgb * in.color.rgb;
     if params.blend_frames != 0u {
-        let second = textureSample(particle_texture, particle_sampler, in.uv_b);
+        let second = textureSampleBias(particle_texture, particle_sampler, in.uv_b, view.mip_bias);
         texel = mix(texel, vec4(linear_to_srgb(second.rgb), second.a), in.color.a);
         alpha = texel.a;
         color = texel.rgb * in.color.rgb;

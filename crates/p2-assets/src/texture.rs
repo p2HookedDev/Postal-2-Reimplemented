@@ -21,6 +21,20 @@ pub enum TextureFormat {
 }
 
 impl TextureFormat {
+    /// 0 for the formats nothing decodes.
+    pub fn mip_bytes(self, width: u32, height: u32) -> usize {
+        let (width, height) = (width as usize, height as usize);
+        let blocks = width.div_ceil(4) * height.div_ceil(4);
+        match self {
+            Self::P8 | Self::L8 => width * height,
+            Self::G16 => width * height * 2,
+            Self::Rgba8 => width * height * 4,
+            Self::Dxt1 => blocks * 8,
+            Self::Dxt3 | Self::Dxt5 => blocks * 16,
+            _ => 0,
+        }
+    }
+
     pub(crate) fn from_byte(value: u8) -> Result<Self, Error> {
         use TextureFormat::*;
         const ALL: [TextureFormat; 12] = [P8, Rgba7, Rgb16, Dxt1, Rgb8, Rgba8, NoData, Dxt3, Dxt5, L8, G16, Rrrgggbbb];
@@ -122,7 +136,7 @@ pub fn mip_rgba(texture: &Texture, level: usize, palette: Option<&[[u8; 4]]>) ->
 
 fn decode_dxt(format: TextureFormat, width: u32, height: u32, data: &[u8]) -> Option<Vec<[u8; 4]>> {
     let (w, h) = (width as usize, height as usize);
-    let block_size = if format == TextureFormat::Dxt1 { 8 } else { 16 };
+    let block_size = format.mip_bytes(4, 4);
     let blocks_x = w.div_ceil(4);
     if blocks_x.checked_mul(h.div_ceil(4))?.checked_mul(block_size)? > data.len() {
         return None;
@@ -213,6 +227,14 @@ fn dimension(r: &mut Reader) -> Result<u32, Error> {
 #[cfg(test)]
 mod dxt_tests {
     use super::*;
+
+    #[test]
+    fn mip_bytes_rounds_blocks_up() {
+        assert_eq!(TextureFormat::Dxt1.mip_bytes(5, 4), 16);
+        assert_eq!(TextureFormat::Dxt5.mip_bytes(1, 1), 16);
+        assert_eq!(TextureFormat::G16.mip_bytes(3, 2), 12);
+        assert_eq!(TextureFormat::NoData.mip_bytes(4, 4), 0);
+    }
 
     fn texture(format: TextureFormat, data: Vec<u8>) -> Texture {
         Texture { format, palette: None, mips: vec![Mip { width: 4, height: 4, data }], masked: false, clamp: [false; 2], lod_set: 0 }

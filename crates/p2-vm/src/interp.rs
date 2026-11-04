@@ -315,7 +315,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let object_name = pkg.name(pkg.exports[export].object_name).to_owned();
         let native_id = if is_native_declaration(native, flags) { crate::native_id::Native::from_name(&object_name) } else { None };
-        let mem = self.script.memory.of(&layout);
+        let mem = self.store.memory.of(&layout);
         let take_damage = object_name.eq_ignore_ascii_case("TakeDamage") && params.len() >= 5;
         let mut labels = FxHashMap::default();
         for statement in &statements {
@@ -367,8 +367,8 @@ impl<L: LoaderRef> Vm<L> {
         }
         let mut locals = self.take_locals(function.mem);
         for (&index, value) in function.params.iter().zip(args) {
-            let field = self.script.memory.get(function.mem).fields[index];
-            self.script.memory.write_field(&field, &mut locals, value);
+            let field = self.store.memory.get(function.mem).fields[index];
+            self.store.memory.write_field(&field, &mut locals, value);
         }
         let (value, locals) = self.run_locals(function, this, class, locals)?;
         self.give_locals(locals);
@@ -392,7 +392,7 @@ impl<L: LoaderRef> Vm<L> {
             self.count(crate::profiling::Work::FrameAlloc);
             Mem::default()
         });
-        self.script.memory.reset(layout, &mut mem);
+        self.store.memory.reset(layout, &mut mem);
         mem
     }
 
@@ -422,7 +422,7 @@ impl<L: LoaderRef> Vm<L> {
             this,
             class,
             locals,
-            |vm, locals, _, index| vm.script.memory.read_field(&vm.script.memory.get(function.mem).fields[index], locals),
+            |vm, locals, _, index| vm.store.memory.read_field(&vm.store.memory.get(function.mem).fields[index], locals),
             |vm, function, this, class, locals| {
                 vm.trace_call(function);
                 vm.count(crate::profiling::Work::ScriptCall);
@@ -510,15 +510,15 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.count(crate::profiling::Work::ScriptCall);
         let mut locals = self.take_locals(function.mem);
-        let fields = &self.script.memory.get(function.mem).fields;
+        let fields = &self.store.memory.get(function.mem).fields;
         for (&index, value) in function.params.iter().zip(args.drain(..)) {
-            self.script.memory.write_field(&fields[index], &mut locals, value);
+            self.store.memory.write_field(&fields[index], &mut locals, value);
         }
         let (value, locals) = self.interpret(function, this, class, locals)?;
-        let fields = &self.script.memory.get(function.mem).fields;
+        let fields = &self.store.memory.get(function.mem).fields;
         args.extend(function.params.iter().map(|&index| match function.layout.properties[index].flags & CPF_OUT_PARM {
             0 => Value::Map,
-            _ => self.script.memory.read_field(&fields[index], &locals),
+            _ => self.store.memory.read_field(&fields[index], &locals),
         }));
         self.give_locals(locals);
         Ok((value, args))
@@ -565,13 +565,13 @@ impl<L: LoaderRef> Vm<L> {
 
     fn return_slot(&self, frame: &Frame) -> Option<Value> {
         let index = frame.function.return_value?;
-        let field = self.script.memory.get(frame.function.mem).fields.get(index)?;
-        Some(self.script.memory.read_field(field, &frame.locals))
+        let field = self.store.memory.get(frame.function.mem).fields.get(index)?;
+        Some(self.store.memory.read_field(field, &frame.locals))
     }
 
     pub(crate) fn state_frame(&mut self, code: &Arc<Function>, object: ObjectId) -> Result<Frame, Error> {
         let class = self.object(object).class.ok_or(Error::Unsupported("state code of a stub".to_owned()))?;
-        let locals = self.script.memory.zero(code.mem);
+        let locals = self.store.memory.zero(code.mem);
         Ok(Frame { function: Arc::clone(code), this: Some(object), class, locals, switch: None, iterators: Vec::new() })
     }
 
@@ -1066,13 +1066,13 @@ impl<L: LoaderRef> Vm<L> {
             if let Some(place) = place {
                 outs.push((param, place));
             }
-            let field = self.script.memory.get(function.mem).fields[param];
-            self.script.memory.write_field(&field, &mut locals, value);
+            let field = self.store.memory.get(function.mem).fields[param];
+            self.store.memory.write_field(&field, &mut locals, value);
         }
         let (value, locals) = self.run_locals(function, context, class, locals)?;
         for &(param, place) in outs.iter().rev() {
-            let field = self.script.memory.get(function.mem).fields[param];
-            let final_value = self.script.memory.read_field(&field, &locals);
+            let field = self.store.memory.get(function.mem).fields[param];
+            let final_value = self.store.memory.read_field(&field, &locals);
             self.write_place(frame, &place, final_value);
         }
         self.give_locals(locals);
@@ -1240,11 +1240,11 @@ impl<L: LoaderRef> Vm<L> {
             Some(mem) => (mem, place.word as usize, place.heap as usize),
             None => (&empty, 0, 0),
         };
-        self.script.memory.read(place.shape, place.dim, mem, word, heap)
+        self.store.memory.read(place.shape, place.dim, mem, word, heap)
     }
 
     fn write_place(&mut self, frame: &mut Frame, place: &Place, value: Value) {
-        let memory = &self.script.memory;
+        let memory = &self.store.memory;
         let mem = match place.root {
             Root::Local => &mut frame.locals,
             Root::Instance(object) => match self.store.objects.get_mut(object.0 as usize) {
@@ -1263,7 +1263,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn array_mut<'s>(&'s mut self, frame: &'s mut Frame, place: &Place) -> Option<(&'s MemLayouts, &'s mut Array, LayoutId)> {
         let (Shape::Array(elem), 1) = (place.shape, place.dim) else { return None };
-        let memory = &self.script.memory;
+        let memory = &self.store.memory;
         let mem = match place.root {
             Root::Local => &mut frame.locals,
             Root::Instance(object) => &mut self.store.objects.get_mut(object.0 as usize)?.mem,
@@ -1288,7 +1288,7 @@ impl<L: LoaderRef> Vm<L> {
         match place.shape {
             _ if place.dim > 1 => {
                 let index = index.clamp(0, place.dim as i32 - 1) as u32;
-                let (words, heaps) = self.script.memory.size(place.shape);
+                let (words, heaps) = self.store.memory.size(place.shape);
                 place.word += index * words;
                 place.heap += index * heaps;
                 place.dim = 1;
@@ -1297,8 +1297,8 @@ impl<L: LoaderRef> Vm<L> {
             Shape::Array(elem) if (place.depth as usize) < MAX_HOPS && index >= 0 => {
                 place.hops[place.depth as usize] = Hop { heap: place.heap, index: index as u32, elem };
                 place.depth += 1;
-                let (words, heaps) = self.script.memory.element_size(elem);
-                let field = self.script.memory.get(elem).fields[0];
+                let (words, heaps) = self.store.memory.element_size(elem);
+                let field = self.store.memory.get(elem).fields[0];
                 place.word = index as u32 * words;
                 place.heap = index as u32 * heaps;
                 place.shape = field.shape;
@@ -1381,7 +1381,7 @@ impl<L: LoaderRef> Vm<L> {
                     }
                 };
                 let index = index.ok_or_else(|| Error::Unsupported(format!("default {}", property_name(self, *reference))))?;
-                match self.script.memory.get(self.class(class).mem).fields.get(index) {
+                match self.store.memory.get(self.class(class).mem).fields.get(index) {
                     Some(field) => Target::Place(Place::new(Root::Default(class), field)),
                     None => Target::Nowhere,
                 }
@@ -1403,14 +1403,14 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn local_target(&self, frame: &Frame, index: usize) -> Target {
-        match self.script.memory.get(frame.function.mem).fields.get(index) {
+        match self.store.memory.get(frame.function.mem).fields.get(index) {
             Some(field) => Target::Place(Place::new(Root::Local, field)),
             None => Target::Nowhere,
         }
     }
 
     fn instance_target(&self, object: ObjectId, class: ClassId, index: usize) -> Target {
-        match self.script.memory.get(self.class(class).mem).fields.get(index) {
+        match self.store.memory.get(self.class(class).mem).fields.get(index) {
             Some(field) => Target::Place(Place::new(Root::Instance(object), field)),
             None => Target::Nowhere,
         }
@@ -1419,7 +1419,7 @@ impl<L: LoaderRef> Vm<L> {
     fn struct_member_target(&self, target: Target, index: usize) -> Target {
         match target {
             Target::Place(mut place) => match (place.shape, place.dim) {
-                (Shape::Struct(id), 1) => match self.script.memory.get(id).fields.get(index) {
+                (Shape::Struct(id), 1) => match self.store.memory.get(id).fields.get(index) {
                     Some(field) => {
                         place.word += field.word;
                         place.heap += field.heap;
@@ -1467,8 +1467,9 @@ impl<L: LoaderRef> Vm<L> {
         Ok(None)
     }
 
+    #[inline]
     pub fn is_a(&self, object: ObjectId, class_name: impl crate::ClassName) -> bool {
-        self.object(object).class.is_some_and(|class| class_name.is_base_of(self, class))
+        self.store.is_a(object, class_name)
     }
 
     pub fn stub_is_a(&self, object: ObjectId, class_name: &str) -> bool {
@@ -1497,19 +1498,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn class_is_a(&self, class: ClassId, class_name: impl crate::ClassName) -> bool {
-        class_name.is_base_of(self, class)
+        class_name.is_base_of(&self.store, class)
     }
 
+    #[inline]
     pub(crate) fn class_has_name(&self, class: ClassId, name: NameId) -> bool {
-        let mut current = Some(class);
-        while let Some(class) = current {
-            self.count(crate::profiling::Work::ClassTestStep);
-            if self.class(class).name == name {
-                return true;
-            }
-            current = self.class(class).super_class;
-        }
-        false
+        self.store.class_has_name(class, name)
     }
 
     fn cast_target(&mut self, package: PackageId, class: i32) -> NameId {
@@ -1545,22 +1539,6 @@ impl<L: LoaderRef> Vm<L> {
             Some(member) => Value::Int(self.texture_size(object)[member / 2]),
             None => Value::Int(0),
         }
-    }
-
-    pub(crate) fn class_is_named(&self, class: ClassId, class_name: &str) -> bool {
-        self.count(crate::profiling::Work::ClassTestByName);
-        if class_name.eq_ignore_ascii_case("Actor") {
-            return self.class(class).is_actor();
-        }
-        let mut current = Some(class);
-        while let Some(class) = current {
-            self.count(crate::profiling::Work::ClassTestStep);
-            if self.name(self.class(class).name).eq_ignore_ascii_case(class_name) {
-                return true;
-            }
-            current = self.class(class).super_class;
-        }
-        false
     }
 
     fn native_function(&mut self, index: u16) -> Option<(PackageId, usize)> {

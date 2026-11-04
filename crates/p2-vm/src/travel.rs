@@ -141,11 +141,11 @@ impl<L: LoaderRef> Vm<L> {
             if let Some(class) = object.class
                 && !actors.contains(&ObjectId(id as u32))
             {
-                self.script.memory.forget(self.store.classes[class.0 as usize].mem, &mut object.mem, &is_gone);
+                self.store.memory.forget(self.store.classes[class.0 as usize].mem, &mut object.mem, &is_gone);
             }
         }
         for class in &mut self.store.classes {
-            self.script.memory.forget(class.mem, &mut class.defaults, &is_gone);
+            self.store.memory.forget(class.mem, &mut class.defaults, &is_gone);
             if class.class_object.is_some_and(|object| gone.contains(&object)) {
                 class.class_object = None;
             }
@@ -202,9 +202,9 @@ impl<L: LoaderRef> Vm<L> {
             for (index, value) in &travel.properties {
                 let value = self.remap(value, &map);
                 if let Some(class) = self.object(*actor).class
-                    && let Some(&field) = self.script.memory.get(self.class(class).mem).fields.get(*index)
+                    && let Some(&field) = self.store.memory.get(self.class(class).mem).fields.get(*index)
                 {
-                    self.script.memory.write_field(&field, &mut self.store.objects[actor.0 as usize].mem, value);
+                    self.store.memory.write_field(&field, &mut self.store.objects[actor.0 as usize].mem, value);
                 }
             }
         }

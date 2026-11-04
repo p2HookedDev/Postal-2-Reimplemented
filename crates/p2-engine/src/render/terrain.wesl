@@ -7,6 +7,7 @@ import bevy_pbr::{
         pbr_fragment::pbr_input_from_standard_material,
         pbr_functions::main_pass_post_lighting_processing,
         forward_io::{VertexOutput, FragmentOutput},
+        mesh_view_bindings::view,
     },
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
@@ -165,8 +166,9 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let position_dx = dpdx(position);
     let position_dy = dpdy(position);
     let alpha_uv = vertex_output.uv_b;
-    let alpha_dx = dpdx(alpha_uv);
-    let alpha_dy = dpdy(alpha_uv);
+    let mip_scale = exp2(view.mip_bias);
+    let alpha_dx = dpdx(alpha_uv) * mip_scale;
+    let alpha_dy = dpdy(alpha_uv) * mip_scale;
 
     let terrain = params(vertex_output);
     let count = min(terrain.count.x, MAX_LAYERS);
@@ -190,7 +192,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         let uv = vec2(dot(u.xyz, position) + u.w, dot(v.xyz, position) + v.w);
         let gx = vec2(dot(u.xyz, position_dx), dot(v.xyz, position_dx));
         let gy = vec2(dot(u.xyz, position_dy), dot(v.xyz, position_dy));
-        let texel = layer_texture(vertex_output, k, uv, gx, gy);
+        let texel = layer_texture(vertex_output, k, uv, gx * mip_scale, gy * mip_scale);
         var alpha = 1.0;
         if k > 0u {
             alpha = texel.a * layer_alpha(vertex_output, k, alpha_uv, alpha_dx, alpha_dy);
@@ -204,10 +206,10 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
             if (terrain.count.y & (NO_RELIEF | NO_GLOSS)) != (NO_RELIEF | NO_GLOSS) {
                 let size = layer_size(vertex_output, k);
                 let step = max(1.0 / size, max(abs(gx), abs(gy)));
-                let l = dot(layer_texture(vertex_output, k, uv - vec2(step.x, 0.0), gx, gy).rgb, LUMINANCE);
-                let r = dot(layer_texture(vertex_output, k, uv + vec2(step.x, 0.0), gx, gy).rgb, LUMINANCE);
-                let t = dot(layer_texture(vertex_output, k, uv - vec2(0.0, step.y), gx, gy).rgb, LUMINANCE);
-                let b = dot(layer_texture(vertex_output, k, uv + vec2(0.0, step.y), gx, gy).rgb, LUMINANCE);
+                let l = dot(layer_texture(vertex_output, k, uv - vec2(step.x, 0.0), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
+                let r = dot(layer_texture(vertex_output, k, uv + vec2(step.x, 0.0), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
+                let t = dot(layer_texture(vertex_output, k, uv - vec2(0.0, step.y), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
+                let b = dot(layer_texture(vertex_output, k, uv + vec2(0.0, step.y), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
                 let slope = vec2(r - l, b - t) / 2.0;
                 relief = allowed_relief(
                     relief_from(normal, position, position_dx, position_dy, gx, gy, size, slope, dot(texel.rgb, LUMINANCE)),

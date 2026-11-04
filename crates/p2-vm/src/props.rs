@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use crate::memory::{Field, Shape};
-use crate::{ClassId, LoaderRef, NameId, Vm};
+use crate::{ClassId, NameId, ObjectStore};
 
 macro_rules! properties {
     ($($name:ident),* $(,)?) => {
@@ -123,11 +123,11 @@ impl Resolved {
 }
 
 pub trait PropertyName: Copy {
-    fn slot_in<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> Option<usize>;
+    fn slot_in(self, store: &ObjectStore, class: ClassId) -> Option<usize>;
 
     #[doc(hidden)]
-    fn field_in<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> Option<Field> {
-        vm.script.memory.get(vm.class(class).mem).fields.get(self.slot_in(vm, class)?).copied()
+    fn field_in(self, store: &ObjectStore, class: ClassId) -> Option<Field> {
+        store.memory.get(store.class(class).mem).fields.get(self.slot_in(store, class)?).copied()
     }
 
     #[doc(hidden)]
@@ -137,20 +137,20 @@ pub trait PropertyName: Copy {
 
     #[doc(hidden)]
     #[inline]
-    fn word_in<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> Option<(u32, Shape)> {
-        self.field_in(vm, class).filter(|f| f.dim == 1).map(|f| (f.word, f.shape))
+    fn word_in(self, store: &ObjectStore, class: ClassId) -> Option<(u32, Shape)> {
+        self.field_in(store, class).filter(|f| f.dim == 1).map(|f| (f.word, f.shape))
     }
 }
 
 impl<T: AsRef<str> + ?Sized> PropertyName for &T {
-    fn slot_in<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> Option<usize> {
-        vm.property_index(class, self.as_ref())
+    fn slot_in(self, store: &ObjectStore, class: ClassId) -> Option<usize> {
+        store.property_index(class, self.as_ref())
     }
 }
 
 impl PropertyName for Prop {
-    fn slot_in<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> Option<usize> {
-        match vm.class(class).resolved.slots[self as usize] {
+    fn slot_in(self, store: &ObjectStore, class: ClassId) -> Option<usize> {
+        match store.class(class).resolved.slots[self as usize] {
             u32::MAX => None,
             slot => Some(slot as usize),
         }
@@ -161,8 +161,8 @@ impl PropertyName for Prop {
     }
 
     #[inline]
-    fn word_in<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> Option<(u32, Shape)> {
-        match vm.class(class).resolved.words[self as usize] {
+    fn word_in(self, store: &ObjectStore, class: ClassId) -> Option<(u32, Shape)> {
+        match store.class(class).resolved.words[self as usize] {
             (_, Shape::Map) => None,
             found => Some(found),
         }
@@ -175,7 +175,7 @@ impl PropertyName for Prop {
 pub struct Slot(pub(crate) usize);
 
 impl PropertyName for Slot {
-    fn slot_in<L: LoaderRef>(self, _vm: &Vm<L>, _class: ClassId) -> Option<usize> {
+    fn slot_in(self, _store: &ObjectStore, _class: ClassId) -> Option<usize> {
         Some(self.0)
     }
 }
@@ -215,24 +215,24 @@ impl<'a> Ordered<'a> {
 }
 
 pub trait ClassName: Copy {
-    fn is_base_of<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> bool;
+    fn is_base_of(self, store: &ObjectStore, class: ClassId) -> bool;
 }
 
 impl<T: AsRef<str> + ?Sized> ClassName for &T {
-    fn is_base_of<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> bool {
-        vm.class_is_named(class, self.as_ref())
+    fn is_base_of(self, store: &ObjectStore, class: ClassId) -> bool {
+        store.class_is_named(class, self.as_ref())
     }
 }
 
 impl ClassName for NameId {
-    fn is_base_of<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> bool {
-        vm.class_has_name(class, self)
+    fn is_base_of(self, store: &ObjectStore, class: ClassId) -> bool {
+        store.class_has_name(class, self)
     }
 }
 
 impl ClassName for Kind {
-    fn is_base_of<L: LoaderRef>(self, vm: &Vm<L>, class: ClassId) -> bool {
-        vm.class(class).resolved.kinds & (1 << self as u32) != 0
+    fn is_base_of(self, store: &ObjectStore, class: ClassId) -> bool {
+        store.class(class).resolved.kinds & (1 << self as u32) != 0
     }
 }
 

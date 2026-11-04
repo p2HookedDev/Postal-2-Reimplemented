@@ -549,12 +549,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn read_local(&self, frame: &Frame, index: usize) -> Value {
-        let memory = &self.script.memory;
+        let memory = &self.store.memory;
         memory.get(frame.function.mem).fields.get(index).map_or(Value::Int(0), |field| memory.read_field(field, &frame.locals))
     }
 
     fn read_instance(&self, object: ObjectId, class: ClassId, index: usize) -> Value {
-        let memory = &self.script.memory;
+        let memory = &self.store.memory;
         memory.get(self.class(class).mem).fields.get(index).map_or(Value::Int(0), |field| memory.read_field(field, &self.object(object).mem))
     }
 }

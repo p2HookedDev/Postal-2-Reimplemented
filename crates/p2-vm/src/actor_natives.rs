@@ -181,20 +181,6 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn actor_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let Some(this) = this else { return Ok(None) };
-        match native {
-            Native::SetBoneRotation | Native::SetBoneLocation | Native::SetBoneDirection => return self.bone_native(native, this, args),
-            Native::SetLodStaticMesh | Native::ClearLodStaticMesh | Native::DeleteLodStaticMesh => return self.lod_native(native, this, args),
-            Native::KSetCOMOffset | Native::KGetCOMOffset | Native::KSetInertiaTensor | Native::KGetInertiaTensor | Native::KGetConstraintForce | Native::KGetConstraintTorque | Native::KUpdateConstraintParams => {
-                return self.karma_state_native(native, this, args);
-            }
-            Native::Play | Native::StopNow | Native::StopAtEnd | Native::Pause | Native::IsPlaying | Native::IsPaused | Native::GetWidth | Native::GetHeight if self.is_a(this, Kind::Movie) => {
-                return self.movie_native(native, this, args);
-            }
-            Native::InitializeMovie => return self.movie_native(native, this, args),
-            // No shipped script calls these two and nothing draws a `ScriptedTexture`'s text: no effect.
-            Native::DrawColoredText | Native::ReplaceTexture => return Ok(None),
-            _ => {}
-        }
         let f = |n: usize| args.get(n).map_or(0.0, float);
         let object = |n: usize| crate::natives::object_arg(args, n);
         let unknown = || Error::UnknownNative(format!("{native:?}"));
@@ -252,7 +238,7 @@ impl<L: LoaderRef> Vm<L> {
                 let Vector { x, y, .. } = vec3(args.first());
                 let (_, rotation) = self.camera();
                 let fov = self.player().map_or(90.0, |p| self.float_of(p, Prop::FovAngle));
-                let (width, height) = self.media.canvas.map_or((0, 0), |c| (self.int_prop(c, Prop::SizeX), self.int_prop(c, Prop::SizeY)));
+                let (width, height) = self.media.canvas.object.map_or((0, 0), |c| (self.int_prop(c, Prop::SizeX), self.int_prop(c, Prop::SizeY)));
                 Value::Vector(screen_to_near_plane([x, y], [width as f32, height as f32], if fov > 0.0 { fov } else { 90.0 }, rotation))
             }
             // `PlayFlashbangSound(Sound, OverrideDuration)`: the host stops the other sounds, silences the loops
@@ -268,13 +254,14 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::GetCacheEntry | Native::MoveCacheEntry => Value::Bool(false),
-            Native::AddSpawnProperty | Native::GraphData => return Ok(None),
+            // No shipped script calls the last two and nothing draws a `ScriptedTexture`'s text: no effect.
+            Native::AddSpawnProperty | Native::GraphData | Native::DrawColoredText | Native::ReplaceTexture => return Ok(None),
             _ => return Err(unknown()),
         };
         Ok(Some(value))
     }
 
-    fn bone_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
+    pub(crate) fn bone_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
         let given = |n: usize| !matches!(args.get(n), None | Some(Value::Map));
         let f = |n: usize| args.get(n).map_or(0.0, float);
         match native {
@@ -309,7 +296,7 @@ impl<L: LoaderRef> Vm<L> {
         Ok(None)
     }
 
-    fn lod_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
+    pub(crate) fn lod_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
         let given = |n: usize| !matches!(args.get(n), None | Some(Value::Map));
         let f = |n: usize| args.get(n).map_or(0.0, float);
         let object = |n: usize| crate::natives::object_arg(args, n);
@@ -341,7 +328,7 @@ impl<L: LoaderRef> Vm<L> {
         Ok(Some(value))
     }
 
-    fn karma_state_native(&mut self, native: Native, this: ObjectId, args: &mut [Value]) -> Result<Option<Value>, Error> {
+    pub(crate) fn karma_state_native(&mut self, native: Native, this: ObjectId, args: &mut [Value]) -> Result<Option<Value>, Error> {
         match native {
             // No shipped script calls these or their getters and the bodies in `karma.rs` read neither property,
             // so the values only answer the getters.
@@ -378,7 +365,10 @@ impl<L: LoaderRef> Vm<L> {
         Ok(None)
     }
 
-    fn movie_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
+    pub(crate) fn movie_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
+        if native != Native::InitializeMovie && !self.is_a(this, Kind::Movie) {
+            return Err(Error::UnknownNative(format!("{native:?}")));
+        }
         let value = match native {
             // Defaults UseSound 0, Loop 0 (the third default is 30, unverified).
             Native::Play => {

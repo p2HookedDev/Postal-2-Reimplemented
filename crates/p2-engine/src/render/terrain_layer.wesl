@@ -3,6 +3,7 @@ import bevy_pbr::{
         pbr_functions::alpha_discard,
         pbr_fragment::pbr_input_from_standard_material,
         forward_io::{VertexOutput, FragmentOutput},
+        mesh_view_bindings::view,
     },
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
@@ -39,14 +40,15 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var pbr_input = pbr_input_from_standard_material(input, is_front);
     @if(BINDLESS) {
         let index = indices(vertex_output);
-        pbr_input.material.base_color.a *= textureSample(
+        pbr_input.material.base_color.a *= textureSampleBias(
             bindless_textures_2d[index.alpha_map],
             bindless_samplers_filtering[index.alpha_map_sampler],
-            vertex_output.uv_b
+            vertex_output.uv_b,
+            view.mip_bias
         ).r;
     }
     @else {
-        pbr_input.material.base_color.a *= textureSample(alpha_map, alpha_map_sampler, vertex_output.uv_b).r;
+        pbr_input.material.base_color.a *= textureSampleBias(alpha_map, alpha_map_sampler, vertex_output.uv_b, view.mip_bias).r;
     }
     let base_alpha = pbr_input.material.base_color.a;
     pbr_input.material.base_color = alpha_discard(

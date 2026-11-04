@@ -164,7 +164,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(class) = self.object(object).class else { return };
         let layout = self.class(class).mem;
         let mut mem = std::mem::take(&mut self.store.objects[object.0 as usize].mem);
-        self.script.memory.visit_refs(layout, &mut mem, &mut |shape, word| {
+        self.store.memory.visit_refs(layout, &mut mem, &mut |shape, word| {
             if shape == Shape::Object
                 && let Some(found) = memory::object(*word)
             {
@@ -175,12 +175,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn kept_transient(&mut self) -> HashSet<ObjectId> {
-        let roots = [self.host.client.master, self.host.client.viewport, self.media.canvas];
+        let roots = [self.host.client.master, self.host.client.viewport, self.media.canvas.object];
         let mut stack: Vec<ObjectId> = roots.into_iter().flatten().collect();
         for class in 0..self.store.classes.len() {
             let layout = self.store.classes[class].mem;
             let mut defaults = std::mem::take(&mut self.store.classes[class].defaults);
-            self.script.memory.visit_refs(layout, &mut defaults, &mut |shape, word| {
+            self.store.memory.visit_refs(layout, &mut defaults, &mut |shape, word| {
                 if shape == Shape::Object
                     && let Some(found) = memory::object(*word)
                 {
@@ -257,7 +257,7 @@ impl<L: LoaderRef> Vm<L> {
         for &o in &saved {
             let Some(class) = self.object(o).class else { continue };
             let mut mem = self.object(o).mem.clone();
-            self.script.memory.visit_refs(self.class(class).mem, &mut mem, &mut |shape, word| {
+            self.store.memory.visit_refs(self.class(class).mem, &mut mem, &mut |shape, word| {
                 *word = match shape {
                     Shape::Object => reference(self, memory::object(*word)),
                     _ => name_of(self, NameId(*word)),
@@ -330,12 +330,12 @@ impl<L: LoaderRef> Vm<L> {
             let Some(class) = self.object(id).class else { continue };
             let defaults = &self.class(class).defaults;
             let layout = self.class(class).mem;
-            if saved.mem.words.len() != defaults.words.len() || saved.mem.heap.len() != defaults.heap.len() || !self.script.memory.arrays_fit(layout, &saved.mem) {
+            if saved.mem.words.len() != defaults.words.len() || saved.mem.heap.len() != defaults.heap.len() || !self.store.memory.arrays_fit(layout, &saved.mem) {
                 self.diagnostics.log.push(format!("Load: {} does not match its class {}, skipped", saved.path, saved.class));
                 continue;
             }
             let mut mem = saved.mem.clone();
-            self.script.memory.visit_refs(self.class(class).mem, &mut mem, &mut |shape, word| {
+            self.store.memory.visit_refs(self.class(class).mem, &mut mem, &mut |shape, word| {
                 *word = match shape {
                     Shape::Object => reference(*word),
                     _ => name(*word).0,

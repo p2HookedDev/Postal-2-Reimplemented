@@ -6,12 +6,12 @@ use p2_assets::pose::{Frame, LocalBone, blend_local, bone_frames, channel_weight
 use p2_assets::{MeshAnimation, SkeletalMesh, read_mesh_animation, read_primitive_sphere, read_skeletal_mesh};
 
 use p2_math::{Rotator, Vector};
-use p2_package::PackageId;
+use p2_package::{Loader, PackageId};
 
 use crate::enums::EDrawType;
 use crate::anim::AnimChannel;
 use crate::collision::Placement;
-use crate::{LoaderRef, NameId, ObjectId, Value, Vm, Prop};
+use crate::{LoaderRef, NameId, ObjectId, ObjectStore, Value, Vm, Prop};
 
 pub(crate) struct PosedMesh {
     pub(crate) mesh: SkeletalMesh,
@@ -105,6 +105,111 @@ fn transform_sphere(frame: &Frame, [x, y, z, radius]: [f32; 4]) -> [f32; 4] {
 
 const UNIT: Frame = Frame::IDENTITY;
 
+impl BoneData {
+    fn keep_pose(&mut self, store: &ObjectStore, actor: ObjectId, key: PoseKey, frames: Arc<[Frame]>) {
+        if self.poses.len() >= POSE_CACHE_LIMIT && !self.poses.contains_key(&actor) {
+            let mut poses = std::mem::take(&mut self.poses);
+            poses.retain(|&posed, _| !store.is_deleted(posed));
+            if poses.len() >= POSE_CACHE_LIMIT {
+                poses.clear();
+            }
+            self.poses = poses;
+        }
+        self.poses.insert(actor, (key, frames));
+    }
+
+    fn ref_bone(&mut self, store: &ObjectStore, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
+        let key = (mesh_object, bone);
+        if let Some(&found) = self.ref_bones.get(&key) {
+            return found;
+        }
+        let found = mesh.match_ref_bone(&store.name(bone).to_ascii_lowercase());
+        self.ref_bones.insert(key, found);
+        found
+    }
+
+    fn mesh_bone(&mut self, store: &ObjectStore, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
+        let key = (mesh_object, bone);
+        if let Some(&found) = self.mesh_bones.get(&key) {
+            return found;
+        }
+        let name = store.name(bone).to_ascii_lowercase();
+        let found = mesh.names.iter().position(|n| *n == name);
+        self.mesh_bones.insert(key, found);
+        found
+    }
+
+    fn sequence_index(&mut self, store: &ObjectStore, animation_object: ObjectId, animation: &PosedAnimation, sequence: NameId) -> Option<usize> {
+        let key = (animation_object, sequence);
+        if let Some(&found) = self.sequences.get(&key) {
+            return found;
+        }
+        let name = store.name(sequence).to_ascii_lowercase();
+        let found = animation.sequences.iter().position(|s| *s == name);
+        self.sequences.insert(key, found);
+        found
+    }
+
+    fn bone_map(&mut self, mesh_object: ObjectId, mesh: &PosedMesh, animation_object: ObjectId, animation: &PosedAnimation) -> Arc<[Option<usize>]> {
+        let key = (mesh_object, animation_object);
+        if let Some(map) = self.bone_maps.get(&key) {
+            return map.clone();
+        }
+        let map: Arc<[Option<usize>]> = mesh.names.iter().map(|name| animation.bones.iter().position(|b| b == name)).collect();
+        self.bone_maps.insert(key, map.clone());
+        map
+    }
+
+    fn saved_sphere(&mut self, store: &ObjectStore, loader: &Loader, mesh: ObjectId, class: &'static str) -> Option<[f32; 4]> {
+        if let Some(&sphere) = self.spheres.get(&(mesh, class)) {
+            return Some(sphere);
+        }
+        let (package, export) = loader.loaded_export_by_path_of_class(&store.object(mesh).path, class)?;
+        let loaded = loader.package(package);
+        let sphere = read_primitive_sphere(&loaded.package, &loaded.data, &loaded.package.exports[export]).ok()?;
+        self.spheres.insert((mesh, class), sphere);
+        Some(sphere)
+    }
+
+    fn read_posed_mesh(&mut self, store: &ObjectStore, loader: &Loader, mesh: ObjectId) -> Option<Arc<PosedMesh>> {
+        let read = loader.loaded_export_by_path_of_class(&store.object(mesh).path, "SkeletalMesh").and_then(|(id, export)| {
+            let loaded = loader.package(id);
+            let mesh = read_skeletal_mesh(&loaded.package, &loaded.data, &loaded.package.exports[export]).ok()?;
+            let names = mesh.bones.iter().map(|b| loaded.package.name(b.name).to_ascii_lowercase()).collect();
+            let parents = mesh.bones.iter().map(|b| b.parent).collect();
+            let name = |index: usize| loaded.package.name(index).to_ascii_lowercase();
+            let aliases = mesh.attach_aliases.iter().map(|a| (name(a.alias), name(a.bone))).collect();
+            let reference = mesh.bones.iter().enumerate().map(|(bone, b)| reference_frame(bone, b.orientation, b.position)).collect();
+            Some(Arc::new(PosedMesh { mesh, names, parents, aliases, reference }))
+        });
+        self.meshes.insert(mesh, read.clone());
+        read
+    }
+
+    fn prewarm_animations(&mut self, loader: &Loader) {
+        let exports: Vec<(PackageId, usize)> = loader
+            .package_names()
+            .filter_map(|name| loader.loaded_id(name))
+            .flat_map(|id| {
+                let pkg = &loader.package(id).package;
+                (0..pkg.exports.len()).filter(move |&e| pkg.object_name(pkg.exports[e].class_index) == Some("MeshAnimation")).map(move |e| (id, e))
+            })
+            .filter(|key| !self.parsed.0.contains_key(key))
+            .collect();
+        let read: Vec<((PackageId, usize), Option<Arc<MeshAnimation>>)> = {
+            use rayon::prelude::*;
+            exports
+                .into_par_iter()
+                .map(|(id, export)| {
+                    let loaded = loader.package(id);
+                    ((id, export), read_mesh_animation(&loaded.package, &loaded.data, &loaded.package.exports[export]).ok().map(Arc::new))
+                })
+                .collect()
+        };
+        Arc::make_mut(&mut self.parsed.0).extend(read);
+    }
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn get_bone_coords(&mut self, actor: ObjectId, bone: NameId) -> Value {
         let coords = |frame: Frame| {
@@ -132,7 +237,7 @@ impl<L: LoaderRef> Vm<L> {
     fn bone_frame(&mut self, actor: ObjectId, bone: NameId) -> Option<Option<Frame>> {
         let mesh_object = self.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
-        let Some(index) = self.ref_bone(mesh_object, &mesh, bone) else { return Some(None) };
+        let Some(index) = self.media.bone_data.ref_bone(&self.store, mesh_object, &mesh, bone) else { return Some(None) };
         if let Some(frames) = self.ragdoll_world_frames(actor) {
             return Some(frames.get(index).copied());
         }
@@ -157,62 +262,8 @@ impl<L: LoaderRef> Vm<L> {
             return Some((mesh, frames.clone()));
         }
         let frames: Arc<[Frame]> = self.pose_world_bone_frames(actor, mesh_object, &mesh).into();
-        self.keep_pose(actor, key, frames.clone());
+        self.media.bone_data.keep_pose(&self.store, actor, key, frames.clone());
         Some((mesh, frames))
-    }
-
-    fn keep_pose(&mut self, actor: ObjectId, key: PoseKey, frames: Arc<[Frame]>) {
-        if self.media.bone_data.poses.len() >= POSE_CACHE_LIMIT && !self.media.bone_data.poses.contains_key(&actor) {
-            let mut poses = std::mem::take(&mut self.media.bone_data.poses);
-            poses.retain(|&posed, _| !self.is_deleted(posed));
-            if poses.len() >= POSE_CACHE_LIMIT {
-                poses.clear();
-            }
-            self.media.bone_data.poses = poses;
-        }
-        self.media.bone_data.poses.insert(actor, (key, frames));
-    }
-
-    fn ref_bone(&mut self, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
-        let key = (mesh_object, bone);
-        if let Some(&found) = self.media.bone_data.ref_bones.get(&key) {
-            return found;
-        }
-        let found = mesh.match_ref_bone(&self.name(bone).to_ascii_lowercase());
-        self.media.bone_data.ref_bones.insert(key, found);
-        found
-    }
-
-    fn mesh_bone(&mut self, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
-        let key = (mesh_object, bone);
-        if let Some(&found) = self.media.bone_data.mesh_bones.get(&key) {
-            return found;
-        }
-        let name = self.name(bone).to_ascii_lowercase();
-        let found = mesh.names.iter().position(|n| *n == name);
-        self.media.bone_data.mesh_bones.insert(key, found);
-        found
-    }
-
-    fn sequence_index(&mut self, animation_object: ObjectId, animation: &PosedAnimation, sequence: NameId) -> Option<usize> {
-        let key = (animation_object, sequence);
-        if let Some(&found) = self.media.bone_data.sequences.get(&key) {
-            return found;
-        }
-        let name = self.name(sequence).to_ascii_lowercase();
-        let found = animation.sequences.iter().position(|s| *s == name);
-        self.media.bone_data.sequences.insert(key, found);
-        found
-    }
-
-    fn bone_map(&mut self, mesh_object: ObjectId, mesh: &PosedMesh, animation_object: ObjectId, animation: &PosedAnimation) -> Arc<[Option<usize>]> {
-        let key = (mesh_object, animation_object);
-        if let Some(map) = self.media.bone_data.bone_maps.get(&key) {
-            return map.clone();
-        }
-        let map: Arc<[Option<usize>]> = mesh.names.iter().map(|name| animation.bones.iter().position(|b| b == name)).collect();
-        self.media.bone_data.bone_maps.insert(key, map.clone());
-        map
     }
 
     /// `None` when no channel plays yet: a first animation starts at once.
@@ -232,10 +283,10 @@ impl<L: LoaderRef> Vm<L> {
             }
             let Some(animation_object) = animation else { continue };
             let Some(animation) = self.posed_animation(animation_object) else { continue };
-            let Some(sequence) = self.sequence_index(animation_object, &animation, state.sequence) else { continue };
+            let Some(sequence) = self.media.bone_data.sequence_index(&self.store, animation_object, &animation, state.sequence) else { continue };
             let frames = animation.animation.sequences[sequence].num_frames.max(1) as f32;
             let pose = animation.animation.pose_at(sequence, state.frame.max(0.0) * frames);
-            let tracks = self.bone_map(mesh_object, mesh, animation_object, &animation);
+            let tracks = self.media.bone_data.bone_map(mesh_object, mesh, animation_object, &animation);
             let mut posed: Vec<LocalBone> = tracks.iter().zip(&bind).map(|(&track, &bound)| track.and_then(|t| pose.get(t)).unwrap_or(bound)).collect();
             if let Some((from, weight)) = state.tween() {
                 tween_pose(from, &mut posed, weight);
@@ -243,7 +294,7 @@ impl<L: LoaderRef> Vm<L> {
             match &mut local {
                 None => local = Some(posed),
                 Some(base) => {
-                    let start = (state.blend_bone != NameId::NONE).then(|| self.mesh_bone(mesh_object, mesh, state.blend_bone)).flatten();
+                    let start = (state.blend_bone != NameId::NONE).then(|| self.media.bone_data.mesh_bone(&self.store, mesh_object, mesh, state.blend_bone)).flatten();
                     blend_local(base, &posed, channel_weight(state.blend_alpha, state.frame, state.blend_in_time), &subtree(&mesh.parents, start));
                 }
             }
@@ -254,7 +305,7 @@ impl<L: LoaderRef> Vm<L> {
     fn pose_world_bone_frames(&mut self, actor: ObjectId, mesh_object: ObjectId, mesh: &PosedMesh) -> Vec<Frame> {
         let mut local = self.local_bone_pose(actor, mesh_object, mesh).unwrap_or_else(|| mesh.mesh.bones.iter().map(|b| (b.orientation, b.position)).collect());
         for (bone, turn) in self.bone_rotations(actor).to_vec() {
-            if let Some(index) = self.mesh_bone(mesh_object, mesh, bone) {
+            if let Some(index) = self.media.bone_data.mesh_bone(&self.store, mesh_object, mesh, bone) {
                 local[index].0 = turn_local(local[index].0, turn.into());
             }
         }
@@ -287,11 +338,11 @@ impl<L: LoaderRef> Vm<L> {
         let draw_type = self.draw_type_of(actor);
         let skeletal = if draw_type == Some(EDrawType::Mesh) { self.skeletal_mesh(actor).and_then(|mesh| Some((mesh, self.posed_mesh(mesh)?))) } else { None };
         let (frame, saved) = if let Some((mesh, posed)) = skeletal {
-            (self.mesh_to_world(actor, &posed), self.saved_sphere(mesh, "SkeletalMesh"))
+            (self.mesh_to_world(actor, &posed), self.media.bone_data.saved_sphere(&self.store, &self.loader, mesh, "SkeletalMesh"))
         } else if draw_type == Some(EDrawType::StaticMesh)
             && let Some(mesh) = self.object_of(actor, Prop::StaticMesh)
         {
-            (local_to_world, self.saved_sphere(mesh, "StaticMesh"))
+            (local_to_world, self.media.bone_data.saved_sphere(&self.store, &self.loader, mesh, "StaticMesh"))
         } else {
             (local_to_world, None)
         };
@@ -304,34 +355,12 @@ impl<L: LoaderRef> Vm<L> {
         Value::Struct([w, x, y, z].map(Value::Float).to_vec())
     }
 
-    fn saved_sphere(&mut self, mesh: ObjectId, class: &'static str) -> Option<[f32; 4]> {
-        if let Some(&sphere) = self.media.bone_data.spheres.get(&(mesh, class)) {
-            return Some(sphere);
-        }
-        let (package, export) = self.loader.loaded_export_by_path_of_class(&self.object(mesh).path, class)?;
-        let loaded = self.loader.package(package);
-        let sphere = read_primitive_sphere(&loaded.package, &loaded.data, &loaded.package.exports[export]).ok()?;
-        self.media.bone_data.spheres.insert((mesh, class), sphere);
-        Some(sphere)
-    }
-
     pub(crate) fn posed_mesh(&mut self, mesh: ObjectId) -> Option<Arc<PosedMesh>> {
         if let Some(found) = self.media.bone_data.meshes.get(&mesh) {
             return found.clone();
         }
         let phase = self.profile_start();
-        let loader = self.loader.clone();
-        let read = loader.loaded_export_by_path_of_class(&self.object(mesh).path, "SkeletalMesh").and_then(|(id, export)| {
-            let loaded = loader.package(id);
-            let mesh = read_skeletal_mesh(&loaded.package, &loaded.data, &loaded.package.exports[export]).ok()?;
-            let names = mesh.bones.iter().map(|b| loaded.package.name(b.name).to_ascii_lowercase()).collect();
-            let parents = mesh.bones.iter().map(|b| b.parent).collect();
-            let name = |index: usize| loaded.package.name(index).to_ascii_lowercase();
-            let aliases = mesh.attach_aliases.iter().map(|a| (name(a.alias), name(a.bone))).collect();
-            let reference = mesh.bones.iter().enumerate().map(|(bone, b)| reference_frame(bone, b.orientation, b.position)).collect();
-            Some(Arc::new(PosedMesh { mesh, names, parents, aliases, reference }))
-        });
-        self.media.bone_data.meshes.insert(mesh, read.clone());
+        let read = self.media.bone_data.read_posed_mesh(&self.store, &self.loader, mesh);
         self.profile_phase("load: skeletal mesh bones", phase);
         read
     }
@@ -376,27 +405,7 @@ impl<L: LoaderRef> Vm<L> {
     /// Reads ahead what is slow on first use (tens of ms on the VM's thread mid-game). For the loading thread, once the map
     /// has begun play; caches only, nothing a script sees changes.
     pub fn prewarm(&mut self) {
-        let loader = self.loader.clone();
-        let exports: Vec<(PackageId, usize)> = loader
-            .package_names()
-            .filter_map(|name| loader.loaded_id(name))
-            .flat_map(|id| {
-                let pkg = &loader.package(id).package;
-                (0..pkg.exports.len()).filter(move |&e| pkg.object_name(pkg.exports[e].class_index) == Some("MeshAnimation")).map(move |e| (id, e))
-            })
-            .filter(|key| !self.media.bone_data.parsed.0.contains_key(key))
-            .collect();
-        let read: Vec<((PackageId, usize), Option<Arc<MeshAnimation>>)> = {
-            use rayon::prelude::*;
-            exports
-                .into_par_iter()
-                .map(|(id, export)| {
-                    let loaded = loader.package(id);
-                    ((id, export), read_mesh_animation(&loaded.package, &loaded.data, &loaded.package.exports[export]).ok().map(Arc::new))
-                })
-                .collect()
-        };
-        Arc::make_mut(&mut self.media.bone_data.parsed.0).extend(read);
+        self.media.bone_data.prewarm_animations(&self.loader);
         self.karma_assets();
     }
 }

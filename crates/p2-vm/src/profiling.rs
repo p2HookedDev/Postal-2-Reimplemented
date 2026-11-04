@@ -5,7 +5,7 @@ use p2_package::PackageId;
 
 use rustc_hash::FxHashMap;
 
-use crate::{LoaderRef, Vm};
+use crate::{LoaderRef, ObjectStore, Vm};
 
 macro_rules! work {
     ($($(#[$doc:meta])* $name:ident = $text:literal,)*) => {
@@ -85,23 +85,18 @@ pub(crate) struct FunctionProfile {
     children: Vec<Duration>,
 }
 
-impl<L: LoaderRef> Vm<L> {
+impl ObjectStore {
+    #[inline]
     pub(crate) fn count(&self, work: Work) {
-        if self.diagnostics.count_work {
-            self.diagnostics.work.counts[work as usize].fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    pub(crate) fn count_n(&self, work: Work, n: usize) {
-        if self.diagnostics.count_work {
-            self.diagnostics.work.counts[work as usize].fetch_add(n as u64, Ordering::Relaxed);
+        if self.count_work {
+            self.work.counts[work as usize].fetch_add(1, Ordering::Relaxed);
         }
     }
 
     pub(crate) fn count_property(&self, name: &str) {
-        if self.diagnostics.count_work {
+        if self.count_work {
             self.count(Work::PropertyByName);
-            if let Ok(mut names) = self.diagnostics.work.property_names.lock() {
+            if let Ok(mut names) = self.work.property_names.lock() {
                 match names.get_mut(name) {
                     Some(count) => *count += 1,
                     None => {
@@ -111,13 +106,27 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
     }
+}
+
+impl<L: LoaderRef> Vm<L> {
+    pub(crate) fn count(&self, work: Work) {
+        if self.diagnostics.count_work {
+            self.store.work.counts[work as usize].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn count_n(&self, work: Work, n: usize) {
+        if self.diagnostics.count_work {
+            self.store.work.counts[work as usize].fetch_add(n as u64, Ordering::Relaxed);
+        }
+    }
 
     pub fn take_work_counts(&mut self) -> Vec<(&'static str, u64)> {
-        NAMES.iter().zip(&self.diagnostics.work.counts).map(|(&name, count)| (name, count.swap(0, Ordering::Relaxed))).collect()
+        NAMES.iter().zip(&self.store.work.counts).map(|(&name, count)| (name, count.swap(0, Ordering::Relaxed))).collect()
     }
 
     pub fn take_property_names(&mut self) -> Vec<(String, u64)> {
-        let mut names: Vec<(String, u64)> = self.diagnostics.work.property_names.get_mut().map(std::mem::take).unwrap_or_default().into_iter().collect();
+        let mut names: Vec<(String, u64)> = self.store.work.property_names.get_mut().map(std::mem::take).unwrap_or_default().into_iter().collect();
         names.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         names
     }

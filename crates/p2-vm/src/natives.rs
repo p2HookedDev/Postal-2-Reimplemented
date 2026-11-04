@@ -1,44 +1,50 @@
 use p2_math::{Rotator, Vector};
 use crate::interp::{float, int, truthy};
-use crate::native_id::Native;
+use crate::native_id::{Native, NativeGroup};
 use crate::{Error, HostCommand, LoaderRef, MusicCommand, NameId, ObjectId, PlayedSound, Prop, ProjectorEvent, Value, Vm};
 
 pub const AUDIO_DEFAULT_RADIUS: f32 = 80.0;
 
-#[expect(clippy::too_many_lines, reason = "one match over the native enum")]
 pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Native>, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
     let Some(native) = native else { return Err(Error::UnknownNative(name.to_owned())) };
     if let Some(value) = crate::operators::operate(native, args) {
         return Ok(Some(value));
     }
-    let i = |n: usize| args.get(n).map_or(0, int);
-    let f = |n: usize| args.get(n).map_or(0.0, float);
-    let b = |n: usize| args.get(n).is_some_and(truthy);
-    let s = |n: usize| match args.get(n) {
-        Some(Value::Str(text)) => text.as_str(),
-        _ => "",
-    };
-    let object = |n: usize| object_arg(args, n);
+    match native.group() {
+        NativeGroup::Operator => Err(Error::UnknownNative(name.to_owned())),
+        NativeGroup::Text => text_native(native, args),
+        NativeGroup::Random => random_native(vm, native, args),
+        NativeGroup::Reflect => reflect_native(vm, native, this, args),
+        NativeGroup::State => state_native(vm, native, this, args),
+        NativeGroup::Lifetime => lifetime_native(vm, native, this, args),
+        NativeGroup::Placement => placement_native(vm, native, this, args),
+        NativeGroup::Sound => sound_native(vm, native, this, args),
+        NativeGroup::Platform => platform_native(vm, native, this, args),
+        NativeGroup::Sense => sense_native(vm, native, this, args),
+        NativeGroup::Mesh => mesh_native(vm, native, this, args),
+        NativeGroup::Presentation => presentation_native(vm, native, this, args),
+        NativeGroup::Canvas => vm.canvas_native(native, this, args),
+        NativeGroup::Trace => vm.trace_native(native, this, args),
+        NativeGroup::Ai => vm.ai_native(native, this, args),
+        NativeGroup::Move => vm.move_native(native, this, args),
+        NativeGroup::Nav => vm.nav_native(native, this, args),
+        NativeGroup::Karma => vm.karma_native(native, this, args),
+        NativeGroup::Game => vm.game_native(native, this, args),
+        NativeGroup::Util => vm.util_native(native, this, args),
+        NativeGroup::HurtRadius => vm.hurt_radius_native(native, this, args),
+        NativeGroup::Anim => vm.anim_native(native, this, args),
+        NativeGroup::Actor => vm.actor_native(native, this, args),
+        NativeGroup::Bone => this.map_or(Ok(None), |this| vm.bone_native(native, this, args)),
+        NativeGroup::Lod => this.map_or(Ok(None), |this| vm.lod_native(native, this, args)),
+        NativeGroup::KarmaState => this.map_or(Ok(None), |this| vm.karma_state_native(native, this, args)),
+        NativeGroup::Movie => this.map_or(Ok(None), |this| vm.movie_native(native, this, args)),
+    }
+}
+
+fn text_native(native: Native, args: &mut [Value]) -> Result<Option<Value>, Error> {
     let value = match native {
-        // Draws yaw first, then pitch, then roll when asked, as retail.
-        Native::RotRand => {
-            let mut turn = || (vm.rand() * 2) % 0xffff;
-            let (yaw, pitch) = (turn(), turn());
-            Value::Rotator([pitch, yaw, if b(0) { turn() } else { 0 }].into())
-        }
-        Native::GetEnum => Value::Name(match object(0) {
-            Some(e) => vm.enum_name(e, i(1)),
-            None => NameId::NONE,
-        }),
-        Native::GetPropertyText => Value::Str(this.map_or_else(String::new, |this| vm.property_text(this, s(0)))),
-        Native::SetPropertyText => {
-            if let Some(this) = this {
-                vm.set_property_text(this, s(0), s(1));
-            }
-            return Ok(None);
-        }
         Native::SplitString => {
-            let (text, delim) = (s(0), s(1));
+            let (text, delim) = (str_arg(args, 0), str_arg(args, 1));
             let pieces: Vec<Value> = if delim.is_empty() { vec![Value::Str(text.to_owned())] } else { text.split(delim).map(|p| Value::Str(p.to_owned())).collect() };
             let count = pieces.len() as i32;
             if let Some(slot) = args.get_mut(2) {
@@ -47,7 +53,7 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
             Value::Int(count)
         }
         Native::SplitStringSingle => {
-            let (text, delim) = (s(0), s(1));
+            let (text, delim) = (str_arg(args, 0), str_arg(args, 1));
             match (!delim.is_empty()).then(|| text.split_once(delim)).flatten() {
                 Some((head, rest)) => {
                     let (head, rest) = (head.to_owned(), rest.to_owned());
@@ -60,13 +66,47 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
                 None => Value::Bool(false),
             }
         }
-        Native::FindObject => {
-            let class = object(1).map(|class| vm.name(vm.object(class).name).to_owned()).unwrap_or_default();
-            Value::Object(vm.find_object_by_path(s(0), &class))
+        Native::Concat_StrStr => Value::Str([str_arg(args, 0), str_arg(args, 1)].concat()),
+        Native::At_StrStr => Value::Str(format!("{} {}", str_arg(args, 0), str_arg(args, 1))),
+        Native::EqualEqual_StrStr => Value::Bool(str_arg(args, 0) == str_arg(args, 1)),
+        Native::NotEqual_StrStr => Value::Bool(str_arg(args, 0) != str_arg(args, 1)),
+        Native::Less_StrStr => Value::Bool(str_arg(args, 0) < str_arg(args, 1)),
+        Native::Greater_StrStr => Value::Bool(str_arg(args, 0) > str_arg(args, 1)),
+        Native::LessEqual_StrStr => Value::Bool(str_arg(args, 0) <= str_arg(args, 1)),
+        Native::GreaterEqual_StrStr => Value::Bool(str_arg(args, 0) >= str_arg(args, 1)),
+        Native::ComplementEqual_StrStr => Value::Bool(str_arg(args, 0).eq_ignore_ascii_case(str_arg(args, 1))),
+        Native::Len => Value::Int(str_arg(args, 0).chars().count() as i32),
+        Native::Caps => Value::Str(str_arg(args, 0).to_uppercase()),
+        Native::Locs => Value::Str(str_arg(args, 0).to_lowercase()),
+        Native::Left => Value::Str(str_arg(args, 0).chars().take(int_arg(args, 1).max(0) as usize).collect()),
+        Native::Right => {
+            let text = str_arg(args, 0);
+            let count = text.chars().count();
+            Value::Str(text.chars().skip(count.saturating_sub(int_arg(args, 1).max(0) as usize)).collect())
+        }
+        Native::Mid => {
+            let count = if args.len() > 2 && int_arg(args, 2) > 0 { int_arg(args, 2) as usize } else { usize::MAX };
+            Value::Str(str_arg(args, 0).chars().skip(int_arg(args, 1).max(0) as usize).take(count).collect())
+        }
+        Native::Asc => Value::Int(str_arg(args, 0).chars().next().map_or(0, |c| c as i32)),
+        Native::Chr => Value::Str(char::from_u32(int_arg(args, 0).max(0) as u32).map(String::from).unwrap_or_default()),
+        Native::InStr => Value::Int(str_arg(args, 0).find(str_arg(args, 1)).map_or(-1, |at| str_arg(args, 0)[..at].chars().count() as i32)),
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn random_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        // Draws yaw first, then pitch, then roll when asked, as retail.
+        Native::RotRand => {
+            let mut turn = || (vm.rand() * 2) % 0xffff;
+            let (yaw, pitch) = (turn(), turn());
+            Value::Rotator([pitch, yaw, if bool_arg(args, 0) { turn() } else { 0 }].into())
         }
         Native::FRand => Value::Float(vm.random()),
         // `rand() % Max`, so never above 32767; 0 for Max <= 0.
-        Native::Rand => Value::Int(if i(0) > 0 { vm.rand() % i(0) } else { 0 }),
+        Native::Rand => Value::Int(if int_arg(args, 0) > 0 { vm.rand() % int_arg(args, 0) } else { 0 }),
         // Size squared summed Y, X, Z, with the square root in double precision, as retail.
         Native::VRand => loop {
             let v = Vector::from([0; 3].map(|_| vm.random() * 2.0 - 1.0));
@@ -75,89 +115,30 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
                 break Value::Vector(v * (1.0 / (f64::from(size_squared).sqrt() as f32)));
             }
         },
-        Native::Concat_StrStr => Value::Str([s(0), s(1)].concat()),
-        Native::At_StrStr => Value::Str(format!("{} {}", s(0), s(1))),
-        Native::EqualEqual_StrStr => Value::Bool(s(0) == s(1)),
-        Native::NotEqual_StrStr => Value::Bool(s(0) != s(1)),
-        Native::Less_StrStr => Value::Bool(s(0) < s(1)),
-        Native::Greater_StrStr => Value::Bool(s(0) > s(1)),
-        Native::LessEqual_StrStr => Value::Bool(s(0) <= s(1)),
-        Native::GreaterEqual_StrStr => Value::Bool(s(0) >= s(1)),
-        Native::ComplementEqual_StrStr => Value::Bool(s(0).eq_ignore_ascii_case(s(1))),
-        Native::Len => Value::Int(s(0).chars().count() as i32),
-        Native::Caps => Value::Str(s(0).to_uppercase()),
-        Native::Locs => Value::Str(s(0).to_lowercase()),
-        Native::Left => Value::Str(s(0).chars().take(i(1).max(0) as usize).collect()),
-        Native::Right => {
-            let text = s(0);
-            let count = text.chars().count();
-            Value::Str(text.chars().skip(count.saturating_sub(i(1).max(0) as usize)).collect())
-        }
-        Native::Mid => {
-            let count = if args.len() > 2 && i(2) > 0 { i(2) as usize } else { usize::MAX };
-            Value::Str(s(0).chars().skip(i(1).max(0) as usize).take(count).collect())
-        }
-        Native::Asc => Value::Int(s(0).chars().next().map_or(0, |c| c as i32)),
-        Native::Chr => Value::Str(char::from_u32(i(0).max(0) as u32).map(String::from).unwrap_or_default()),
-        Native::InStr => Value::Int(s(0).find(s(1)).map_or(-1, |at| s(0)[..at].chars().count() as i32)),
-        Native::GotoState => {
-            if let Some(this) = this {
-                // An omitted state is the current one (`GotoState(, '')`): the code goes to the label in that state.
-                let state = if matches!(args.first(), Some(Value::Map)) { vm.state_name(this) } else { name_arg(&args[..], 0) };
-                vm.goto_state(this, state, name_arg(&args[..], 1))?;
-            }
-            return Ok(None);
-        }
-        Native::GetStateName => Value::Name(this.map_or(NameId::NONE, |this| vm.state_name(this))),
-        Native::IsInState => Value::Bool(match this {
-            Some(this) => vm.is_in_state(this, name_arg(&args[..], 0))?,
-            None => false,
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::GetEnum => Value::Name(match object_arg(args, 0) {
+            Some(e) => vm.enum_name(e, int_arg(args, 1)),
+            None => NameId::NONE,
         }),
-        Native::Sleep => {
-            vm.script.latent.sleep = Some(f(0));
-            return Ok(None);
-        }
-        Native::FinishInterpolation => {
+        Native::GetPropertyText => Value::Str(this.map_or_else(String::new, |this| vm.property_text(this, str_arg(args, 0)))),
+        Native::SetPropertyText => {
             if let Some(this) = this {
-                vm.finish_interpolation(this);
+                vm.set_property_text(this, str_arg(args, 0), str_arg(args, 1));
             }
             return Ok(None);
         }
-        Native::SetTimer => {
-            if let Some(this) = this {
-                vm.set(this, Prop::TimerRate, Value::Float(f(0)));
-                vm.set(this, Prop::TimerCounter, Value::Float(0.0));
-                vm.set(this, Prop::bTimerLoop, Value::Bool(b(1)));
-            }
-            return Ok(None);
-        }
-        Native::Destroy => Value::Bool(match this {
-            Some(this) => vm.destroy(this)?,
-            None => false,
-        }),
-        Native::Spawn => {
-            let class = match args.first() {
-                Some(&Value::Object(Some(class))) => vm.class_of_object(class)?,
-                _ => None,
-            };
-            let Some(class) = class else { return Ok(Some(Value::Object(None))) };
-            let owner = match args.get(1) {
-                Some(&Value::Object(owner)) => owner,
-                _ => None,
-            };
-            let placement = [(3, Prop::Location), (4, Prop::Rotation)].map(|(index, property)| match args.get(index) {
-                Some(value) if is_struct_value(value) => Some(value.clone()),
-                _ => this.and_then(|this| vm.get(this, property)),
-            });
-            let instigator = this.and_then(|this| vm.object_of(this, Prop::Instigator));
-            let actor = vm.spawn_actor(class, owner, instigator, placement)?;
-            if let (Some(actor), Some(tag @ Value::Name(_))) = (actor, args.get(2)) {
-                vm.set(actor, Prop::Tag, tag.clone());
-            }
-            Value::Object(actor)
+        Native::FindObject => {
+            let class = object_arg(args, 1).map(|class| vm.name(vm.object(class).name).to_owned()).unwrap_or_default();
+            Value::Object(vm.find_object_by_path(str_arg(args, 0), &class))
         }
         Native::DynamicLoadObject => {
-            let path = match s(0).to_owned() {
+            let path = match str_arg(args, 0).to_owned() {
                 name if name.len() > 4 && name.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("ini:")) => vm.ini_name(&name[4..]).unwrap_or(name),
                 name => name,
             };
@@ -184,7 +165,7 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
                 match vm.export_class(&path, &class_name) {
                     Some(Some(class)) => Value::Object(Some(vm.stub(&path, &class))),
                     Some(None) => {
-                        if !b(2) {
+                        if !bool_arg(args, 2) {
                             vm.diagnostics.log.push(format!("DynamicLoadObject: {path} not found"));
                         }
                         Value::Object(None)
@@ -195,6 +176,115 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
                 Value::Object(None)
             }
         }
+        Native::IsA => {
+            let class = name_arg(args, 0);
+            Value::Bool(this.is_some_and(|this| vm.is_a(this, class)))
+        }
+        Native::ClassIsChildOf => {
+            let class = |vm: &mut Vm<L>, n: usize| match args.get(n) {
+                Some(&Value::Object(Some(object))) => vm.class_of_object(object),
+                _ => Ok(None),
+            };
+            let (test, parent) = (class(vm, 0)?, class(vm, 1)?);
+            Value::Bool(match (test, parent) {
+                (Some(test), Some(parent)) => vm.class_is_a(test, vm.class(parent).name),
+                _ => false,
+            })
+        }
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn state_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::GotoState => {
+            if let Some(this) = this {
+                // An omitted state is the current one (`GotoState(, '')`): the code goes to the label in that state.
+                let state = if matches!(args.first(), Some(Value::Map)) { vm.state_name(this) } else { name_arg(args, 0) };
+                vm.goto_state(this, state, name_arg(args, 1))?;
+            }
+            return Ok(None);
+        }
+        Native::GetStateName => Value::Name(this.map_or(NameId::NONE, |this| vm.state_name(this))),
+        Native::IsInState => Value::Bool(match this {
+            Some(this) => vm.is_in_state(this, name_arg(args, 0))?,
+            None => false,
+        }),
+        Native::Sleep => {
+            vm.script.latent.sleep = Some(float_arg(args, 0));
+            return Ok(None);
+        }
+        Native::FinishInterpolation => {
+            if let Some(this) = this {
+                vm.finish_interpolation(this);
+            }
+            return Ok(None);
+        }
+        Native::SetTimer => {
+            if let Some(this) = this {
+                vm.set(this, Prop::TimerRate, Value::Float(float_arg(args, 0)));
+                vm.set(this, Prop::TimerCounter, Value::Float(0.0));
+                vm.set(this, Prop::bTimerLoop, Value::Bool(bool_arg(args, 1)));
+            }
+            return Ok(None);
+        }
+        Native::Disable | Native::Enable => {
+            let (Some(this), Some(&Value::Name(probe))) = (this, args.first()) else { return Ok(None) };
+            let Some(bit) = crate::states::probe_bit(vm.name(probe)) else { return Ok(None) };
+            let disabled = vm.script.states.probes_disabled.entry(this).or_insert(0);
+            if native == Native::Disable {
+                *disabled |= 1 << bit;
+            } else {
+                *disabled &= !(1 << bit);
+            }
+            return Ok(None);
+        }
+        Native::Initialize if this.is_some_and(|this| vm.is_a(this, "Interaction")) => {
+            if let Some(this) = this {
+                vm.event(this, "Initialized", Vec::new())?;
+            }
+            return Ok(None);
+        }
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn lifetime_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::Destroy => Value::Bool(match this {
+            Some(this) => vm.destroy(this)?,
+            None => false,
+        }),
+        Native::Spawn => {
+            let class = match args.first() {
+                Some(&Value::Object(Some(class))) => vm.class_of_object(class)?,
+                _ => None,
+            };
+            let Some(class) = class else { return Ok(Some(Value::Object(None))) };
+            let owner = match args.get(1) {
+                Some(&Value::Object(owner)) => owner,
+                _ => None,
+            };
+            let placement = [(3, Prop::Location), (4, Prop::Rotation)].map(|(index, property)| match args.get(index) {
+                Some(value) if is_struct_value(value) => Some(value.clone()),
+                _ => this.and_then(|this| vm.get(this, property)),
+            });
+            let instigator = this.and_then(|this| vm.object_of(this, Prop::Instigator));
+            let actor = vm.spawn_actor(class, owner, instigator, placement)?;
+            if let (Some(actor), Some(tag @ Value::Name(_))) = (actor, args.get(2)) {
+                vm.set(actor, Prop::Tag, tag.clone());
+            }
+            Value::Object(actor)
+        }
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn placement_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
         Native::SetLocation => {
             let Some(this) = this else { return Ok(Some(Value::Bool(false))) };
             if matches!(args.first(), Some(Value::Map)) {
@@ -236,21 +326,6 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
             set_actor_properties(vm, native, this, args)?;
             Value::Bool(true)
         }
-        Native::IsA => {
-            let class = name_arg(&args[..], 0);
-            Value::Bool(this.is_some_and(|this| vm.is_a(this, class)))
-        }
-        Native::ClassIsChildOf => {
-            let class = |vm: &mut Vm<L>, n: usize| match args.get(n) {
-                Some(&Value::Object(Some(object))) => vm.class_of_object(object),
-                _ => Ok(None),
-            };
-            let (test, parent) = (class(vm, 0)?, class(vm, 1)?);
-            Value::Bool(match (test, parent) {
-                (Some(test), Some(parent)) => vm.class_is_a(test, vm.class(parent).name),
-                _ => false,
-            })
-        }
         Native::AttachToBone | Native::DetachFromBone => {
             let (Some(this), Some(&Value::Object(Some(attachment)))) = (this, args.first()) else {
                 return Ok(Some(Value::Bool(false)));
@@ -259,7 +334,7 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
             if native == Native::AttachToBone {
                 // Only attaches to a bone or alias of a skeletal mesh; a loose bolt-on is destroyed a second later.
                 // A mesh whose package is not loaded has its bones unknown, not missing, so only a read mesh refuses.
-                let bone = name_arg(&args[..], 1);
+                let bone = name_arg(args, 1);
                 let wanted = vm.name(bone).to_ascii_lowercase();
                 let matched = vm.skeletal_mesh(this).is_some_and(|mesh| {
                     vm.posed_mesh(mesh).is_none_or(|mesh| mesh.match_ref_bone(&wanted).is_some())
@@ -274,125 +349,12 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
             }
             Value::Bool(true)
         }
-        Native::AddController | Native::RemoveController => {
-            controller_list(vm, native, this);
-            return Ok(None);
-        }
-        Native::PlaySound | Native::PlayOwnedSound => {
-            play_sound(vm, this, args);
-            return Ok(None);
-        }
-        Native::Disable | Native::Enable => {
-            let (Some(this), Some(&Value::Name(probe))) = (this, args.first()) else { return Ok(None) };
-            let Some(bit) = crate::states::probe_bit(vm.name(probe)) else { return Ok(None) };
-            let disabled = vm.script.states.probes_disabled.entry(this).or_insert(0);
-            if native == Native::Disable {
-                *disabled |= 1 << bit;
-            } else {
-                *disabled &= !(1 << bit);
-            }
-            return Ok(None);
-        }
-        Native::ConsoleCommand => console_command(vm, s(0))?,
-        Native::IsDemoBuild | Native::PlatformIsSteamDeck | Native::PlatformIsMacOS | Native::PlatformIsUnix | Native::IsSteamBuild | Native::SteamOwnsDLC => Value::Bool(false),
-        Native::PlatformIsWindows => Value::Bool(true),
-        Native::SteamGetWorkshopStatus | Native::GetBuildDate => Value::Str(String::new()),
-        // The install's country, `[Shell.ShellRootWindow] InstalledCountry` (unverified).
-        Native::GetCountryCode => Value::Str(vm.ini_name("Shell.ShellRootWindow.InstalledCountry").unwrap_or_else(|| "US".to_owned())),
-        Native::SaveConfig | Native::StaticSaveConfig => {
-            if let Some(this) = this {
-                vm.save_config(this, native == Native::StaticSaveConfig);
-            }
-            return Ok(None);
-        }
-        Native::ResetConfig | Native::AbandonProjector => return Ok(None),
-        Native::PlayMusicAttenuate | Native::PlayMusic => {
-            play_music(vm, native, this, args)
-        }
-        Native::AttachProjector | Native::DetachProjector => {
-            if let Some(this) = this {
-                if native == Native::AttachProjector {
-                    vm.attach_static_meshes(this);
-                } else {
-                    vm.detach_projected_actors(this);
-                }
-                vm.host.commands.push(HostCommand::Projector(if native == Native::AttachProjector { ProjectorEvent::Attach(this) } else { ProjectorEvent::Detach(this) }));
-            }
-            return Ok(None);
-        }
-        Native::StopAllMusic => {
-            vm.host.commands.push(HostCommand::Music(MusicCommand::StopAll { fade_out: f(0) }));
-            return Ok(None);
-        }
-        Native::FileSize => {
-            let path = s(0).replace('\\', "/");
-            let stem = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_owned();
-            let size = vm.loader.find(&stem).and_then(|file| std::fs::metadata(file).ok()).map_or(-1, |m| m.len() as i32);
-            Value::Int(size)
-        }
         Native::OnlyAffectPawns => {
             if let Some(this) = this {
-                vm.set(this, Prop::bOnlyAffectPawns, Value::Bool(b(0)));
+                vm.set(this, Prop::bOnlyAffectPawns, Value::Bool(bool_arg(args, 0)));
             }
             return Ok(None);
         }
-        // The VM has no `Entry` map, so the played level stands in (unverified).
-        Native::GetEntryLevel => Value::Object(vm.level()),
-        Native::GetLocalURL => Value::Str(vm.map_name.clone()),
-        Native::StopMusic => {
-            vm.host.commands.push(HostCommand::Music(MusicCommand::Stop { handle: i(0), fade_out: f(1) }));
-            return Ok(None);
-        }
-        Native::StrLen | Native::TextSize | Native::DrawText | Native::DrawTextClipped | Native::DrawTile | Native::DrawTileClipped | Native::DrawActor | Native::DrawPortal
-        | Native::Draw3DLine => return vm.canvas_native(native, this, args),
-        // Stores `ViewTarget`. Retail then calls a virtual function, not analysed; `None` is taken to mean
-        // the controller itself (unverified).
-        Native::SetViewTarget => {
-            if let Some(this) = this {
-                let target = object(0).or(Some(this));
-                vm.set(this, Prop::ViewTarget, Value::Object(target));
-            }
-            return Ok(None);
-        }
-        Native::Trace | Native::FastTrace => return vm.trace_native(native, this, args),
-        Native::GetRenderBoundingSphere => match this {
-            Some(this) => vm.render_bounding_sphere(this),
-            None => return Ok(None),
-        },
-        Native::GetBoneCoords => match this {
-            Some(this) => vm.get_bone_coords(this, name_arg(&args[..], 0)),
-            None => return Ok(None),
-        },
-        Native::GetBoneRotation => match this {
-            Some(this) => vm.get_bone_rotation(this, name_arg(&args[..], 0)),
-            None => return Ok(None),
-        },
-        Native::SetTwistLook => {
-            if let Some(this) = this {
-                vm.set_twist_look(this, i(1));
-            }
-            return Ok(None);
-        }
-        // Ignores its arguments, as retail. System time: days since 2000-01-01 (X), seconds into the day (Y)
-        // and milliseconds (Z).
-        Native::GetMillisecondsFrom => Value::Vector(milliseconds_since_2000(vm, this).into()),
-        Native::Initialize if this.is_some_and(|this| vm.is_a(this, "Interaction")) => {
-            if let Some(this) = this {
-                vm.event(this, "Initialized", Vec::new())?;
-            }
-            return Ok(None);
-        }
-        Native::MakeNoise => {
-            if let Some(this) = this {
-                vm.make_noise(this, f(0))?;
-            }
-            return Ok(None);
-        }
-        Native::LineOfSightTo => Value::Bool(match (this, object(0)) {
-            (Some(this), Some(other)) => vm.line_of_sight_to(this, other, false),
-            _ => false,
-        }),
-        Native::PlayerCanSeeMe => Value::Bool(this.is_some_and(|this| vm.player_can_see_me(this))),
         Native::Warp | Native::UnWarp => {
             if let Some(this) = this
                 && args.len() >= 3
@@ -406,60 +368,174 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
             }
             return Ok(None);
         }
-        Native::Encompasses => Value::Bool(match (this, object(0)) {
+        Native::SetPhysics => {
+            if let Some(this) = this {
+                vm.set_physics_byte(this, int_arg(args, 0) as u8, None)?;
+            }
+            return Ok(None);
+        }
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn sound_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::PlaySound | Native::PlayOwnedSound => {
+            play_sound(vm, this, args);
+            return Ok(None);
+        }
+        Native::PlayMusicAttenuate | Native::PlayMusic => {
+            play_music(vm, native, this, args)
+        }
+        Native::StopAllMusic => {
+            vm.host.commands.push(HostCommand::Music(MusicCommand::StopAll { fade_out: float_arg(args, 0) }));
+            return Ok(None);
+        }
+        Native::StopMusic => {
+            vm.host.commands.push(HostCommand::Music(MusicCommand::Stop { handle: int_arg(args, 0), fade_out: float_arg(args, 1) }));
+            return Ok(None);
+        }
+        Native::GetSoundDuration => {
+            let duration = object_arg(args, 0).and_then(|sound| vm.sound_duration(sound)).unwrap_or(0.0);
+            Value::Float(duration)
+        }
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::ConsoleCommand => console_command(vm, str_arg(args, 0))?,
+        Native::IsDemoBuild | Native::PlatformIsSteamDeck | Native::PlatformIsMacOS | Native::PlatformIsUnix | Native::IsSteamBuild | Native::SteamOwnsDLC => Value::Bool(false),
+        Native::PlatformIsWindows => Value::Bool(true),
+        Native::SteamGetWorkshopStatus | Native::GetBuildDate => Value::Str(String::new()),
+        // The install's country, `[Shell.ShellRootWindow] InstalledCountry` (unverified).
+        Native::GetCountryCode => Value::Str(vm.ini_name("Shell.ShellRootWindow.InstalledCountry").unwrap_or_else(|| "US".to_owned())),
+        Native::SaveConfig | Native::StaticSaveConfig => {
+            if let Some(this) = this {
+                vm.save_config(this, native == Native::StaticSaveConfig);
+            }
+            return Ok(None);
+        }
+        Native::ResetConfig => return Ok(None),
+        Native::FileSize => {
+            let path = str_arg(args, 0).replace('\\', "/");
+            let stem = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_owned();
+            let size = vm.loader.find(&stem).and_then(|file| std::fs::metadata(file).ok()).map_or(-1, |m| m.len() as i32);
+            Value::Int(size)
+        }
+        // The VM has no `Entry` map, so the played level stands in (unverified).
+        Native::GetEntryLevel => Value::Object(vm.level()),
+        Native::GetLocalURL => Value::Str(vm.map_name.clone()),
+        // Ignores its arguments, as retail. System time: days since 2000-01-01 (X), seconds into the day (Y)
+        // and milliseconds (Z).
+        Native::GetMillisecondsFrom => Value::Vector(milliseconds_since_2000(vm, this).into()),
+        Native::ClientTravel => {
+            vm.diagnostics.log.push(format!("ClientTravel {}", str_arg(args, 0)));
+            let url = crate::TravelUrl::parse(str_arg(args, 0)).resolve(&vm.url_options, crate::ETravelType::from_byte(int_arg(args, 1) as u8)).text();
+            vm.host.commands.push(HostCommand::Travel(url));
+            vm.travel_items = bool_arg(args, 2);
+            return Ok(None);
+        }
+        Native::Travel => {
+            vm.diagnostics.log.push(format!("Travel {}", str_arg(args, 0)));
+            let url = crate::TravelUrl::parse(str_arg(args, 0)).resolve(&vm.url_options, crate::ETravelType::Absolute).text();
+            vm.host.commands.push(HostCommand::Travel(url));
+            vm.travel_items = false;
+            return Ok(None);
+        }
+        Native::Log | Native::Warn => {
+            vm.diagnostics.log.push(str_arg(args, 0).to_owned());
+            return Ok(None);
+        }
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn sense_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::AddController | Native::RemoveController => {
+            controller_list(vm, native, this);
+            return Ok(None);
+        }
+        Native::MakeNoise => {
+            if let Some(this) = this {
+                vm.make_noise(this, float_arg(args, 0))?;
+            }
+            return Ok(None);
+        }
+        Native::LineOfSightTo => Value::Bool(match (this, object_arg(args, 0)) {
+            (Some(this), Some(other)) => vm.line_of_sight_to(this, other, false),
+            _ => false,
+        }),
+        Native::PlayerCanSeeMe => Value::Bool(this.is_some_and(|this| vm.player_can_see_me(this))),
+        Native::Encompasses => Value::Bool(match (this, object_arg(args, 0)) {
             (Some(this), Some(other)) => {
                 let location = vm.vec3_of(other, Prop::Location);
                 vm.encompasses(this, location)
             }
             _ => false,
         }),
-        Native::CanSee | Native::PickWallAdjust | Native::FindPathTowardNearest | Native::MoveSmooth | Native::GetAssistedAimTarget => return vm.ai_native(native, this, args),
-        Native::MoveTo | Native::MoveToward | Native::MoveToWithRadius | Native::MoveTowardWithRadius | Native::FinishRotation | Native::WaitForLanding
-        | Native::InLatentExecution | Native::ReachedDestination | Native::EndClimbLadder | Native::StopWaiting | Native::FindStairRotation | Native::WaitToSeeEnemy | Native::EAdjustJump => return vm.move_native(native, this, args),
-        Native::FindPathToward | Native::FindPathTo | Native::FindRandomDest | Native::actorReachable | Native::pointReachable | Native::ClearPaths
-        | Native::BuildPathNodeLists | Native::BuildHomeNodeLists => return vm.nav_native(native, this, args),
-        Native::KAddImpulse | Native::KAddForce | Native::KAddTorque | Native::KWake | Native::KDisableKarma | Native::KSetMass | Native::KGetMass | Native::KSetFriction
-        | Native::KGetFriction | Native::KSetRestitution | Native::KGetRestitution | Native::KSetDampingProps | Native::KGetDampingProps
-        | Native::KSetImpactThreshold | Native::KGetImpactThreshold | Native::KSetStayUpright | Native::KSetBlockKarma | Native::KEnableCollision
-        | Native::KDisableCollision | Native::KGetCOMPosition | Native::KSetSkelVel | Native::KFreezeRagdoll => return vm.karma_native(native, this, args),
-        Native::SafeToGoIntoStasis | Native::GetGameMap | Native::PointToLineDist | Native::VectorsInFuzz | Native::ThickLineCylinderCollide
-        | Native::FireHurtRadius | Native::ForceInit | Native::ForceSpawn | Native::SetProjectionNormal | Native::SetMaxParticles
-        | Native::SetLiveParticleTimes | Native::SpawnParticleLength => return vm.game_native(native, this, args),
-        Native::Floor | Native::Localize | Native::GetLanguage | Native::GetDisplayLanguage | Native::SetLanguage | Native::InterpCurveEval | Native::LoadFileToString
-        | Native::SaveStringToFile | Native::FindFiles | Native::OpenLog | Native::Logf | Native::CloseLog | Native::Error | Native::GetMapName | Native::GetURLMap
-        | Native::DoesMapExist | Native::GetAddressURL | Native::GetDefaultURL | Native::UpdateURL | Native::GetNextInt | Native::GetNextIntDesc | Native::IsSteamDeck
-        | Native::IsWorkshopBuild | Native::SteamUnlockAchievement | Native::SteamLockAchievement | Native::SteamGetAchievement
-        | Native::SteamGetStatFloat | Native::SteamGetStatInt | Native::SteamRequestStats | Native::SteamSetStatInt | Native::SteamSetStatFloat
-        | Native::SteamResetStats | Native::SteamIndicateAchievementProgress | Native::SteamPurgeWorkshop | Native::SteamOwnsGame
-        | Native::SteamViewStorePage | Native::CopyToClipboard | Native::PasteFromClipboard | Native::ResetKeyboard | Native::GetNetworkNumber
-        | Native::GetPlayerNetworkAddress | Native::ParseKillMessage | Native::DeleteSave | Native::GetMapFileName | Native::LaunchDLC
-        | Native::LaunchSocialNetwork | Native::GetNextSkin => return vm.util_native(native, this, args),
-        Native::SetBoneRotation | Native::SetBoneDirection | Native::SetBoneLocation | Native::AttachActor | Native::DetachActor | Native::Kill
-        | Native::SpawnParticle | Native::Pling | Native::GetCameraLocation | Native::ScreenToWorld | Native::PlayFlashbangSound
-        | Native::AddSpawnProperty | Native::SetLodStaticMesh | Native::ClearLodStaticMesh | Native::DeleteLodStaticMesh | Native::GetCacheEntry
-        | Native::MoveCacheEntry | Native::KSetCOMOffset | Native::KGetCOMOffset | Native::KSetInertiaTensor | Native::KGetInertiaTensor
-        | Native::KGetConstraintForce | Native::KGetConstraintTorque | Native::KUpdateConstraintParams | Native::Play | Native::Pause | Native::IsPlaying
-        | Native::IsPaused | Native::GetWidth | Native::GetHeight | Native::InitializeMovie | Native::StopNow | Native::StopAtEnd | Native::DrawColoredText | Native::ReplaceTexture
-        | Native::GraphData => return vm.actor_native(native, this, args),
-        Native::HurtRadius | Native::HurtRadiusEX => return vm.hurt_radius_native(native, this, args),
         Native::PickTarget => Value::Object(this.and_then(|this| vm.pick_target(this, args))),
-        Native::ClientTravel => {
-            vm.diagnostics.log.push(format!("ClientTravel {}", s(0)));
-            let url = crate::TravelUrl::parse(s(0)).resolve(&vm.url_options, crate::ETravelType::from_byte(i(1) as u8)).text();
-            vm.host.commands.push(HostCommand::Travel(url));
-            vm.travel_items = b(2);
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn mesh_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::GetRenderBoundingSphere => match this {
+            Some(this) => vm.render_bounding_sphere(this),
+            None => return Ok(None),
+        },
+        Native::GetBoneCoords => match this {
+            Some(this) => vm.get_bone_coords(this, name_arg(args, 0)),
+            None => return Ok(None),
+        },
+        Native::GetBoneRotation => match this {
+            Some(this) => vm.get_bone_rotation(this, name_arg(args, 0)),
+            None => return Ok(None),
+        },
+        Native::SetTwistLook => {
+            if let Some(this) = this {
+                vm.set_twist_look(this, int_arg(args, 1));
+            }
             return Ok(None);
         }
-        Native::Travel => {
-            vm.diagnostics.log.push(format!("Travel {}", s(0)));
-            let url = crate::TravelUrl::parse(s(0)).resolve(&vm.url_options, crate::ETravelType::Absolute).text();
-            vm.host.commands.push(HostCommand::Travel(url));
-            vm.travel_items = false;
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+fn presentation_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
+    let value = match native {
+        Native::AbandonProjector => return Ok(None),
+        Native::AttachProjector | Native::DetachProjector => {
+            if let Some(this) = this {
+                if native == Native::AttachProjector {
+                    vm.attach_static_meshes(this);
+                } else {
+                    vm.detach_projected_actors(this);
+                }
+                vm.host.commands.push(HostCommand::Projector(if native == Native::AttachProjector { ProjectorEvent::Attach(this) } else { ProjectorEvent::Detach(this) }));
+            }
+            return Ok(None);
+        }
+        // Stores `ViewTarget`. Retail then calls a virtual function, not analysed; `None` is taken to mean
+        // the controller itself (unverified).
+        Native::SetViewTarget => {
+            if let Some(this) = this {
+                let target = object_arg(args, 0).or(Some(this));
+                vm.set(this, Prop::ViewTarget, Value::Object(target));
+            }
             return Ok(None);
         }
         Native::ShowSubtitle => {
             if let Some(this) = this
-                && let Some(index) = crate::util_natives::subtitle_index(vm.get(this, "SubTag").as_ref(), s(0))
+                && let Some(index) = crate::util_natives::subtitle_index(vm.get(this, "SubTag").as_ref(), str_arg(args, 0))
                 && let Some(player) = vm.player()
             {
                 vm.event(player, "CallSubtitle", vec![Value::Object(None), Value::Int(index), Value::Int(-1), Value::Object(None)])?;
@@ -467,26 +543,7 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
             return Ok(None);
         }
         Native::GetTotalSceneTime => Value::Float(this.map_or(0.0, |this| vm.total_scene_time(this))),
-        Native::GetSoundDuration => {
-            let duration = object(0).and_then(|sound| vm.sound_duration(sound)).unwrap_or(0.0);
-            Value::Float(duration)
-        }
-        Native::SetPhysics => {
-            if let Some(this) = this {
-                vm.set_physics_byte(this, i(0) as u8, None)?;
-            }
-            return Ok(None);
-        }
-        Native::PlayAnim | Native::PlayAnimAt | Native::LoopAnim | Native::TweenAnim | Native::IsAnimating | Native::FinishAnim | Native::HasAnim
-        | Native::StopAnimating | Native::FreezeAnimAt | Native::IsTweening | Native::AnimIsInGroup | Native::LinkSkelAnim | Native::GetDefaultAnim
-        | Native::AnimBlendParams | Native::AnimBlendToAlpha | Native::GetAnimParams | Native::EnableChannelNotify | Native::SetBoneScale => {
-            return vm.anim_native(native, this, args);
-        }
-        Native::Log | Native::Warn => {
-            vm.diagnostics.log.push(s(0).to_owned());
-            return Ok(None);
-        }
-        _ => return Err(Error::UnknownNative(name.to_owned())),
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
     };
     Ok(Some(value))
 }
@@ -498,7 +555,7 @@ fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<Value,
     Ok(Value::Str(match command.to_ascii_lowercase().as_str() {
         "getping" | "getcurrentdisplaynumber" | "getrenderdeviceogl" => "0".to_owned(),
         "getcurrentres" => {
-            let size = |property, default| match vm.media.canvas.and_then(|canvas| vm.get(canvas, property)) {
+            let size = |property, default| match vm.media.canvas.object.and_then(|canvas| vm.get(canvas, property)) {
                 Some(Value::Int(size)) if size > 0 => size,
                 _ => default,
             };
@@ -877,6 +934,21 @@ pub(crate) fn bool_arg(args: &[Value], n: usize) -> bool {
     args.get(n).is_some_and(truthy)
 }
 
+fn int_arg(args: &[Value], n: usize) -> i32 {
+    args.get(n).map_or(0, int)
+}
+
+fn float_arg(args: &[Value], n: usize) -> f32 {
+    args.get(n).map_or(0.0, float)
+}
+
+fn str_arg(args: &[Value], n: usize) -> &str {
+    match args.get(n) {
+        Some(Value::Str(text)) => text.as_str(),
+        _ => "",
+    }
+}
+
 pub(crate) fn name_arg(args: &[Value], n: usize) -> NameId {
     match args.get(n) {
         Some(&Value::Name(name)) => name,
@@ -968,3 +1040,32 @@ pub(crate) fn orthogonal_rotation(x: Vector, y: Vector, z: Vector) -> Rotator {
     [pitch, yaw, roll].into()
 }
 
+
+#[cfg(test)]
+mod route_tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use p2_package::Loader;
+
+    use super::*;
+
+    const UNROUTED: [&str; 3] = ["AtEqual_StrStr", "ConcatEqual_StrStr", "Initialize"];
+
+    #[test]
+    fn every_native_keeps_its_route() {
+        let empty = std::env::temp_dir();
+        let loader = Loader::new(&empty, &[]).unwrap();
+        let mut unrouted = Vec::new();
+        for &native in Native::ALL {
+            let name = format!("{native:?}");
+            let mut vm = Vm::new(&loader);
+            let mut args = vec![Value::Int(0); 8];
+            let result = catch_unwind(AssertUnwindSafe(|| call(&mut vm, &name, Some(native), None, &mut args)));
+            if matches!(result, Ok(Err(Error::UnknownNative(_)))) {
+                unrouted.push(name);
+            }
+        }
+        unrouted.sort();
+        assert_eq!(unrouted, UNROUTED);
+    }
+}

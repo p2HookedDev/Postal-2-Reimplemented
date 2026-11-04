@@ -2,7 +2,7 @@
 // base texture holds diffuse × (1 − mask), so lit + glow is the driver's lerp(lit diffuse, glow, mask). With a separate
 // opacity the base texture is the plain diffuse and the glow blends by its alpha.
 
-import bevy_pbr::render::{pbr_bindings, pbr_types, forward_io::VertexOutput};
+import bevy_pbr::render::{pbr_bindings, pbr_types, forward_io::VertexOutput, mesh_view_bindings::view};
 import package::p2_engine::color::{to_display, to_linear};
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
@@ -47,7 +47,7 @@ fn glow(in: VertexOutput, flags: u32) -> vec4<f32> {
     let sampler_ = pbr_bindings::emissive_sampler;
     // At the base's UV: the glow is baked to line up with the base's holes, only without UV animation.
     // A modifier on `Diffuse` alone would not move it.
-    let texel = textureSample(texture, sampler_, (uv_transform * vec3(in.uv, 1.0)).xy);
+    let texel = textureSampleBias(texture, sampler_, (uv_transform * vec3(in.uv, 1.0)).xy, view.mip_bias);
     return vec4(emissive * texel.rgb, texel.a);
 }
 @else {

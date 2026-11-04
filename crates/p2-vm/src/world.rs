@@ -237,21 +237,19 @@ impl<L: LoaderRef> Vm<L> {
         hulls
     }
 
+    #[inline]
     pub(crate) fn vector(&self, object: ObjectId, property: impl crate::PropertyName) -> Vector {
-        self.member_words::<3>(object, property).map_or(Vector::ZERO, |members| {
-            members.map(|m| match m {
-                (word, crate::memory::Shape::Float) => f32::from_bits(word),
-                _ => 0.0,
-            }).into()
-        })
+        self.store.vector(object, property)
     }
 
+    #[inline]
     pub(crate) fn vec3_of(&self, object: ObjectId, property: impl crate::PropertyName) -> Vector {
-        self.members::<3>(object, property).map_or(Vector::ZERO, |members| members.map(|m| crate::interp::float(&m)).into())
+        self.store.vec3_of(object, property)
     }
 
+    #[inline]
     pub fn location(&self, actor: ObjectId) -> Vector {
-        self.vector(actor, Prop::Location)
+        self.store.location(actor)
     }
 
     pub fn velocity(&self, actor: ObjectId) -> Vector {
@@ -279,13 +277,9 @@ impl<L: LoaderRef> Vm<L> {
             .collect()
     }
 
+    #[inline]
     pub fn rotation(&self, actor: ObjectId) -> Rotator {
-        self.member_words::<3>(actor, Prop::Rotation).map_or([0; 3].into(), |members| {
-            members.map(|m| match m {
-                (word, crate::memory::Shape::Int) => word as i32,
-                _ => 0,
-            }).into()
-        })
+        self.store.rotation(actor)
     }
 
     pub fn zone_at(&self, point: Vector) -> Option<ObjectId> {
@@ -325,17 +319,13 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn trace_boxes(&self, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
         let world = &self.world;
         let length = (end - start).size();
-        let back = |hit: Hit, units: f32| {
-            let time = if length > 1e-6 { (hit.time - units / length).clamp(0.0, 1.0) } else { hit.time };
-            Hit { time, location: start.lerp(end, time), ..hit }
-        };
-        let terrain = world.terrains.iter().filter_map(|t| terrain_box_check(t, start, end, extent)).map(|hit| back(hit, 0.5));
+        let terrain = world.terrains.iter().filter_map(|t| terrain_box_check(t, start, end, extent)).map(|hit| pull_back(start, end, hit, 0.5));
         let (mesh, brush) = self.with_near_boxes(start, end, extent, |near| {
             let shapes = |model: bool| near.iter().map(|&i| &world.boxes[i]).filter(move |w| w.model == model).map(|w| &*w.shape);
             (mesh_box_check(shapes(false), start, end, extent), mesh_box_check(shapes(true), start, end, extent))
         });
-        let mesh = mesh.map(|hit| back(hit, pull_back_units(false, length)));
-        let brush = brush.map(|hit| back(hit, pull_back_units(true, length)));
+        let mesh = mesh.map(|hit| pull_back(start, end, hit, pull_back_units(false, length)));
+        let brush = brush.map(|hit| pull_back(start, end, hit, pull_back_units(true, length)));
         terrain.chain(mesh).chain(brush).min_by(|a, b| a.time.total_cmp(&b.time))
     }
 

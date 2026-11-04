@@ -1,14 +1,14 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
-use p2_math::Vector;
+use p2_math::{Rng, Vector};
 use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::Prop;
 use crate::interp::{float, int};
 use crate::natives::vec3;
 use crate::physics::{MAX_STEP_HEIGHT, MIN_FLOOR_Z};
-use crate::{Error, Kind, LoaderRef, ObjectId, Value, Vm};
+use crate::{ClassNames, Error, Kind, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const UNVISITED: i32 = 10_000_000;
 const ANCHOR_DISTANCE_SQUARED: i32 = 1_440_000;
@@ -64,13 +64,13 @@ impl Search {
         }
     }
 
-    fn reach<L: LoaderRef>(&mut self, vm: &Vm<L>, node: usize, actor: ObjectId) {
+    fn reach(&mut self, store: &ObjectStore, node: usize, actor: ObjectId) {
         if self.stamps[node] != self.query {
             self.stamps[node] = self.query;
             self.weight[node] = UNVISITED;
             self.previous[node] = None;
-            self.blocked[node] = vm.flag_of(actor, Prop::bBlocked);
-            self.cost[node] = vm.get(actor, Prop::ExtraCost).as_ref().map_or(0, int);
+            self.blocked[node] = store.flag_of(actor, Prop::bBlocked);
+            self.cost[node] = store.get(actor, Prop::ExtraCost).as_ref().map_or(0, int);
         }
     }
 }
@@ -103,56 +103,212 @@ struct FoundRoute<'a> {
     end_distance: f32,
 }
 
+impl Graph {
+    fn nodes_near(&self, store: &ObjectStore, location: Vector) -> Vec<usize> {
+        let mut near: Vec<(i32, usize)> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, node)| {
+                let offset = location - node.location;
+                let squared = offset.dot(offset) as i32;
+                (squared < ANCHOR_DISTANCE_SQUARED && !store.flag_of(node.actor, Prop::bBlocked)).then_some((squared, i))
+            })
+            .collect();
+        near.sort();
+        near.into_iter().map(|(_, i)| i).collect()
+    }
+
+    fn breadth_path_to(&mut self, store: &ObjectStore, rng: &mut Rng, pawn: ObjectId, start: usize, start_weight: i32, evaluator: Evaluator) -> Searched {
+        let can_crouch = store.flag_of(pawn, Prop::bCanCrouch);
+        let (radius, height) = match can_crouch {
+            true => (store.float_of(pawn, Prop::CrouchRadius), store.float_of(pawn, Prop::CrouchHeight)),
+            false => (store.float_of(pawn, Prop::CollisionRadius), store.float_of(pawn, Prop::CollisionHeight)),
+        };
+        let (radius, height) = (radius as i32, height as i32);
+        let max_fall = store.float_of(pawn, Prop::MaxFallSpeed) as i32;
+        let crouch_cost = 1.1 / store.float_of(pawn, Prop::WalkingPct);
+        let default_height = store.object(pawn).class.and_then(|c| store.default_value(c, Prop::CollisionHeight)).as_ref().map_or(0.0, float);
+        let flags = move_flags(store, pawn);
+        let mut search = std::mem::take(&mut self.search);
+        search.start(self.nodes.len());
+        search.reach(store, start, self.nodes[start].actor);
+        search.weight[start] = start_weight;
+        let mut queue = BinaryHeap::from([Reverse((start_weight, start))]);
+        let (mut best, mut best_weight) = (None, 0.0_f32);
+        let mut visits = 0;
+        while let Some(Reverse((w, current))) = queue.pop() {
+            if w != search.weight[current] {
+                continue;
+            }
+            let value = match evaluator {
+                Evaluator::EndPoint(end) => if Some(current) == end { 2.0 } else { 0.0 },
+                Evaluator::Random => rng.frand(),
+            };
+            if value > best_weight && !search.blocked[current] {
+                best_weight = value;
+                best = Some(current);
+            }
+            if best_weight >= 1.0 {
+                break;
+            }
+            let over = visits > 250;
+            visits += 1;
+            if over {
+                if best_weight > 0.0 {
+                    break;
+                }
+                visits = 200;
+            }
+            if search.blocked[current] {
+                continue;
+            }
+            for spec in &self.nodes[current].specs {
+                let supported = spec.radius >= radius && spec.height >= height && spec.flags & flags == spec.flags && spec.max_landing <= max_fall;
+                if !supported || spec.end == current {
+                    continue;
+                }
+                search.reach(store, spec.end, self.nodes[spec.end].actor);
+                let edge = if (spec.height as f32) < default_height {
+                    (spec.distance as f32 * crouch_cost + search.cost[spec.end] as f32) as i32
+                } else {
+                    search.cost[spec.end] + spec.distance
+                };
+                let next = search.weight[current].saturating_add(edge);
+                if next < search.weight[spec.end] {
+                    search.weight[spec.end] = next;
+                    search.previous[spec.end] = Some(current);
+                    queue.push(Reverse((next, spec.end)));
+                }
+            }
+        }
+        Searched { best, best_weight, search }
+    }
+
+    fn start_route(&self, store: &mut ObjectStore, controller: ObjectId, found: &FoundRoute) -> (Vec<usize>, Vec<(ObjectId, Vector)>) {
+        let FoundRoute { best, weight, previous, end_distance, .. } = *found;
+        let mut route = vec![best];
+        while let Some(&Some(before)) = previous.get(route[route.len() - 1]) {
+            if route.len() > previous.len() {
+                break;
+            }
+            route.push(before);
+        }
+        route.reverse();
+        let nodes: Vec<(ObjectId, Vector)> = route.iter().map(|&n| (self.nodes[n].actor, self.nodes[n].location)).collect();
+        store.set(controller, Prop::RouteGoal, Value::Object(Some(nodes[nodes.len() - 1].0)));
+        store.set(controller, Prop::RouteDist, Value::Float(weight[best] as f32 + end_distance));
+        (route, nodes)
+    }
+
+    fn finish_route(&self, store: &mut ObjectStore, controller: ObjectId, pawn: ObjectId, route: &[usize], nodes: &[(ObjectId, Vector)], first: usize) {
+        let cache: Vec<Value> = (0..ROUTE_CACHE).map(|i| Value::Object(nodes.get(first + i).map(|n| n.0))).collect();
+        store.set(controller, Prop::RouteCache, Value::Array(cache));
+        if let (Some(&a), Some(&b)) = (route.get(first), route.get(first + 1))
+            && let Some(spec) = self.nodes[a].specs.iter().find(|s| s.end == b)
+        {
+            let radius = spec.radius as f32;
+            store.set(pawn, Prop::NextPathRadius, Value::Float(radius));
+        }
+    }
+}
+
+fn read_graph(store: &ObjectStore, level: Option<ObjectId>) -> Graph {
+    let mut graph = Graph::default();
+    let mut current = level.and_then(|level| store.object_of(level, Prop::NavigationPointList));
+    let mut actors = Vec::new();
+    while let Some(nav) = current {
+        if graph.index.contains_key(&nav) {
+            break;
+        }
+        graph.index.insert(nav, actors.len());
+        actors.push(nav);
+        current = store.object_of(nav, Prop::nextNavigationPoint);
+    }
+    for &actor in &actors {
+        let specs = match store.get(actor, Prop::PathList) {
+            Some(Value::Array(list)) => list
+                .iter()
+                .filter_map(|v| if let &Value::Object(Some(spec)) = v { Some(spec) } else { None })
+                .filter_map(|spec| {
+                    let end = *graph.index.get(&store.object_of(spec, Prop::End)?)?;
+                    let number = |name: &str| store.get(spec, name).as_ref().map_or(0, int);
+                    Some(Spec {
+                        end,
+                        distance: number("Distance"),
+                        radius: number("CollisionRadius"),
+                        height: number("CollisionHeight"),
+                        flags: number("reachFlags"),
+                        max_landing: number("MaxLandingVelocity"),
+                    })
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        graph.nodes.push(Node {
+            actor,
+            location: store.vector(actor, Prop::Location),
+            radius: store.float_of(actor, Prop::CollisionRadius),
+            height: store.float_of(actor, Prop::CollisionHeight),
+            specs,
+        });
+    }
+    graph
+}
+
+fn move_flags(store: &ObjectStore, pawn: ObjectId) -> i32 {
+    let controller = store.object_of(pawn, Prop::Controller);
+    let pawn_flag = |name: Prop| i32::from(store.flag_of(pawn, name));
+    let controller_flag = |name: Prop| controller.map_or(0, |c| i32::from(store.flag_of(c, name)));
+    pawn_flag(Prop::bCanWalk)
+        | pawn_flag(Prop::bCanFly) << 1
+        | pawn_flag(Prop::bCanSwim) << 2
+        | pawn_flag(Prop::bCanJump) << 3
+        | controller_flag(Prop::bCanOpenDoors) << 4
+        | controller_flag(Prop::bCanDoSpecial) << 5
+        | pawn_flag(Prop::bCanClimbLadders) << 6
+        | controller_flag(Prop::bIsPlayer) << 7
+        | R_FORCED
+}
+
+fn build_node_lists(store: &mut ObjectStore, class_names: &ClassNames, game: ObjectId, homes: bool) {
+    let (path_node, home_node) = (class_names.path_node, class_names.home_node);
+    let nodes: Vec<ObjectId> = store
+        .actor_ids
+        .iter()
+        .copied()
+        .filter(|&o| store.is_a(o, path_node) && !store.is_deleted(o) && store.is_a(o, home_node) == homes)
+        .collect();
+    let mut lists: Vec<Vec<ObjectId>> = Vec::new();
+    for node in nodes {
+        let tag = store.get(node, Prop::Tag);
+        let found = lists.iter().position(|list| !homes || store.get(list[0], Prop::Tag) == tag);
+        match found {
+            Some(list) => lists[list].push(node),
+            None => lists.push(vec![node]),
+        }
+    }
+    let mut entries = Vec::new();
+    for list in &lists {
+        for (i, &node) in list.iter().enumerate() {
+            store.set(node, Prop::NextNode, Value::Object(Some(list[(i + 1) % list.len()])));
+        }
+        entries.push(Value::Struct(vec![Value::Object(Some(list[0])), Value::Int(list.len() as i32)]));
+    }
+    if homes {
+        store.set(game, Prop::HomeNodeLists, Value::Array(entries));
+    } else if let Some(entry) = entries.pop() {
+        store.set(game, Prop::PathNodeList, entry);
+    }
+}
+
 impl<L: LoaderRef> Vm<L> {
     fn graph(&mut self) -> &Graph {
         if self.nav_graph.is_none() {
-            let graph = self.read_graph();
+            let graph = read_graph(&self.store, self.level);
             self.nav_graph = Some(graph);
         }
         self.nav_graph.get_or_insert_with(Graph::default)
-    }
-
-    fn read_graph(&self) -> Graph {
-        let mut graph = Graph::default();
-        let mut current = self.level.and_then(|level| self.object_of(level, Prop::NavigationPointList));
-        let mut actors = Vec::new();
-        while let Some(nav) = current {
-            if graph.index.contains_key(&nav) {
-                break;
-            }
-            graph.index.insert(nav, actors.len());
-            actors.push(nav);
-            current = self.object_of(nav, Prop::nextNavigationPoint);
-        }
-        for &actor in &actors {
-            let specs = match self.get(actor, Prop::PathList) {
-                Some(Value::Array(list)) => list
-                    .iter()
-                    .filter_map(|v| if let &Value::Object(Some(spec)) = v { Some(spec) } else { None })
-                    .filter_map(|spec| {
-                        let end = *graph.index.get(&self.object_of(spec, Prop::End)?)?;
-                        let number = |name: &str| self.get(spec, name).as_ref().map_or(0, int);
-                        Some(Spec {
-                            end,
-                            distance: number("Distance"),
-                            radius: number("CollisionRadius"),
-                            height: number("CollisionHeight"),
-                            flags: number("reachFlags"),
-                            max_landing: number("MaxLandingVelocity"),
-                        })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            graph.nodes.push(Node {
-                actor,
-                location: self.vector(actor, Prop::Location),
-                radius: self.float_of(actor, Prop::CollisionRadius),
-                height: self.float_of(actor, Prop::CollisionHeight),
-                specs,
-            });
-        }
-        graph
     }
 
     pub(crate) fn nav_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
@@ -189,7 +345,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Native::ClearPaths => return Ok(None),
             Native::BuildPathNodeLists | Native::BuildHomeNodeLists => {
-                self.build_node_lists(this, native == Native::BuildHomeNodeLists);
+                build_node_lists(&mut self.store, &self.script.lookups.class_names, this, native == Native::BuildHomeNodeLists);
                 return Ok(None);
             }
             _ => return Err(Error::UnknownNative(format!("{native:?}"))),
@@ -275,7 +431,7 @@ impl<L: LoaderRef> Vm<L> {
             Evaluator::EndPoint(_) => Evaluator::EndPoint(end_anchor),
             random => random,
         };
-        let Searched { best, best_weight, search } = self.breadth_path_to(pawn, start, start_distance as i32, evaluator);
+        let Searched { best, best_weight, search } = self.nav_graph.get_or_insert_with(Graph::default).breadth_path_to(&self.store, &mut self.rng, pawn, start, start_distance as i32, evaluator);
         if let Some(best) = best {
             self.set_route_cache(controller, pawn, &FoundRoute { best, weight: &search.weight, previous: &search.previous, start_distance, end_distance });
         }
@@ -304,25 +460,9 @@ impl<L: LoaderRef> Vm<L> {
         (goal_location - location).size()
     }
 
-    fn nodes_near(&self, location: Vector) -> Vec<usize> {
-        let graph = self.nav_graph.as_ref();
-        let mut near: Vec<(i32, usize)> = graph
-            .map(|g| g.nodes.iter().enumerate())
-            .into_iter()
-            .flatten()
-            .filter_map(|(i, node)| {
-                let offset = location - node.location;
-                let squared = offset.dot(offset) as i32;
-                (squared < ANCHOR_DISTANCE_SQUARED && !self.flag_of(node.actor, Prop::bBlocked)).then_some((squared, i))
-            })
-            .collect();
-        near.sort();
-        near.into_iter().map(|(_, i)| i).collect()
-    }
-
     fn find_start_anchor(&mut self, pawn: ObjectId, location: Vector) -> Option<usize> {
         let height = self.float_of(pawn, Prop::CollisionHeight);
-        for candidate in self.nodes_near(location) {
+        for candidate in self.nav_graph.as_ref().map_or_else(Vec::new, |graph| graph.nodes_near(&self.store, location)) {
             let node = &self.graph().nodes[candidate];
             let (actor, node_location, node_height) = (node.actor, node.location, node.height);
             let visible = self.trace_world(node_location, location, Vector::ZERO).is_none()
@@ -336,7 +476,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn find_end_anchor(&mut self, pawn: ObjectId, goal: Option<ObjectId>, goal_location: Vector) -> Option<usize> {
         let height = self.float_of(pawn, Prop::CollisionHeight);
-        for candidate in self.nodes_near(goal_location) {
+        for candidate in self.nav_graph.as_ref().map_or_else(Vec::new, |graph| graph.nodes_near(&self.store, goal_location)) {
             let node = &self.graph().nodes[candidate];
             let (node_location, node_height) = (node.location, node.height);
             let goal_top = [goal_location[0], goal_location[1], goal_location[2] + goal.map_or(0.0, |g| self.float_of(g, Prop::CollisionHeight))];
@@ -363,124 +503,23 @@ impl<L: LoaderRef> Vm<L> {
             && self.reached_destination(pawn, self.vector(anchor, Prop::Location) - self.vector(pawn, Prop::Location), Some(anchor))
     }
 
-    fn move_flags(&self, pawn: ObjectId) -> i32 {
-        let controller = self.object_of(pawn, Prop::Controller);
-        let pawn_flag = |name: Prop| i32::from(self.flag_of(pawn, name));
-        let controller_flag = |name: Prop| controller.map_or(0, |c| i32::from(self.flag_of(c, name)));
-        pawn_flag(Prop::bCanWalk)
-            | pawn_flag(Prop::bCanFly) << 1
-            | pawn_flag(Prop::bCanSwim) << 2
-            | pawn_flag(Prop::bCanJump) << 3
-            | controller_flag(Prop::bCanOpenDoors) << 4
-            | controller_flag(Prop::bCanDoSpecial) << 5
-            | pawn_flag(Prop::bCanClimbLadders) << 6
-            | controller_flag(Prop::bIsPlayer) << 7
-            | R_FORCED
-    }
-
-    fn breadth_path_to(&mut self, pawn: ObjectId, start: usize, start_weight: i32, evaluator: Evaluator) -> Searched {
-        let can_crouch = self.flag_of(pawn, Prop::bCanCrouch);
-        let (radius, height) = match can_crouch {
-            true => (self.float_of(pawn, Prop::CrouchRadius), self.float_of(pawn, Prop::CrouchHeight)),
-            false => (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight)),
-        };
-        let (radius, height) = (radius as i32, height as i32);
-        let max_fall = self.float_of(pawn, Prop::MaxFallSpeed) as i32;
-        let crouch_cost = 1.1 / self.float_of(pawn, Prop::WalkingPct);
-        let default_height = self.object(pawn).class.and_then(|c| self.default_value(c, Prop::CollisionHeight)).as_ref().map_or(0.0, float);
-        let flags = self.move_flags(pawn);
-        let mut graph = self.nav_graph.take().unwrap_or_default();
-        let mut search = std::mem::take(&mut graph.search);
-        search.start(graph.nodes.len());
-        search.reach(&*self, start, graph.nodes[start].actor);
-        search.weight[start] = start_weight;
-        let mut queue = BinaryHeap::from([Reverse((start_weight, start))]);
-        let (mut best, mut best_weight) = (None, 0.0_f32);
-        let mut visits = 0;
-        while let Some(Reverse((w, current))) = queue.pop() {
-            if w != search.weight[current] {
-                continue;
-            }
-            let value = match evaluator {
-                Evaluator::EndPoint(end) => if Some(current) == end { 2.0 } else { 0.0 },
-                Evaluator::Random => self.random(),
-            };
-            if value > best_weight && !search.blocked[current] {
-                best_weight = value;
-                best = Some(current);
-            }
-            if best_weight >= 1.0 {
-                break;
-            }
-            let over = visits > 250;
-            visits += 1;
-            if over {
-                if best_weight > 0.0 {
-                    break;
-                }
-                visits = 200;
-            }
-            if search.blocked[current] {
-                continue;
-            }
-            for spec in &graph.nodes[current].specs {
-                let supported = spec.radius >= radius && spec.height >= height && spec.flags & flags == spec.flags && spec.max_landing <= max_fall;
-                if !supported || spec.end == current {
-                    continue;
-                }
-                search.reach(&*self, spec.end, graph.nodes[spec.end].actor);
-                let edge = if (spec.height as f32) < default_height {
-                    (spec.distance as f32 * crouch_cost + search.cost[spec.end] as f32) as i32
-                } else {
-                    search.cost[spec.end] + spec.distance
-                };
-                let next = search.weight[current].saturating_add(edge);
-                if next < search.weight[spec.end] {
-                    search.weight[spec.end] = next;
-                    search.previous[spec.end] = Some(current);
-                    queue.push(Reverse((next, spec.end)));
-                }
-            }
-        }
-        self.nav_graph = Some(graph);
-        Searched { best, best_weight, search }
-    }
-
     fn set_route_cache(&mut self, controller: ObjectId, pawn: ObjectId, found: &FoundRoute) {
-        let FoundRoute { best, weight, previous, start_distance, end_distance } = *found;
-        let mut route = vec![best];
-        while let Some(&Some(before)) = previous.get(route[route.len() - 1]) {
-            if route.len() > previous.len() {
-                break;
-            }
-            route.push(before);
-        }
-        route.reverse();
-        let nodes: Vec<(ObjectId, Vector)> = route.iter().map(|&n| (self.graph().nodes[n].actor, self.graph().nodes[n].location)).collect();
-        self.set(controller, Prop::RouteGoal, Value::Object(Some(nodes[nodes.len() - 1].0)));
-        self.set(controller, Prop::RouteDist, Value::Float(weight[best] as f32 + end_distance));
+        let (route, nodes) = self.nav_graph.get_or_insert_with(Graph::default).start_route(&mut self.store, controller, found);
         let mut first = 0;
         if let Some(&(next, next_location)) = nodes.get(1) {
             first = 1;
-            if start_distance > 0.0 {
+            if found.start_distance > 0.0 {
                 let location = self.vector(pawn, Prop::Location);
                 let to_pawn = (location - next_location).size();
                 let along = (nodes[0].1 - next_location).size();
                 let skip = to_pawn < SKIP_ANCHOR_DISTANCE
-                    && to_pawn < (along + start_distance) * SKIP_ANCHOR_SHARE
+                    && to_pawn < (along + found.start_distance) * SKIP_ANCHOR_SHARE
                     && self.trace_world(next_location, location, Vector::ZERO).is_none()
                     && self.actor_reachable(pawn, next, true, true);
                 first = usize::from(skip);
             }
         }
-        let cache: Vec<Value> = (0..ROUTE_CACHE).map(|i| Value::Object(nodes.get(first + i).map(|n| n.0))).collect();
-        self.set(controller, Prop::RouteCache, Value::Array(cache));
-        if let (Some(&a), Some(&b)) = (route.get(first), route.get(first + 1))
-            && let Some(spec) = self.graph().nodes[a].specs.iter().find(|s| s.end == b)
-        {
-            let radius = spec.radius as f32;
-            self.set(pawn, Prop::NextPathRadius, Value::Float(radius));
-        }
+        self.nav_graph.get_or_insert_with(Graph::default).finish_route(&mut self.store, controller, pawn, &route, &nodes, first);
     }
 
     pub(crate) fn actor_reachable(&mut self, pawn: ObjectId, target: ObjectId, known_visible: bool, no_anchor_check: bool) -> bool {
@@ -595,35 +634,6 @@ impl<L: LoaderRef> Vm<L> {
             return WalkMove::Stopped;
         }
         WalkMove::Moved(at)
-    }
-
-    fn build_node_lists(&mut self, game: ObjectId, homes: bool) {
-        let (path_node, home_node) = (self.script.lookups.class_names.path_node, self.script.lookups.class_names.home_node);
-        let nodes: Vec<ObjectId> = self
-            .actors()
-            .filter(|&o| self.is_a(o, path_node) && !self.is_deleted(o) && self.is_a(o, home_node) == homes)
-            .collect();
-        let mut lists: Vec<Vec<ObjectId>> = Vec::new();
-        for node in nodes {
-            let tag = self.get(node, Prop::Tag);
-            let found = lists.iter().position(|list| !homes || self.get(list[0], Prop::Tag) == tag);
-            match found {
-                Some(list) => lists[list].push(node),
-                None => lists.push(vec![node]),
-            }
-        }
-        let mut entries = Vec::new();
-        for list in &lists {
-            for (i, &node) in list.iter().enumerate() {
-                self.set(node, Prop::NextNode, Value::Object(Some(list[(i + 1) % list.len()])));
-            }
-            entries.push(Value::Struct(vec![Value::Object(Some(list[0])), Value::Int(list.len() as i32)]));
-        }
-        if homes {
-            self.set(game, Prop::HomeNodeLists, Value::Array(entries));
-        } else if let Some(entry) = entries.pop() {
-            self.set(game, Prop::PathNodeList, entry);
-        }
     }
 }
 

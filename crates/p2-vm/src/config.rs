@@ -278,13 +278,13 @@ impl<L: LoaderRef> Vm<L> {
         }
         for (index, texts) in found {
             let field = &layout.properties[index];
-            let slot = self.script.memory.get(mem_layout).fields[index];
+            let slot = self.store.memory.get(mem_layout).fields[index];
             let value = match (&field.ty, field.array_dim) {
                 // A value that does not parse stays a zero item: `Subtitles.ini`'s arrays run in parallel, and many of
                 // its `Priority=` are empty.
                 (Type::Array(inner), _) => Some(Value::Array(texts.iter().map(|t| self.import(inner, t).unwrap_or_else(|| crate::zero_slot(inner, 1))).collect())),
                 (ty, dim) if dim > 1 => {
-                    let Value::Array(mut items) = self.script.memory.read_field(&slot, defaults) else { continue };
+                    let Value::Array(mut items) = self.store.memory.read_field(&slot, defaults) else { continue };
                     for (item, text) in items.iter_mut().zip(&texts).filter(|(_, t)| !t.is_empty()) {
                         if let Some(value) = self.import(ty, text) {
                             *item = value;
@@ -295,7 +295,7 @@ impl<L: LoaderRef> Vm<L> {
                 (ty, _) => self.import(ty, &texts[0]),
             };
             if let Some(value) = value {
-                self.script.memory.write_field(&slot, defaults, value);
+                self.store.memory.write_field(&slot, defaults, value);
             }
         }
     }
@@ -313,8 +313,8 @@ impl<L: LoaderRef> Vm<L> {
         let field = &self.class(class).layout.properties[index];
         let (ty, config) = (field.ty.clone(), field.flags & CPF_CONFIG != 0);
         let Some(value) = self.import(&ty, text) else { return };
-        let field = self.script.memory.get(self.class(class).mem).fields[index];
-        self.script.memory.write_field(&field, &mut self.store.classes[class.0 as usize].defaults, value.clone());
+        let field = self.store.memory.get(self.class(class).mem).fields[index];
+        self.store.memory.write_field(&field, &mut self.store.classes[class.0 as usize].defaults, value.clone());
         let class_name = self.name(self.class(class).name).to_owned();
         let objects: Vec<_> = self.object_ids().filter(|&o| self.is_a(o, &class_name)).collect();
         for object in objects {
@@ -437,8 +437,8 @@ impl<L: LoaderRef> Vm<L> {
             if !self.config_section(Some(class), name, flags, &own).eq_ignore_ascii_case(section) {
                 continue;
             }
-            let slot = self.script.memory.get(self.class(class).mem).fields[field];
-            self.script.memory.write_field(&slot, &mut self.store.classes[class.0 as usize].defaults, value.clone());
+            let slot = self.store.memory.get(self.class(class).mem).fields[field];
+            self.store.memory.write_field(&slot, &mut self.store.classes[class.0 as usize].defaults, value.clone());
         }
     }
 

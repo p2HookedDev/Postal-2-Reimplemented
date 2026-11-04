@@ -1,9 +1,18 @@
 #![allow(dead_code, reason = "each test binary uses a part of this module")]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use p2_package::{Loader, PackageId};
+use p2_test_package::PackageBuilder;
 use p2_vm::{ObjectId, Value, Vm};
+
+pub fn load_fixture(package: &PackageBuilder, dir: &str) -> Vm<Arc<Loader>> {
+    let dir = package.write_to_temp(dir).unwrap();
+    let mut loader = Loader::new(&dir, &["*.u".into()]).unwrap();
+    loader.load_scripts().unwrap();
+    Vm::new(Arc::new(loader))
+}
 
 pub fn game_dir() -> Option<PathBuf> {
     let dir = std::env::var_os("P2_GAME_DIR").map(PathBuf::from);

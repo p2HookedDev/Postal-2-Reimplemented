@@ -4076,6 +4076,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "p2-test-package"
+version = "0.1.0"
+dependencies = [
+ "p2-package",
+ "p2-script",
+]
+
+[[package]]
 name = "p2-viewer"
 version = "0.1.0"
 dependencies = [
@@ -4101,6 +4109,7 @@ dependencies = [
  "p2-package",
  "p2-physics",
  "p2-script",
+ "p2-test-package",
  "postcard",
  "rayon",
  "rustc-hash 2.1.3",

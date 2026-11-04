@@ -23,6 +23,7 @@ mod movement_natives;
 mod native_id;
 mod operators;
 mod natives;
+mod object_store;
 mod nav;
 mod pawn_anim;
 mod physics;
@@ -65,6 +66,7 @@ pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
 pub use profiling::FunctionTime;
 pub use memory::Mem as PropertyBlock;
+use object_store::ObjectStore;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -188,7 +190,6 @@ pub struct Diagnostics {
     pub trace: Option<Vec<String>>,
     pub tick_profile: Option<HashMap<String, std::time::Duration>>,
     pub count_work: bool,
-    pub(crate) work: profiling::Counters,
     pub(crate) function_profile: Option<profiling::FunctionProfile>,
 }
 
@@ -202,11 +203,8 @@ pub struct VmOptions {
 pub(crate) struct Media {
     pub(crate) anims: anim::Anims,
     pub(crate) bone_data: bones::BoneData,
-    pub(crate) canvas: Option<ObjectId>,
-    pub(crate) canvas_items: Vec<CanvasItem>,
-    pub(crate) canvas_paths: FxHashMap<ObjectId, Arc<str>>,
+    pub(crate) canvas: canvas::Canvas,
     pub(crate) subtitle_sounds: util_natives::SubtitleSounds,
-    pub(crate) fonts: FxHashMap<ObjectId, Option<Arc<p2_assets::Font>>>,
     pub(crate) texture_sizes: FxHashMap<ObjectId, [i32; 2]>,
     pub(crate) sound_durations: FxHashMap<ObjectId, Option<f32>>,
 }
@@ -225,24 +223,7 @@ pub(crate) struct HostIo {
 }
 
 #[derive(Default)]
-pub(crate) struct ObjectStore {
-    pub(crate) names: Vec<String>,
-    pub(crate) name_ids: FxHashMap<String, NameId>,
-    pub(crate) objects: Vec<Object>,
-    pub(crate) object_ids: FxHashMap<String, ObjectId>,
-    pub(crate) actor_ids: std::collections::BTreeSet<ObjectId>,
-    pub(crate) dynamic_ids: actors::DynamicActors,
-    pub(crate) classes: Vec<Class>,
-    pub(crate) class_ids: FxHashMap<(PackageId, usize), ClassId>,
-    pub(crate) class_by_name: FxHashMap<NameId, ClassId>,
-    pub(crate) class_exports: FxHashMap<PackageId, FxHashMap<String, usize>>,
-    pub(crate) name_counters: FxHashMap<ClassId, u32>,
-    pub(crate) class_redirects: Vec<(ClassId, ClassId)>,
-}
-
-#[derive(Default)]
 pub(crate) struct ScriptRuntime {
-    pub(crate) memory: memory::MemLayouts,
     pub(crate) frame_pool: Vec<memory::Mem>,
     pub(crate) arg_pool: Vec<Vec<Value>>,
     pub(crate) functions: FxHashMap<(PackageId, usize), Arc<interp::Function>>,
@@ -465,8 +446,9 @@ impl<L: LoaderRef> Vm<L> {
         id
     }
 
+    #[inline]
     pub fn name(&self, id: NameId) -> &str {
-        &self.store.names[id.0 as usize]
+        self.store.name(id)
     }
 
     pub fn actors(&self) -> impl Iterator<Item = ObjectId> + '_ {
@@ -477,12 +459,14 @@ impl<L: LoaderRef> Vm<L> {
         (0..self.store.objects.len() as u32).map(ObjectId)
     }
 
+    #[inline]
     pub fn object(&self, id: ObjectId) -> &Object {
-        &self.store.objects[id.0 as usize]
+        self.store.object(id)
     }
 
+    #[inline]
     pub fn class(&self, id: ClassId) -> &Class {
-        &self.store.classes[id.0 as usize]
+        self.store.class(id)
     }
 
     pub fn find_class(&mut self, package: &str, name: &str) -> Result<ClassId, Error> {
@@ -514,13 +498,9 @@ impl<L: LoaderRef> Vm<L> {
         self.store.class_redirects.iter().find(|(from, _)| *from == class).map_or(class, |&(_, to)| to)
     }
 
+    #[inline]
     pub fn property_index(&self, class: ClassId, name: &str) -> Option<usize> {
-        self.count_property(name);
-        let class = self.class(class);
-        class.index.get(name).copied().or_else(|| {
-            self.count(profiling::Work::PropertyScan);
-            lower_lookup(class.lower_index.get_or_init(|| lowercase_index(&class.layout)), name)
-        })
+        self.store.property_index(class, name)
     }
 
     pub fn new_object(&mut self, class: ClassId, name: Option<&str>) -> ObjectId {
@@ -690,162 +670,68 @@ impl<L: LoaderRef> Vm<L> {
         result
     }
 
+    #[inline]
     pub(crate) fn field(&self, object: ObjectId, property: impl PropertyName) -> Option<memory::Field> {
-        property.field_in(self, self.object(object).class?)
+        self.store.field(object, property)
     }
 
+    #[inline]
     pub fn get(&self, object: ObjectId, property: impl PropertyName) -> Option<Value> {
-        if property.is_resolved()
-            && let Some((word, shape)) = self.word(object, property)
-        {
-            return Some(memory::scalar(word, shape));
-        }
-        let field = self.field(object, property)?;
-        Some(self.script.memory.read_field(&field, &self.object(object).mem))
+        self.store.get(object, property)
     }
 
     #[inline]
-    pub(crate) fn word(&self, object: ObjectId, property: impl PropertyName) -> Option<(u32, memory::Shape)> {
-        let object_ref = self.object(object);
-        let (word, shape) = property.word_in(self, object_ref.class?)?;
-        match shape {
-            memory::Shape::Byte | memory::Shape::Int | memory::Shape::Bool | memory::Shape::Float | memory::Shape::Object | memory::Shape::Name => {
-                Some((*object_ref.mem.words.get(word as usize)?, shape))
-            }
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn member_words<const N: usize>(&self, object: ObjectId, property: impl PropertyName) -> Option<[(u32, memory::Shape); N]> {
-        const { assert!(N <= 3, "member_words reaches a struct's first three members (`MemLayout::head`)") };
-        let object_ref = self.object(object);
-        let (base, memory::Shape::Struct(id)) = property.word_in(self, object_ref.class?)? else { return None };
-        let head = &self.script.memory.get(id).head;
-        let words = &object_ref.mem.words;
-        Some(std::array::from_fn(|i| match head.get(i) {
-            Some(&(word, shape)) if shape != memory::Shape::Map => (words.get((base + word) as usize).copied().unwrap_or(0), shape),
-            _ => (0, memory::Shape::Map),
-        }))
-    }
-
-    /// R, G, B, A (`Object.uc` declares B, G, R, A), read in place. All four: [`Vm::member_words`] reaches only the first
-    /// three.
-    pub(crate) fn color_of(&self, object: ObjectId, property: impl PropertyName) -> Option<[u8; 4]> {
-        let field = self.field(object, property)?;
-        let (memory::Shape::Struct(id), 1) = (field.shape, field.dim) else { return None };
-        let (members, words) = (&self.script.memory.get(id).fields, &self.object(object).mem.words);
-        let byte = |i: usize| members.get(i).and_then(|m| words.get((field.word + m.word) as usize)).map(|&word| word as u8);
-        Some([byte(2)?, byte(1)?, byte(0)?, byte(3)?])
-    }
-
     pub(crate) fn members<const N: usize>(&self, object: ObjectId, property: impl PropertyName) -> Option<[Value; N]> {
-        Some(self.member_words::<N>(object, property)?.map(|(word, shape)| memory::scalar(word, shape)))
+        self.store.members::<N>(object, property)
     }
 
-    pub(crate) fn set_members<const N: usize>(&mut self, object: ObjectId, property: impl PropertyName, values: [Value; N]) -> bool {
-        let Some(field) = self.field(object, property) else { return false };
-        let (memory::Shape::Struct(id), 1) = (field.shape, field.dim) else { return false };
-        let members = &self.script.memory.get(id).fields;
-        let mem = &mut self.store.objects[object.0 as usize].mem;
-        for (m, value) in members.iter().zip(values) {
-            self.script.memory.write(m.shape, m.dim, mem, (field.word + m.word) as usize, (field.heap + m.heap) as usize, value);
-        }
-        true
-    }
-
+    #[inline]
     pub(crate) fn array_words(&self, object: ObjectId, property: impl PropertyName) -> Option<&[u32]> {
-        let field = self.field(object, property)?;
-        let (memory::Shape::Array(elem), 1) = (field.shape, field.dim) else { return None };
-        if self.script.memory.element_size(elem) != (1, 0) {
-            return None;
-        }
-        match self.object(object).mem.heap.get(field.heap as usize)? {
-            memory::Heap::Array(array) => array.mem.words.get(..array.len as usize),
-            memory::Heap::Str(_) => None,
-        }
+        self.store.array_words(object, property)
     }
 
+    #[inline]
     pub(crate) fn element_of(&self, object: ObjectId, property: impl PropertyName, index: usize) -> Option<Value> {
-        let field = self.field(object, property)?;
-        let mem = &self.object(object).mem;
-        if field.dim > 1 {
-            if index >= field.dim as usize {
-                return None;
-            }
-            let (word, heap) = (field.word as usize + index * field.words as usize, field.heap as usize + index * field.heaps as usize);
-            return Some(self.script.memory.read(field.shape, 1, mem, word, heap));
-        }
-        let memory::Shape::Array(elem) = field.shape else { return None };
-        let memory::Heap::Array(array) = mem.heap.get(field.heap as usize)? else { return None };
-        if index >= array.len as usize {
-            return None;
-        }
-        let f = self.script.memory.get(elem).fields[0];
-        let (w, h) = self.script.memory.element_size(elem);
-        Some(self.script.memory.read(f.shape, f.dim, &array.mem, index * w as usize, index * h as usize))
+        self.store.element_of(object, property, index)
     }
 
+    #[inline]
     pub(crate) fn object_list(&self, object: ObjectId, property: impl PropertyName) -> Vec<ObjectId> {
-        self.array_words(object, property).map_or_else(Vec::new, |words| words.iter().filter_map(|&w| memory::object(w)).collect())
+        self.store.object_list(object, property)
     }
 
     pub fn property_block(&self, object: ObjectId) -> &PropertyBlock {
         &self.object(object).mem
     }
 
+    #[inline]
     pub fn properties(&self, object: ObjectId) -> Vec<Value> {
-        let object = self.object(object);
-        let Some(class) = object.class else { return Vec::new() };
-        self.script.memory.get(self.class(class).mem).fields.iter().map(|field| self.script.memory.read_field(field, &object.mem)).collect()
+        self.store.properties(object)
     }
 
+    #[inline]
     pub fn property_at(&self, object: ObjectId, index: usize) -> Option<Value> {
-        let object_ref = self.object(object);
-        let field = *self.script.memory.get(self.class(object_ref.class?).mem).fields.get(index)?;
-        Some(self.script.memory.read_field(&field, &object_ref.mem))
+        self.store.property_at(object, index)
     }
 
+    #[inline]
     pub(crate) fn set_property_at(&mut self, object: ObjectId, index: usize, value: Value) -> bool {
-        let Some(class) = self.object(object).class else { return false };
-        let Some(&field) = self.script.memory.get(self.class(class).mem).fields.get(index) else { return false };
-        self.script.memory.write_field(&field, &mut self.store.objects[object.0 as usize].mem, value);
-        true
+        self.store.set_property_at(object, index, value)
     }
 
-    fn member_place(&self, class: ClassId, first: &str, members: &[&str]) -> Option<(memory::Shape, u32, usize, usize)> {
-        let index = self.property_index(class, first)?;
-        let field = *self.script.memory.get(self.class(class).mem).fields.get(index)?;
-        let mut ty = &self.class(class).layout.properties[index].ty;
-        let (mut shape, mut dim, mut word, mut heap) = (field.shape, field.dim, field.word as usize, field.heap as usize);
-        for member in members {
-            let (Type::Struct(layout), memory::Shape::Struct(id), 1) = (ty, shape, dim) else { return None };
-            let index = layout.properties.iter().position(|p| p.name.eq_ignore_ascii_case(member))?;
-            let f = *self.script.memory.get(id).fields.get(index)?;
-            ty = &layout.properties[index].ty;
-            (shape, dim, word, heap) = (f.shape, f.dim, word + f.word as usize, heap + f.heap as usize);
-        }
-        Some((shape, dim, word, heap))
-    }
-
+    #[inline]
     pub fn get_path(&self, object: ObjectId, path: &[&str]) -> Option<Value> {
-        let (first, members) = path.split_first()?;
-        let (shape, dim, word, heap) = self.member_place(self.object(object).class?, first, members)?;
-        Some(self.script.memory.read(shape, dim, &self.object(object).mem, word, heap))
+        self.store.get_path(object, path)
     }
 
+    #[inline]
     pub fn set_path(&mut self, object: ObjectId, path: &[&str], value: Value) -> bool {
-        let Some((first, members)) = path.split_first() else { return false };
-        let Some(class) = self.object(object).class else { return false };
-        let Some((shape, dim, word, heap)) = self.member_place(class, first, members) else { return false };
-        self.script.memory.write(shape, dim, &mut self.store.objects[object.0 as usize].mem, word, heap, value);
-        true
+        self.store.set_path(object, path, value)
     }
 
+    #[inline]
     pub fn set(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
-        let Some(field) = self.field(object, property) else { return false };
-        self.script.memory.write_field(&field, &mut self.store.objects[object.0 as usize].mem, value);
-        true
+        self.store.set(object, property, value)
     }
 
     pub fn export_class(&self, path: &str, wanted: &str) -> Option<Option<String>> {
@@ -930,9 +816,9 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
+    #[inline]
     pub fn default_value(&self, class: ClassId, property: impl PropertyName) -> Option<Value> {
-        let field = property.field_in(self, class)?;
-        Some(self.script.memory.read_field(&field, &self.class(class).defaults))
+        self.store.default_value(class, property)
     }
 
     fn load_class(&mut self, package: PackageId, export: usize) -> Result<ClassId, Error> {
@@ -962,8 +848,8 @@ impl<L: LoaderRef> Vm<L> {
         // The layout lists the class's own properties first, then the superclass's (whose defaults apply). In memory
         // the superclass's come first, at the superclass's offsets, as in the engine.
         let base = super_class.map(|id| (self.class(id).mem, self.class(id).layout.properties.len()));
-        let mem_layout = self.script.memory.of_class(&layout, base);
-        let mut defaults = self.script.memory.zero(mem_layout);
+        let mem_layout = self.store.memory.of_class(&layout, base);
+        let mut defaults = self.store.memory.zero(mem_layout);
         if let Some(id) = super_class {
             let inherited = &self.class(id).defaults;
             defaults.words[..inherited.words.len()].copy_from_slice(&inherited.words);
@@ -993,7 +879,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let lower = lowercase_index(&layout);
         let slot_of = |p: &str| index.get(p).copied().or_else(|| lower_lookup(&lower, p));
-        let fields = &self.script.memory.get(mem_layout).fields;
+        let fields = &self.store.memory.get(mem_layout).fields;
         let resolved = props::Resolved::new(slot_of, fields, self.name(name), super_class.map_or(0, |s| self.class(s).resolved.kinds()));
         let lower_index = std::sync::OnceLock::from(lower);
         let mem = mem_layout;
@@ -1017,8 +903,8 @@ impl<L: LoaderRef> Vm<L> {
         self.store.class_ids.insert((package, export), id);
         self.store.class_by_name.entry(name).or_insert(id);
         if let Some(index) = self.property_index(id, "Class") {
-            let field = self.script.memory.get(mem).fields[index];
-            self.script.memory.write_field(&field, &mut self.store.classes[id.0 as usize].defaults, Value::Object(Some(class_object)));
+            let field = self.store.memory.get(mem).fields[index];
+            self.store.memory.write_field(&field, &mut self.store.classes[id.0 as usize].defaults, Value::Object(Some(class_object)));
         }
         self.profile_phase("load: class", phase);
         Ok(id)
@@ -1039,8 +925,8 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             };
             let value = self.convert(pkg, package, &layout.properties[index].ty, tag.value);
-            let field = self.script.memory.get(mem_layout).fields[index];
-            self.script.memory.write_element(&field, mem, tag.array_index as usize, value);
+            let field = self.store.memory.get(mem_layout).fields[index];
+            self.store.memory.write_element(&field, mem, tag.array_index as usize, value);
         }
     }
 

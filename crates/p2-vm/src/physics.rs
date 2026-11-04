@@ -3,7 +3,6 @@ use p2_collision::{mesh_box_check, pull_back_units, segment_cylinder};
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
 use crate::interp::{float, int};
-use crate::memory::Shape;
 use crate::mover::turned;
 use crate::{Error, LoaderRef, ObjectId, Prop, PropertyName, Value, Vm, Kind};
 
@@ -150,40 +149,34 @@ struct SweepAgainst {
 }
 
 impl<L: LoaderRef> Vm<L> {
+    #[inline]
     pub(crate) fn float_of(&self, object: ObjectId, property: impl PropertyName) -> f32 {
-        match self.word(object, property) {
-            Some((word, Shape::Float)) => f32::from_bits(word),
-            Some((word, Shape::Int)) => word as i32 as f32,
-            Some((word, Shape::Byte | Shape::Bool)) => word as f32,
-            _ => 0.0,
-        }
+        self.store.float_of(object, property)
     }
 
+    #[inline]
     pub(crate) fn flag_of(&self, object: ObjectId, property: impl PropertyName) -> bool {
-        matches!(self.word(object, property), Some((word, Shape::Bool)) if word != 0)
+        self.store.flag_of(object, property)
     }
 
+    #[inline]
     pub(crate) fn object_of(&self, object: ObjectId, property: impl PropertyName) -> Option<ObjectId> {
-        match self.word(object, property) {
-            Some((word, Shape::Object)) => crate::memory::object(word),
-            _ => None,
-        }
+        self.store.object_of(object, property)
     }
 
+    #[inline]
     pub(crate) fn byte_of(&self, object: ObjectId, property: impl PropertyName) -> u8 {
-        match self.word(object, property) {
-            Some((word, Shape::Byte | Shape::Bool | Shape::Int)) => word as u8,
-            Some((word, Shape::Float)) => f32::from_bits(word) as i32 as u8,
-            _ => 0,
-        }
+        self.store.byte_of(object, property)
     }
 
+    #[inline]
     pub(crate) fn rotator_of(&self, object: ObjectId, property: impl PropertyName) -> Rotator {
-        self.members::<3>(object, property).map_or([0; 3].into(), |members| members.map(|m| int(&m)).into())
+        self.store.rotator_of(object, property)
     }
 
+    #[inline]
     pub(crate) fn set_vector(&mut self, object: ObjectId, property: impl PropertyName, value: Vector) {
-        self.set_members(object, property, <[f32; 3]>::from(value).map(Value::Float));
+        self.store.set_vector(object, property, value);
     }
 
     pub(crate) fn event_bool(&mut self, object: ObjectId, name: &str, args: impl IntoIterator<Item = Value>) -> Result<bool, Error> {

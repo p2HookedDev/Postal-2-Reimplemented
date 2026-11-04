@@ -267,7 +267,7 @@ impl<L: LoaderRef> Vm<L> {
         };
         let Some(class) = self.object(controller).class else { return Ok(()) };
         let layout = Arc::clone(&self.class(class).layout);
-        let fields = &self.script.memory.get(self.class(class).mem).fields;
+        let fields = &self.store.memory.get(self.class(class).mem).fields;
         let words = &mut self.store.objects[controller.0 as usize].mem.words;
         for (property, field) in layout.properties.iter().zip(fields) {
             if property.flags & CPF_INPUT != 0

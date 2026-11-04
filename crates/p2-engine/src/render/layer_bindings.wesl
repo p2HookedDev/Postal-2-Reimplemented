@@ -118,9 +118,9 @@ fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: 
             }
             uv = vec2(dot(layers.specular_u.xyz, vec3(uv, 1.0)), dot(layers.specular_v.xyz, vec3(uv, 1.0)));
 @if(BINDLESS)
-            texel = textureSample(bindless_textures_2d[index.flat_specular], bindless_samplers_filtering[index.flat_specular_sampler], uv);
+            texel = textureSampleBias(bindless_textures_2d[index.flat_specular], bindless_samplers_filtering[index.flat_specular_sampler], uv, view.mip_bias);
 @else
-            texel = textureSample(flat_specular_texture, flat_specular_sampler, uv);
+            texel = textureSampleBias(flat_specular_texture, flat_specular_sampler, uv, view.mip_bias);
         }
         out = specular(out, texel.rgb, mask);
     }
