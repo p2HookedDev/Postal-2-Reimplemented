@@ -640,6 +640,7 @@ impl PreparedScene {
         let (attached, drawn_pawns, drawn_attachments) = (pawn_parts.attached, pawn_parts.drawn_pawns, pawn_parts.drawn_attachments);
         phase("pawns");
         let switches = switched_images(game, &images, &cache);
+        keep_restyled_out_of_world_pass(&mut models, switches.iter().map(|(_, switch)| switch));
         let blocking = collisions.len();
         let status = format!(
             "{name}: {drawn} of {} BSP polygons ({textured} textured, {lit} light-mapped); \
@@ -703,6 +704,15 @@ fn switched_images(
         }
     }
     switched
+}
+
+fn keep_restyled_out_of_world_pass<'a>(models: &mut [ModelView], switches: impl Iterator<Item = &'a SwitchImage>) {
+    let restyled: HashSet<AssetId<Image>> = switches.filter(|switch| switch.whole).map(|switch| switch.image).collect();
+    for section in models.iter_mut().flat_map(|model| &mut model.sections) {
+        if section.texture.as_ref().is_some_and(|texture| restyled.contains(&texture.id())) {
+            section.chunks = None;
+        }
+    }
 }
 
 
@@ -1556,6 +1566,18 @@ mod tests {
     fn mesh_placement(loader: &Loader, actor: &MeshActor) -> ((PackageId, i32), MeshPlacement) {
         let mesh = (loader.id_of(actor.mesh_package).unwrap(), actor.static_mesh);
         (mesh, MeshPlacement { location: actor.location, rotation: actor.rotation, scale: actor.scale, pre_pivot: actor.pre_pivot })
+    }
+
+    #[test]
+    fn only_surfaces_a_switch_restyles_leave_the_world_pass() {
+        let mut images = Assets::<Image>::default();
+        let [restyled, image_only, plain] = [(); 3].map(|()| images.add(Image::default()));
+        let section = |image: &Handle<Image>| SectionView { texture: Some(image.clone()), chunks: Some(Arc::from(Vec::new())), ..SectionView::textured(Handle::default(), None) };
+        let mut models = [ModelView { sections: vec![section(&restyled), section(&image_only), section(&plain)], instances: Vec::new(), zone: None }];
+        let switch = |image: &Handle<Image>, whole| SwitchImage { image: image.id(), whole, shown: RenderState::default() };
+        keep_restyled_out_of_world_pass(&mut models, [switch(&restyled, true), switch(&image_only, false)].iter());
+        let in_table: Vec<bool> = models[0].sections.iter().map(|section| section.chunks.is_some()).collect();
+        assert_eq!(in_table, [false, true, true]);
     }
 
     #[test]
