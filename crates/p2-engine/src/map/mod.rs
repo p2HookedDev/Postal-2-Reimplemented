@@ -412,6 +412,7 @@ impl Session {
         t.play.set(None);
         self.map = None;
         self.map_system = None;
+        self.projector_actors.clear();
         self.hud_textures.clear();
         self.hud_fonts.clear();
         self.hud_images.clear();
