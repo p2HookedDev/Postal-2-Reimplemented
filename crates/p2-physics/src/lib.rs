@@ -20,6 +20,12 @@ const UNITS_PER_METER: f32 = 50.0;
 /// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing.
 const MAX_STEP: f32 = 1.0 / 60.0;
 const MAX_SUBSTEPS: f32 = 30.0;
+const STEP_SLACK: f32 = 0.1;
+
+fn substeps(dt: f32) -> (u32, f32) {
+    let steps = (dt / MAX_STEP - STEP_SLACK).ceil().clamp(1.0, MAX_SUBSTEPS);
+    (steps as u32, (dt / steps).min(MAX_STEP * (1.0 + STEP_SLACK)))
+}
 /// Pairs multiply their coefficients, so the level leaves a body's own values in charge.
 const LEVEL_FRICTION: f32 = 1.0;
 const LEVEL_RESTITUTION: f32 = 1.0;
@@ -389,10 +395,10 @@ impl World {
         if dt <= 0.0 {
             return Vec::new();
         }
-        let steps = (dt / MAX_STEP).ceil().clamp(1.0, MAX_SUBSTEPS);
-        self.parameters.dt = (dt / steps).min(MAX_STEP);
+        let (steps, step) = substeps(dt);
+        self.parameters.dt = step;
         let mut impacts = Vec::new();
-        for _ in 0..steps as u32 {
+        for _ in 0..steps {
             self.pipeline.step(
                 self.gravity,
                 &self.parameters,
@@ -551,6 +557,24 @@ fn collider(shape: &Shape) -> Option<ColliderBuilder> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_times_around_a_refresh_rate_keep_one_step_count() {
+        for (around, steps) in [(1.0 / 60.0, 1), (1.0 / 30.0, 2), (1.0 / 144.0, 1), (0.1, 6)] {
+            for dt in [around * 0.99, around, around * 1.01] {
+                let (count, size) = substeps(dt);
+                assert_eq!(count, steps, "{dt}");
+                assert!((size * count as f32 - dt).abs() < 1e-6, "{dt}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_frame_past_the_substep_limit_loses_time() {
+        let (count, size) = substeps(2.0);
+        assert_eq!(count, 30);
+        assert!(size <= MAX_STEP * (1.0 + STEP_SLACK));
+    }
 
     fn crate_box(location: p2_math::Vector) -> BodyParams {
         BodyParams {
