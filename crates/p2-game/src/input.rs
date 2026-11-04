@@ -7,7 +7,7 @@ use p2_engine::play::PlayerInput;
 
 pub fn read_player_input(
     keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
+    mut buttons: ResMut<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     window: Single<(&Window, &CursorOptions)>,
@@ -15,6 +15,9 @@ pub fn read_player_input(
     mut input: ResMut<PlayerInput>,
 ) {
     let (window, cursor) = *window;
+    if !window.focused {
+        buttons.release_all();
+    }
     input.typed = keyboard.read().filter(|k| k.state == ButtonState::Pressed).filter_map(|k| k.text.as_deref()).collect();
     input.cursor = window.cursor_position().map(|position| position.to_array());
     input.playing = true;
@@ -27,7 +30,7 @@ pub fn read_player_input(
     } else if scroll.delta.y < 0.0 {
         input.held.push("MouseWheelDown");
     }
-    input.mouse = if cursor.grab_mode == CursorGrabMode::None { [0.0, 0.0] } else { [motion.delta.x, -motion.delta.y] };
+    input.mouse = if cursor.grab_mode == CursorGrabMode::None || !window.focused { [0.0, 0.0] } else { [motion.delta.x, -motion.delta.y] };
 }
 fn engine_key(key: KeyCode) -> Option<&'static str> {
     Some(match key {
