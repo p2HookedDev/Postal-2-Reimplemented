@@ -61,6 +61,8 @@ pub struct Texture {
     pub lod_set: u8,
 }
 
+pub const LOD_SET_LIGHT_MAP: u8 = 3;
+
 pub fn read_texture<'a, R: Resolve + ?Sized>(objects: &mut Objects<'a, R>, src: Source<'a>, export: usize) -> Result<Texture, Error> {
     let object = objects.read(src, export)?;
     let format = TextureFormat::from_byte(object.byte("Format"))?;

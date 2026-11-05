@@ -97,6 +97,7 @@ pub struct SceneTargets<'w, 's> {
     pub(crate) canvas: CanvasModels<'w, 's>,
     pub(crate) models: ActorModels<'w, 's>,
     pub view: ResMut<'w, MeshView>,
+    pub(crate) shown: ResMut<'w, crate::shown_scene::ShownScene>,
     pub animated: ResMut<'w, Animated>,
     pub times: ResMut<'w, FrameTimes>,
     pub play: ResMut<'w, Play>,
@@ -490,6 +491,9 @@ impl Session {
         let calls = items.iter().filter(|item| matches!(item, CanvasItem::Actor { .. }));
         let drawn: Vec<(&CanvasItem, usize)> = calls.zip(hud::call_slots(items)).filter(|&(_, slot)| slot < OVERLAY_LAYERS.len()).collect();
         t.view.fov = t.play.world().and_then(PlayWorld::fov).unwrap_or(0.0);
+        if let Some(fogs) = t.play.world_mut().and_then(PlayWorld::take_zone_fogs) {
+            t.shown.fogs = fogs;
+        }
         if self.left_canvas_actors.is_empty() {
             t.view.overlays.clear();
             for &(item, slot) in &drawn {

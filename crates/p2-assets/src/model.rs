@@ -279,7 +279,7 @@ impl LightMapTexture {
             .filter(|(_, data)| !data.is_empty())
             .map(|(level, data)| Mip { width: (width >> level).max(1), height: (height >> level).max(1), data: data.clone() })
             .collect();
-        Some(Texture { format, palette: None, mips, masked: false, clamp: [false; 2], lod_set: 0 })
+        Some(Texture { format, palette: None, mips, masked: false, clamp: [false; 2], lod_set: crate::texture::LOD_SET_LIGHT_MAP })
     }
 }
 

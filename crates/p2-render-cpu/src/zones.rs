@@ -195,8 +195,11 @@ impl ZonePortals {
             for (portal, &side) in self.portals.iter().zip(&portal_sides) {
                 let [back, front] = portal.zones;
                 let (near, far) = if side >= 0.0 { (front, back) } else { (back, front) };
-                if near != zone || opened >= MAX_VOLUMES {
+                if near != zone {
                     continue;
+                }
+                if opened >= MAX_VOLUMES {
+                    return VisibleZones { volumes: None, capped: true };
                 }
                 let hidden = occluders[usize::from(zone)].iter().any(|o| portal.polygon.iter().all(|&p| o.iter().all(|plane| plane_dot(plane, p) >= 0.0)));
                 if hidden {
@@ -214,19 +217,26 @@ impl ZonePortals {
                 opened += 1;
             }
         }
-        VisibleZones { volumes: Some((volumes, occluders)) }
+        VisibleZones { volumes: Some((volumes, occluders)), capped: false }
     }
 }
 
 pub struct VisibleZones {
     /// By zone number; `None`: everything is seen.
     volumes: Option<(Vec<Vec<Vec<Plane>>>, Vec<Vec<Vec<Plane>>>)>,
+    capped: bool,
 }
 
 impl VisibleZones {
     pub fn all() -> Self {
-        Self { volumes: None }
+        Self { volumes: None, capped: false }
     }
+    
+    /// The walk passed its cap, so everything counts as seen: incomplete volumes would hide what is in view.
+    pub fn capped(&self) -> bool {
+        self.capped
+    }
+
 
     pub fn reached(&self, zone: u8) -> bool {
         self.volumes.as_ref().is_none_or(|(volumes, _)| volumes.get(usize::from(zone)).is_some_and(|volume| !volume.is_empty()))
@@ -418,6 +428,18 @@ mod tests {
         let seen = doorway().visible([-5.0, 0.0, 0.0].into(), 1, &[Plane::from([-1.0, 0.0, 0.0, 6.0])]);
         assert!(!seen.reached(2));
         assert!(!seen.sees(2, [10.0, -0.5, -0.5].into(), [11.0, 0.5, 0.5].into()));
+    }
+
+    #[test]
+    fn a_walk_past_its_cap_sees_all() {
+        let mut portals = doorway();
+        let portal = &portals.portals[0];
+        let copy = || Portal { polygon: portal.polygon.clone(), plane: portal.plane, zones: portal.zones };
+        let copies: Vec<_> = (0..MAX_VOLUMES).map(|_| copy()).collect();
+        portals.portals.extend(copies);
+        let seen = portals.visible([-5.0, 0.0, 0.0].into(), 1, &[]);
+        assert!(seen.capped());
+        assert!(seen.sees(2, [10.0, 50.0, -0.5].into(), [11.0, 51.0, 0.5].into()));
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub mod lightmapped;
 pub mod mesh_light;
 pub mod modern;
 pub mod particle_material;
+pub(crate) mod sampler_refresh;
 pub mod shader_layers;
 pub mod world_pass;
 pub(crate) mod shaders;

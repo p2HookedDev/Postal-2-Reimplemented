@@ -414,6 +414,8 @@ pub fn alpha_map_image(width: u32, height: u32, alpha: &[u8]) -> Image {
     image
 }
 
+const LOD_SET_LABEL: &str = "lod set ";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextureQuality {
     pub detail: [u8; 5],
@@ -452,6 +454,17 @@ impl TextureQuality {
         skip.clamp(0, (mips - 1).max(0)) as u32
     }
 
+    /// `None` for an image whose sampler [`Self::sampler`] did not make.
+    pub fn refreshed_sampler(&self, image: &Image) -> Option<ImageSamplerDescriptor> {
+        let ImageSampler::Descriptor(now) = &image.sampler else { return None };
+        let lod_set = now.label.as_deref()?.strip_prefix(LOD_SET_LABEL)?.parse().ok()?;
+        let wrap = [now.address_mode_u, now.address_mode_v];
+        match self.sampler(lod_set, image.texture_descriptor.mip_level_count, wrap) {
+            ImageSampler::Descriptor(descriptor) => Some(descriptor),
+            _ => None,
+        }
+    }
+
     /// Skipped mips become the lowest level used. `UseTrilinear` picks the mip filter, `LevelOfAnisotropy`
     /// the min and mag filter; Bevy needs every filter linear then.
     pub fn sampler(&self, lod_set: u8, mips: u32, wrap: [ImageAddressMode; 2]) -> ImageSampler {
@@ -463,13 +476,13 @@ impl TextureQuality {
             mipmap_filter,
             lod_min_clamp: self.skipped_mips(lod_set, mips) as f32,
             anisotropy_clamp: anisotropy,
+            label: Some(format!("{LOD_SET_LABEL}{lod_set}")),
             ..ImageSamplerDescriptor::linear()
         })
     }
 }
 
-/// The quality new images are made with; images already made keep theirs (Bevy cannot refresh only the sampler of an
-/// image whose pixels are gone from the main world), so a change shows on textures loaded afterwards.
+/// The quality new images are made with; `render::sampler_refresh` brings the ones already made up to it.
 static QUALITY: Mutex<TextureQuality> = Mutex::new(TextureQuality::DEFAULT);
 
 pub fn set_texture_quality(quality: TextureQuality) {
@@ -737,6 +750,7 @@ mod tests {
         assert_eq!([(1, 8), (2, 8), (3, 8), (3, 2)].map(|(set, mips)| quality.skipped_mips(set, mips)), [1, 2, 3, 1]);
         assert_eq!([(0, 8), (9, 8), (4, 8)].map(|(set, mips)| quality.skipped_mips(set, mips)), [0, 0, 0]);
         assert_eq!(TextureQuality { min_lod: 7, ..quality }.skipped_mips(3, 8), 1);
+        assert_eq!(quality.skipped_mips(p2_assets::LOD_SET_LIGHT_MAP, 2), 1);
         assert_eq!(TextureQuality { max_lod: 5, ..quality }.skipped_mips(4, 8), 3);
         assert_eq!([" low", "UltraLow", "high", "2", "x"].map(TextureQuality::detail_level), [2, 3, 0, 2, 0]);
         let wrap = [ImageAddressMode::Repeat; 2];

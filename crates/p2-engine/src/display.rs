@@ -212,7 +212,7 @@ impl bevy::app::Plugin for DisplayPlugin {
     }
 }
 
-fn apply_texture_quality(settings: bevy::ecs::system::Res<Settings>) {
+pub(crate) fn apply_texture_quality(settings: bevy::ecs::system::Res<Settings>) {
     p2_bevy_assets::set_texture_quality(settings.texture_quality());
 }
 

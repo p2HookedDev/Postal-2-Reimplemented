@@ -101,6 +101,7 @@ impl PlayWorld {
         loader: Arc<Loader>,
         center: Vec3,
         player: Option<(ObjectId, Option<ObjectId>)>,
+        zone_actors: Vec<Option<ObjectId>>,
         music_dir: PathBuf,
     ) -> Self {
         let (player, player_pawn) = (player.map(|(controller, _)| controller), player.and_then(|(_, pawn)| pawn));
@@ -135,6 +136,8 @@ impl PlayWorld {
             sent: FxHashMap::default(),
             lower_names: FxHashMap::default(),
             settings_sent: false,
+            zone_actors,
+            zone_fogs_sent: Vec::new(),
             music_dir,
             zone_songs: HashMap::new(),
             zone_keys: Vec::new(),
@@ -239,6 +242,9 @@ impl PlayWorld {
         }
         if frame.settings.is_none() {
             frame.settings = old.settings.take();
+        }
+        if frame.zone_fogs.is_none() {
+            frame.zone_fogs = old.zone_fogs.take();
         }
         if frame.set_mouse.is_none() {
             frame.set_mouse = old.set_mouse.take();
@@ -388,6 +394,10 @@ impl PlayWorld {
 
     pub fn wants_quit(&self) -> bool {
         self.frame.quit
+    }
+
+    pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<crate::actors::ZoneFog>>> {
+        self.frame.zone_fogs.take()
     }
 
     pub fn take_display(&mut self) -> (Option<p2_vm::WindowRequest>, Option<crate::display::Settings>) {

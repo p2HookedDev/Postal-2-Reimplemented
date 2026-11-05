@@ -383,9 +383,6 @@ impl Game {
     }
 
     pub fn detail_image(&mut self, source: TextureSource) -> Option<Image> {
-        if !p2_bevy_assets::texture_quality().detail_textures {
-            return None;
-        }
         let (texture, palette) = self.texture_at(source.detail?.0, source.detail?.1)?;
         texture_to_image(&texture, palette.as_deref())
     }

@@ -12,6 +12,7 @@ pub struct VmFrame {
     pub(super) sound_files: Vec<(String, Option<p2_assets::Sound>)>,
     pub(super) ambients: Vec<(ObjectId, crate::actors::AmbientActor, Arc<str>)>,
     pub(super) zone_sounds: Option<Vec<ZoneSound>>,
+    pub(super) zone_fogs: Option<Vec<Option<crate::actors::ZoneFog>>>,
     pub(super) audio_channels: usize,
     pub(super) music: Vec<(MusicCommand, Option<Vector>, Option<Arc<[u8]>>)>,
     pub(super) actor_changes: Vec<(ObjectId, ActorFrame)>,
@@ -108,7 +109,7 @@ impl VmFrame {
         self.movies.clear();
         self.times.clear();
         self.profile.clear();
-        Self { step, view: None, zone_sounds: None, shows_mouse: false, travel: None, fov: None, overlay: None, quit: false, window: None, settings: None, set_mouse: None, ..self }
+        Self { step, view: None, zone_sounds: None, zone_fogs: None, shows_mouse: false, travel: None, fov: None, overlay: None, quit: false, window: None, settings: None, set_mouse: None, ..self }
     }
 }
 
@@ -155,6 +156,8 @@ pub(super) struct Simulation {
     pub(super) sent: FxHashMap<ObjectId, ActorFrame>,
     pub(super) lower_names: FxHashMap<p2_vm::NameId, Arc<str>>,
     pub(super) settings_sent: bool,
+    pub(super) zone_actors: Vec<Option<ObjectId>>,
+    pub(super) zone_fogs_sent: Vec<Option<crate::actors::ZoneFog>>,
     pub(super) music_dir: PathBuf,
     pub(super) zone_songs: HashMap<String, Option<Arc<[u8]>>>,
     pub(super) zone_keys: Vec<(ObjectId, usize)>,
@@ -507,6 +510,7 @@ impl Simulation {
         frame.quit = self.quit;
         self.read_audio(frame);
         self.read_settings(frame);
+        self.read_zone_fogs(frame);
     }
 
     fn read_hud_actors(&mut self, frame: &mut VmFrame) {
@@ -661,6 +665,15 @@ impl Simulation {
         frame.zone_sounds = self.view.and_then(|view| self.zone_sounds(view.location));
         self.send_sound_files(frame, &new_paths);
         frame.audio_channels = self.vm.audio_channels();
+    }
+
+    fn read_zone_fogs(&mut self, frame: &mut VmFrame) {
+        let vm = &self.vm;
+        let fog_of = |actor: &Option<ObjectId>| actor.and_then(|actor| crate::actors::zone_fog(vm, actor));
+        if !self.zone_actors.iter().map(fog_of).eq(self.zone_fogs_sent.iter().copied()) {
+            self.zone_fogs_sent = self.zone_actors.iter().map(fog_of).collect();
+            frame.zone_fogs = Some(self.zone_fogs_sent.clone());
+        }
     }
 
     fn read_settings(&mut self, frame: &mut VmFrame) {

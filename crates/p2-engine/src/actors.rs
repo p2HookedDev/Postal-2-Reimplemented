@@ -313,7 +313,7 @@ pub fn zone_ambient(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> [f32; 3] {
     hsv_color(byte("AmbientHue"), byte("AmbientSaturation"), byte("AmbientBrightness"))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ZoneFog {
     pub color: [u8; 3],
     pub start: f32,

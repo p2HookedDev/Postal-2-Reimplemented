@@ -130,7 +130,7 @@ pub(crate) struct PreparedScene {
     vm_animations: VmAnimations,
     assets: PendingAssets,
     scene: Scene,
-    played: (Vm<Arc<Loader>>, Arc<Loader>, Option<(ObjectId, Option<ObjectId>)>),
+    played: (Vm<Arc<Loader>>, Arc<Loader>, Option<(ObjectId, Option<ObjectId>)>, Vec<Option<ObjectId>>),
     animated: Vec<AnimatedMesh>,
     emitters: Vec<(ObjectId, EmitterActor)>,
     sprites: Vec<SpriteActor>,
@@ -445,8 +445,8 @@ impl Session {
         self.map = Some(package);
         t.animated.0.extend(animated);
         let center = scene.center;
-        let (vm, loader, player) = played;
-        t.play.set(Some(PlayWorld::new(vm, loader, center, player, self.root.join("Music"))));
+        let (vm, loader, player, zone_actors) = played;
+        t.play.set(Some(PlayWorld::new(vm, loader, center, player, zone_actors, self.root.join("Music"))));
         self.add_particles(emitters, -center, t);
         self.add_sprites(sprites, -center, t);
         self.add_coronas(coronas, -center, t);
@@ -1192,7 +1192,7 @@ struct MapActors {
     level_brightness: f32,
     attachments: HashMap<ObjectId, Vec<SkeletalActor>>,
     script_errors: usize,
-    played: (Vm<Arc<Loader>>, Arc<Loader>, Option<(ObjectId, Option<ObjectId>)>),
+    played: (Vm<Arc<Loader>>, Arc<Loader>, Option<(ObjectId, Option<ObjectId>)>, Vec<Option<ObjectId>>),
     pawns: HashMap<(String, Vec<Option<String>>), Vec<SkeletalActor>>,
     projectors: Vec<ProjectorActor>,
     antiportal_paths: Vec<(String, MeshPlacement)>,
@@ -1298,7 +1298,7 @@ fn read_map_actors(started: StartedVm, model: &Model, sky_zone: Option<u8>) -> M
         });
         mesh_paths.entry((actor.static_mesh, actor.skins)).or_default().push(MeshPlacing { transform, instance, placement, follow, in_sky, only_from });
     }
-    for object in zone_actors {
+    for &object in &zone_actors {
         zone_fogs.push(object.and_then(|object| zone_fog(&vm, object)));
         terrain_zones.push(object.or(level_info).is_some_and(|object| vm.get(object, "bTerrainZone") == Some(p2_vm::Value::Bool(true))));
         zone_ambients.push(object.or(level_info).map_or([0.0; 3], |object| zone_ambient(&vm, object)));
@@ -1306,7 +1306,7 @@ fn read_map_actors(started: StartedVm, model: &Model, sky_zone: Option<u8>) -> M
     if let Some(p2_vm::Value::Float(brightness)) = level_info.and_then(|info| vm.get(info, "Brightness")) {
         level_brightness = brightness;
     }
-    let played = (vm, Arc::clone(&loader), player);
+    let played = (vm, Arc::clone(&loader), player, zone_actors);
     MapActors { terrain_infos, start, mesh_paths, zone_fogs, terrain_zones, mesh_lights, zone_ambients, level_brightness, attachments, script_errors, played, pawns, projectors, antiportal_paths, emitters, sprites, coronas, fluids }
 }
 

@@ -75,6 +75,7 @@ impl Plugin for MeshViewPlugin {
             crate::render::actor_light::ActorLightPlugin,
             crate::render::mesh_light::MeshLightPlugin,
             crate::render::world_pass::WorldPassPlugin,
+            crate::render::sampler_refresh::SamplerRefreshPlugin,
         ));
         app.init_resource::<MeshView>()
             .init_resource::<ShownScene>()
@@ -1110,6 +1111,20 @@ fn follower_zones(
     }
 }
 
+// No near plane: it would clip away a portal closer to the eye than that plane, and lose the zone behind.
+fn walk_view(transform: &Transform, projection: &Projection, origin: Vec3) -> Vec<Plane> {
+    let frustum = projection.compute_frustum(&GlobalTransform::from(*transform));
+    let sides = frustum.0.half_spaces.iter().enumerate().filter(|&(index, _)| index != bevy::shape::ViewFrustum::NEAR_PLANE_IDX);
+    sides
+        .map(|(_, half)| {
+            // Bevy half-spaces (inside: n · p + d > 0) moved to Unreal space (p = swap(u) + origin).
+            let normal = Vec3::from(half.normal());
+            let [x, y, z] = from_bevy(normal);
+            Plane::from([x, y, z, -(half.d() + normal.dot(origin))])
+        })
+        .collect()
+}
+
 /// Scenes without BSP portals, and a view outside the world, show everything. While the modern sun casts ([`SunShadow`]),
 /// a dynamic object with a sun caster mesh ([`CASTER_LAYER`]) within the sun's last cascade stays shown:
 /// `Visibility::Hidden` takes a mesh out of the shadow pass too, so its shadow popped in and out with the view.
@@ -1133,18 +1148,15 @@ fn zone_visibility(
     let seen = match (&shown.portals, cameras.iter().next(), view_zone) {
         (Some(portals), Some((transform, projection)), Some(zone)) => {
             let eye = from_bevy(transform.translation - shown.origin);
-            // Bevy half-spaces (inside: n · p + d > 0) moved to Unreal space (p = swap(u) + origin).
-            let frustum = projection.compute_frustum(&GlobalTransform::from(*transform));
-            let view: [Plane; 6] = frustum.0.half_spaces.map(|half| {
-                let normal = Vec3::from(half.normal());
-                let [x, y, z] = from_bevy(normal);
-                Plane::from([x, y, z, -(half.d() + normal.dot(shown.origin))])
-            });
+            let view = walk_view(transform, projection, shown.origin);
             eye_seen = Some(eye);
             portals.visible(eye.into(), zone, &view)
         }
         _ => VisibleZones::all(),
     };
+    if seen.capped() {
+        bevy::log::warn_once!("portal walk passed its cap: no zone culling at such views");
+    }
     let mut seen_bits = [0u32; 8];
     for zone in 0..=u8::MAX {
         if seen.reached(zone) {
@@ -1313,6 +1325,17 @@ mod tests {
             light_maps: Vec::new(),
             light_map_textures: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_walk_keeps_a_portal_nearer_than_the_near_plane() {
+        let origin = Vec3::new(100.0, 200.0, 300.0);
+        let transform = Transform::from_translation(origin);
+        let projection = Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() });
+        let view = walk_view(&transform, &projection, origin);
+        assert_eq!(view.len(), 5);
+        let ahead = from_bevy(Vec3::new(0.0, 0.0, -1.0));
+        assert!(view.iter().all(|plane| plane.normal.dot(ahead.into()) >= plane.d));
     }
 
     #[test]

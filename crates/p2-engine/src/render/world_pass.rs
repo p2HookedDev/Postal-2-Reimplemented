@@ -43,7 +43,7 @@ use bevy::render::render_phase::{
 use bevy::render::render_resource::binding_types::{storage_buffer_read_only_sized, storage_buffer_sized, uniform_buffer_sized};
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BindingResource, Buffer, BufferDescriptor, BufferUsages, CachedComputePipelineId,
-    BufferId, TextureViewId, ComputePassDescriptor, ComputePipelineDescriptor, IndexFormat, PipelineCache, ShaderStages, StorageBuffer,
+    BufferId, SamplerId, TextureViewId, ComputePassDescriptor, ComputePipelineDescriptor, IndexFormat, PipelineCache, ShaderStages, StorageBuffer,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::settings::WgpuFeatures;
@@ -258,7 +258,7 @@ struct Built {
     mesh_chunks: HashMap<AssetId<Mesh>, Vec<(u32, u32)>>,
     mesh_sections: HashMap<AssetId<Mesh>, Vec<u32>>,
     metadata_buffers: Vec<(MeshSlabId, BufferId)>,
-    lightmap_views: Vec<(AssetId<Image>, TextureViewId)>,
+    lightmap_views: Vec<(AssetId<Image>, TextureViewId, SamplerId)>,
     live_views: u32,
 }
 
@@ -568,7 +568,7 @@ fn build(world: &mut World, draws: &WorldDraws) -> Option<Built> {
 
     let mesh_groups = mesh_bind_groups(world, &model, &mesh_group_keys, &images_by_slot, slab_size);
     let metadata_buffers = mesh_group_keys.iter().filter_map(|(slab, _)| *slab).filter_map(|slab| Some((slab, allocator.buffer_for_slab(slab)?.id()))).collect();
-    let lightmap_views = light_slots.keys().filter_map(|&image| Some((image, images.get(image)?.texture_view.id()))).collect();
+    let lightmap_views = light_slots.keys().filter_map(|&image| images.get(image).map(|gpu| (image, gpu.texture_view.id(), gpu.sampler.id()))).collect();
     let materials = material_list.into_iter().map(|(id, (binding, properties))| (id, binding, properties)).collect();
     info!("world pass: {} sections, {next_draw} chunks, {} buckets, {} light maps", draws.sections.len(), buckets.len(), light_slots.len());
     Some(Built {
@@ -596,9 +596,9 @@ fn is_stale(world: &World, built: &Built, draws: &WorldDraws) -> bool {
     if !Arc::ptr_eq(&built.sections, &draws.sections) {
         return true;
     }
-    // The modern look's sun mask swaps a light map's image under the same handle.
+    // The modern look's sun mask swaps a light map's image under the same handle, and a texture setting swaps its sampler.
     let images = world.resource::<RenderAssets<GpuImage>>();
-    if built.lightmap_views.iter().any(|(image, view)| images.get(*image).is_some_and(|image| image.texture_view.id() != *view)) {
+    if built.lightmap_views.iter().any(|(image, view, sampler)| images.get(*image).is_some_and(|image| image.texture_view.id() != *view || image.sampler.id() != *sampler)) {
         return true;
     }
     let materials = world.resource::<ErasedRenderAssets<PreparedMaterial>>();

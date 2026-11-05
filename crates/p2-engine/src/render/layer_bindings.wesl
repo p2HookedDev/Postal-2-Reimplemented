@@ -69,7 +69,7 @@ fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: 
         out += emissive.rgb;
     }
 @if(VERTEX_UVS_A) {
-    if layers.detail.x != 0.0 {
+    if layers.detail.x != 0.0 && layers.detail.w == 0.0 {
         let uv = (pbr_input.material.uv_transform * vec3(in.uv, 1.0)).xy * layers.detail.x;
 @if(BINDLESS)
         let index = indices(in);

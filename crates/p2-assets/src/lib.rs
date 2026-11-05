@@ -38,7 +38,7 @@ pub use static_mesh::{
 pub use sound::{Sound, read_sound, read_sound_duration, sound_file_span, wave_duration_by};
 pub use terrain::{Terrain, TerrainLayer, read_terrain};
 pub use terrain_deco::{DecoLayer, DecoMaps, Decoration, TexelMap};
-pub use texture::{Mip, Texture, TextureFormat, read_palette, read_texture, mip_rgba, texture_alpha, texture_bgra, texture_heights, texture_rgba};
+pub use texture::{LOD_SET_LIGHT_MAP, Mip, Texture, TextureFormat, read_palette, read_texture, mip_rgba, texture_alpha, texture_bgra, texture_heights, texture_rgba};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
