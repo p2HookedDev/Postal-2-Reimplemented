@@ -39,6 +39,7 @@ pub enum SpecularMode {
     BaseAlpha = 2,
     Constant = 3,
     GlowAlpha = 4,
+    Multiply = 5,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

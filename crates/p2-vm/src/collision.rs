@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use p2_assets::{Model, read_model, read_static_mesh};
-use p2_collision::{MeshCollision, model_triangles, static_mesh_collision};
+use p2_collision::{Hit, MeshCollision, model_triangles, static_mesh_collision};
 
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
@@ -118,7 +118,12 @@ impl<L: LoaderRef> Vm<L> {
 
     fn reach_of(&self, actor: ObjectId, shape: Option<&PlacedShape>) -> f32 {
         let radius = self.float_of(actor, Prop::CollisionRadius);
-        let Some(shape) = shape else { return radius };
+        let Some(shape) = shape else {
+            if self.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
+                return fluid_reach(self.fluid_bounds(actor)).max(radius);
+            }
+            return radius;
+        };
         let (min, max) = shape.boxes.bounds();
         if min[0] > max[0] {
             return radius;
@@ -243,6 +248,15 @@ impl<L: LoaderRef> Vm<L> {
         self.primitive_meets_box(primitive, center, extent)
     }
 
+    pub(crate) fn fluid_bounds(&self, actor: ObjectId) -> [Vector; 2] {
+        fluid_box(
+            self.vector(actor, Prop::Location),
+            [self.float_of(actor, Prop::FluidXSize), self.float_of(actor, Prop::FluidYSize)],
+            self.float_of(actor, Prop::FluidGridSpacing),
+            self.byte_of(actor, Prop::FluidGridType) == FGT_HEXAGONAL,
+        )
+    }
+
     fn volume_or_fluid(&self, actor: ObjectId) -> bool {
         (self.object_of(actor, Prop::Brush).is_some() && self.is_a(actor, Kind::Volume)) || self.is_a(actor, self.script.lookups.class_names.fluid_surface_info)
     }
@@ -273,13 +287,7 @@ impl<L: LoaderRef> Vm<L> {
             return self.projector_meets_box(actor, center, extent).unwrap_or_else(|| cylinder(self));
         }
         if self.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
-            let fluid = fluid_box(
-                self.vector(actor, Prop::Location),
-                [self.float_of(actor, Prop::FluidXSize), self.float_of(actor, Prop::FluidYSize)],
-                self.float_of(actor, Prop::FluidGridSpacing),
-                self.byte_of(actor, Prop::FluidGridType) == FGT_HEXAGONAL,
-            );
-            return boxes_meet(fluid, center, extent);
+            return boxes_meet(self.fluid_bounds(actor), center, extent);
         }
         if self.is_a(actor, Kind::Brush)
             && let Some((model, _, Placement { location, rotation, scale, pre_pivot })) = self.primitive_placement(actor)
@@ -348,6 +356,47 @@ fn boxes_meet(bounds: [Vector; 2], center: Vector, extent: Vector) -> bool {
     (0..3).all(|i| bounds[0][i] <= center[i] + extent[i] && center[i] - extent[i] <= bounds[1][i])
 }
 
+fn fluid_reach(bounds: [Vector; 2]) -> f32 {
+    (bounds[1][0] - bounds[0][0]).hypot(bounds[1][1] - bounds[0][1]) * 0.5
+}
+
+
+pub(crate) fn fluid_line_check(bounds: [Vector; 2], height: f32, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
+    let d = end - start;
+    if extent == Vector::ZERO {
+        let time = (height - start[2]) / d[2];
+        if !(0.0..=1.0).contains(&time) {
+            return None;
+        }
+        let location = start + d * time;
+        let inside = (0..2).all(|i| bounds[0][i] <= location[i] && location[i] <= bounds[1][i]);
+        return inside.then(|| Hit { time, location, normal: Vector::new(0.0, 0.0, 1.0) });
+    }
+    let (mut enter, mut exit) = (0.0_f32, 1.0_f32);
+    let mut normal = Vector::new(0.0, 0.0, 1.0);
+    for i in 0..3 {
+        let (low, high) = (bounds[0][i] - extent[i], bounds[1][i] + extent[i]);
+        if d[i].abs() < 1e-6 {
+            if start[i] < low || start[i] > high {
+                return None;
+            }
+            continue;
+        }
+        let (near, far, side) = if d[i] > 0.0 { ((low - start[i]) / d[i], (high - start[i]) / d[i], -1.0) } else { ((high - start[i]) / d[i], (low - start[i]) / d[i], 1.0) };
+        if near > enter {
+            enter = near;
+            let mut axis = [0.0_f32; 3];
+            axis[i] = side;
+            normal = axis.into();
+        }
+        exit = exit.min(far);
+        if enter > exit {
+            return None;
+        }
+    }
+    Some(Hit { time: enter, location: start + d * enter, normal })
+}
+
 /// Half size, in the primitive's space, of the smallest box holding a world box of half size `extent`.
 /// `scale` must have no zero component.
 fn local_extent(extent: Vector, axes: &[Vector; 3], scale: Vector) -> Vector {
@@ -396,6 +445,35 @@ mod tests {
         assert!(!cylinder_meets_box(at, 25.0, 40.0, Vector::new(35.0, 0.0, 0.0), extent));
         assert!(!cylinder_meets_box(at, 25.0, 40.0, Vector::new(0.0, 0.0, 60.0), extent));
         assert!(!cylinder_meets_box(at, 25.0, 40.0, Vector::new(0.0, 36.0, 0.0), extent));
+    }
+
+    #[test]
+    fn a_line_hits_the_fluid_plane_anywhere_on_the_grid_from_both_sides() {
+        let bounds = fluid_box(Vector::new(100.0, 0.0, 50.0), [33.0, 33.0], 32.0, false);
+        for (from, to) in [(60.0, 40.0), (40.0, 60.0)] {
+            let hit = fluid_line_check(bounds, 50.0, Vector::new(600.0, 300.0, from), Vector::new(600.0, 300.0, to), Vector::ZERO).expect("a hit");
+            assert_eq!((hit.time, hit.location, hit.normal), (0.5, Vector::new(600.0, 300.0, 50.0), Vector::new(0.0, 0.0, 1.0)));
+        }
+        assert!(fluid_line_check(bounds, 50.0, Vector::new(700.0, 0.0, 60.0), Vector::new(700.0, 0.0, 40.0), Vector::ZERO).is_none());
+        assert!(fluid_line_check(bounds, 50.0, Vector::new(600.0, 0.0, 90.0), Vector::new(600.0, 0.0, 60.0), Vector::ZERO).is_none());
+        assert!(fluid_line_check(bounds, 50.0, Vector::new(600.0, 0.0, 60.0), Vector::new(800.0, 0.0, 60.0), Vector::ZERO).is_none());
+    }
+
+    #[test]
+    fn a_box_sweep_hits_the_fluid_box_where_the_extent_first_reaches_it() {
+        let bounds = fluid_box(Vector::ZERO, [11.0, 11.0], 10.0, false);
+        let extent = Vector::new(10.0, 10.0, 10.0);
+        let hit = fluid_line_check(bounds, 0.0, Vector::new(100.0, 0.0, 0.0), Vector::new(0.0, 0.0, 0.0), extent).expect("a hit");
+        assert_eq!((hit.time, hit.normal), (0.4, Vector::new(1.0, 0.0, 0.0)));
+        assert!(fluid_line_check(bounds, 0.0, Vector::new(100.0, 100.0, 0.0), Vector::new(70.0, 100.0, 0.0), extent).is_none());
+    }
+
+    #[test]
+    fn fluid_reach_covers_the_grid_corners() {
+        let bounds = fluid_box(Vector::ZERO, [33.0, 41.0], 32.0, true);
+        let corner = bounds[1][0].hypot(bounds[1][1]);
+        assert!((fluid_reach(bounds) - corner).abs() < 1e-3);
+        assert!(fluid_reach(bounds) > 500.0);
     }
 
     #[test]

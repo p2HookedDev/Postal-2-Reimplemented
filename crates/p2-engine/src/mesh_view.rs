@@ -560,7 +560,7 @@ impl SectionMaterial {
         }
     }
 
-    fn insert(&self, entity: &mut EntityCommands) {
+    pub(crate) fn insert(&self, entity: &mut EntityCommands) {
         match self {
             Self::Standard(material) => entity.insert(MeshMaterial3d(material.clone())),
             Self::Blended(material) => entity.insert(MeshMaterial3d(material.clone())),
@@ -879,7 +879,7 @@ struct MovingUv {
     size: [f32; 2],
 }
 
-fn set_uv_transform<M: bevy::asset::Asset>(
+pub(crate) fn set_uv_transform<M: bevy::asset::Asset>(
     store: &mut Assets<M>,
     handle: &Handle<M>,
     transform: Affine2,

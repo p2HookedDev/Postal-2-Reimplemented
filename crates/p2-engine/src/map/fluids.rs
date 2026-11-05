@@ -1,7 +1,8 @@
 use super::*;
 use p2_math::Vector;
 use p2_particles::{Beam, FluidOscillator, FluidSettings, FluidSurface, StripPoint, View};
-use crate::render::particle_material::SpriteBlend;
+use p2_assets::{UvModifier, uv_matrix};
+use crate::mesh_view::{MaterialImages, SectionMaterial, SectionView, actor_standard, section_material, set_uv_transform};
 
 pub(super) fn camera_view(camera: &Transform, origin: Vec3) -> View {
     let unreal = |v: Vec3| Vector::from(to_bevy(v.to_array()));
@@ -104,8 +105,8 @@ pub(super) fn fill_beams(mesh: &mut Mesh, beams: &[Beam], [u_scale, v_scale]: [f
     quads.write(mesh);
 }
 
-/// Drawn with `Skins[0]` (no material when empty), lit by the actor's ambient and dynamic lights
-/// unless its lighting actor is `bUnlit`; the material's own blending applies (no `Style` override).
+/// The vertex colour is the light, 1 being neutral. No water skin reads the simulation's height alpha; retail's use of it is
+/// (unverified).
 pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
     let vertices = surface.vertices();
     let mut indices = surface.indices();
@@ -116,7 +117,7 @@ pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
         (
             vertices.iter().map(|v| to_bevy(v.position)).collect(),
             vertices.iter().map(|v| bevy_vector(v.normal).normalize_or_zero().to_array()).collect(),
-            vertices.iter().map(|v| display([255, 255, 255, v.alpha])).collect(),
+            vec![[1.0; 4]; vertices.len()],
             vertices.iter().map(|v| v.uv).collect(),
         )
     };
@@ -129,7 +130,7 @@ pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
 }
 
 fn refill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
-    use bevy::mesh::VertexAttributeValues::{Float32x3, Float32x4};
+    use bevy::mesh::VertexAttributeValues::Float32x3;
     let vertices = surface.vertices();
     if vertices.is_empty() || mesh.count_vertices() != vertices.len() {
         return;
@@ -142,11 +143,6 @@ fn refill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
     if let Some(Float32x3(normals)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
         for (normal, v) in normals.iter_mut().zip(&vertices) {
             *normal = bevy_vector(v.normal).normalize_or_zero().to_array();
-        }
-    }
-    if let Some(Float32x4(colors)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
-        for (color, v) in colors.iter_mut().zip(&vertices) {
-            *color = display([255, 255, 255, v.alpha]);
         }
     }
 }
@@ -247,17 +243,10 @@ pub(super) struct FluidShown {
     bounds: (Vector, Vector),
     shown: bool,
     since_drawn: f32,
-}
-
-fn fluid_blend(blending: Option<Blending>) -> Option<SpriteBlend> {
-    Some(match blending {
-        None | Some(Blending::Opaque) => SpriteBlend::Opaque,
-        Some(Blending::Masked) => SpriteBlend::Masked,
-        Some(Blending::Alpha) => SpriteBlend::Alpha,
-        Some(Blending::Additive) => SpriteBlend::Translucent,
-        Some(Blending::Modulate) => SpriteBlend::Modulated,
-        Some(Blending::Invisible) => return None,
-    })
+    material: SectionMaterial,
+    uv: Vec<UvModifier>,
+    uv_size: [f32; 2],
+    seconds: f32,
 }
 
 impl Session {
@@ -268,19 +257,43 @@ impl Session {
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         for fluid in fluids {
             let Some((package, export)) = fluid.skin.as_deref().and_then(|skin| game.export_by_path(skin)) else { continue };
-            let Some(texture) = game.material_texture(package, export_reference(export)) else { continue };
-            let Some(blend) = fluid_blend(texture.state.blending) else { continue };
-            let material = ParticleMaterial::sprite(t.assets.images.add(texture.image), blend);
+            let Some(texture) = game.fluid_texture(package, export_reference(export)) else {
+                bevy::log::warn!("fluid surface not drawn, no material from skin {:?}", fluid.skin);
+                continue;
+            };
+            let uv_size = texture.image.size().as_vec2().to_array();
+            let found = MaterialImages {
+                image: t.assets.images.add(texture.image),
+                glow: texture.glow.map(|glow| t.assets.images.add(glow)),
+                detail: texture.detail.map(|detail| t.assets.images.add(detail)),
+                specular: texture.specular.map(|(cube, params)| (t.assets.images.add(cube), params)),
+                state: texture.state,
+            };
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
             fill_fluid(&mut mesh, &fluid.surface);
             let mesh = t.assets.meshes.add(mesh);
+            let mut section = SectionView::textured(mesh.clone(), Some(found));
+            section.no_scene_lights = true;
+            section.two_sided = true;
+            let material = section_material(&section, actor_standard(&section, true), &mut t.assets.materials, &mut t.assets.mesh_lit);
             let shown = if fluid.hidden { Visibility::Hidden } else { Visibility::Inherited };
             let parent = t.commands.spawn((ActorModel(fluid.object), Transform::from_translation(origin), Visibility::default())).id();
-            let entity = t
-                .commands
-                .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(t.assets.particle_materials.add(material)), Transform::default(), shown, NoFrustumCulling, ChildOf(parent)))
-                .id();
-            self.fluids.push(FluidShown { object: fluid.object, surface: fluid.surface, mesh, entity, bounds: fluid.bounds, shown: !fluid.hidden, since_drawn: 0.0 });
+            let mut spawned = t.commands.spawn((Mesh3d(mesh.clone()), Transform::default(), shown, NoFrustumCulling, ChildOf(parent)));
+            material.insert(&mut spawned);
+            let entity = spawned.id();
+            self.fluids.push(FluidShown {
+                object: fluid.object,
+                surface: fluid.surface,
+                mesh,
+                entity,
+                bounds: fluid.bounds,
+                shown: !fluid.hidden,
+                since_drawn: 0.0,
+                material,
+                uv: section.uv,
+                uv_size,
+                seconds: 0.0,
+            });
         }
     }
 
@@ -319,6 +332,16 @@ impl Session {
             fluid.surface.tick(step, fluid.since_drawn <= 1.0, touchers);
             if drawn && let Some(mut mesh) = t.assets.meshes.get_mut(&fluid.mesh) {
                 refill_fluid(&mut mesh, &fluid.surface);
+            }
+            fluid.seconds += step;
+            if drawn && !fluid.uv.is_empty() {
+                let [[a, b, c], [d, e, f]] = uv_matrix(&fluid.uv, fluid.seconds, fluid.uv_size);
+                let transform = bevy::math::Affine2::from_cols(Vec2::new(a, d), Vec2::new(b, e), Vec2::new(c, f));
+                match &fluid.material {
+                    SectionMaterial::MeshLit(handle) => set_uv_transform(&mut t.assets.mesh_lit, handle, transform, |m| &m.base, |m| &mut m.base),
+                    SectionMaterial::Standard(handle) => set_uv_transform(&mut t.assets.materials, handle, transform, |m| m, |m| m),
+                    _ => {}
+                }
             }
         }
     }

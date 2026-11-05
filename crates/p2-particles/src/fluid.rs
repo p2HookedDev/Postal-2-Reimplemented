@@ -2,8 +2,32 @@ use p2_math::{Rng, Vector};
 
 const ROW: f32 = 0.866_025;
 
+const MAX_CATCH_UP_STEPS: u32 = 8;
+const MAX_WARM_UP_SECONDS: f32 = 10.0;
+const MAX_NOISE_PER_STEP: i32 = 64;
+const MIN_PLING_RADIUS: f32 = 1.5;
+const VISCOSITY: f32 = 0.6;
+const MAX_SMOOTHING: f32 = 0.1;
+const MAX_WAVE_NUMBER: f32 = 0.4;
+/// In grid spacings, drawn height.
+const MAX_HEIGHT: f32 = 0.25;
+
 fn bit_set(words: &[i32], i: usize) -> bool {
     words.get(i >> 5).is_some_and(|word| word & (1 << (i & 31)) != 0)
+}
+
+/// The sum of a vertex's neighbours less their count times the vertex. Hexagonal: 6 neighbours, odd rows
+/// shifted half a spacing right.
+#[inline]
+fn ring_difference(hexagonal: bool, odd: bool, [below, here, above]: [&[f32]; 3], x: usize) -> f32 {
+    let c = here[x];
+    if !hexagonal {
+        here[x - 1] + here[x + 1] + below[x] + above[x] - c * 4.0
+    } else if !odd {
+        here[x - 1] + above[x - 1] + above[x] + here[x + 1] + below[x] + below[x - 1] - c * 6.0
+    } else {
+        here[x - 1] + above[x] + above[x + 1] + here[x + 1] + below[x + 1] + below[x] - c * 6.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,10 +111,13 @@ pub struct FluidSurface {
     pub oscillators: Vec<FluidOscillator>,
     origin: Vector,
     verts: [Vec<f32>; 2],
+    scratch: Vec<f32>,
     latest: usize,
     alpha: Vec<u8>,
     clamped: Vec<i32>,
     rollover: f32,
+    noise_due: f32,
+    height_limit: f32,
     warmed_up: bool,
     rng: Rng,
 }
@@ -105,13 +132,17 @@ impl FluidSurface {
             half_y *= ROW;
         }
         let count = (settings.x_size * settings.y_size) as usize;
+        let height_limit = MAX_HEIGHT * settings.spacing / settings.height_scale.abs();
         Self {
             origin: Vector::new(location.x - half_x, location.y - half_y, location.z),
             verts: [vec![0.0; count], vec![0.0; count]],
+            scratch: vec![0.0; count],
             latest: 1,
             alpha: vec![0; count],
             clamped: clamp_bitmap,
             rollover: 0.0,
+            noise_due: 0.0,
+            height_limit: if height_limit.is_finite() && height_limit > 0.0 { height_limit } else { f32::MAX },
             warmed_up: false,
             rng: Rng::new(seed),
             oscillators: Vec::new(),
@@ -133,6 +164,7 @@ impl FluidSurface {
 
     /// The first tick simulates `WarmUpTime`; later steps run only while the surface was drawn within the
     /// last second. `UpdateRate` not above 0 does nothing: those steps would never reach their end.
+    /// Unlike retail, a long frame drops the steps past the cap instead of running them all at once.
     pub fn tick(&mut self, delta: f32, drawn_lately: bool, touchers: &[FluidToucher]) {
         if self.settings.update_rate.is_nan() || self.settings.update_rate <= 0.0 {
             return;
@@ -140,7 +172,7 @@ impl FluidSurface {
         let step = 1.0 / self.settings.update_rate;
         if !self.warmed_up {
             let mut time = 0.0;
-            while time < self.settings.warm_up_time {
+            while time < self.settings.warm_up_time.min(MAX_WARM_UP_SECONDS) {
                 self.update(step, touchers);
                 time += step;
             }
@@ -148,10 +180,13 @@ impl FluidSurface {
         }
         if drawn_lately {
             self.rollover += delta;
-            while step < self.rollover {
+            let mut steps = 0;
+            while step < self.rollover && steps < MAX_CATCH_UP_STEPS {
                 self.update(step, touchers);
                 self.rollover -= step;
+                steps += 1;
             }
+            self.rollover = self.rollover.min(step);
         }
     }
 
@@ -161,15 +196,18 @@ impl FluidSurface {
             self.pling(toucher.location, self.settings.ripple_velocity_factor * speed, toucher.radius);
         }
         let (nx, ny) = (self.settings.x_size, self.settings.y_size);
-        // Retail divides by `FluidXSize - 2` here; a grid that narrow would fault, so it gets no noise.
         if nx > 2 && ny > 2 {
-            for _ in 0..(self.settings.noise_frequency * step).floor() as i32 {
+            self.noise_due += self.settings.noise_frequency * step;
+            let due = self.noise_due.floor();
+            self.noise_due -= due;
+            for _ in 0..(due as i32).min(MAX_NOISE_PER_STEP) {
                 let x = self.rng.rand() % (nx - 2) + 1;
                 let y = self.rng.rand() % (ny - 2) + 1;
                 if !self.is_clamped(self.index(x, y)) {
                     let (min, max) = self.settings.noise_strength;
                     let strength = min + (max - min) * self.rng.frand();
-                    self.pling_vertex(x, y, strength);
+                    let (vx, vy) = self.vertex_xy(x, y);
+                    self.pling(Vector::new(vx, vy, 0.0), strength, 0.0);
                 }
             }
         }
@@ -180,16 +218,17 @@ impl FluidSurface {
         }
         self.oscillators = oscillators;
         self.wave_step(step);
+        self.smooth((VISCOSITY * step).min(MAX_SMOOTHING));
     }
 
-    /// The wave step, into the older buffer. Hexagonal: 6 neighbours, odd rows shifted half a spacing
-    /// right. Edge vertices never change here.
+    /// The wave step, into the older buffer. Edge vertices never change here.
     fn wave_step(&mut self, step: f32) {
         let s = &self.settings;
         let (nx, ny) = (s.x_size, s.y_size);
         let damp = 1.0 - s.damping * step;
-        let speed = s.speed * step * s.speed * step;
+        let speed = (s.speed * step * s.speed * step).min(MAX_WAVE_NUMBER * s.spacing * s.spacing);
         let inv = 1.0 / (s.spacing * s.spacing);
+        let limit = self.height_limit;
         let (src, dst) = (self.latest, 1 - self.latest);
         self.latest = dst;
         let [a, b] = &mut self.verts;
@@ -197,54 +236,94 @@ impl FluidSurface {
         let width = nx as usize;
         let row = |y: i32| &cur[y as usize * width..(y + 1) as usize * width];
         for y in 1..ny - 1 {
-            let (below, here, above) = (row(y - 1), row(y), row(y + 1));
+            let rows = [row(y - 1), row(y), row(y + 1)];
             let odd = y & 1 != 0;
             for x in 1..width.saturating_sub(1) {
                 let i = y as usize * width + x;
                 if !self.clamped.is_empty() && bit_set(&self.clamped, i) {
                     continue;
                 }
-                let c = here[x];
-                let lap = if !s.hexagonal {
-                    (here[x - 1] + here[x + 1] + below[x] + above[x] - c * 4.0) * inv
-                } else if !odd {
-                    (here[x - 1] + above[x - 1] + above[x] + here[x + 1] + below[x] + below[x - 1] - c * 6.0) * inv
-                } else {
-                    (here[x - 1] + above[x] + above[x + 1] + here[x + 1] + below[x + 1] + below[x] - c * 6.0) * inv
-                };
-                out[i] = ((c * 2.0 + lap * speed) - out[i]) * damp;
+                let lap = ring_difference(s.hexagonal, odd, rows, x) * inv;
+                out[i] = (((rows[1][x] * 2.0 + lap * speed) - out[i]) * damp).clamp(-limit, limit);
                 let alpha = (s.alpha_height_scale * out[i] + s.alpha_curve_scale * lap).round_ties_even() as i32;
                 self.alpha[i] = alpha.clamp(0, i32::from(s.alpha_max)) as u8;
             }
         }
     }
 
+    /// Retail has no such step. Filtering only the new heights damps sharp ripples most, which hides single-vertex wiggles.
+    fn smooth(&mut self, amount: f32) {
+        let s = &self.settings;
+        let (ny, width) = (s.y_size, s.x_size as usize);
+        let out = &mut self.verts[self.latest];
+        self.scratch.copy_from_slice(out);
+        let row = |y: i32| &self.scratch[y as usize * width..(y + 1) as usize * width];
+        for y in 1..ny - 1 {
+            let rows = [row(y - 1), row(y), row(y + 1)];
+            let odd = y & 1 != 0;
+            for x in 1..width.saturating_sub(1) {
+                let i = y as usize * width + x;
+                if !self.clamped.is_empty() && bit_set(&self.clamped, i) {
+                    continue;
+                }
+                out[i] = rows[1][x] + amount * ring_difference(s.hexagonal, odd, rows, x);
+            }
+        }
+    }
+
     pub fn pling_vertex(&mut self, x: i32, y: i32, strength: f32) {
-        if (0..self.settings.x_size).contains(&x) && (0..self.settings.y_size).contains(&y) {
+        if (1..self.settings.x_size - 1).contains(&x) && (1..self.settings.y_size - 1).contains(&y) && self.settings.update_rate > 0.0 {
             let i = self.index(x, y);
             if !self.is_clamped(i) {
-                self.verts[self.latest][i] += (1.0 / self.settings.update_rate) * strength;
+                let height = self.verts[self.latest][i] + (1.0 / self.settings.update_rate) * strength;
+                self.verts[self.latest][i] = height.clamp(-self.height_limit, self.height_limit);
             }
         }
     }
 
     pub fn pling(&mut self, position: Vector, strength: f32, radius: f32) {
-        if radius <= 0.01 {
-            let (x, y) = self.nearest_index(position.x, position.y);
-            self.pling_vertex(x, y, strength);
-            return;
-        }
-        let (x0, y0) = self.nearest_index(position.x - radius, position.y - radius);
-        let (x1, y1) = self.nearest_index(position.x + radius, position.y + radius);
+        let wide = self.settings.spacing * MIN_PLING_RADIUS;
+        let (reach, scale) = if radius >= wide {
+            (radius, strength)
+        } else {
+            let total = self.pling_weight_total(position, wide);
+            if total <= 0.0 {
+                return;
+            }
+            (wide, strength / total)
+        };
+        let (x0, y0) = self.nearest_index(position.x - reach, position.y - reach);
+        let (x1, y1) = self.nearest_index(position.x + reach, position.y + reach);
         for y in y0..=y1 {
             for x in x0..=x1 {
-                let (vx, vy) = self.vertex_xy(x, y);
-                let d2 = (vx - position.x) * (vx - position.x) + (vy - position.y) * (vy - position.y);
-                if d2 < radius * radius {
-                    self.pling_vertex(x, y, ((radius * radius - d2).sqrt() / radius) * strength);
+                let weight = self.pling_weight(x, y, position, reach);
+                if weight > 0.0 {
+                    self.pling_vertex(x, y, weight * scale);
                 }
             }
         }
+    }
+
+    fn pling_weight_total(&self, position: Vector, reach: f32) -> f32 {
+        let (x0, y0) = self.nearest_index(position.x - reach, position.y - reach);
+        let (x1, y1) = self.nearest_index(position.x + reach, position.y + reach);
+        let mut total = 0.0;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                total += self.pling_weight(x, y, position, reach);
+            }
+        }
+        total
+    }
+
+    fn pling_weight(&self, x: i32, y: i32, position: Vector, reach: f32) -> f32 {
+        let s = &self.settings;
+        if !(1..s.x_size - 1).contains(&x) || !(1..s.y_size - 1).contains(&y) || self.is_clamped(self.index(x, y)) {
+            return 0.0;
+        }
+        let (vx, vy) = self.vertex_xy(x, y);
+        let d2 = (vx - position.x) * (vx - position.x) + (vy - position.y) * (vy - position.y);
+        if d2 < reach * reach { (reach * reach - d2).sqrt() / reach } else { 0.0 }
     }
 
     fn nearest_index(&self, x: f32, y: f32) -> (i32, i32) {
@@ -256,18 +335,24 @@ impl FluidSurface {
         (hold(ix, s.x_size), hold(iy, s.y_size))
     }
 
-    /// Retail shifts a hexagonal vertex half a spacing by the parity of its column `x`, not of its row
-    /// as the drawn grid does; `pling` measures from these.
     fn vertex_xy(&self, x: i32, y: i32) -> (f32, f32) {
         let s = &self.settings;
         if s.hexagonal {
-            let mut vx = x as f32 * s.spacing + self.origin.x;
-            if x & 1 != 0 {
-                vx = (f64::from(s.spacing) * 0.5 + f64::from(vx)) as f32;
-            }
-            (vx, y as f32 * ROW * s.spacing + self.origin.y)
+            let shift = if y & 1 != 0 { 0.5 } else { 0.0 };
+            ((x as f32 + shift) * s.spacing + self.origin.x, y as f32 * ROW * s.spacing + self.origin.y)
         } else {
             (x as f32 * s.spacing + self.origin.x, y as f32 * s.spacing + self.origin.y)
+        }
+    }
+
+    /// Heights between the last two steps, so the water moves at any frame rate, one step behind the simulation.
+    fn drawn_heights(&self) -> impl Fn(i32, i32) -> f32 + '_ {
+        let (old, new) = (&self.verts[1 - self.latest], &self.verts[self.latest]);
+        let t = (self.rollover * self.settings.update_rate).clamp(0.0, 1.0);
+        let nx = self.settings.x_size;
+        move |x, y| {
+            let i = (y * nx + x) as usize;
+            old[i] + (new[i] - old[i]) * t
         }
     }
 
@@ -293,8 +378,7 @@ impl FluidSurface {
         let s = &self.settings;
         let (nx, ny) = (s.x_size, s.y_size);
         let o = self.origin;
-        let h = &self.verts[self.latest];
-        let at = |x: i32, y: i32| h[(y * nx + x) as usize];
+        let at = self.drawn_heights();
         let hs = s.height_scale;
         let per_u = 1.0 / (nx as f32 - 0.5);
         let row_spacing = s.spacing * ROW;
@@ -343,11 +427,11 @@ impl FluidSurface {
         let s = &self.settings;
         let (nx, ny) = (s.x_size, s.y_size);
         let o = self.origin;
-        let h = &self.verts[self.latest];
-        let at = |x: i32, y: i32| h[(y * nx + x) as usize];
+        let at = self.drawn_heights();
         let hs = s.height_scale;
         let per_u = 1.0 / (nx as f32 - 1.0);
-        let nz = s.spacing * s.spacing * -4.0;
+        // Retail's z is negative, which points the normal under the water.
+        let nz = s.spacing * s.spacing * 4.0;
         let column = |x: i32| (s.u_tiles * x as f32) * per_u + s.u_offset;
         for x in 0..nx {
             out.push(self.edge_vertex(x as f32 * s.spacing + o.x, o.y, [column(x), s.v_offset]));
@@ -393,8 +477,6 @@ impl FluidSurface {
 }
 
 impl FluidOscillator {
-    /// `OscTime` advances by `step`; strength is `Strength` at `Frequency` <= 1e-4, else `sin((Frequency *
-    /// fmod(OscTime, 1 / Frequency) + Phase / 255) * 2π) * Strength` (fmod order (unverified)).
     pub fn oscillate(&mut self, step: f32) -> f32 {
         self.time += step;
         if self.frequency <= 1e-4 {
@@ -415,11 +497,20 @@ mod tests {
         FluidSurface::new(settings, Vector::ZERO, Vec::new(), 1)
     }
 
+    fn pond(settings: FluidSettings) -> FluidSurface {
+        FluidSurface::new(FluidSettings { warm_up_time: 0.0, x_size: 24, y_size: 24, ..settings }, Vector::ZERO, Vec::new(), 7)
+    }
+
+    fn peak(surface: &FluidSurface) -> f32 {
+        surface.verts[surface.latest].iter().fold(0.0, |peak: f32, h| peak.max(h.abs()))
+    }
+
     #[test]
     fn a_bad_update_rate_ends_the_tick() {
         for update_rate in [-30.0, 0.0] {
             let settings = FluidSettings { update_rate, x_size: 5, y_size: 5, ..FluidSettings::default() };
             let mut surface = FluidSurface::new(settings, Vector::ZERO, Vec::new(), 1);
+            surface.pling(Vector::ZERO, 30.0, 0.0);
             surface.tick(1.0, true, &[]);
             assert_eq!(surface.height(2, 2), 0.0);
         }
@@ -432,20 +523,44 @@ mod tests {
     }
 
     #[test]
-    fn a_pling_raises_the_nearest_vertex_by_strength_over_update_rate() {
-        let mut surface = square(5);
+    fn a_narrow_pling_spreads_the_same_kick_around_the_nearest_vertex() {
+        let mut surface = square(9);
         surface.pling(Vector::new(3.0, -4.0, 99.0), 30.0, 0.0);
-        assert_eq!(surface.height(2, 2), 1.0);
-        assert_eq!(surface.verts[0].iter().chain(&surface.verts[1]).filter(|&&h| h != 0.0).count(), 1);
+        let heights = &surface.verts[surface.latest];
+        assert!((heights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        assert!(heights.iter().all(|&h| h <= surface.height(4, 4)));
+        assert!(heights.iter().filter(|&&h| h != 0.0).count() > 1);
     }
 
     #[test]
     fn a_wide_pling_falls_off_with_distance() {
         let mut surface = square(5);
-        surface.pling(Vector::ZERO, 30.0, 40.0);
+        surface.pling(Vector::ZERO, 30.0, 96.0);
         assert_eq!(surface.height(2, 2), 1.0);
-        assert!((surface.height(3, 2) - 0.6).abs() < 1e-6);
-        assert_eq!(surface.height(3, 3), 0.0);
+        assert!((surface.height(3, 2) - 0.942_809).abs() < 1e-5);
+        assert_eq!(surface.height(4, 2), 0.0);
+    }
+
+    #[test]
+    fn a_pling_lands_where_the_vertex_is_drawn_on_odd_rows() {
+        let mut surface = FluidSurface::new(FluidSettings { x_size: 9, y_size: 9, ..FluidSettings::default() }, Vector::ZERO, Vec::new(), 1);
+        for (x, y) in [(4, 3), (3, 3), (4, 4), (3, 4)] {
+            let drawn = surface.vertices()[surface.index(x, y)].position;
+            assert_eq!(surface.vertex_xy(x, y), (drawn.x, drawn.y));
+            surface.verts[surface.latest].fill(0.0);
+            surface.pling(drawn, 30.0, 0.0);
+            assert!(surface.verts[surface.latest].iter().all(|&h| h <= surface.height(x, y)));
+            assert!(surface.height(x, y) > 0.0);
+        }
+    }
+
+    #[test]
+    fn an_edge_takes_no_kick() {
+        let mut surface = square(5);
+        surface.pling_vertex(0, 2, 30.0);
+        surface.pling_vertex(4, 2, 30.0);
+        surface.pling_vertex(2, 0, 30.0);
+        assert!(surface.verts.iter().flatten().all(|&h| h == 0.0));
     }
 
     #[test]
@@ -468,7 +583,7 @@ mod tests {
         surface.clamped = vec![1 << 12];
         surface.pling_vertex(2, 2, 30.0);
         surface.pling_vertex(2, 1, 30.0);
-        surface.wave_step(1.0 / 30.0);
+        surface.update(1.0 / 30.0, &[]);
         assert_eq!(surface.height(2, 2), 0.0);
     }
 
@@ -479,7 +594,7 @@ mod tests {
         surface.tick(1.0, false, &[]);
         assert_eq!(surface.height(2, 2), 1.0);
         surface.tick(0.05, true, &[]);
-        assert!((surface.height(2, 2) - (2.0 - 4.0 / 1024.0 * 25.0)).abs() < 1e-5);
+        assert!(surface.height(2, 2) > 1.5);
     }
 
     #[test]
@@ -497,5 +612,107 @@ mod tests {
         let vertices = surface.vertices();
         assert_eq!(vertices[3].position.x - vertices[0].position.x, 16.0);
         assert_eq!(vertices[5].uv[0], 1.0);
+    }
+
+    #[test]
+    fn the_same_time_gives_the_same_water_at_any_frame_rate() {
+        let run = |frames: u32, delta: f32| {
+            let mut surface = pond(FluidSettings::default());
+            surface.pling(Vector::new(10.0, -20.0, 0.0), -300.0, 0.0);
+            for _ in 0..frames {
+                surface.tick(delta, true, &[]);
+            }
+            surface.verts[surface.latest].clone()
+        };
+        let slow = run(61, 1.0 / 60.0);
+        assert_eq!(slow, run(122, 1.0 / 120.0));
+        assert_eq!(slow, run(244, 1.0 / 240.0));
+    }
+
+    #[test]
+    fn a_long_frame_runs_only_the_capped_steps() {
+        let mut surface = pond(FluidSettings::default());
+        surface.tick(0.0, true, &[]);
+        surface.tick(100.0, true, &[]);
+        assert!(surface.rollover <= 1.0 / 30.0);
+    }
+
+    #[test]
+    fn drawn_heights_move_between_the_last_two_steps() {
+        let mut surface = pond(FluidSettings::default());
+        surface.pling_vertex(12, 12, 300.0);
+        surface.tick(1.5 / 30.0, true, &[]);
+        let (old, new) = (surface.verts[1 - surface.latest][surface.index(12, 12)], surface.height(12, 12));
+        let drawn = surface.drawn_heights()(12, 12);
+        assert!(old != new && (drawn - (old + new) / 2.0).abs() < 1e-3, "{old} {new} {drawn}");
+    }
+
+    #[test]
+    fn a_ripple_spreads_then_decays() {
+        let mut surface = pond(FluidSettings::default());
+        surface.pling(Vector::ZERO, -300.0, 0.0);
+        let kicked = peak(&surface);
+        assert!(kicked > 0.0);
+        for _ in 0..15 {
+            surface.tick(1.0 / 30.0, true, &[]);
+        }
+        let (near, far) = (surface.height(12, 12), surface.height(18, 12));
+        assert!(near != 0.0 && far != 0.0);
+        for _ in 0..1800 {
+            surface.tick(1.0 / 30.0, true, &[]);
+        }
+        assert!(peak(&surface) < 0.05, "{}", peak(&surface));
+    }
+
+    #[test]
+    fn heights_stay_in_bounds_at_any_frame_time() {
+        let toucher = FluidToucher { location: Vector::new(-40.0, 30.0, 0.0), velocity: Vector::new(600.0, 0.0, 0.0), radius: 28.0 };
+        for delta in [1.0 / 500.0, 1.0 / 60.0, 1.0 / 15.0, 0.5] {
+            let settings = FluidSettings { noise_frequency: 200.0, noise_strength: (-128.0, 128.0), damping: 0.1, ..FluidSettings::default() };
+            let mut surface = pond(settings);
+            surface.oscillators.push(FluidOscillator { location: Vector::ZERO, frequency: 1.0, phase: 0, strength: 32.0, radius: 32.0, time: 0.0 });
+            let limit = surface.height_limit;
+            for _ in 0..(20.0 / delta) as u32 {
+                surface.pling(Vector::new(30.0, 30.0, 0.0), -300.0, 0.0);
+                surface.tick(delta, true, &[toucher]);
+                assert!(surface.verts.iter().flatten().all(|h| h.is_finite() && h.abs() <= limit * 1.001));
+            }
+        }
+    }
+
+    #[test]
+    fn a_wave_speed_too_fast_for_the_grid_stays_stable() {
+        for hexagonal in [false, true] {
+            let mut surface = pond(FluidSettings { hexagonal, speed: 5000.0, update_rate: 10.0, ..FluidSettings::default() });
+            surface.pling(Vector::ZERO, -300.0, 0.0);
+            for _ in 0..600 {
+                surface.tick(0.1, true, &[]);
+            }
+            let unbounded = surface.height_limit * 0.5;
+            assert!(peak(&surface) < unbounded, "{}", peak(&surface));
+        }
+    }
+
+    #[test]
+    fn one_shot_moves_the_water_a_visible_share_of_a_cell() {
+        let mut surface = FluidSurface::new(FluidSettings { warm_up_time: 0.0, ..FluidSettings::default() }, Vector::ZERO, Vec::new(), 7);
+        let hit = surface.vertices()[surface.index(16, 16)].position;
+        surface.pling(hit, -300.0, 0.0);
+        let mut deepest: f32 = 0.0;
+        for _ in 0..60 {
+            surface.update(1.0 / 30.0, &[]);
+            deepest = deepest.max(peak(&surface));
+        }
+        assert!(deepest > 0.15 * 32.0, "{deepest}");
+        assert!(deepest <= surface.height_limit, "{deepest}");
+    }
+
+    #[test]
+    fn a_noise_rate_under_the_update_rate_still_fires() {
+        let mut surface = pond(FluidSettings { noise_frequency: 5.0, ..FluidSettings::default() });
+        for _ in 0..30 {
+            surface.update(1.0 / 30.0, &[]);
+        }
+        assert!(peak(&surface) > 0.0);
     }
 }

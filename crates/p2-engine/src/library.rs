@@ -91,6 +91,7 @@ pub struct SpecularSource {
     pub cube: bool,
     pub env_map: Option<u8>,
     pub mask: SpecularMask,
+    pub tint: Option<[u8; 4]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -285,6 +286,54 @@ impl Game {
         self.section_texture(source, state, true)
     }
 
+
+    pub fn fluid_texture(&mut self, id: PackageId, material: i32) -> Option<SectionTexture> {
+        let walk = self.base_texture_export(id, material, &mut RenderState::default())?;
+        let Some((package, export)) = walk.combiner else { return self.material_texture(id, material) };
+        let combiner = self.combiner_at(package, export)?;
+        let (mut state1, mut state2) = (RenderState::default(), RenderState::default());
+        let side1 = self.base_texture_export(package, combiner.material1, &mut state1);
+        let side2 = self.base_texture_export(package, combiner.material2, &mut state2);
+        let is_cube = |side: &(Option<Walk>, RenderState)| side.0.as_ref().is_some_and(|walk| walk.cube.is_some());
+        let Ok([(cube_side, cube_state), (base, mut base_state)]) = split_by_cube([(side1, state1), (side2, state2)], is_cube) else {
+            let tint = self.combiner_tint(package, export);
+            let mut texture = self.material_texture(id, material)?;
+            if tint.is_some() {
+                texture.state.color = tint;
+            }
+            return Some(texture);
+        };
+        let cube = cube_side?.cube?;
+        base_state.color = base_state.color.map(|[r, g, b, _]| [r, g, b, 255]);
+        let specular = SpecularSource { image: cube, combine: None, cube: true, env_map: cube_state.env_map, mask: SpecularMask::None, tint: None };
+        let base = base.as_ref();
+        let source = TextureSource { texture: base.and_then(|base| base.texture), opacity: None, wet: base.and_then(|base| base.wet), combine: None, glow: None, detail: None, specular: Some(specular), switch: None };
+        let mut texture = self.section_texture(source, base_state, false)?;
+        if combiner.ops.color == p2_assets::ColorOperation::Multiply
+            && let Some((_, params)) = &mut texture.specular
+        {
+            params.mode = SpecularMode::Multiply;
+        }
+        Some(texture)
+    }
+
+    fn combiner_at(&mut self, id: PackageId, export: usize) -> Option<p2_assets::Combiner> {
+        let (package, data) = self.data(id);
+        read_combiner(&mut Objects::new(&self.loader), Source { package, data }, export).ok()
+    }
+
+    fn combiner_tint(&mut self, id: PackageId, export: usize) -> Option<[u8; 4]> {
+        let combiner = self.combiner_at(id, export)?;
+        if combiner.ops.color != p2_assets::ColorOperation::Multiply {
+            return None;
+        }
+        [combiner.material1, combiner.material2].into_iter().find_map(|side| {
+            let mut state = RenderState::default();
+            let walk = self.base_texture_export(id, side, &mut state)?;
+            state.color.filter(|_| walk.texture.is_none() && walk.cube.is_none()).map(|[r, g, b, _]| [r, g, b, 255])
+        })
+    }
+
     fn section_texture(&mut self, source: TextureSource, state: RenderState, decoded: bool) -> Option<SectionTexture> {
         let (mut image, glow) = match self.glow_bake(source) {
             Some((image, glow)) if source.opacity.is_none() => (image, Some(glow)),
@@ -342,7 +391,8 @@ impl Game {
         };
         let uv = if cube { Vec::new() } else { state.uv };
         let combine = walk.combiner.filter(|_| !cube).and_then(|(id, export)| self.combine_source(id, export));
-        Some((SpecularSource { image, combine, cube, env_map: state.env_map, mask }, uv))
+        let tint = walk.combiner.filter(|_| cube).and_then(|(id, export)| self.combiner_tint(id, export));
+        Some((SpecularSource { image, combine, cube, env_map: state.env_map, mask, tint }, uv))
     }
 
     pub fn specular_layer(&mut self, source: TextureSource) -> Option<(Image, SpecularParams)> {
@@ -357,7 +407,11 @@ impl Game {
             for face in faces {
                 let (face_id, face_export) = self.export_of(id, face)?;
                 let (texture, palette) = self.texture_at(face_id, face_export)?;
-                decoded.push(p2_assets::texture_rgba(&texture, palette.as_deref())?);
+                let mut face = p2_assets::texture_rgba(&texture, palette.as_deref())?;
+                if let Some(tint) = specular.tint {
+                    tint_texels(&mut face.2, tint);
+                }
+                decoded.push(face);
             }
             cube_image(std::array::from_fn(|face| view(&decoded[face])))
         } else if let Some(image) = specular.combine.and_then(|combine| self.combined_image(combine)) {
@@ -567,6 +621,24 @@ impl Game {
     }
 }
 
+fn split_by_cube<T>([a, b]: [T; 2], is_cube: impl Fn(&T) -> bool) -> Result<[T; 2], [T; 2]> {
+    if is_cube(&a) {
+        Ok([a, b])
+    } else if is_cube(&b) {
+        Ok([b, a])
+    } else {
+        Err([a, b])
+    }
+}
+
+fn tint_texels(texels: &mut [[u8; 4]], tint: [u8; 4]) {
+    for texel in texels {
+        for (c, t) in texel[..3].iter_mut().zip(tint) {
+            *c = ((u16::from(*c) * u16::from(t) + 127) / 255) as u8;
+        }
+    }
+}
+
 fn white_image() -> Image {
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let size = Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
@@ -593,5 +665,25 @@ fn invert_color(image: &mut Image) {
                 *c = 255 - *c;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cube_on_either_side_leaves_the_other_side_as_the_base() {
+        let is_cube = |side: &&str| *side == "cube";
+        assert_eq!(split_by_cube(["cube", "base"], is_cube), Ok(["cube", "base"]));
+        assert_eq!(split_by_cube(["base", "cube"], is_cube), Ok(["cube", "base"]));
+        assert_eq!(split_by_cube(["base", "color"], is_cube), Err(["base", "color"]));
+    }
+
+    #[test]
+    fn a_specular_tint_dims_the_cube_and_keeps_alpha() {
+        let mut texels = [[255, 255, 255, 200], [100, 200, 0, 7]];
+        tint_texels(&mut texels, [47, 47, 0, 255]);
+        assert_eq!(texels, [[47, 47, 0, 200], [18, 37, 0, 7]]);
     }
 }

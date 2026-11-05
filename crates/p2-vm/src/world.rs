@@ -510,6 +510,9 @@ impl<L: LoaderRef> Vm<L> {
                 let units = if zero_extent && shape.model { 0.5 } else { pull_back_units(shape.model, length) };
                 if zero_extent { mesh_line_check([&*shape.lines], start, end) } else { mesh_box_check([&*shape.boxes], start, end, extent) }
                     .map(|hit| pull_back(start, end, hit, units))
+            } else if self.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
+                let height = self.vector(actor, Prop::Location)[2];
+                crate::collision::fluid_line_check(self.fluid_bounds(actor), height, start, end, extent)
             } else {
                 let radius = self.float_of(actor, Prop::CollisionRadius) + extent.x.max(extent.y);
                 let height = self.float_of(actor, Prop::CollisionHeight) + extent.z;

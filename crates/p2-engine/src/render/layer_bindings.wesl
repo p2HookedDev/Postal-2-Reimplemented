@@ -122,7 +122,11 @@ fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: 
 @else
             texel = textureSampleBias(flat_specular_texture, flat_specular_sampler, uv, view.mip_bias);
         }
-        out = specular(out, texel.rgb, mask);
+        if mode == 5u {
+            out *= texel.rgb;
+        } else {
+            out = specular(out, texel.rgb, mask);
+        }
     }
     return vec4(out, alpha);
 }
