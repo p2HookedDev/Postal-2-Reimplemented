@@ -36,4 +36,9 @@ jobs:
 
       - name: Publish
         shell: pwsh
-        run: gh release create $env:GITHUB_REF_NAME "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip" --verify-tag --generate-notes
+        run: |
+          $version = [regex]::Escape($env:GITHUB_REF_NAME.TrimStart("v"))
+          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## $version\b[^\n]*\n(.*?)(?=^## |\z)")
+          if (-not $section.Success) { throw "CHANGELOG.md has no section for $env:GITHUB_REF_NAME" }
+          Set-Content dist/notes.md $section.Groups[1].Value.Trim()
+          gh release create $env:GITHUB_REF_NAME "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip" --verify-tag --title $env:GITHUB_REF_NAME --notes-file dist/notes.md
