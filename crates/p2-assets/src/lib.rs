@@ -17,7 +17,7 @@ mod terrain;
 mod terrain_deco;
 mod texture;
 
-pub use actor::{MeshActor, read_actor_location, read_actor_rotation, read_mesh_actor};
+pub use actor::{EDrawType, MeshActor,read_actor_location, read_actor_rotation, read_mesh_actor};
 pub use convex_volume::{ConvexEdge, ConvexFace, ConvexVolume, read_convex_volume};
 pub use font::{Font, FontCharacter, read_font};
 pub use karma::{AggGeom, BoxElem, ConvexElem, CylinderElem, ElemTm, KMeshProps, SphereElem, read_kmesh_props};

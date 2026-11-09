@@ -226,9 +226,9 @@ impl<L: LoaderRef> Vm<L> {
 
     fn input_event(&mut self, key: &str, action: Action, delta: f32) -> Result<(), Error> {
         let code = match action {
-            Action::Press => crate::client::IST_PRESS,
-            Action::Release => crate::client::IST_RELEASE,
-            _ => crate::client::IST_AXIS,
+            Action::Press => crate::enums::EInputAction::Press,
+            Action::Release => crate::enums::EInputAction::Release,
+            _ => crate::enums::EInputAction::Axis,
         };
         if self.interactions_key_event(key, code, delta)? {
             return Ok(());

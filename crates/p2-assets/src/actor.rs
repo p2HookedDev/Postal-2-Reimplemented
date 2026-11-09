@@ -4,7 +4,28 @@ use p2_script::{Objects, Resolve, Source};
 
 use crate::Error;
 
-const DT_STATIC_MESH: u8 = 8;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum EDrawType {
+    Sprite = 1,
+    Mesh = 2,
+    StaticMesh = 8,
+    Particle = 10,
+    AntiPortal = 11,
+}
+
+impl EDrawType {
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            1 => Self::Sprite,
+            2 => Self::Mesh,
+            8 => Self::StaticMesh,
+            10 => Self::Particle,
+            11 => Self::AntiPortal,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MeshActor<'a> {
@@ -27,7 +48,7 @@ pub fn read_mesh_actor<'a, R: Resolve + ?Sized>(
 ) -> Result<Option<MeshActor<'a>>, Error> {
     let object = objects.read(src, export)?;
     let Some((mesh_package, static_mesh)) = object.object("StaticMesh") else { return Ok(None) };
-    if object.bool("bHidden") || object.byte("DrawType") != DT_STATIC_MESH {
+    if object.bool("bHidden") || EDrawType::from_byte(object.byte("DrawType")) != Some(EDrawType::StaticMesh) {
         return Ok(None);
     }
     let draw_scale = object.float("DrawScale");

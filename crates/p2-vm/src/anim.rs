@@ -9,7 +9,7 @@ use p2_package::PackageId;
 use p2_script::{ScriptObject, read_export};
 
 use p2_math::Rotator;
-use crate::enums::EDrawType;
+use crate::enums::{EDrawType, EProbe};
 use crate::native_id::Native;
 use crate::interp::int;
 use crate::natives::{AUDIO_DEFAULT_RADIUS, name_arg, optional_float};
@@ -17,7 +17,6 @@ use crate::natives::{AUDIO_DEFAULT_RADIUS, name_arg, optional_float};
 use crate::{Error, HostCommand, LoaderRef, NameId, ObjectId, PlayedSound, Value, Vm, Prop, Kind};
 
 const MAX_CHANNEL: i32 = 256;
-const PROBE_ANIM_END: u32 = 24;
 const START_LOOP: f32 = 1e-4;
 const START_ONCE: f32 = 1e-3;
 const MAX_PASSES: usize = 4;
@@ -445,12 +444,12 @@ impl<L: LoaderRef> Vm<L> {
                 self.store.set(actor, Prop::AnimAction, Value::Name(NameId::NONE));
             }
             if let Some(controller) = self.store.object_of(actor, Prop::Controller)
-                && self.is_probing(controller, PROBE_ANIM_END)?
+                && self.is_probing(controller, EProbe::AnimEnd as u32)?
             {
                 target = controller;
             }
         }
-        if self.is_probing(target, PROBE_ANIM_END)? {
+        if self.is_probing(target, EProbe::AnimEnd as u32)? {
             self.event(target, "AnimEnd", [Value::Int(channel as i32)])?;
         }
         Ok(())

@@ -8,12 +8,12 @@ use p2_math::{Rotator, Vector};
 use rustc_hash::FxHashMap;
 use crate::native_id::Native;
 use crate::Prop;
+use crate::enums::ERenderStyle;
 use crate::interp::{float, truthy};
 use crate::{Error, InteractionOrder, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const CHAR_WIDTH: f32 = 8.0;
 const CHAR_HEIGHT: f32 = 16.0;
-const STY_NONE: u8 = 0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasItem {
@@ -139,7 +139,7 @@ impl Canvas {
                 let (x, y) = (float_of(store, Prop::CurX).round(), float_of(store, Prop::CurY).round());
                 let (kept, start) = clip_text(x, &font.glyphs(&text).collect::<Vec<_>>(), clip[0]);
                 let height = font.size(&text)[1];
-                if let Some(start) = start.filter(|_| style(store) != STY_NONE && y < clip[1] && y + height > 0.0) {
+                if let Some(start) = start.filter(|_| ERenderStyle::from_byte(style(store)) != Some(ERenderStyle::None) && y < clip[1] && y + height > 0.0) {
                     let color = color(store);
                     self.items.push(CanvasItem::Text { text: kept, position: [org[0] + start, org[1] + y], scale: font.scale, color, font: font.path() });
                 }
@@ -154,7 +154,7 @@ impl Canvas {
                 } else {
                     position[0]
                 };
-                if style(store) != STY_NONE {
+                if ERenderStyle::from_byte(style(store)) != Some(ERenderStyle::None) {
                     let color = color(store);
                     self.items.push(CanvasItem::Text { text, position: [x, position[1]], scale: font.scale, color, font: font.path() });
                 }
@@ -176,7 +176,7 @@ impl Canvas {
                 let at = [float_of(store, Prop::CurX), float_of(store, Prop::CurY)];
                 if let Some((at, size, uv)) = clip_tile(at, [f(1), f(2)], [f(3), f(4), f(5), f(6)], clip) {
                     let style = style(store);
-                    if style != STY_NONE {
+                    if ERenderStyle::from_byte(style) != Some(ERenderStyle::None) {
                         let position = [org[0] + at[0], org[1] + at[1]];
                         let color = color(store);
                         self.items.push(CanvasItem::Tile { material, position, size, uv, color, style });
@@ -193,7 +193,7 @@ impl Canvas {
                 let f = |n: usize| args.get(n).map_or(0.0, float);
                 let size = [f(1), f(2)];
                 let style = style(store);
-                if style != STY_NONE {
+                if ERenderStyle::from_byte(style) != Some(ERenderStyle::None) {
                     let position = [float_of(store, Prop::OrgX) + float_of(store, Prop::CurX), float_of(store, Prop::OrgY) + float_of(store, Prop::CurY)];
                     let color = color(store);
                     self.items.push(CanvasItem::Tile { material, position, size, uv: [f(3), f(4), f(5), f(6)], color, style });

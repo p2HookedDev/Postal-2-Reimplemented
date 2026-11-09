@@ -1,11 +1,8 @@
 use p2_math::Vector;
 use rustc_hash::FxHashSet;
+use crate::enums::EProbe;
 use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop, Kind};
 
-const PROBE_HEAR_NOISE: u32 = 42;
-const PROBE_SEE_PLAYER: u32 = 40;
-const PROBE_ENEMY_NOT_VISIBLE: u32 = 41;
-const PROBE_SEE_MONSTER: u32 = 44;
 const SIGHT_CHECK_SECONDS: f32 = 0.1;
 const SIGHT_IDLE_SECONDS: f32 = 0.2;
 const NOISE_SLOTS: [[Prop; 3]; 2] = [[Prop::noise1spot, Prop::noise1time, Prop::noise1loudness], [Prop::noise2spot, Prop::noise2time, Prop::noise2loudness]];
@@ -72,7 +69,7 @@ impl<L: LoaderRef> Vm<L> {
             if self.store.object_of(listener, Prop::Pawn) == Some(instigator) || (!everyone && self.store.get(listener, Prop::Tag) != tag) {
                 continue;
             }
-            if !self.is_probing(listener, PROBE_HEAR_NOISE)? {
+            if !self.is_probing(listener, EProbe::HearNoise as u32)? {
                 continue;
             }
             if self.can_hear(listener, location, loudness, actor) {
@@ -191,7 +188,7 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(());
         }
         if self.store.float_of(controller, Prop::SightCounter) < 0.0 {
-            let gain = if self.is_probing(controller, PROBE_ENEMY_NOT_VISIBLE)? {
+            let gain = if self.is_probing(controller, EProbe::EnemyNotVisible as u32)? {
                 self.check_enemy_visible(controller)?;
                 SIGHT_CHECK_SECONDS
             } else {
@@ -242,8 +239,8 @@ impl<L: LoaderRef> Vm<L> {
             let Some(other) = next else { break };
             let player = self.store.flag_of(controller, Prop::bIsPlayer);
             if other != controller && (player || self.store.flag_of(other, Prop::bIsPlayer)) && self.store.float_of(other, Prop::SightCounter) < 0.0 {
-                let (probe, event) = if player { (PROBE_SEE_PLAYER, "SeePlayer") } else { (PROBE_SEE_MONSTER, "SeeMonster") };
-                if self.is_probing(other, probe)?
+                let (probe, event) = if player { (EProbe::SeePlayer, "SeePlayer") } else { (EProbe::SeeMonster, "SeeMonster") };
+                if self.is_probing(other, probe as u32)?
                     && let Some(pawn) = self.store.object_of(controller, Prop::Pawn)
                     && self.see_pawn(other, pawn, SightCheck::Periodic)
                 {

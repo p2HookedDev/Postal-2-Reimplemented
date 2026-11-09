@@ -1,6 +1,7 @@
 use p2_math::{Rotator, Vector};
 use crate::interp::{float, int};
 use crate::natives::vec3;
+use crate::enums::{ECamOrientation, ESAStatus};
 
 use crate::{Encroachment, Error, Kind, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
 
@@ -10,12 +11,6 @@ const MIN_PCT: f32 = 1e-4;
 const MAX_PCT: f32 = 100.0;
 const SKIP_MARGIN: f32 = 0.01;
 const REVERSE_TURN: f32 = 65535.0;
-const SASTATUS_RUNNING: u8 = 1;
-const SASTATUS_ENDING: u8 = 2;
-const SASTATUS_EXPIRED: u8 = 3;
-const CAMORIENT_LOOK_AT_ACTOR: u8 = 1;
-const CAMORIENT_FACE_PATH: u8 = 2;
-const CAMORIENT_INTERPOLATE: u8 = 3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenOverlay {
@@ -89,7 +84,7 @@ impl<L: LoaderRef> Vm<L> {
     /// The interpolator is done at value 1, so an orientation without ease-in time applies at once.
     pub(crate) fn construct_scene_manager(&mut self, scene: ObjectId) {
         for orientation in ["CamOrientation", "PrevOrientation"] {
-            self.store.set_path(scene, &[orientation, "CamOrientation"], Value::Byte(CAMORIENT_INTERPOLATE));
+            self.store.set_path(scene, &[orientation, "CamOrientation"], Value::Byte(ECamOrientation::Interpolate as u8));
         }
         self.store.set_path(scene, &["RotInterpolator", "bDone"], Value::Int(1));
         self.store.set_path(scene, &["RotInterpolator", "_value"], Value::Float(1.0));
@@ -207,7 +202,7 @@ impl<L: LoaderRef> Vm<L> {
         self.event(scene, "SceneEnded", Vec::new())?;
         for action in self.objects_in(scene, Prop::Actions) {
             for sub_action in self.objects_in(action, Prop::SubActions) {
-                let looks = self.store.get_path(sub_action, &["CamOrientation", "CamOrientation"]) == Some(Value::Byte(CAMORIENT_LOOK_AT_ACTOR));
+                let looks = self.store.get_path(sub_action, &["CamOrientation", "CamOrientation"]) == Some(Value::Byte(ECamOrientation::LookAtActor as u8));
                 if self.store.is_a(sub_action, Kind::SubActionOrientation) && looks {
                     self.store.set_path(sub_action, &["CamOrientation", "LookAt"], Value::Object(None));
                 }
@@ -324,7 +319,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn change_orientation(&mut self, scene: ObjectId, mut orientation: Value) {
         let Value::Struct(members) = &mut orientation else { return };
-        let looks = members.first() == Some(&Value::Byte(CAMORIENT_LOOK_AT_ACTOR));
+        let looks = members.first() == Some(&Value::Byte(ECamOrientation::LookAtActor as u8));
         if looks
             && members.get(1) == Some(&Value::Object(None))
             && let Some(&Value::Name(tag)) = members.get(2)
@@ -401,10 +396,10 @@ impl<L: LoaderRef> Vm<L> {
 
     fn scene_rotation(&mut self, scene: ObjectId, location: Vector, current: Rotator, action: Option<ObjectId>, pct: f32) -> Rotator {
         let along = self.action_pct(scene, pct);
-        let mode = self.store.get_path(scene, &["CamOrientation", "CamOrientation"]).map_or(0, |v| int(&v) as u8);
+        let mode = self.store.get_path(scene, &["CamOrientation", "CamOrientation"]).and_then(|v| ECamOrientation::from_byte(int(&v) as u8));
         let mut target = <[i32; 3]>::from(current).map(|c| c as f32);
         match (mode, action) {
-            (CAMORIENT_FACE_PATH, Some(action)) => {
+            (Some(ECamOrientation::FacePath), Some(action)) => {
                 let position = along * LAST_SAMPLE as f32;
                 let index = position as i32;
                 let samples = self.vectors_in(action, Prop::SampleLocations);
@@ -412,12 +407,12 @@ impl<L: LoaderRef> Vm<L> {
                 let fraction = position - index as f32;
                 target = rotation(((p2 - p1) * fraction) + ((p1 - p0) * (1.0 - fraction)));
             }
-            (CAMORIENT_LOOK_AT_ACTOR, _) => {
+            (Some(ECamOrientation::LookAtActor), _) => {
                 if let Some(Value::Object(Some(look_at))) = self.store.get_path(scene, &["CamOrientation", "LookAt"]) {
                     target = rotation(self.store.vec3_of(look_at, Prop::Location) - location);
                 }
             }
-            (CAMORIENT_INTERPOLATE, Some(action)) => {
+            (Some(ECamOrientation::Interpolate), Some(action)) => {
                 let prev = self.prev_action(scene, action);
                 if let (Some(to), Some(from)) = (self.store.object_of(action, Prop::IntPoint), prev.and_then(|prev| self.store.object_of(prev, Prop::IntPoint))) {
                     let (to, from) = (self.store.rotator_of(to, Prop::Rotation), self.store.rotator_of(from, Prop::Rotation));
@@ -449,7 +444,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.set_vector(scene, Prop::CameraShake, Vector::ZERO);
         for sub_action in self.objects_in(scene, Prop::SubActions) {
-            if self.store.byte_of(sub_action, Prop::Status) != SASTATUS_EXPIRED {
+            if ESAStatus::from_byte(self.store.byte_of(sub_action, Prop::Status)) != Some(ESAStatus::Expired) {
                 self.update_sub_action(scene, sub_action, pct)?;
             }
         }
@@ -461,21 +456,21 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn sub_action_status(&mut self, sub_action: ObjectId, pct: f32) -> Option<bool> {
-        if self.store.byte_of(sub_action, Prop::Status) == SASTATUS_ENDING {
-            self.store.set(sub_action, Prop::Status, Value::Byte(SASTATUS_EXPIRED));
+        if ESAStatus::from_byte(self.store.byte_of(sub_action, Prop::Status)) == Some(ESAStatus::Ending) {
+            self.store.set(sub_action, Prop::Status, Value::Byte(ESAStatus::Expired as u8));
             return None;
         }
         let (start, end) = (self.store.float_of(sub_action, Prop::PctStarting), self.store.float_of(sub_action, Prop::PctEnding));
         if start < pct && pct <= end {
-            self.store.set(sub_action, Prop::Status, Value::Byte(SASTATUS_RUNNING));
+            self.store.set(sub_action, Prop::Status, Value::Byte(ESAStatus::Running as u8));
         } else if pct > end {
-            self.store.set(sub_action, Prop::Status, Value::Byte(SASTATUS_ENDING));
+            self.store.set(sub_action, Prop::Status, Value::Byte(ESAStatus::Ending as u8));
         }
-        Some(matches!(self.store.byte_of(sub_action, Prop::Status), SASTATUS_RUNNING | SASTATUS_ENDING))
+        Some(matches!(ESAStatus::from_byte(self.store.byte_of(sub_action, Prop::Status)), Some(ESAStatus::Running | ESAStatus::Ending)))
     }
 
     fn sub_action_progress(&self, sub_action: ObjectId, pct: f32) -> f32 {
-        if self.store.byte_of(sub_action, Prop::Status) == SASTATUS_ENDING {
+        if ESAStatus::from_byte(self.store.byte_of(sub_action, Prop::Status)) == Some(ESAStatus::Ending) {
             return 1.0;
         }
         progress((pct - self.store.float_of(sub_action, Prop::PctStarting)) / self.store.float_of(sub_action, Prop::PctDuration))
@@ -500,7 +495,7 @@ impl<L: LoaderRef> Vm<L> {
             if let Some(orientation) = self.store.get(sub_action, Prop::CamOrientation) {
                 self.change_orientation(scene, orientation);
             }
-            self.store.set(sub_action, Prop::Status, Value::Byte(SASTATUS_EXPIRED));
+            self.store.set(sub_action, Prop::Status, Value::Byte(ESAStatus::Expired as u8));
         } else if self.store.is_a(sub_action, Kind::SubActionFade) {
             if let Some(controller) = controller {
                 let channel = |vm: &Self, name: &str| vm.store.get_path(sub_action, &["FadeColor", name]).map_or(0.0, |v| int(&v) as f32) / 255.0;
@@ -538,7 +533,7 @@ impl<L: LoaderRef> Vm<L> {
                 let length = self.store.float_of(sub_action, Prop::PctDuration);
                 let alpha = if length <= 0.0 { end } else { (pct - self.store.float_of(sub_action, Prop::PctStarting)) / length * (end - start) + start };
                 self.store.set(effect, Prop::Alpha, Value::Float(alpha));
-                let ending = self.store.byte_of(sub_action, Prop::Status) == SASTATUS_ENDING;
+                let ending = ESAStatus::from_byte(self.store.byte_of(sub_action, Prop::Status)) == Some(ESAStatus::Ending);
                 let keep = alpha > 0.0 && !(ending && self.store.flag_of(sub_action, Prop::DisableAfterDuration));
                 self.show_camera_effect(controller, effect, keep)?;
             }
@@ -583,7 +578,7 @@ impl<L: LoaderRef> Vm<L> {
             alpha
         };
         self.store.set(effect, Prop::Alpha, Value::Float(alpha));
-        let ending = self.store.byte_of(sub_action, Prop::Status) == SASTATUS_ENDING;
+        let ending = ESAStatus::from_byte(self.store.byte_of(sub_action, Prop::Status)) == Some(ESAStatus::Ending);
         self.show_camera_effect(controller, effect, alpha > 0.0 && !ending)
     }
 

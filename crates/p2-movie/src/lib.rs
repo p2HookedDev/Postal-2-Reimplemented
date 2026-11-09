@@ -12,9 +12,13 @@ const ID_SOUND_STEREO: u16 = 0x1021;
 /// The widest and tallest frame accepted: a bad info chunk must not abort on allocating its buffers.
 const MAX_FRAME_SIDE: u16 = 4096;
 
-const CODE_SKIP: u16 = 0;
-const CODE_MOTION: u16 = 1;
-const CODE_VECTOR: u16 = 2;
+#[derive(Clone, Copy)]
+enum Code {
+    Skip,
+    Motion,
+    Vector,
+    Split,
+}
 
 /// Sample rate of `RoQ` sound chunks; the file does not store it (unverified: the rate id's tools wrote).
 pub const SAMPLE_RATE: u32 = 22_050;
@@ -134,13 +138,18 @@ struct Codes {
 }
 
 impl Codes {
-    fn next(&mut self, r: &mut Reader) -> Result<u16, RoqError> {
+    fn next(&mut self, r: &mut Reader) -> Result<Code, RoqError> {
         if self.left == 0 {
             self.word = r.u16()?;
             self.left = 8;
         }
         self.left -= 1;
-        Ok((self.word >> (self.left * 2)) & 3)
+        Ok(match (self.word >> (self.left * 2)) & 3 {
+            0 => Code::Skip,
+            1 => Code::Motion,
+            2 => Code::Vector,
+            _ => Code::Split,
+        })
     }
 }
 
@@ -255,13 +264,13 @@ impl Video {
 
     fn block8(&mut self, r: &mut Reader, codes: &mut Codes, (x, y): (usize, usize), mean: Mean) -> Result<(), RoqError> {
         match codes.next(r)? {
-            CODE_SKIP => {}
-            CODE_MOTION => self.motion(x, y, 8, motion_vector(r.u8()?, mean)),
-            CODE_VECTOR => {
+            Code::Skip => {}
+            Code::Motion => self.motion(x, y, 8, motion_vector(r.u8()?, mean)),
+            Code::Vector => {
                 let cell = self.cells4[usize::from(r.u8()?)];
                 self.put(x, y, &cell, 4, 2);
             }
-            _ => {
+            Code::Split => {
                 for (qx, qy) in quadrants(4) {
                     self.block4(r, codes, (x + qx, y + qy), mean)?;
                 }
@@ -272,13 +281,13 @@ impl Video {
 
     fn block4(&mut self, r: &mut Reader, codes: &mut Codes, (x, y): (usize, usize), mean: Mean) -> Result<(), RoqError> {
         match codes.next(r)? {
-            CODE_SKIP => {}
-            CODE_MOTION => self.motion(x, y, 4, motion_vector(r.u8()?, mean)),
-            CODE_VECTOR => {
+            Code::Skip => {}
+            Code::Motion => self.motion(x, y, 4, motion_vector(r.u8()?, mean)),
+            Code::Vector => {
                 let cell = self.cells4[usize::from(r.u8()?)];
                 self.put(x, y, &cell, 4, 1);
             }
-            _ => {
+            Code::Split => {
                 for (qx, qy) in quadrants(2) {
                     let cell = self.cells2[usize::from(r.u8()?)];
                     self.put(x + qx, y + qy, &cell, 2, 1);

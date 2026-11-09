@@ -1,5 +1,7 @@
 //! Reads script byte properties as enums; a byte that names no value reads as `None` and stays a byte.
 
+pub(crate) use p2_assets::EDrawType;
+
 use crate::{LoaderRef, ObjectId, Prop, Vm};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,20 +49,35 @@ impl EPhysics {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum EDrawType {
-    Sprite = 1,
-    Mesh = 2,
-    StaticMesh = 8,
-    Particle = 10,
+pub enum ERenderStyle {
+    None = 0,
+    Translucent = 3,
 }
 
-impl EDrawType {
+impl ERenderStyle {
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            0 => Self::None,
+            3 => Self::Translucent,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[repr(u8)]
+pub(crate) enum ENetRole {
+    SimulatedProxy = 2,
+    AutonomousProxy = 3,
+    Authority = 4,
+}
+
+impl ENetRole {
     pub(crate) fn from_byte(byte: u8) -> Option<Self> {
         Some(match byte {
-            1 => Self::Sprite,
-            2 => Self::Mesh,
-            8 => Self::StaticMesh,
-            10 => Self::Particle,
+            2 => Self::SimulatedProxy,
+            3 => Self::AutonomousProxy,
+            4 => Self::Authority,
             _ => return None,
         })
     }
@@ -68,9 +85,67 @@ impl EDrawType {
 
 impl<L: LoaderRef> Vm<L> {
 
-    pub(crate) fn draw_type_of(&self, actor: ObjectId) -> Option<EDrawType> {
+    pub fn draw_type_of(&self, actor: ObjectId) -> Option<EDrawType> {
         EDrawType::from_byte(self.store.byte_of(actor, Prop::DrawType))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum EProbe {
+    AnimEnd = 24,
+    Tick = 36,
+    SeePlayer = 40,
+    EnemyNotVisible = 41,
+    HearNoise = 42,
+    UpdateEyeHeight = 43,
+    SeeMonster = 44,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum ESAStatus {
+    Running = 1,
+    Ending = 2,
+    Expired = 3,
+}
+
+impl ESAStatus {
+    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            1 => Self::Running,
+            2 => Self::Ending,
+            3 => Self::Expired,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum ECamOrientation {
+    LookAtActor = 1,
+    FacePath = 2,
+    Interpolate = 3,
+}
+
+impl ECamOrientation {
+    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            1 => Self::LookAtActor,
+            2 => Self::FacePath,
+            3 => Self::Interpolate,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum EInputAction {
+    Press = 1,
+    Release = 3,
+    Axis = 4,
 }
 
 #[cfg(test)]
@@ -83,7 +158,7 @@ mod tests {
             assert_eq!(EPhysics::from_byte(byte).map(|physics| physics as u8), Some(byte));
         }
         assert_eq!(EPhysics::from_byte(15), None);
-        for byte in [1, 2, 8, 10] {
+        for byte in [1, 2, 8, 10, 11] {
             assert_eq!(EDrawType::from_byte(byte).map(|draw_type| draw_type as u8), Some(byte));
         }
         assert_eq!(EDrawType::from_byte(0), None);

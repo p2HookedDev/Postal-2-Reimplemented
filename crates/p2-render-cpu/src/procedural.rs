@@ -31,29 +31,63 @@ pub struct WaterSim {
     rng: u32,
 }
 
-/// Drop kinds (the names unverified against the script, the kinds by their behaviour in `draw_drop`).
-const DROP_FIXED_DEPTH: u8 = 0;
-const DROP_PHASE_SPOT: u8 = 1;
-const DROP_SHALLOW_SPOT: u8 = 2;
-const DROP_HALF_AMPL: u8 = 3;
-const DROP_RANDOM_MOVER: u8 = 4;
-const DROP_FIXED_RANDOM_SPOT: u8 = 5;
-const DROP_WHIRLY_THING: u8 = 6;
-const DROP_BIG_WHIRLY: u8 = 7;
-const DROP_HORIZONTAL_LINE: u8 = 8;
-const DROP_VERTICAL_LINE: u8 = 9;
-const DROP_DIAGONAL_LINE1: u8 = 0xa;
-const DROP_DIAGONAL_LINE2: u8 = 0xb;
-const DROP_HORIZONTAL_OSC: u8 = 0xc;
-const DROP_VERTICAL_OSC: u8 = 0xd;
-const DROP_DIAGONAL_OSC1: u8 = 0xe;
-const DROP_DIAGONAL_OSC2: u8 = 0xf;
-const DROP_RAIN_DROPS: u8 = 0x10;
-const DROP_AREA_CLAMP: u8 = 0x11;
-const DROP_LEAKY_TAP: u8 = 0x12;
-const DROP_DRIPPY_TAP: u8 = 0x13;
-const DROP_WHIRLY_THING_BACK: u8 = 0x40;
-const DROP_BIG_WHIRLY_BACK: u8 = 0x41;
+/// The water texture's drop types; 0x40 and 0x41 are whirlies with a negative speed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum DropType {
+    FixedDepth = 0,
+    PhaseSpot = 1,
+    ShallowSpot = 2,
+    HalfAmpl = 3,
+    RandomMover = 4,
+    FixedRandomSpot = 5,
+    WhirlyThing = 6,
+    BigWhirly = 7,
+    HorizontalLine = 8,
+    VerticalLine = 9,
+    DiagonalLine1 = 0xa,
+    DiagonalLine2 = 0xb,
+    HorizontalOsc = 0xc,
+    VerticalOsc = 0xd,
+    DiagonalOsc1 = 0xe,
+    DiagonalOsc2 = 0xf,
+    RainDrops = 0x10,
+    AreaClamp = 0x11,
+    LeakyTap = 0x12,
+    DrippyTap = 0x13,
+    WhirlyThingBack = 0x40,
+    BigWhirlyBack = 0x41,
+}
+
+impl DropType {
+    fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            0 => Self::FixedDepth,
+            1 => Self::PhaseSpot,
+            2 => Self::ShallowSpot,
+            3 => Self::HalfAmpl,
+            4 => Self::RandomMover,
+            5 => Self::FixedRandomSpot,
+            6 => Self::WhirlyThing,
+            7 => Self::BigWhirly,
+            8 => Self::HorizontalLine,
+            9 => Self::VerticalLine,
+            0xa => Self::DiagonalLine1,
+            0xb => Self::DiagonalLine2,
+            0xc => Self::HorizontalOsc,
+            0xd => Self::VerticalOsc,
+            0xe => Self::DiagonalOsc1,
+            0xf => Self::DiagonalOsc2,
+            0x10 => Self::RainDrops,
+            0x11 => Self::AreaClamp,
+            0x12 => Self::LeakyTap,
+            0x13 => Self::DrippyTap,
+            0x40 => Self::WhirlyThingBack,
+            0x41 => Self::BigWhirlyBack,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Step {
@@ -183,72 +217,75 @@ impl WaterSim {
     fn draw_drop(&mut self, drop: &mut WaterDrop) {
         let (x, y) = (usize::from(drop.x), usize::from(drop.y));
         let (depth, count) = (drop.depth, usize::from(drop.d >> 1) + 1);
-        match drop.kind {
-            DROP_FIXED_DEPTH => self.set(x, y, drop.d, drop.d),
-            DROP_PHASE_SPOT => {
+        let Some(kind) = DropType::from_byte(drop.kind) else {
+            return;
+        };
+        match kind {
+            DropType::FixedDepth => self.set(x, y, drop.d, drop.d),
+            DropType::PhaseSpot => {
                 drop.depth = drop.depth.wrapping_add(drop.d);
                 let value = self.sine[usize::from(drop.depth)];
                 self.set(x, y, value, value);
             }
-            DROP_SHALLOW_SPOT => {
+            DropType::ShallowSpot => {
                 drop.depth = drop.depth.wrapping_add(drop.d);
                 let value = (self.sine[usize::from(drop.depth)] >> 1) + 0x40;
                 self.set(x, y, value, value);
             }
-            DROP_HALF_AMPL => {
+            DropType::HalfAmpl => {
                 drop.depth = drop.depth.wrapping_add(drop.d);
                 let value = self.sine[usize::from(drop.depth)].max(0x80);
                 self.set(x, y, value, value);
             }
-            DROP_RANDOM_MOVER => {
+            DropType::RandomMover => {
                 let step = |sim: &mut Self| i32::from(sim.rand() & 3) - i32::from(sim.rand() & 3);
                 let (dx, dy) = (step(self), step(self));
                 drop.x = (i32::from(drop.x) + dx) as u8 & (self.w - 1) as u8;
                 drop.y = (i32::from(drop.y) + dy) as u8 & (self.h - 1) as u8;
                 self.set(x, y, 0xb9, 0x47);
             }
-            DROP_FIXED_RANDOM_SPOT => {
+            DropType::FixedRandomSpot => {
                 let (a, b) = (self.rand(), self.rand());
                 self.set(x, y, a, b);
             }
-            DROP_WHIRLY_THING | DROP_BIG_WHIRLY | DROP_WHIRLY_THING_BACK | DROP_BIG_WHIRLY_BACK => {
+            DropType::WhirlyThing | DropType::BigWhirly | DropType::WhirlyThingBack | DropType::BigWhirlyBack => {
                 let (a, b, c, d) = (i32::from(drop.a), i32::from(drop.b), i32::from(drop.c), i32::from(drop.d));
-                let sum = match drop.kind {
-                    DROP_WHIRLY_THING => (b + d) * 256 + c + a,
-                    DROP_BIG_WHIRLY => a + b * 256 + c + d * 256,
+                let sum = match kind {
+                    DropType::WhirlyThing => (b + d) * 256 + c + a,
+                    DropType::BigWhirly => a + b * 256 + c + d * 256,
                     _ => b * 256 - c - d * 256 + a,
                 } & 0xffff;
                 drop.a = sum as u8;
                 drop.b = (sum >> 8) as u8;
-                let shift = if matches!(drop.kind, DROP_WHIRLY_THING | DROP_WHIRLY_THING_BACK) { 4 } else { 3 };
+                let shift = if matches!(kind, DropType::WhirlyThing | DropType::WhirlyThingBack) { 4 } else { 3 };
                 let dx = usize::from(self.sine[usize::from(drop.b)] >> shift);
                 let dy = usize::from(self.sine[usize::from(drop.b.wrapping_add(0x40))] >> shift);
                 self.set(x + dx, y + dy, depth, depth);
             }
-            DROP_HORIZONTAL_LINE => (0..count).for_each(|i| self.set(x + i, y, depth, depth)),
-            DROP_VERTICAL_LINE => (0..count).for_each(|i| self.set(x, y + i, depth, depth)),
-            DROP_DIAGONAL_LINE1 => (0..count).for_each(|i| self.set(x.wrapping_sub(i), y + i, depth, depth)),
-            DROP_DIAGONAL_LINE2 => (0..count).for_each(|i| self.set(x + i, y + i, depth, depth)),
-            DROP_HORIZONTAL_OSC..=DROP_DIAGONAL_OSC2 => {
+            DropType::HorizontalLine => (0..count).for_each(|i| self.set(x + i, y, depth, depth)),
+            DropType::VerticalLine => (0..count).for_each(|i| self.set(x, y + i, depth, depth)),
+            DropType::DiagonalLine1 => (0..count).for_each(|i| self.set(x.wrapping_sub(i), y + i, depth, depth)),
+            DropType::DiagonalLine2 => (0..count).for_each(|i| self.set(x + i, y + i, depth, depth)),
+            DropType::HorizontalOsc | DropType::VerticalOsc | DropType::DiagonalOsc1 | DropType::DiagonalOsc2 => {
                 drop.depth = drop.depth.wrapping_add(drop.c);
                 let value = self.sine[usize::from(drop.depth)];
                 for i in 0..count {
-                    match drop.kind {
-                        DROP_HORIZONTAL_OSC => self.set(x + i, y, value, value),
-                        DROP_VERTICAL_OSC => self.set(x, y + i, value, value),
-                        DROP_DIAGONAL_OSC1 => self.set(x.wrapping_sub(i), y + i, value, value),
+                    match kind {
+                        DropType::HorizontalOsc => self.set(x + i, y, value, value),
+                        DropType::VerticalOsc => self.set(x, y + i, value, value),
+                        DropType::DiagonalOsc1 => self.set(x.wrapping_sub(i), y + i, value, value),
                         _ => self.set(x + i, y + i, value, value),
                     }
                 }
             }
-            DROP_RAIN_DROPS => {
+            DropType::RainDrops => {
                 if self.rand() & 0xf == 0 {
                     let (ry, rx) = (usize::from(self.rand()), usize::from(self.rand()));
                     let range = usize::from(drop.d);
                     self.set(x + ((rx * range) >> 8), y + ((ry * range) >> 8), depth, !depth);
                 }
             }
-            DROP_AREA_CLAMP => {
+            DropType::AreaClamp => {
                 let size = usize::from(drop.d >> 1);
                 for j in 0..size {
                     for i in 0..size {
@@ -256,16 +293,15 @@ impl WaterSim {
                     }
                 }
             }
-            DROP_LEAKY_TAP | DROP_DRIPPY_TAP => {
+            DropType::LeakyTap | DropType::DrippyTap => {
                 drop.a = drop.a.wrapping_add(drop.d);
                 if drop.a <= drop.d {
-                    if drop.kind == DROP_DRIPPY_TAP {
+                    if kind == DropType::DrippyTap {
                         drop.a = self.rand();
                     }
                     self.set(x, y, depth, !depth);
                 }
             }
-            _ => {}
         }
     }
 }

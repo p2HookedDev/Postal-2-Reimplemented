@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use p2_assets::EDrawType;
 use p2_math::{Rotator, Vector};
 use p2_render_cpu::{MeshLight, MeshPlacement, hsv_color};
 use rustc_hash::FxHashMap;
@@ -8,13 +9,8 @@ use crate::render::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
 use p2_particles::{EmitterKind, EmitterProperties, EmitterSettings, PropertyValue};
 use p2_vm::{Kind, LoaderRef, ObjectId, Prop, PropertyName, Value, Vm};
 
-const DT_STATIC_MESH: u8 = 8;
-const DT_MESH: u8 = 2;
-const DT_ANTI_PORTAL: u8 = 11;
-const DT_SPRITE: u8 = 1;
-
 pub fn antiportal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<(String, MeshPlacement)> {
-    if vm.store.get(actor, Prop::DrawType) != Some(Value::Byte(DT_ANTI_PORTAL)) || vm.store.get(actor, Prop::bHidden) == Some(Value::Bool(true)) || vm.store.is_deleted(actor) {
+    if vm.draw_type_of(actor) != Some(EDrawType::AntiPortal) || vm.store.get(actor, Prop::bHidden) == Some(Value::Bool(true)) || vm.store.is_deleted(actor) {
         return None;
     }
     let Some(Value::Object(Some(volume))) = vm.store.get(actor, Prop::AntiPortal) else { return None };
@@ -111,7 +107,7 @@ pub fn look_key<T: std::hash::Hash>(objects: impl IntoIterator<Item = Option<T>>
 
 pub fn skeletal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SkeletalActor> {
     // Hidden ones too: scripts may show them later (the followers' visibility follows `bHidden`).
-    if vm.store.get(actor, Prop::DrawType) != Some(Value::Byte(DT_MESH)) || vm.store.is_deleted(actor) {
+    if vm.draw_type_of(actor) != Some(EDrawType::Mesh) || vm.store.is_deleted(actor) {
         return None;
     }
     let mesh = object_path(vm, vm.store.get(actor, Prop::Mesh).as_ref())?;
@@ -186,7 +182,7 @@ pub struct MeshActor {
 
 pub fn mesh_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshActor> {
     let flag = |property: Prop| vm.store.get(actor, property) == Some(Value::Bool(true));
-    if vm.store.get(actor, Prop::DrawType) != Some(Value::Byte(DT_STATIC_MESH)) || vm.store.is_deleted(actor) || (flag(Prop::bHidden) && flag(Prop::bStatic)) {
+    if vm.draw_type_of(actor) != Some(EDrawType::StaticMesh) || vm.store.is_deleted(actor) || (flag(Prop::bHidden) && flag(Prop::bStatic)) {
         return None;
     }
     let static_mesh = object_path(vm, vm.store.get(actor, Prop::StaticMesh).as_ref())?;
@@ -246,7 +242,7 @@ pub struct SpriteActor {
 /// editor-only sprites retail hides in game through `bHidden`) are not.
 pub fn sprite_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SpriteActor> {
     let flag = |property: Prop| vm.store.get(actor, property) == Some(Value::Bool(true));
-    if vm.store.get(actor, Prop::DrawType) != Some(Value::Byte(DT_SPRITE)) || vm.store.is_deleted(actor) || (flag(Prop::bHidden) && flag(Prop::bStatic)) {
+    if vm.draw_type_of(actor) != Some(EDrawType::Sprite) || vm.store.is_deleted(actor) || (flag(Prop::bHidden) && flag(Prop::bStatic)) {
         return None;
     }
     let Some(Value::Object(Some(texture))) = vm.store.get(actor, Prop::Texture) else { return None };

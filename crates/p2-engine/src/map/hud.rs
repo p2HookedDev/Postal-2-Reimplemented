@@ -1,4 +1,5 @@
 use super::*;
+use p2_vm::ERenderStyle;
 
 pub(super) struct HudFont {
     font: Font,
@@ -138,8 +139,6 @@ pub(super) fn paint_canvas(ctx: &egui::Context, rect: egui::Rect, items: &[Canva
     }
 }
 
-pub(super) const STY_TRANSLUCENT: u8 = 3;
-
 pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], session: &mut Session, contexts: &mut EguiContexts, targets: &mut SceneTargets) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, "hud".into())).with_clip_rect(rect);
     let color = |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
@@ -184,7 +183,7 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
                     egui::pos2(uv[0] / texels.x, uv[1] / texels.y),
                     egui::vec2(uv[2] / texels.x, uv[3] / texels.y),
                 );
-                let tint = if *style == STY_TRANSLUCENT { egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], 0) } else { color(*c) };
+                let tint = if ERenderStyle::from_byte(*style) == Some(ERenderStyle::Translucent) { egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], 0) } else { color(*c) };
                 painter.image(id, area, uv, tint);
             }
         }

@@ -1,5 +1,5 @@
 use p2_math::Vector;
-use crate::enums::EPhysics;
+use crate::enums::{EPhysics, EProbe};
 use crate::volumes::{OldZone, ZoneEvents};
 use crate::{ClassId, Error, HostCommand, InteractionOrder, Kind, ObjectId, LoaderRef, Prop, Value, Vm};
 
@@ -14,7 +14,6 @@ fn add_time(profile: &mut std::collections::HashMap<String, std::time::Duration>
 
 const SPAWN_EVENTS: [&str; 3] = ["Spawned", "PreBeginPlay", "BeginPlay"];
 const BEGUN_EVENTS: [&str; 3] = ["PostBeginPlay", "SetInitialState", "PostNetBeginPlay"];
-const PROBE_TICK: u32 = 36;
 const MIN_TICK: f32 = 0.0005;
 const MAX_TICK: f32 = 0.4;
 
@@ -761,7 +760,7 @@ impl<L: LoaderRef> Vm<L> {
         {
             return Ok(false);
         }
-        Ok(!self.is_probing(actor, PROBE_TICK)?)
+        Ok(!self.is_probing(actor, EProbe::Tick as u32)?)
     }
 
     /// Runs before the stock tick. Pawns owned by a player's controller, or with `bIgnoreTimeDilation`,
@@ -1048,7 +1047,7 @@ mod tests {
 
     #[test]
     fn tick_probe_bit_is_the_tick_name_s() {
-        assert_eq!(crate::states::probe_bit("Tick"), Some(super::PROBE_TICK));
+        assert_eq!(crate::states::probe_bit("Tick"), Some(super::EProbe::Tick as u32));
     }
 
     #[test]

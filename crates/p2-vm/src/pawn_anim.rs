@@ -1,6 +1,6 @@
 use p2_math::{Rotator, Vector};
 
-use crate::enums::EPhysics;
+use crate::enums::{ENetRole, EPhysics, EProbe};
 use crate::interp::int;
 use crate::anim::Playback;
 use crate::{Encroachment, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
@@ -12,9 +12,6 @@ const LEFT_TURN_CHANNEL: i32 = 3;
 const FIRST_MOVEMENT_CHANNEL: i32 = 4;
 const END_CHANNEL: i32 = FIRST_MOVEMENT_CHANNEL + 8;
 const NM_DEDICATED_SERVER: u8 = 1;
-const ROLE_SIMULATED_PROXY: u8 = 2;
-const ROLE_AUTHORITY: u8 = 4;
-const PROBE_UPDATE_EYE_HEIGHT: u32 = 43;
 const MIN_TURN_RATE: f32 = 1000.0;
 const TURN_ANIM_YAW_RATE: f32 = 16384.0;
 const MIN_BIASED_STRAFE: f32 = 0.1;
@@ -88,11 +85,11 @@ impl<L: LoaderRef> Vm<L> {
                 self.place_far_moved(weapon, location, Encroachment::Ignored)?;
             }
         }
-        if self.store.flag_of(pawn, Prop::bUpdateEyeheight) && self.is_probing(pawn, PROBE_UPDATE_EYE_HEIGHT)? {
+        if self.store.flag_of(pawn, Prop::bUpdateEyeheight) && self.is_probing(pawn, EProbe::UpdateEyeHeight as u32)? {
             self.event(pawn, "UpdateEyeHeight", [Value::Float(delta)])?;
         }
         let breath = self.store.float_of(pawn, Prop::BreathTime);
-        if self.store.byte_of(pawn, Prop::Role) == ROLE_AUTHORITY && breath > 0.0 {
+        if ENetRole::from_byte(self.store.byte_of(pawn, Prop::Role)) == Some(ENetRole::Authority) && breath > 0.0 {
             let left = breath - delta;
             if left < 0.001 {
                 self.store.set(pawn, Prop::BreathTime, Value::Float(0.0));
@@ -294,7 +291,7 @@ impl<L: LoaderRef> Vm<L> {
         } else if old_yaw - yaw > 32768.0 {
             old_yaw -= 65536.0;
         }
-        if self.store.physics_of(pawn) == Some(EPhysics::Walking) && self.store.byte_of(pawn, Prop::Role) > ROLE_SIMULATED_PROXY {
+        if self.store.physics_of(pawn) == Some(EPhysics::Walking) && ENetRole::from_byte(self.store.byte_of(pawn, Prop::Role)) > Some(ENetRole::SimulatedProxy) {
             let turn_rate = (yaw - old_yaw) / delta;
             for (channel, turning, anim) in [
                 (RIGHT_TURN_CHANNEL, turn_rate > MIN_TURN_RATE, Prop::TurnRightAnim),

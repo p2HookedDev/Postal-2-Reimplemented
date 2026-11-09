@@ -1,13 +1,12 @@
 use p2_math::Vector;
 use crate::native_id::Native;
 use crate::Prop;
+use crate::enums::ENetRole;
 use crate::interp::{float, truthy};
 use crate::natives::vec3;
 
 use crate::world::trace;
 use crate::{Error, Kind, LoaderRef, NameId, ObjectId, Value, Vm};
-
-const ROLE_AUTHORITY: u8 = 4;
 
 const PICK_TARGET_RANGE_SQUARED: f32 = 16_000_000.0;
 const MAX_CONTROLLERS: u32 = 10_000;
@@ -95,7 +94,7 @@ impl<L: LoaderRef> Vm<L> {
             if self.store.is_deleted(victim)
                 || !of_target_class(self, victim)
                 || victim == this
-                || self.store.byte_of(victim, Prop::Role) != ROLE_AUTHORITY
+                || ENetRole::from_byte(self.store.byte_of(victim, Prop::Role)) != Some(ENetRole::Authority)
                 || self.store.flag_of(victim, Prop::bHidden)
                 || (options.ignore_instigator && Some(victim) == instigator)
                 || Some(victim) == options.ignore

@@ -51,6 +51,7 @@ use p2_package::{Loader, Package, PackageId, Reader};
 use rustc_hash::{FxHashMap, FxHashSet};
 pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidPling, MovieState};
 pub use canvas::CanvasItem;
+pub use enums::ERenderStyle;
 pub use input::PlayerView;
 pub use config::{RENDER_DEVICE, VIEWPORT_MANAGER, WindowRequest, ini_truthy};
 use p2_script::{Layouts, Objects, ScriptObject, Source, StructLayout, Type, read_export, read_properties};

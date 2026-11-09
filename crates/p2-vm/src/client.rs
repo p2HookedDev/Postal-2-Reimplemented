@@ -3,6 +3,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::Prop;
+use crate::enums::EInputAction;
 use crate::{Error, LoaderRef, ObjectId, Value, Vm};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,10 +27,6 @@ pub(crate) struct Client {
 }
 
 const CINEMATICS_RATIO: f32 = 1.66;
-
-pub(crate) const IST_PRESS: u8 = 1;
-pub(crate) const IST_RELEASE: u8 = 3;
-pub(crate) const IST_AXIS: u8 = 4;
 
 impl<L: LoaderRef> Vm<L> {
     /// Call after the first map loaded and before [`Vm::login`], which makes the viewport the player's.
@@ -96,12 +93,12 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    pub(crate) fn interactions_key_event(&mut self, key: &str, action: u8, delta: f32) -> Result<bool, Error> {
+    pub(crate) fn interactions_key_event(&mut self, key: &str, action: EInputAction, delta: f32) -> Result<bool, Error> {
         let (Some(master), Some(key)) = (self.host.client.master, self.input_key(key)) else { return Ok(false) };
         let Some(function) = self.find_object_function(master, "Process_KeyEvent")? else { return Ok(false) };
         let Some(class) = self.store.object(master).class else { return Ok(false) };
         for list in self.interaction_lists(master).into_iter().flatten() {
-            let args = vec![list, Value::Byte(key), Value::Byte(action), Value::Float(delta)];
+            let args = vec![list, Value::Byte(key), Value::Byte(action as u8), Value::Float(delta)];
             if self.call(&function, Some(master), class, args)?.as_ref().is_some_and(crate::interp::truthy) {
                 return Ok(true);
             }
