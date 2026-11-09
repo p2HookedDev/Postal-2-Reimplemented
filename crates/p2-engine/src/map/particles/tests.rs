@@ -273,7 +273,7 @@ fn sprite_records_keep_their_place_on_a_moved_grid() {
     let grid_at = Vec3::new(40.0, 3.0, -9.0);
     let record = sprite_record(&sprite, grid_at);
     let centre = Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));
-    assert_eq!(centre + grid_at, bevy_vector(location));
+    assert_eq!(centre + grid_at, Vec3::from(to_bevy(location)));
 }
 
 #[test]

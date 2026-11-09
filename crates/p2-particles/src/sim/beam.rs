@@ -180,7 +180,7 @@ impl Emitter {
             let relative = e.props.coordinate_system == CoordinateSystem::Relative;
             let axes = owner.rotation.axes();
             let world = |at: Vector| if relative { rotate_by(&axes, at) + owner.location } else { at };
-            for (slot, p) in e.particles[..e.active_particles].iter().enumerate().filter(|(_, p)| p.active) {
+            for (slot, p) in e.live() {
                 if count == out.len() {
                     out.push(Beam { points: Vec::new(), size: 0.0, color: [0; 4] });
                 }

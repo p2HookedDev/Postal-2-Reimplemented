@@ -1,5 +1,4 @@
 pub use crate::components::FollowBone;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -135,8 +134,8 @@ pub struct AnimatedMesh {
     parents: Arc<[usize]>,
     bone_names: Arc<[String]>,
     aliases: Arc<[(String, usize, Mat4)]>,
-    vm_bone_maps: HashMap<Arc<str>, Arc<[Option<usize>]>>,
-    subtrees: HashMap<Arc<str>, Arc<[bool]>>,
+    vm_bone_maps: FxHashMap<Arc<str>, Arc<[Option<usize>]>>,
+    subtrees: FxHashMap<Arc<str>, Arc<[bool]>>,
     last_pose: Option<u64>,
     bone_indices: FxHashMap<Arc<str>, Option<usize>>,
     bone_scales: Vec<f32>,
@@ -171,8 +170,8 @@ impl AnimatedMesh {
             parents,
             bone_names,
             aliases: Arc::new([]),
-            vm_bone_maps: HashMap::new(),
-            subtrees: HashMap::new(),
+            vm_bone_maps: FxHashMap::default(),
+            subtrees: FxHashMap::default(),
             last_pose: None,
             bone_indices: FxHashMap::default(),
             bone_scales: Vec::new(),

@@ -498,7 +498,7 @@ pub fn log_frame_times(mut times: ResMut<FrameTimes>, time: Res<Time<Real>>, mut
     );
     if times.vm_profile == VmProfile::TickByClass {
         let mut vm: Vec<_> = times.vm_parts.drain().collect();
-        vm.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
+        vm.sort_by(|(a, a_total), (b, b_total)| b_total.cmp(a_total).then_with(|| a.cmp(b)));
         bevy::log::info!("vm tick by class and phase (ms per frame): {}", list(&mut vm.iter().take(10).map(|(n, t)| (n.as_str(), *t)), frames));
     }
     if let Some(mut slowest) = times.take_slowest() {

@@ -47,8 +47,8 @@ impl<L: LoaderRef> Vm<L> {
                 if other == mover {
                     continue;
                 }
-                let shape = self.actor_shape(other);
-                let (min, max) = if let Some(shape) = &shape {
+                let shape = self.fill_shape(other).and_then(|placement| self.placed_shape(other, &placement));
+                let (min, max) = if let Some(shape) = shape {
                     let (min, max) = shape.boxes.bounds();
                     let grow = Vector::new(radius + 1.0, radius + 1.0, height + 1.0);
                     (min - grow, max + grow)

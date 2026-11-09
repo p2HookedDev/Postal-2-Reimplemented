@@ -52,7 +52,7 @@ impl<L: LoaderRef> Vm<L> {
             if !world_geometry || self.store.is_deleted(actor) || (self.store.is_a(actor, Kind::BlockingVolume) && self.store.flag_of(actor, Prop::bClassBlocker)) {
                 continue;
             }
-            let Some(shape) = self.actor_shape(actor) else { continue };
+            let Some(shape) = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement)).cloned() else { continue };
             if self.store.flag_of(actor, Prop::bBlockNonZeroExtentTraces) {
                 self.world.boxes.push(WorldShape { shape: shape.boxes, model: shape.model, actor });
             }

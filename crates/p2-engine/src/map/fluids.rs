@@ -79,7 +79,7 @@ pub(super) fn fill_beams(mesh: &mut Mesh, beams: &[Beam], [u_scale, v_scale]: [f
         let color = display(beam.color);
         let at = |i: usize| Vec3::from_array(beam.points[i].location.into());
         for sheet in 0..sheets {
-            let turn = (0x8000 / sheets * sheet) as f32 * std::f32::consts::TAU / 65536.0;
+            let turn = p2_math::radians((0x8000 / sheets * sheet) as i32);
             let base = quads.positions.len() as u32;
             let mut previous = 2.0 * at(0) - at(1);
             for (i, point) in beam.points.iter().enumerate() {
@@ -116,7 +116,7 @@ pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &mut FluidSurface) {
     } else {
         (
             vertices.iter().map(|v| to_bevy(v.position)).collect(),
-            vertices.iter().map(|v| bevy_vector(v.normal).normalize_or_zero().to_array()).collect(),
+            vertices.iter().map(|v| Vec3::from(to_bevy(v.normal)).normalize_or_zero().to_array()).collect(),
             vec![[1.0; 4]; vertices.len()],
             vertices.iter().map(|v| v.uv).collect(),
         )
@@ -142,7 +142,7 @@ fn refill_fluid(mesh: &mut Mesh, surface: &mut FluidSurface, vertices: &mut Vec<
     }
     if let Some(Float32x3(normals)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
         for (normal, v) in normals.iter_mut().zip(vertices.iter()) {
-            *normal = bevy_vector(v.normal).normalize_or_zero().to_array();
+            *normal = Vec3::from(to_bevy(v.normal)).normalize_or_zero().to_array();
         }
     }
 }
@@ -319,7 +319,7 @@ impl Session {
                     t.commands.entity(fluid.entity).try_insert(if shown { Visibility::Inherited } else { Visibility::Hidden });
                 }
             }
-            let (min, max) = (bevy_vector(fluid.bounds.0), bevy_vector(fluid.bounds.1));
+            let (min, max) = (Vec3::from(to_bevy(fluid.bounds.0)), Vec3::from(to_bevy(fluid.bounds.1)));
             let in_view = in_frustum(Some((min.min(max), min.max(max))));
             let drawn = fluid.shown && in_view;
             fluid.since_drawn = if drawn { 0.0 } else { fluid.since_drawn + step };

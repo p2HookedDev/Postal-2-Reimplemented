@@ -195,7 +195,7 @@ fn static_actor_sections(t: &mut SceneTargets, mesh: &Arc<StaticMesh>, sections:
                 section.mesh = t.assets.meshes.add(copy);
             }
         }
-        let shading = Shading::Vertices { mesh: Arc::clone(mesh), scale: a.scale, pre_pivot: a.pre_pivot };
+        let shading = Shading::Vertices { mesh: Arc::clone(mesh), sphere: crate::render::actor_light::mesh_sphere(mesh), scale: a.scale, pre_pivot: a.pre_pivot };
         // Not its `MaxLights`: retail sets every listed light and the driver takes the first 8.
         ActorLit::new(a.object, a.lighting.glow, MAX_HARDWARE_LIGHTS, 0.0, shading)
     });

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
@@ -72,9 +70,12 @@ fn placed_sphere((center, radius): (Vector, f32), placement: &MeshPlacement) -> 
 }
 
 impl LightEnvironment {
-    pub fn new(lights: HashMap<i32, MeshLight>, zone_ambients: Vec<[f32; 3]>, level_brightness: f32) -> Self {
-        let sun = crate::render::modern::brightest_sun(lights.values(), level_brightness);
-        Self { lights: lights.into_iter().collect(), zone_ambients, level_brightness, sun, terrain: Vec::new() }
+    pub fn new(lights: FxHashMap<i32, MeshLight>, zone_ambients: Vec<[f32; 3]>, level_brightness: f32) -> Self {
+        let mut ordered: Vec<(&i32, &MeshLight)> = lights.iter().collect();
+        // Highest key first: of fully equal suns the picker keeps the last, so the lowest key wins.
+        ordered.sort_unstable_by_key(|&(&key, _)| std::cmp::Reverse(key));
+        let sun = crate::render::modern::brightest_sun(ordered.into_iter().map(|(_, light)| light), level_brightness);
+        Self { lights, zone_ambients, level_brightness, sun, terrain: Vec::new() }
     }
 
     pub fn with_terrain(self, terrain: Vec<crate::render::terrain_light::TerrainSector>) -> Self {
@@ -116,10 +117,10 @@ impl LightEnvironment {
             .collect()
     }
 
-    pub fn mesh_colors(&self, model: &Model, mesh: &StaticMesh, instance: Option<&StaticMeshInstance>, lighting: &MeshLighting) -> Vec<[u8; 4]> {
+    pub fn mesh_colors(&self, model: &Model, mesh: &StaticMesh, sphere: (Vector, f32), instance: Option<&StaticMeshInstance>, lighting: &MeshLighting) -> Vec<[u8; 4]> {
         let lights: Vec<Option<MeshLight>> =
             instance.map_or_else(Vec::new, |i| i.lights.iter().map(|l| self.lights.get(&l.actor).copied()).collect());
-        let (center, radius) = placed_sphere(mesh_sphere(mesh), &lighting.placement);
+        let (center, radius) = placed_sphere(sphere, &lighting.placement);
         let hardware = self.hardware_lights(model, center, radius, MAX_HARDWARE_LIGHTS);
         let ambient = self.ambient(lighting.zone, lighting.glow);
         static_mesh_colors(mesh, instance, &lights, &lighting.placement, self.level_brightness, ambient, &hardware)
@@ -232,7 +233,7 @@ impl Plugin for ActorLightPlugin {
 
 #[derive(Clone)]
 pub enum Shading {
-    Vertices { mesh: Arc<StaticMesh>, scale: Vector, pre_pivot: Vector },
+    Vertices { mesh: Arc<StaticMesh>, sphere: (Vector, f32), scale: Vector, pre_pivot: Vector },
     Tint,
 }
 
@@ -469,14 +470,14 @@ fn attach_to_hud_base(lit: &mut ActorLit, mesh: &Mesh3d, (radius, max_lights): (
 }
 
 fn relight_vertices(lit: &ActorLit, frame: ActorPlace, target: &Handle<Mesh>, world: &RelightWorld, colors: &mut FxHashMap<ObjectId, Vec<[f32; 4]>>, meshes: &mut Assets<Mesh>) -> bool {
-    let Shading::Vertices { mesh: source, scale, pre_pivot } = &lit.shading else { return true };
+    let Shading::Vertices { mesh: source, sphere, scale, pre_pivot } = &lit.shading else { return true };
     if !colors.contains_key(&lit.actor) {
         if colors.len() >= VERTEX_UPDATES_PER_FRAME {
             return false;
         }
         let placement = MeshPlacement { location: frame.location, rotation: frame.rotation, scale: (*scale), pre_pivot: (*pre_pivot) };
         let lighting = MeshLighting { placement, zone: p2_collision::point_zone(world.model, frame.location), glow: frame.glow };
-        colors.insert(lit.actor, lighting_colors(&world.environment.mesh_colors(world.model, source, None, &lighting)));
+        colors.insert(lit.actor, lighting_colors(&world.environment.mesh_colors(world.model, source, *sphere, None, &lighting)));
     }
     if let (Some(colors), Some(mut mesh)) = (colors.get(&lit.actor), meshes.get_mut(target)) {
         set_vertex_colors(&mut mesh, colors);

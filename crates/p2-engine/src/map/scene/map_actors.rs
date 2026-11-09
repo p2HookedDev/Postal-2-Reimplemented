@@ -6,7 +6,7 @@ pub(super) struct MapActors {
     pub(super) mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>>,
     pub(super) zone_fogs: Vec<Option<crate::actors::ZoneFog>>,
     pub(super) terrain_zones: Vec<bool>,
-    pub(super) mesh_lights: HashMap<i32, p2_render_cpu::MeshLight>,
+    pub(super) mesh_lights: FxHashMap<i32, p2_render_cpu::MeshLight>,
     pub(super) zone_ambients: Vec<[f32; 3]>,
     pub(super) level_brightness: f32,
     pub(super) attachments: HashMap<ObjectId, Vec<SkeletalActor>>,
@@ -27,7 +27,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model, sky_zone: Optio
     let mut mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>> = HashMap::new();
     let mut zone_fogs = Vec::new();
     let mut terrain_zones = Vec::new();
-    let mut mesh_lights = HashMap::new();
+    let mut mesh_lights = FxHashMap::default();
     let mut zone_ambients = Vec::new();
     let mut level_info = None;
     let mut level_brightness = 1.0;

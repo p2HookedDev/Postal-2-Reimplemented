@@ -46,10 +46,10 @@ pub(crate) struct Primitives {
 }
 
 impl<L: LoaderRef> Vm<L> {
-    pub(crate) fn actor_shape(&mut self, actor: ObjectId) -> Option<PlacedShape> {
+    pub(crate) fn fill_shape(&mut self, actor: ObjectId) -> Option<Placement> {
         let (primitive, brush, placement) = self.primitive_placement(actor)?;
-        if let Some(shape) = self.placed_shape(actor, &placement) {
-            return Some(shape.clone());
+        if self.placed_shape(actor, &placement).is_some() {
+            return Some(placement);
         }
         let local = self.local_shape(primitive, brush)?;
         let phase = self.profile_start();
@@ -59,9 +59,9 @@ impl<L: LoaderRef> Vm<L> {
         let boxes = place(&local.boxes, &local.box_slots);
         let lines = local.lines.as_ref().map_or_else(|| boxes.clone(), |lines| place(lines, &local.line_slots));
         let shape = PlacedShape { boxes, lines, model: brush };
-        self.world.primitives.placed.insert(actor, (placement, shape.clone()));
+        self.world.primitives.placed.insert(actor, (placement, shape));
         self.profile_phase("collision shape placed", phase);
-        Some(shape)
+        Some(placement)
     }
 
     fn primitive_placement(&self, actor: ObjectId) -> Option<(ObjectId, bool, Placement)> {
@@ -96,7 +96,7 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    fn placed_shape(&self, actor: ObjectId, placement: &Placement) -> Option<&PlacedShape> {
+    pub(crate) fn placed_shape(&self, actor: ObjectId, placement: &Placement) -> Option<&PlacedShape> {
         self.world.primitives.placed.get(&actor).filter(|(placed, _)| placed == placement).map(|(_, shape)| shape)
     }
 
@@ -106,8 +106,8 @@ impl<L: LoaderRef> Vm<L> {
 
     /// A mover or a volume can reach far beyond its cylinder, and its pivot can be anywhere.
     pub(crate) fn collision_reach(&mut self, actor: ObjectId) -> f32 {
-        let shape = self.actor_shape(actor);
-        self.reach_of(actor, shape.as_ref())
+        let placement = self.fill_shape(actor);
+        self.reach_of(actor, placement.and_then(|placement| self.placed_shape(actor, &placement)))
     }
 
     pub(crate) fn placed_reach(&self, actor: ObjectId) -> Option<f32> {
@@ -269,7 +269,7 @@ impl<L: LoaderRef> Vm<L> {
     /// A static mesh uses its placed collision triangles' bounds (retail's placed box can be larger).
     /// A skeletal mesh, a ragdoll too, keeps the cylinder, not its Karma bodies.
     fn encroach_box(&mut self, actor: ObjectId) -> (Vector, Vector) {
-        if let Some(shape) = self.actor_shape(actor).filter(|shape| !shape.model) {
+        if let Some(shape) = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement)).filter(|shape| !shape.model) {
             let (min, max) = shape.boxes.bounds();
             if min[0] <= max[0] {
                 return ([0, 1, 2].map(|i| (min[i] + max[i]) * 0.5).into(), [0, 1, 2].map(|i| (max[i] - min[i]) * 0.5).into());
@@ -299,7 +299,7 @@ impl<L: LoaderRef> Vm<L> {
             let hulls = self.world.primitives.hulls.entry(model).or_insert_with(|| BspHulls::new(&brush));
             return p2_collision::point_check(&brush, hulls, local, local_extent(extent, &axes, scale)).is_some();
         }
-        match self.actor_shape(actor) {
+        match self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement)) {
             Some(shape) => p2_collision::mesh_box_overlaps([&*shape.boxes], center, extent),
             None => cylinder(self),
         }

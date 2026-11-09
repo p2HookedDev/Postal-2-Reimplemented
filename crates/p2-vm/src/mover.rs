@@ -134,7 +134,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn encroached_blockers(&mut self, mover: ObjectId) -> Vec<ObjectId> {
-        let Some(shape) = self.actor_shape(mover) else { return Vec::new() };
+        let Some(shape) = self.fill_shape(mover).and_then(|placement| self.placed_shape(mover, &placement)) else { return Vec::new() };
         let (min, max) = shape.boxes.bounds();
         let mut found = Vec::new();
         let nearby = self.colliders_near([min[0], min[1]], [max[0], max[1]], 0.0);
@@ -157,7 +157,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn primitive_overlaps(&mut self, mover: ObjectId, other: ObjectId) -> bool {
-        let Some(shape) = self.actor_shape(mover) else { return false };
+        let Some(shape) = self.fill_shape(mover).and_then(|placement| self.placed_shape(mover, &placement)) else { return false };
         let (radius, height) = self.store.collision_size(other);
         mesh_box_overlaps([&*shape.boxes], self.store.vector(other, Prop::Location), [radius, radius, height].into())
     }

@@ -13,7 +13,7 @@ pub struct FrameTimes {
     pub totals: std::collections::BTreeMap<&'static str, Duration>,
     pub vm_totals: std::collections::BTreeMap<&'static str, Duration>,
     pub vm_profile: VmProfile,
-    pub vm_parts: HashMap<String, Duration>,
+    pub vm_parts: FxHashMap<String, Duration>,
     pub(super) current: FrameParts,
     pub(super) slowest: Option<FrameParts>,
 }
@@ -50,7 +50,7 @@ impl FrameTimes {
         for (part, time) in &sorted {
             *self.vm_parts.entry(part.clone()).or_default() += *time;
         }
-        sorted.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+        sorted.sort_by(|(a, a_time), (b, b_time)| b_time.cmp(a_time).then_with(|| a.cmp(b)));
         self.current.profile = sorted;
     }
 

@@ -8,6 +8,7 @@ use p2_package::TagValue;
 use super::*;
 use super::projectors::{ALPHA_TEST_TAG, PROJECTOR_TAG, TAGGED_TAG};
 use super::static_meshes::holds_eye;
+use crate::render::actor_light::mesh_sphere;
 
 fn mesh_placement(loader: &Loader, actor: &MeshActor) -> ((PackageId, i32), MeshPlacement) {
     let mesh = (loader.id_of(actor.mesh_package).unwrap(), actor.static_mesh);
@@ -164,7 +165,7 @@ fn suburbs3_static_meshes_not_black() {
         if instance.colors.len() != mesh.positions.len() {
             continue;
         }
-        let colors = environment.mesh_colors(&model, &mesh, Some(&instance), &lighting);
+        let colors = environment.mesh_colors(&model, &mesh, mesh_sphere(&mesh), Some(&instance), &lighting);
         lit += 1;
         let lights: Vec<_> = instance.lights.iter().map(|l| environment.lights.get(&l.actor).copied()).collect();
         relit += usize::from(p2_render_cpu::needs_relight(&instance, &lights));
@@ -241,7 +242,7 @@ fn suburbs3_brightness_balance() {
         let LoadedPackage { package: pkg, data, .. } = loader.package(resolved.package);
         let mesh = read_static_mesh(pkg, data, &pkg.exports[resolved.export.unwrap()]).unwrap();
         let lighting = MeshLighting { placement, zone: p2_collision::point_zone(&model, placement.location), glow: 0 };
-        let drawn = mean_shown(&environment.mesh_colors(&model, &mesh, instance.as_ref(), &lighting));
+        let drawn = mean_shown(&environment.mesh_colors(&model, &mesh, mesh_sphere(&mesh), instance.as_ref(), &lighting));
         if instance.is_some_and(|i| i.colors.len() == mesh.positions.len()) {
             (lit, lit_sum) = (lit + 1, lit_sum + drawn);
         } else {
@@ -332,7 +333,7 @@ fn props_without_baked_light_not_black() {
             let LoadedPackage { package: pkg, data, .. } = loader.package(resolved.package);
             let mesh = read_static_mesh(pkg, data, &pkg.exports[resolved.export.unwrap()]).unwrap();
             let lighting = MeshLighting { placement, zone: p2_collision::point_zone(&model, placement.location), glow: 0 };
-            let after = shown(&environment.mesh_colors(&model, &mesh, instance.as_ref(), &lighting));
+            let after = shown(&environment.mesh_colors(&model, &mesh, mesh_sphere(&mesh), instance.as_ref(), &lighting));
             if instance.as_ref().is_some_and(|instance| instance_fits(&mesh, instance)) {
                 statics.push((placement.location, after));
                 continue;

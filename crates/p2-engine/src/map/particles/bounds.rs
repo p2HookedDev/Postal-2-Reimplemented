@@ -40,7 +40,7 @@ pub(super) fn particles_box(p: &ParticleActor) -> Option<(Vec3, Vec3)> {
                 (None, _) => DRAWN_REACH,
             };
             let (min, max) = p.simulation.bounds(index, reach)?;
-            Some((bevy_vector(min), bevy_vector(max)))
+            Some((Vec3::from(to_bevy(min)), Vec3::from(to_bevy(max))))
         })
         .reduce(|(lo, hi), (min, max)| (lo.min(min), hi.max(max)))
 }

@@ -219,7 +219,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             let hit = if let Some(hit) = ragdoll {
                 hit
-            } else if let Some(shape) = self.actor_shape(actor) {
+            } else if let Some(shape) = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement)) {
                 let primitive = if shape.model { Primitive::Brush } else { Primitive::StaticMesh };
                 let units = if zero_extent && shape.model { 0.5 } else { pull_back_units(primitive, length) };
                 if zero_extent { mesh_line_check([&*shape.lines], start, end) } else { mesh_box_check([&*shape.boxes], start, end, extent) }
@@ -311,7 +311,7 @@ impl<L: LoaderRef> Vm<L> {
             (world.actor, world.shape.slot(triangle)?)
         } else {
             let actor = actor?;
-            let shape = self.actor_shape(actor)?;
+            let shape = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement))?;
             let (_, _, triangle) = mesh_line_check_at([&*shape.lines], start, end)?;
             (actor, shape.lines.slot(triangle)?)
         };

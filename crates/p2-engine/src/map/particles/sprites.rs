@@ -93,7 +93,7 @@ pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, se
 }
 
 pub(super) fn sprite_box(sprite: &SpriteParticle) -> (Vec3, Vec3) {
-    let (at, reach) = (bevy_vector(sprite.location), bevy_vector(sprite.up).abs() + bevy_vector(sprite.right).abs());
+    let (at, reach) = (Vec3::from(to_bevy(sprite.location)), Vec3::from(to_bevy(sprite.up)).abs() + Vec3::from(to_bevy(sprite.right)).abs());
     (at - reach, at + reach)
 }
 
@@ -124,7 +124,7 @@ pub(super) fn sprite_record(sprite: &SpriteParticle, grid_at: Vec3) -> [u32; REC
     let (next, alpha) = sprite.blend.unwrap_or((sprite.uv, a));
     let mut record = [0; RECORD_WORDS];
     let floats = |v: Vector| to_bevy(v).map(f32::to_bits);
-    record[0..3].copy_from_slice(&(bevy_vector(sprite.location) - grid_at).to_array().map(f32::to_bits));
+    record[0..3].copy_from_slice(&(Vec3::from(to_bevy(sprite.location)) - grid_at).to_array().map(f32::to_bits));
     record[3] = u32::from_le_bytes([r, g, b, alpha]);
     record[4..7].copy_from_slice(&floats(sprite.up));
     record[8..11].copy_from_slice(&floats(sprite.right));

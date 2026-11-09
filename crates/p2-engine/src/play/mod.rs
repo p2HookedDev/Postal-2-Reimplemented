@@ -2,7 +2,7 @@
 //! hand-off (`PlaySystems::Tick`) the main thread takes the finished frame's [`VmFrame`] and gives the VM the next input.
 
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};

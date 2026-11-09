@@ -62,6 +62,7 @@ fn static_mesh_models(
         Some((mesh_id, mesh, read_static_mesh_materials(pkg, file, export).unwrap_or_default()))
     });
     let Some((mesh_id, mesh, materials)) = mesh else { return false };
+    let sphere = crate::render::actor_light::mesh_sphere(&mesh);
     let mut base = static_mesh_to_meshes(&mesh);
     let textures: Vec<_> = (0..base.len())
         .map(|i| match skins.get(i).filter(|(_, skin)| *skin != 0) {
@@ -107,7 +108,7 @@ fn static_mesh_models(
             let export = reference.and_then(|reference| level.pkg.exports.get(usize::try_from(reference - 1).ok()?));
             let instance = export.and_then(|export| read_static_mesh_instance(level.pkg, level.file, export).ok());
             let fits = instance.as_ref().is_some_and(|instance| instance_fits(&mesh, instance));
-            (level.environment.mesh_colors(level.model, &mesh, instance.as_ref(), &lighting), fits, lighting)
+            (level.environment.mesh_colors(level.model, &mesh, sphere, instance.as_ref(), &lighting), fits, lighting)
         });
         let (lighting, relit): (Option<_>, Option<_>) = lit.map(|(colors, fits, lighting)| (colors, (fits, lighting))).unzip();
         if let Some(follow) = follow {
@@ -115,7 +116,7 @@ fn static_mesh_models(
             // (movers with an instance keep it, as the engine does).
             let relight = relit.filter(|&(fits, _)| !fits).map(|(_, lighting)| {
                 let mesh = shared.get_or_insert_with(|| Arc::new(mesh.clone())).clone();
-                let shading = Shading::Vertices { mesh, scale: lighting.placement.scale, pre_pivot: lighting.placement.pre_pivot };
+                let shading = Shading::Vertices { mesh, sphere, scale: lighting.placement.scale, pre_pivot: lighting.placement.pre_pivot };
                 ActorLit::new(follow.actor, lighting.glow, MAX_HARDWARE_LIGHTS, 0.0, shading)
                     .lit_at(lighting.placement.location, lighting.placement.rotation)
             });

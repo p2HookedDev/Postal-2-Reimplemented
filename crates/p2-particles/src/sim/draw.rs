@@ -16,7 +16,7 @@ impl ParticleEmitter {
         // The engine's camera "up" axis points down the screen (the texture's v0 edge is at -up).
         let (screen_right, screen_down) = (view.right, view.up * -1.0);
         let front = screen_right.cross(screen_down);
-        self.live().filter(move |_| !props.disabled).map(move |p| {
+        self.live().filter(move |_| !props.disabled).map(move |(_, p)| {
             let location = if relative { rotate_by(&axes, p.location) + owner.location } else { p.location };
             let moved = || direction_to_world((p.location - p.old_location).safe_normal());
             let [size_x, size_y] = [p.size.x, p.size.y];
@@ -50,7 +50,7 @@ impl ParticleEmitter {
         let relative = props.coordinate_system == CoordinateSystem::Relative;
         let frame = if relative { owner.rotation } else { Rotator::ZERO };
         let axes = owner.rotation.axes();
-        self.live().filter(move |_| !props.disabled).map(move |p| {
+        self.live().filter(move |_| !props.disabled).map(move |(_, p)| {
             let location = if relative { rotate_by(&axes, p.location) + owner.location } else { p.location };
             let spin = if props.spin_particles { mesh_spin(p) } else { Rotator::ZERO };
             MeshParticle { location, spin, frame, size: p.size, color: p.color }

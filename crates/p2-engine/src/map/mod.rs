@@ -370,10 +370,6 @@ fn open_game<'a>(library: &'a mut Library, system: Option<&Path>) -> Option<&'a 
     library.game(system?)
 }
 
-fn bevy_vector(v: p2_math::Vector) -> Vec3 {
-    Vec3::from(to_bevy(v))
-}
-
 fn export_reference(export: usize) -> i32 {
     export as i32 + 1
 }

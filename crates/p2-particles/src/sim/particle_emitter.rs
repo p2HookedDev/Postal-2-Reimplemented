@@ -69,8 +69,8 @@ impl ParticleEmitter {
         self.props.disabled = disabled;
     }
 
-    pub(super) fn live(&self) -> impl Iterator<Item = &Particle> {
-        self.particles[..self.active_particles].iter().filter(|p| p.active)
+    pub(super) fn live(&self) -> impl Iterator<Item = (usize, &Particle)> {
+        self.particles[..self.active_particles].iter().enumerate().filter(|(_, p)| p.active)
     }
 
     pub(super) fn live_mut(&mut self) -> impl Iterator<Item = &mut Particle> {
