@@ -169,14 +169,17 @@ impl<L: LoaderRef> Vm<L> {
 
 
     pub(crate) fn bolton_adopted(&mut self, actor: ObjectId, id: BodyId, [radius, height]: [f32; 2]) {
-        let life = self.bolton_life();
-        self.store.set(actor, Prop::LifeSpan, Value::Float(life));
         for (property, value) in [(Prop::bCollideActors, true), (Prop::bBlockActors, false), (Prop::bBlockPlayers, false), (Prop::bProjTarget, true)] {
             self.store.set(actor, property, Value::Bool(value));
         }
         self.store.set(actor, Prop::CollisionRadius, Value::Float(radius));
         self.store.set(actor, Prop::CollisionHeight, Value::Float(height));
         self.relocate(actor);
+        if self.karma.boltons.bodies.contains(&actor) {
+            return;
+        }
+        let life = self.bolton_life();
+        self.store.set(actor, Prop::LifeSpan, Value::Float(life));
         let store = &self.store;
         let boltons = &mut self.karma.boltons;
         boltons.bodies.retain(|&a| a != actor && !store.is_deleted(a));

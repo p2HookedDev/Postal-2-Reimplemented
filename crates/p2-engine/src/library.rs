@@ -536,7 +536,7 @@ impl Game {
     pub fn source_layers(&mut self, source: TextureSource, decode: TextureDecode) -> Option<SourceLayers> {
         let (baked, glow) = self.glow_bake(source).unzip();
         let (image, wet) = match baked.filter(|_| source.opacity.is_none()) {
-            Some(image) => (image, None),
+            Some(image) => (image, self.wet_source(source)),
             None => self.unbaked_image(source, decode)?,
         };
         let glow = glow.or_else(|| self.alpha_glow(source));
