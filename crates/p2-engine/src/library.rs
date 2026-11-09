@@ -287,6 +287,7 @@ impl Game {
         self.section_texture(source, state, decode)
     }
 
+    #[cfg(test)]
     pub fn material_texture_rgba(&mut self, id: PackageId, material: i32) -> Option<SectionTexture> {
         let (source, state) = self.material_source(id, material)?;
         self.section_texture(source, state, TextureDecode::Rgba)

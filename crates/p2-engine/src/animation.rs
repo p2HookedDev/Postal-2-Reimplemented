@@ -311,13 +311,7 @@ fn animate(
             continue;
         }
         // An actor the presented frame did not pose keeps its pose.
-        let channels = match world {
-            Some(world) => match world.pose(actor) {
-                Some(pose) => pose,
-                None => continue,
-            },
-            None => None,
-        };
+        let Some(channels) = world.map_or(Some(None), |world| world.pose(actor)) else { continue };
         let pose = match channels {
             Some(actor_pose) => {
                 let ActorPose { scales, turns, .. } = actor_pose;

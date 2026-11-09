@@ -284,8 +284,7 @@ impl Session {
         self.waiting_coronas.extend(spawned.iter_mut().filter_map(|s| s.corona.take()));
         let found: Vec<SpawnedActor> = spawned.into_iter().filter_map(|s| SpawnedActor::new(s.actor, s.mesh, s.skeletal)).collect();
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
-        let (done, building): (Vec<TextureBuild>, Vec<TextureBuild>) = std::mem::take(&mut self.texture_builds).into_iter().partition(|build| build.task.is_finished());
-        self.texture_builds = building;
+        let done: Vec<TextureBuild> = self.texture_builds.extract_if(.., |build| build.task.is_finished()).collect();
         for TextureBuild { path, task, .. } in done {
             let texture = match block_on(task) {
                 Ok((built, assets, texture)) => {
@@ -303,12 +302,9 @@ impl Session {
         for texture in self.waiting_sprites.iter().map(|sprite| &sprite.texture).chain(self.waiting_coronas.iter().map(|corona| &corona.texture)) {
             actor_image(&self.actor_textures, &mut self.texture_builds, game, t, texture);
         }
-        let (sprites, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting_sprites).into_iter().partition(|sprite| self.actor_textures.contains_key(&sprite.texture));
-        self.waiting_sprites = waiting;
-        let (coronas, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting_coronas).into_iter().partition(|corona| self.actor_textures.contains_key(&corona.texture));
-        self.waiting_coronas = waiting;
-        let (done, building): (Vec<ModelBuild>, Vec<ModelBuild>) = std::mem::take(&mut self.spawn_builds).into_iter().partition(|build| build.task.is_finished());
-        self.spawn_builds = building;
+        let sprites: Vec<_> = self.waiting_sprites.extract_if(.., |sprite| self.actor_textures.contains_key(&sprite.texture)).collect();
+        let coronas: Vec<_> = self.waiting_coronas.extract_if(.., |corona| self.actor_textures.contains_key(&corona.texture)).collect();
+        let done: Vec<ModelBuild> = self.spawn_builds.extract_if(.., |build| build.task.is_finished()).collect();
         for ModelBuild { key, task } in done {
             let model = match block_on(task) {
                 Ok(built) => {

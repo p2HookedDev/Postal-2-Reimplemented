@@ -119,35 +119,21 @@ impl BoneData {
     }
 
     fn ref_bone(&mut self, store: &ObjectStore, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
-        let key = (mesh_object, bone);
-        if let Some(&found) = self.ref_bones.get(&key) {
-            return found;
-        }
-        let found = mesh.match_ref_bone(&store.name(bone).to_ascii_lowercase());
-        self.ref_bones.insert(key, found);
-        found
+        *self.ref_bones.entry((mesh_object, bone)).or_insert_with(|| mesh.match_ref_bone(&store.name(bone).to_ascii_lowercase()))
     }
 
     fn mesh_bone(&mut self, store: &ObjectStore, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
-        let key = (mesh_object, bone);
-        if let Some(&found) = self.mesh_bones.get(&key) {
-            return found;
-        }
-        let name = store.name(bone).to_ascii_lowercase();
-        let found = mesh.names.iter().position(|n| *n == name);
-        self.mesh_bones.insert(key, found);
-        found
+        *self.mesh_bones.entry((mesh_object, bone)).or_insert_with(|| {
+            let name = store.name(bone).to_ascii_lowercase();
+            mesh.names.iter().position(|n| *n == name)
+        })
     }
 
     fn sequence_index(&mut self, store: &ObjectStore, animation_object: ObjectId, animation: &PosedAnimation, sequence: NameId) -> Option<usize> {
-        let key = (animation_object, sequence);
-        if let Some(&found) = self.sequences.get(&key) {
-            return found;
-        }
-        let name = store.name(sequence).to_ascii_lowercase();
-        let found = animation.sequences.iter().position(|s| *s == name);
-        self.sequences.insert(key, found);
-        found
+        *self.sequences.entry((animation_object, sequence)).or_insert_with(|| {
+            let name = store.name(sequence).to_ascii_lowercase();
+            animation.sequences.iter().position(|s| *s == name)
+        })
     }
 
     fn bone_map(&mut self, mesh_object: ObjectId, mesh: &PosedMesh, animation_object: ObjectId, animation: &PosedAnimation) -> Arc<[Option<usize>]> {

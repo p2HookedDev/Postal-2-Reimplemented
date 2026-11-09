@@ -1340,22 +1340,7 @@ impl<L: LoaderRef> Vm<L> {
             Expr::InstanceVariable(reference) => {
                 let object = context.ok_or_else(|| Error::Unsupported(format!("{} without an object", property_name(self, *reference))))?;
                 if let Some(class) = self.store.object(object).class {
-                    let index = match linked(frame, link).and_then(|value| member_of_link(value, class)) {
-                        Some(index) => index,
-                        None => {
-                            let key = (class, package, *reference);
-                            let index = match self.script.lookups.members.get(&key) {
-                                Some(&index) => index,
-                                None => {
-                                    let index = self.reference_property(class, package, *reference);
-                                    self.script.lookups.members.insert(key, index);
-                                    index
-                                }
-                            };
-                            set_link(frame, link, member_link(class, index));
-                            index
-                        }
-                    };
+                    let index = self.member_index(frame, link, class, package, *reference);
                     let index = index.ok_or_else(|| Error::Unsupported(format!("property {}", property_name(self, *reference))))?;
                     return Ok(self.instance_target(object, class, index));
                 }
@@ -1363,23 +1348,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Expr::DefaultVariable(reference) => {
                 let class = self.context_class(context)?.unwrap_or(frame.class);
-                let cached = linked(frame, link).and_then(|value| member_of_link(value, class));
-                let index = match cached {
-                    Some(index) => index,
-                    None => {
-                        let key = (class, package, *reference);
-                        let index = match self.script.lookups.members.get(&key) {
-                            Some(&index) => index,
-                            None => {
-                                let index = self.reference_property(class, package, *reference);
-                                self.script.lookups.members.insert(key, index);
-                                index
-                            }
-                        };
-                        set_link(frame, link, member_link(class, index));
-                        index
-                    }
-                };
+                let index = self.member_index(frame, link, class, package, *reference);
                 let index = index.ok_or_else(|| Error::Unsupported(format!("default {}", property_name(self, *reference))))?;
                 match self.store.memory.get(self.store.class(class).mem).fields.get(index) {
                     Some(field) => Target::Place(Place::new(Root::Default(class), field)),
@@ -1400,6 +1369,23 @@ impl<L: LoaderRef> Vm<L> {
             }
             other => return Err(Error::Unsupported(format!("assign to {other:?}").chars().take(60).collect())),
         })
+    }
+
+    fn member_index(&mut self, frame: &Frame, link: Option<u32>, class: ClassId, package: PackageId, reference: i32) -> Option<usize> {
+        if let Some(index) = linked(frame, link).and_then(|value| member_of_link(value, class)) {
+            return index;
+        }
+        let key = (class, package, reference);
+        let index = match self.script.lookups.members.get(&key) {
+            Some(&index) => index,
+            None => {
+                let index = self.reference_property(class, package, reference);
+                self.script.lookups.members.insert(key, index);
+                index
+            }
+        };
+        set_link(frame, link, member_link(class, index));
+        index
     }
 
     fn local_target(&self, frame: &Frame, index: usize) -> Target {

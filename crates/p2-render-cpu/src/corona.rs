@@ -91,16 +91,16 @@ pub fn non_square_scale(front: Vector, x: Vector, y: Vector) -> f32 {
     ((1.0 - front.dot(x).abs()) * (1.0 - front.dot(y).abs())).sqrt()
 }
 
-pub fn corona_quad(location: [f32; 3], right: [f32; 3], up: [f32; 3], draw_scale: f32, draw_scale3d: [f32; 3], factor: f32) -> [[f32; 3]; 4] {
-    let r = right.map(|c| c * draw_scale3d[0] * draw_scale * factor * 512.0);
-    let u = up.map(|c| c * draw_scale3d[1] * draw_scale * factor * 512.0);
-    let corner = |sr: f32, su: f32| std::array::from_fn(|i| location[i] + sr * r[i] + su * u[i]);
-    [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn corona_quad(location: [f32; 3], right: [f32; 3], up: [f32; 3], draw_scale: f32, draw_scale3d: [f32; 3], factor: f32) -> [[f32; 3]; 4] {
+        let r = right.map(|c| c * draw_scale3d[0] * draw_scale * factor * 512.0);
+        let u = up.map(|c| c * draw_scale3d[1] * draw_scale * factor * 512.0);
+        let corner = |sr: f32, su: f32| std::array::from_fn(|i| location[i] + sr * r[i] + su * u[i]);
+        [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)]
+    }
 
     #[test]
     fn a_corona_needs_the_eye_inside_its_light_radius() {

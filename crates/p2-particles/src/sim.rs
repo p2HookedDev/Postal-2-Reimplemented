@@ -290,32 +290,11 @@ impl ParticleEmitter {
             } else {
                 None
             };
-            if let Some(hit) = hit {
-                if self.props.spawn_from_other_emitter.is_some() && dt != 0.0 {
-                    let on_surface = hit.location + hit.normal * SURFACE_OFFSET;
-                    let count = usize::try_from(self.props.spawn_amount).unwrap_or(0);
-                    spawns.extend(std::iter::repeat_n(CollisionHit { location: on_surface, normal: hit.normal }, count));
-                }
-                let last = self.props.use_max_collisions
-                    && p.hit_count + 1 >= self.props.max_collisions.rand(rng).floor() as i32;
-                if last && self.props.respawn_dead_particles {
-                    self.spawn_particle(index, 0.5 * dt, FirstUpdate::Run, None, SpawnContext { owner, rng: &mut *rng, others });
-                } else if last {
-                    self.particles[index].active = false;
-                    dead += 1;
-                    continue;
-                } else {
-                    let p = &mut self.particles[index];
-                    p.velocity -= self.props.acceleration * (dt * 0.5);
-                    p.velocity = mirror(p.velocity, hit.normal);
-                    p.velocity *= self.props.damping_factor_range.rand(rng);
-                    if self.props.damp_rotation {
-                        p.spins_per_second *= self.props.rotation_damping_factor_range.rand(rng);
-                    }
-                    p.hit_count += 1;
-                    p.location = hit.location + hit.normal * SURFACE_OFFSET;
-                    p.old_location = p.location;
-                }
+            if let Some(hit) = hit
+                && !self.survives_hit(index, hit, dt, &mut spawns, SpawnContext { owner, rng: &mut *rng, others })
+            {
+                dead += 1;
+                continue;
             }
             let p = &mut self.particles[index];
             p.size = p.start_size * size_scale(&self.props, p.time, p.max_lifetime);
@@ -338,6 +317,34 @@ impl ParticleEmitter {
         self.all_particles_dead =
             (dead >= max || (self.active_particles == dead && pps == 0.0)) && !self.props.respawn_dead_particles;
         spawns
+    }
+
+    fn survives_hit(&mut self, index: usize, hit: CollisionHit, dt: f32, spawns: &mut Vec<CollisionHit>, context: SpawnContext) -> bool {
+        if self.props.spawn_from_other_emitter.is_some() && dt != 0.0 {
+            let on_surface = hit.location + hit.normal * SURFACE_OFFSET;
+            let count = usize::try_from(self.props.spawn_amount).unwrap_or(0);
+            spawns.extend(std::iter::repeat_n(CollisionHit { location: on_surface, normal: hit.normal }, count));
+        }
+        let last = self.props.use_max_collisions
+            && self.particles[index].hit_count + 1 >= self.props.max_collisions.rand(&mut *context.rng).floor() as i32;
+        if last && self.props.respawn_dead_particles {
+            self.spawn_particle(index, 0.5 * dt, FirstUpdate::Run, None, context);
+        } else if last {
+            self.particles[index].active = false;
+            return false;
+        } else {
+            let p = &mut self.particles[index];
+            p.velocity -= self.props.acceleration * (dt * 0.5);
+            p.velocity = mirror(p.velocity, hit.normal);
+            p.velocity *= self.props.damping_factor_range.rand(&mut *context.rng);
+            if self.props.damp_rotation {
+                p.spins_per_second *= self.props.rotation_damping_factor_range.rand(&mut *context.rng);
+            }
+            p.hit_count += 1;
+            p.location = hit.location + hit.normal * SURFACE_OFFSET;
+            p.old_location = p.location;
+        }
+        true
     }
 
     fn spawn_on_surface(&mut self, hit: CollisionHit, dt: f32, velocity_scale: Option<RangeVector>, context: SpawnContext) {
