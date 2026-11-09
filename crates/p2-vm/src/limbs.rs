@@ -62,6 +62,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut errors = Vec::new();
         self.karma.limbs.tick += 1;
         self.karma.limbs.step = delta;
+        self.age_young_boltons(delta);
         let gone: Vec<ObjectId> =
             self.karma.limbs.live.keys().copied().filter(|&a| self.store.is_deleted(a) || self.store.flag_of(a, Prop::bHidden)).collect();
         for actor in gone {
@@ -230,6 +231,9 @@ impl<L: LoaderRef> Vm<L> {
         self.karma.actors.insert(id, actor);
         self.karma.limbs.live.insert(actor, Limb { id, mesh, wrote: [0.0; 3].into(), before: [0.0; 3].into(), at: location, splat_tick: 0 });
         self.take_limb_motion(actor);
+        if self.store.is_a(actor, self.script.lookups.class_names.bolton_part) {
+            self.bolton_adopted(actor, id);
+        }
     }
 
     fn limb_motion(&mut self, actor: ObjectId) {

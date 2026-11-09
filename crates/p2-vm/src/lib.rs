@@ -1,5 +1,6 @@
 mod actor_natives;
 mod actors;
+mod bolton;
 mod bones;
 mod ai_move;
 mod ai_natives;

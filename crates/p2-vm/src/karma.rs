@@ -36,6 +36,7 @@ pub(crate) struct Karma {
     pub(crate) actors: FxHashMap<BodyId, ObjectId>,
     pub(crate) ragdolls: crate::ragdoll::Ragdolls,
     pub(crate) limbs: crate::limbs::Limbs,
+    pub(crate) boltons: crate::bolton::Boltons,
     failed: FxHashSet<ObjectId>,
     meshes: FxHashMap<ObjectId, Option<Arc<MeshShape>>>,
 }

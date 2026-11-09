@@ -115,6 +115,14 @@ struct Started {
 struct Hooks {
     started: Mutex<Vec<Started>>,
     disabled: FxHashSet<(RigidBodyHandle, RigidBodyHandle)>,
+    level_only: FxHashSet<RigidBodyHandle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Contacts {
+    All,
+    /// Static level geometry only: no other body, awake or dormant.
+    LevelOnly,
 }
 
 impl EventHandler for Hooks {
@@ -142,7 +150,7 @@ impl EventHandler for Hooks {
 impl PhysicsHooks for Hooks {
     fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
         if let (Some(a), Some(b)) = (context.rigid_body1, context.rigid_body2)
-            && self.disabled.contains(&body_pair(a, b))
+            && (self.disabled.contains(&body_pair(a, b)) || self.level_only.contains(&a) || self.level_only.contains(&b))
         {
             return None;
         }
@@ -270,6 +278,7 @@ impl World {
 
     pub fn remove_body(&mut self, id: BodyId) {
         self.hooks.disabled.retain(|&(a, b)| a != id.0 && b != id.0);
+        self.hooks.level_only.remove(&id.0);
         self.take_out_body(id);
     }
 
@@ -368,6 +377,13 @@ impl World {
         } else {
             self.hooks.disabled.insert(pair);
         }
+    }
+
+    pub fn set_contacts(&mut self, id: BodyId, contacts: Contacts) {
+        match contacts {
+            Contacts::All => self.hooks.level_only.remove(&id.0),
+            Contacts::LevelOnly => self.hooks.level_only.insert(id.0),
+        };
     }
 
     pub fn set_pose(&mut self, id: BodyId, location: p2_math::Vector, rotation: [f32; 4]) {

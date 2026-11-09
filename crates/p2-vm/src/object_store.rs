@@ -152,6 +152,17 @@ impl ObjectStore {
         Some(self.memory.read(f.shape, f.dim, &array.mem, index * w as usize, index * h as usize))
     }
 
+    /// An element of a static array (`var T X[N]`).
+    pub(crate) fn set_element(&mut self, object: ObjectId, property: impl PropertyName, index: usize, value: Value) -> bool {
+        let Some(field) = self.field(object, property) else { return false };
+        if index >= field.dim as usize {
+            return false;
+        }
+        let (word, heap) = (field.word as usize + index * field.words as usize, field.heap as usize + index * field.heaps as usize);
+        self.memory.write(field.shape, 1, &mut self.objects[object.0 as usize].mem, word, heap, value);
+        true
+    }
+
     pub(crate) fn object_list(&self, object: ObjectId, property: impl PropertyName) -> Vec<ObjectId> {
         self.array_words(object, property).map_or_else(Vec::new, |words| words.iter().filter_map(|&w| memory::object(w)).collect())
     }

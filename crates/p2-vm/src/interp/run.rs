@@ -100,6 +100,11 @@ impl<L: LoaderRef> Vm<L> {
         if self.script.script_depth >= MAX_SCRIPT_DEPTH {
             return Err(Error::Recursion { calls: MAX_SCRIPT_DEPTH, chain: vec![function.object_name.clone()] });
         }
+        let bolton = function.bolton.zip(this);
+        if let Some((hook, object)) = bolton {
+            let momentum = function.params.get(1).map(|&index| hit_arg(&*self, &args, 1, index));
+            self.bolton_before(hook, object, momentum)?;
+        }
         // `singular`: an object already inside a singular function skips the call, giving its zero value.
         let singular = function.flags & FUNC_SINGULAR != 0 && this.is_some();
         if singular && let Some(object) = this
@@ -127,6 +132,12 @@ impl<L: LoaderRef> Vm<L> {
         self.script.script_depth -= 1;
         if singular && let Some(object) = this {
             self.script.in_singular.remove(&object);
+        }
+        if let Some((hook, object)) = bolton
+            && let Err(e) = self.bolton_after(hook, object)
+            && result.is_ok()
+        {
+            result = Err(e);
         }
         if let Err(Error::Recursion { chain, .. }) = &mut result
             && chain.len() <= RECURSION_CHAIN
