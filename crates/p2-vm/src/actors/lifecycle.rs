@@ -112,7 +112,11 @@ impl<L: LoaderRef> Vm<L> {
             }
             self.event(actor, event, Vec::new())?;
         }
-        Ok((!self.store.is_deleted(actor)).then_some(actor))
+        if self.store.is_deleted(actor) {
+            return Ok(None);
+        }
+        self.karma_mover_spawned(actor);
+        Ok(Some(actor))
     }
 
     /// No check that the owner changed, nor for a destroy between.

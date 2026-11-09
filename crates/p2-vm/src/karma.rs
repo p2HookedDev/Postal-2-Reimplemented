@@ -294,9 +294,23 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
+    pub(crate) fn karma_mover_spawned(&mut self, actor: ObjectId) {
+        if self.karma.world.is_some() && self.store.is_a(actor, crate::Kind::Mover) {
+            self.karma.movers.entry(actor).or_insert(None);
+        }
+    }
+
+    /// With `bBlockKarma`, retail's Karma shapes; blocking only by our rule, the triangles pawns collide with.
     fn karma_mover_body(&mut self, mover: ObjectId) -> Option<Body> {
         let path = self.store.object(mover).path.clone();
-        let Some((shapes, location, quat)) = self.karma_placed_shapes(mover, WithoutProps::Hull) else {
+        let shapes = if self.store.flag_of(mover, Prop::bBlockKarma) {
+            self.karma_placed_shapes(mover, WithoutProps::Hull)
+        } else {
+            self.body_triangles(mover).filter(|(triangles, _)| !triangles.is_empty()).map(|(triangles, placement)| {
+                (vec![Shape::Mesh(triangles)], placement.location, matrix_to_quat(placement.rotation.axes().map(Vector::from)))
+            })
+        };
+        let Some((shapes, location, quat)) = shapes else {
             self.diagnostics.log.push(format!("Karma mover {path}: no collision shape"));
             return None;
         };

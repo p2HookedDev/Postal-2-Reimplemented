@@ -156,6 +156,15 @@ fn karma_triangles_face_up() {
 }
 
 #[test]
+fn inverted_karma_triangles_face_down() {
+    let terrain = Terrain { inverted: true, ..terrain() };
+    for [a, b, c] in terrain.karma_triangles().into_iter().map(|t| t.map(|i| terrain.vertices[i])) {
+        let (u, v) = ([0, 1, 2].map(|i| b[i] - a[i]), [0, 1, 2].map(|i| c[i] - b[i]));
+        assert!(u[0] * v[1] - u[1] * v[0] < 0.0, "{a:?} {b:?} {c:?}");
+    }
+}
+
+#[test]
 fn chain_dropped_onto_sloped_terrain_rests_on_it() {
     let terrain = terrain();
     for (cells, velocity) in [([-4.0, 2.0], [0.0, 0.0, 0.0]), ([3.0, -5.0], [600.0, -300.0, -1000.0]), ([0.0, 0.0], [-800.0, 0.0, -600.0])] {

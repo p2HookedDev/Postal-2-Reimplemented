@@ -64,8 +64,12 @@ impl Terrain {
     }
 
     /// The visible quads' triangles as Karma collides with them: [`Terrain::triangles`] reversed, so each
-    /// one's right-handed normal ((b − a) × (c − b)) points up for a positive `TerrainScale`.
+    /// one's right-handed normal ((b − a) × (c − b)) points up for a positive `TerrainScale`, down when `inverted`,
+    /// the front traces block from (Karma's own rule for `inverted` unverified).
     pub fn karma_triangles(&self) -> Vec<[usize; 3]> {
+        if self.inverted {
+            return self.triangles();
+        }
         self.triangles().into_iter().map(|[a, b, c]| [a, c, b]).collect()
     }
 

@@ -305,3 +305,39 @@ fn a_prop_with_its_origin_under_the_floor_stays_on_it() {
     let origin = world.pose(prop).unwrap().0[2] - floor;
     assert!((-14.0..0.0).contains(&origin), "the origin ended {origin} from the floor");
 }
+
+#[test]
+fn a_ball_dropped_into_an_open_cabin_mover_lands_inside() {
+    let (r, h) = (100.0, 120.0);
+    let quad = |q: [[f32; 3]; 4]| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]];
+    let triangles: Vec<[[f32; 3]; 3]> = [
+        [[-r, -r, 0.0], [r, -r, 0.0], [r, r, 0.0], [-r, r, 0.0]],
+        [[-r, -r, 0.0], [-r, r, 0.0], [-r, r, h], [-r, -r, h]],
+        [[r, -r, 0.0], [r, -r, h], [r, r, h], [r, r, 0.0]],
+        [[-r, -r, 0.0], [-r, -r, h], [r, -r, h], [r, -r, 0.0]],
+        [[-r, r, 0.0], [r, r, 0.0], [r, r, h], [-r, r, h]],
+    ]
+    .into_iter()
+    .flat_map(quad)
+    .collect();
+    let mut world = World::new(GRAVITY.into());
+    world.add_mover(&[Shape::Mesh(triangles)], [0.0; 3].into(), [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let ball = world.add_body(&BodyParams {
+        shapes: vec![Shape::Sphere([0.0; 3].into(), 10.0)],
+        location: [0.0, 0.0, 200.0].into(),
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        mass: 1.0,
+        linear_damping: 0.1,
+        angular_damping: 0.1,
+        friction: 0.7,
+        restitution: 0.0,
+        asleep: false,
+        stay_upright: false,
+        allow_yaw: false,
+    });
+    for _ in 0..120 {
+        world.step(STEP);
+    }
+    let z = world.pose(ball).unwrap().0[2];
+    assert!((5.0..20.0).contains(&z), "the ball rests at {z}, not on the cabin floor");
+}

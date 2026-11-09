@@ -74,6 +74,8 @@ pub enum Shape {
     Sphere(p2_math::Vector, f32),
     Capsule(p2_math::Vector, p2_math::Vector, f32),
     Hull(Vec<[f32; 3]>),
+    /// Kinematic movers only: a triangle mesh has no mass.
+    Mesh(Vec<[[f32; 3]; 3]>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -642,6 +644,11 @@ fn collider(shape: &Shape) -> Option<ColliderBuilder> {
         Shape::Sphere(center, radius) => Some(ColliderBuilder::ball(*radius).translation(to_rapier(*center))),
         Shape::Capsule(a, b, radius) => Some(ColliderBuilder::capsule_from_endpoints(to_rapier(*a), to_rapier(*b), *radius)),
         Shape::Hull(points) => ColliderBuilder::convex_hull(&vectors(points)),
+        Shape::Mesh(triangles) => {
+            let indices = (0..triangles.len() as u32).map(|i| [3 * i, 3 * i + 1, 3 * i + 2]).collect();
+            let flags = TriMeshFlags::MERGE_DUPLICATE_VERTICES | TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;
+            ColliderBuilder::trimesh_with_flags(vectors(triangles.as_flattened()), indices, flags).ok()
+        }
     }
 }
 

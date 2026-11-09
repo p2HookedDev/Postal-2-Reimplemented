@@ -64,6 +64,14 @@ impl<L: LoaderRef> Vm<L> {
         Some(placement)
     }
 
+    /// The collision triangles in the actor's own frame (pre-pivot and scale applied), as pawns collide with them.
+    pub(crate) fn body_triangles(&mut self, actor: ObjectId) -> Option<(Triangles, Placement)> {
+        let (primitive, brush, placement) = self.primitive_placement(actor)?;
+        let local = self.local_shape(primitive, brush)?;
+        let body = |p: [f32; 3]| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i]);
+        Some((local.boxes.iter().map(|t| t.map(body)).collect(), placement))
+    }
+
     fn primitive_placement(&self, actor: ObjectId) -> Option<(ObjectId, bool, Placement)> {
         let brush = self.store.is_a(actor, Kind::Brush);
         let primitive = if brush {
