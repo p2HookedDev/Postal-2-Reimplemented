@@ -105,6 +105,12 @@ impl ResolvedScales {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Corpse {
+    Kept,
+    Gone,
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub fn ragdoll_pose(&mut self, actor: ObjectId) -> Option<Vec<Frame>> {
         let world = self.ragdoll_world_frames(actor)?;
@@ -170,7 +176,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn ragdoll_physics_changed(&mut self, actor: ObjectId, old: Option<EPhysics>) {
         let physics = self.physics_of(actor);
         if old == Some(EPhysics::KarmaRagDoll) && physics != Some(EPhysics::KarmaRagDoll) {
-            self.end_ragdoll(actor, true);
+            self.end_ragdoll(actor, Corpse::Kept);
         }
         if physics == Some(EPhysics::KarmaRagDoll) && !self.karma.ragdolls.live.contains_key(&actor) {
             let ragdolls = &mut self.karma.ragdolls;
@@ -192,8 +198,8 @@ impl<L: LoaderRef> Vm<L> {
             .filter(|&a| self.is_deleted(a) || self.physics_of(a) != Some(EPhysics::KarmaRagDoll))
             .collect();
         for actor in gone {
-            let keep = !self.is_deleted(actor);
-            self.end_ragdoll(actor, keep);
+            let corpse = if self.is_deleted(actor) { Corpse::Gone } else { Corpse::Kept };
+            self.end_ragdoll(actor, corpse);
         }
         let ragdolls = &self.karma.ragdolls;
         let destroyed: Vec<ObjectId> =
@@ -257,7 +263,7 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             }
             let frames = ragdoll.frames.to_vec();
-            self.end_ragdoll(actor, false);
+            self.end_ragdoll(actor, Corpse::Gone);
             self.init_ragdoll(actor, Some(frames));
         }
     }
@@ -392,7 +398,7 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    fn end_ragdoll(&mut self, actor: ObjectId, keep: bool) {
+    fn end_ragdoll(&mut self, actor: ObjectId, corpse: Corpse) {
         let Some(ragdoll) = self.karma.ragdolls.live.remove(&actor) else { return };
         if let Some(world) = self.karma.world.as_mut() {
             let all = ragdoll.all.clone();
@@ -401,7 +407,7 @@ impl<L: LoaderRef> Vm<L> {
         for id in ragdoll.all.iter() {
             self.karma.actors.remove(id);
         }
-        if keep {
+        if corpse == Corpse::Kept {
             self.karma.ragdolls.kept.insert(actor, (ragdoll.mesh, ragdoll.frames));
         }
     }
@@ -429,7 +435,7 @@ impl<L: LoaderRef> Vm<L> {
                     self.diagnostics.log.push("(Karma:) KFreezeRagdoll: Ragdoll not initialised.".to_owned());
                     return Some(Ok(None));
                 }
-                self.end_ragdoll(this, true);
+                self.end_ragdoll(this, Corpse::Kept);
                 self.karma.ragdolls.frozen.insert(this);
                 Some(Ok(None))
             }

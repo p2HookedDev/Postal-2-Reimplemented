@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use p2_package::Loader;
 use p2_script::Type;
-use p2_vm::{HostCommand, ObjectId, Value, Vm};
+use p2_vm::{FunctionProfiling, HostCommand, ObjectId, Value, Vm};
 
 fn load(dir: &Path, map: &str) -> (Loader, p2_package::PackageId) {
     let mut loader = Loader::open(&dir.join("System")).unwrap();
@@ -323,7 +323,7 @@ fn equivalence_bench() {
     let mut phases: Vec<_> = vm.diagnostics.tick_profile.take().unwrap_or_default().into_iter().collect();
     phases.sort_by_key(|(_, d)| std::cmp::Reverse(*d));
     eprintln!("BENCH phases per frame: {:?}", phases.iter().take(30).map(|(c, d)| format!("{c} {:?}", *d / 60)).collect::<Vec<_>>());
-    vm.profile_functions(true);
+    vm.profile_functions(FunctionProfiling::On);
     for f in 420..480 {
         frame(&mut vm, player, f, None);
     }

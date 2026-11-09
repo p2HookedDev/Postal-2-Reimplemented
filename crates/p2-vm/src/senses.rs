@@ -23,6 +23,12 @@ const SIGHT_SIDE_RATIO: f32 = 0.0001;
 const SIGHT_HEAD: f32 = 0.8;
 const SEEN_SECONDS: f32 = 1.0;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SightCheck {
+    Full,
+    Periodic,
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn make_noise(&mut self, actor: ObjectId, mut loudness: f32) -> Result<(), Error> {
         let Some(instigator) = self.object_of(actor, Prop::Instigator) else { return Ok(()) };
@@ -108,7 +114,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Actors do not block here (unverified). Of four side points retail drops the nearest and farthest
     /// to the world origin, not to the viewer, and traces the remaining ones among the first three.
-    pub(crate) fn line_of_sight_to(&mut self, controller: ObjectId, other: ObjectId, use_los_flag: bool) -> bool {
+    pub(crate) fn line_of_sight_to(&mut self, controller: ObjectId, other: ObjectId, check: SightCheck) -> bool {
         let pawn = self.object_of(controller, Prop::Pawn);
         let target = self.object_of(controller, Prop::ViewTarget).or(pawn).unwrap_or(controller);
         let mut view = self.vector(target, Prop::Location);
@@ -139,13 +145,13 @@ impl<L: LoaderRef> Vm<L> {
                 return false;
             }
             let los_flag = self.flag_of(controller, Prop::bLOSflag);
-            if !use_los_flag || !los_flag {
+            if check == SightCheck::Full || !los_flag {
                 let head = [location[0], location[1], location[2] + self.float_of(other, Prop::CollisionHeight) * SIGHT_HEAD];
                 if clear(self, head.into()) {
                     return true;
                 }
             }
-            if use_los_flag && !los_flag {
+            if check == SightCheck::Periodic && !los_flag {
                 return false;
             }
         }
@@ -224,7 +230,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn check_enemy_visible(&mut self, controller: ObjectId) -> Result<(), Error> {
         let Some(enemy) = self.object_of(controller, Prop::Enemy) else { return Ok(()) };
-        if !self.line_of_sight_to(controller, enemy, false) {
+        if !self.line_of_sight_to(controller, enemy, SightCheck::Full) {
             self.event(controller, "EnemyNotVisible", Vec::new())?;
         }
         Ok(())
@@ -239,7 +245,7 @@ impl<L: LoaderRef> Vm<L> {
                 let (probe, event) = if player { (PROBE_SEE_PLAYER, "SeePlayer") } else { (PROBE_SEE_MONSTER, "SeeMonster") };
                 if self.is_probing(other, probe)?
                     && let Some(pawn) = self.object_of(controller, Prop::Pawn)
-                    && self.see_pawn(other, pawn, true)
+                    && self.see_pawn(other, pawn, SightCheck::Periodic)
                 {
                     self.event(other, event, [Value::Object(Some(pawn))])?;
                 }

@@ -8,6 +8,18 @@ use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
 const DEFAULT_VOLUME_PRIORITY: i32 = -1_000_000;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZoneEvents {
+    Sent,
+    Silent,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OldZone {
+    Region,
+    Level,
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn default_physics_volume(&mut self) -> Result<Option<ObjectId>, Error> {
         let Some(level) = self.level else { return Ok(None) };
@@ -149,7 +161,7 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    pub(crate) fn set_zone(&mut self, actor: ObjectId, test: bool, refresh: bool) -> Result<(), Error> {
+    pub(crate) fn set_zone(&mut self, actor: ObjectId, events: ZoneEvents, zone_from: OldZone) -> Result<(), Error> {
         if self.is_deleted(actor) || !self.is_a(actor, Kind::Actor) || self.is_a(actor, Kind::LevelInfo) {
             return Ok(());
         }
@@ -158,12 +170,12 @@ impl<L: LoaderRef> Vm<L> {
             self.set(actor, Prop::PhysicsVolume, Value::Object(Some(actor)));
             return Ok(());
         }
-        let use_touch = self.flag_of(actor, Prop::bCollideActors) && !test && !refresh;
+        let use_touch = self.flag_of(actor, Prop::bCollideActors) && events == ZoneEvents::Sent && zone_from == OldZone::Region;
         let location = self.vector(actor, Prop::Location);
         let (zone, leaf, number) = self.region_at(location);
         let region = self.region_of(actor);
-        let old_zone = if refresh { self.level() } else { region.and_then(|(zone, _, _)| zone) };
-        let zone_changed = zone != old_zone && !test;
+        let old_zone = if zone_from == OldZone::Level { self.level() } else { region.and_then(|(zone, _, _)| zone) };
+        let zone_changed = zone != old_zone && events == ZoneEvents::Sent;
         if zone_changed {
             if let Some(old) = old_zone {
                 self.event(old, "ActorLeaving", [Value::Object(Some(actor))])?;
@@ -182,7 +194,7 @@ impl<L: LoaderRef> Vm<L> {
         let old = self.object_of(actor, Prop::PhysicsVolume);
         let object = |o: Option<ObjectId>| Value::Object(o);
         if !self.is_a(actor, Kind::Pawn) {
-            if test {
+            if events == ZoneEvents::Silent {
                 self.set(actor, Prop::PhysicsVolume, object(new));
             } else if new != old {
                 if let Some(old) = old {
@@ -199,7 +211,7 @@ impl<L: LoaderRef> Vm<L> {
         let eyes = [location[0], location[1], location[2] + self.float_of(actor, Prop::BaseEyeHeight)];
         let head = self.physics_volume_at(eyes.into(), use_touch)?;
         if new != old {
-            if !test {
+            if events == ZoneEvents::Sent {
                 if let Some(old) = old {
                     self.event(old, "PawnLeavingVolume", [object(Some(actor))])?;
                     self.event(actor, "PhysicsVolumeChange", [object(new)])?;
@@ -209,12 +221,12 @@ impl<L: LoaderRef> Vm<L> {
                 }
             }
             self.set(actor, Prop::PhysicsVolume, object(new));
-            if !test && let Some(new) = new {
+            if events == ZoneEvents::Sent && let Some(new) = new {
                 self.event(new, "PawnEnteredVolume", [object(Some(actor))])?;
             }
         }
         if head != self.object_of(actor, Prop::HeadVolume) {
-            if !test {
+            if events == ZoneEvents::Sent {
                 let handled = match self.object_of(actor, Prop::Controller) {
                     Some(controller) => self.event_bool(controller, "NotifyHeadVolumeChange", [object(head)])?,
                     None => false,

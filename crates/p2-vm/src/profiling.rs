@@ -108,6 +108,12 @@ impl ObjectStore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionProfiling {
+    Off,
+    On,
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn count(&self, work: Work) {
         if self.diagnostics.count_work {
@@ -151,8 +157,8 @@ impl<L: LoaderRef> Vm<L> {
         entry.own += total.saturating_sub(children);
     }
 
-    pub fn profile_functions(&mut self, on: bool) {
-        self.diagnostics.function_profile = on.then(FunctionProfile::default);
+    pub fn profile_functions(&mut self, profiling: FunctionProfiling) {
+        self.diagnostics.function_profile = (profiling == FunctionProfiling::On).then(FunctionProfile::default);
     }
 
     pub fn take_function_profile(&mut self) -> Vec<(String, FunctionTime)> {

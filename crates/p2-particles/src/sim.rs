@@ -124,6 +124,12 @@ pub struct ParticleEmitter {
     beam_points: BeamPoints,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FirstUpdate {
+    Skip,
+    Run,
+}
+
 struct SpawnContext<'c, 'o> {
     owner: &'c Owner,
     rng: &'c mut Rng,
@@ -272,7 +278,7 @@ impl ParticleEmitter {
             } else if self.props.respawn_dead_particles {
                 let overshoot = self.props.initial_time_range.rand(rng) + (p.time - p.max_lifetime);
                 let time = if p.max_lifetime == 0.0 { 0.0 } else { overshoot % p.max_lifetime };
-                self.spawn_particle(index, time, false, None, SpawnContext { owner, rng: &mut *rng, others });
+                self.spawn_particle(index, time, FirstUpdate::Run, None, SpawnContext { owner, rng: &mut *rng, others });
             } else {
                 p.active = false;
                 dead += 1;
@@ -293,7 +299,7 @@ impl ParticleEmitter {
                 let last = self.props.use_max_collisions
                     && p.hit_count + 1 >= self.props.max_collisions.rand(rng).floor() as i32;
                 if last && self.props.respawn_dead_particles {
-                    self.spawn_particle(index, 0.5 * dt, false, None, SpawnContext { owner, rng: &mut *rng, others });
+                    self.spawn_particle(index, 0.5 * dt, FirstUpdate::Run, None, SpawnContext { owner, rng: &mut *rng, others });
                 } else if last {
                     self.particles[index].active = false;
                     dead += 1;
@@ -341,7 +347,7 @@ impl ParticleEmitter {
             return;
         }
         let index = self.particle_index;
-        self.spawn_particle(index, dt, false, Some(hit.location), SpawnContext { owner, rng: &mut *rng, others });
+        self.spawn_particle(index, dt, FirstUpdate::Run, Some(hit.location), SpawnContext { owner, rng: &mut *rng, others });
         if let Some(range) = velocity_scale {
             let add_velocity = hit.normal * range.rand(rng);
             let p = &mut self.particles[index];
@@ -362,7 +368,7 @@ impl ParticleEmitter {
         let first = (interval * fraction + dt) - interval;
         let count = (whole.max(0.0) as usize).min(max);
         for k in 0..count {
-            self.spawn_particle(self.particle_index, first - k as f32 * interval, true, None, SpawnContext { owner, rng: &mut *rng, others });
+            self.spawn_particle(self.particle_index, first - k as f32 * interval, FirstUpdate::Skip, None, SpawnContext { owner, rng: &mut *rng, others });
             let next = self.particle_index + 1;
             self.active_particles = self.active_particles.max(next);
             self.particle_index = next % max;
@@ -370,7 +376,7 @@ impl ParticleEmitter {
         total - whole
     }
 
-    fn spawn_particle(&mut self, index: usize, time: f32, fresh: bool, at: Option<Vector>, context: SpawnContext) {
+    fn spawn_particle(&mut self, index: usize, time: f32, first_update: FirstUpdate, at: Option<Vector>, context: SpawnContext) {
         let SpawnContext { owner, rng, others } = context;
         let props = &self.props;
         let strip = props.kind == EmitterKind::Strip;
@@ -380,7 +386,7 @@ impl ParticleEmitter {
         if !strip && (props.max_particles == 0 || self.kill_pending || props.lifetime_range.max <= 0.0) {
             return;
         }
-        let (mut time, mut fresh, mut at) = (time, fresh, at);
+        let (mut time, mut fresh, mut at) = (time, first_update == FirstUpdate::Skip, at);
         let mut passes = 0;
         loop {
             let context = SpawnContext { owner, rng: &mut *rng, others };
@@ -923,7 +929,7 @@ impl Emitter {
             return;
         }
         e.props.start_location_offset = offset;
-        e.spawn_particle(e.particle_index, 0.0, true, None, SpawnContext { owner: &owner, rng: &mut self.rng, others: &Others { before, after } });
+        e.spawn_particle(e.particle_index, 0.0, FirstUpdate::Skip, None, SpawnContext { owner: &owner, rng: &mut self.rng, others: &Others { before, after } });
         let next = e.particle_index + 1;
         e.active_particles = e.active_particles.max(next);
         e.particle_index = next % max;

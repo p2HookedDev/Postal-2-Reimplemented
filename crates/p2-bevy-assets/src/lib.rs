@@ -500,14 +500,18 @@ pub fn set_block_compression(supported: bool) {
 }
 
 pub fn texture_to_image(texture: &Texture, palette: Option<&[[u8; 4]]>) -> Option<Image> {
-    texture_image(texture, palette, BLOCK_COMPRESSION.load(Ordering::Relaxed))
+    let compression = if BLOCK_COMPRESSION.load(Ordering::Relaxed) { Compression::Block } else { Compression::Off };
+    texture_image(texture, palette, compression)
 }
 
-pub fn texture_to_rgba_image(texture: &Texture, palette: Option<&[[u8; 4]]>) -> Option<Image> {
-    texture_image(texture, palette, false)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compression {
+    Off,
+    Block,
 }
 
-fn texture_image(texture: &Texture, palette: Option<&[[u8; 4]]>, compressed: bool) -> Option<Image> {
+pub fn texture_image(texture: &Texture, palette: Option<&[[u8; 4]]>, compression: Compression) -> Option<Image> {
+    let compressed = compression == Compression::Block;
     let base = texture.mips.first()?;
     let (format, block) = match texture.format {
         TextureFormat::Dxt1 if compressed => (GpuFormat::Bc1RgbaUnormSrgb, 4),
@@ -804,7 +808,7 @@ mod tests {
             clamp: [false; 2],
             lod_set: 0,
         };
-        let image = texture_to_rgba_image(&texture, None).unwrap();
+        let image = texture_image(&texture, None, Compression::Off).unwrap();
         assert_eq!(image.texture_descriptor.format, GpuFormat::Rgba8UnormSrgb);
         assert_eq!(image.texture_descriptor.mip_level_count, 4);
         let data = image.data.unwrap();

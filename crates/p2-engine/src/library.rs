@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use bevy::image::Image;
 use p2_assets::{BaseTexture, Blending, CombineOps, Mip, RenderState, Texture, TextureFormat, UvModifier, base_texture, read_combiner, read_cubemap_faces, read_palette, read_texture, read_wet_params};
 use p2_render_cpu::{WetSim};
-use p2_bevy_assets::{alpha_on_black_image, cube_image, texture_combined, texture_glow, texture_to_image, texture_to_rgba_image, texture_to_ui_image, texture_with_constant_alpha, texture_with_opacity};
+use p2_bevy_assets::{alpha_on_black_image, cube_image, Compression, texture_combined, texture_glow, texture_image, texture_to_image, texture_to_ui_image, texture_with_constant_alpha, texture_with_opacity};
 use p2_package::{Ini, Loader, Package, PackageId, ResolveError, Resolved};
 use p2_script::{Objects, Source};
 
@@ -538,7 +538,7 @@ impl Game {
             && let Some(wet) = self.wet_source(source)
         {
             // The animation rewrites the pixels every step (`wet.rs`): the main world keeps them.
-            let mut image = texture_to_rgba_image(&wet.texture, Some(wet.palette.as_slice()))?;
+            let mut image = texture_image(&wet.texture, Some(wet.palette.as_slice()), Compression::Off)?;
             image.asset_usage = bevy::asset::RenderAssetUsages::all();
             return Some(image);
         }
@@ -554,7 +554,9 @@ impl Game {
             Some((mask, mask_palette)) => texture_with_opacity(&texture, palette.as_deref(), &mask, mask_palette.as_deref()),
             None => None,
         };
-        let convert = if decode == TextureDecode::Rgba { texture_to_rgba_image } else { texture_to_image };
+        let convert = |texture: &Texture, palette: Option<&[[u8; 4]]>| {
+            if decode == TextureDecode::Rgba { texture_image(texture, palette, Compression::Off) } else { texture_to_image(texture, palette) }
+        };
         image.or_else(|| convert(&texture, palette.as_deref()))
     }
 

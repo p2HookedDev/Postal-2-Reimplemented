@@ -2,6 +2,7 @@ use p2_math::{Rotator, Vector};
 
 use crate::enums::EPhysics;
 use crate::interp::int;
+use crate::anim::Playback;
 use crate::{Encroachment, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
 
 /// Channels: turning right / left in place, then `MovementAnims` forward, back, left, right; the four after those
@@ -110,11 +111,11 @@ impl<L: LoaderRef> Vm<L> {
         if !self.flag_of(pawn, Prop::bInitializeAnimation) {
             self.set(pawn, Prop::bInitializeAnimation, Value::Bool(true));
             let (right, left) = (self.name_of(pawn, Prop::TurnRightAnim), self.name_of(pawn, Prop::TurnLeftAnim));
-            self.play(pawn, RIGHT_TURN_CHANNEL, right, 1.0, 0.1, true);
-            self.play(pawn, LEFT_TURN_CHANNEL, left, 1.0, 0.1, true);
+            self.play(pawn, RIGHT_TURN_CHANNEL, right, 1.0, 0.1, Playback::Looping);
+            self.play(pawn, LEFT_TURN_CHANNEL, left, 1.0, 0.1, Playback::Looping);
             for i in 0..4 {
                 let sequence = self.movement_anim(pawn, i);
-                self.play(pawn, FIRST_MOVEMENT_CHANNEL + i as i32, sequence, 1.0, 0.1, true);
+                self.play(pawn, FIRST_MOVEMENT_CHANNEL + i as i32, sequence, 1.0, 0.1, Playback::Looping);
             }
             for channel in RIGHT_TURN_CHANNEL..END_CHANNEL {
                 if let Some(state) = self.valid_channel(pawn, channel) {

@@ -65,7 +65,7 @@ pub use actors::Encroachment;
 pub use client::{InteractionOrder, VideoMode};
 pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
-pub use profiling::FunctionTime;
+pub use profiling::{FunctionProfiling, FunctionTime};
 pub use memory::Mem as PropertyBlock;
 use object_store::ObjectStore;
 

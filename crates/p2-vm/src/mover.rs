@@ -4,6 +4,7 @@ use p2_collision::mesh_box_overlaps;
 
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
+use crate::volumes::{OldZone, ZoneEvents};
 use crate::interp::{float, int};
 use crate::physics::Bases;
 use crate::{Encroachment, Error, Kind, LoaderRef, ObjectId, Value, Vm, Prop};
@@ -93,7 +94,7 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(false);
         }
         self.update_relative_location(mover);
-        self.set_zone(mover, false, false)?;
+        self.set_zone(mover, ZoneEvents::Sent, OldZone::Region)?;
         self.update_touching(mover)?;
         Ok(true)
     }

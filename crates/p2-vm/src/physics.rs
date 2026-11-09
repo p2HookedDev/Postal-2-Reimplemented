@@ -2,6 +2,7 @@ use p2_collision::{Primitive, mesh_box_check, pull_back_units, segment_cylinder}
 
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
+use crate::volumes::{OldZone, ZoneEvents};
 use crate::interp::{float, int};
 use crate::mover::turned;
 use crate::{Error, LoaderRef, ObjectId, Prop, PropertyName, Value, Vm, Kind};
@@ -94,13 +95,19 @@ impl MoveHit {
 
 pub(crate) const CYLINDER_PULL_BACK: f32 = 0.001;
 
-fn fixed_turn(current: i32, desired: i32, rate: i32, to_desired: bool, fixed_direction: bool) -> i32 {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Toward {
+    Desired,
+    Spin,
+}
+
+fn fixed_turn(current: i32, desired: i32, rate: i32, toward: Toward, fixed_direction: bool) -> i32 {
     if rate == 0 {
         return current & 0xffff;
     }
     let (current, desired) = (current & 0xffff, desired & 0xffff);
     if fixed_direction {
-        if !to_desired {
+        if toward == Toward::Spin {
             return (current + rate) & 0xffff;
         }
         let step = if rate > 0 {
@@ -112,7 +119,7 @@ fn fixed_turn(current: i32, desired: i32, rate: i32, to_desired: bool, fixed_dir
         };
         return (current + step) & 0xffff;
     }
-    if !to_desired {
+    if toward == Toward::Spin {
         return current;
     }
     let rate = rate.abs();
@@ -365,7 +372,7 @@ impl<L: LoaderRef> Vm<L> {
         if collides && !self.is_deleted(actor) {
             self.end_touches(actor)?;
         }
-        self.set_zone(actor, false, false)?;
+        self.set_zone(actor, ZoneEvents::Sent, OldZone::Region)?;
         Ok(hit)
     }
 
@@ -430,7 +437,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.flag_of(actor, Prop::bCollideActors) && !self.is_deleted(actor) {
             self.end_touches(actor)?;
         }
-        self.set_zone(actor, false, false)?;
+        self.set_zone(actor, ZoneEvents::Sent, OldZone::Region)?;
         Ok(())
     }
 
@@ -1170,20 +1177,20 @@ impl<L: LoaderRef> Vm<L> {
         let mut desired = self.rotator_of(pawn, Prop::DesiredRotation);
         if let Some(controller) = controller.filter(|_| rotate) {
             if desired.yaw != rotation.yaw {
-                rotation.yaw = fixed_turn(rotation.yaw, desired.yaw, turn, true, fixed);
+                rotation.yaw = fixed_turn(rotation.yaw, desired.yaw, turn, Toward::Desired, fixed);
             }
             if matches!(physics, Some(EPhysics::Walking | EPhysics::Falling | EPhysics::Ladder)) && desired.pitch != 0 {
                 desired.pitch = 0;
                 self.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
             }
             if !(self.flag_of(pawn, Prop::bCrawler) && physics == Some(EPhysics::Walking)) && desired.pitch != rotation.pitch {
-                rotation.pitch = fixed_turn(rotation.pitch, desired.pitch, turn, true, fixed);
+                rotation.pitch = fixed_turn(rotation.pitch, desired.pitch, turn, Toward::Desired, fixed);
             }
             if self.flag_of(controller, Prop::bRotateToDesired) {
                 let mut own = self.rotator_of(controller, Prop::Rotation);
                 own.yaw = rotation.yaw;
                 let own_desired = self.rotator_of(controller, Prop::DesiredRotation);
-                own.pitch = fixed_turn(own.pitch, own_desired.pitch, turn, true, self.flag_of(controller, Prop::bFixedRotationDir));
+                own.pitch = fixed_turn(own.pitch, own_desired.pitch, turn, Toward::Desired, self.flag_of(controller, Prop::bFixedRotationDir));
                 self.set(controller, Prop::Rotation, Value::Rotator(own));
             }
         }
@@ -1215,7 +1222,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut rotation = current;
         for axis in [1, 0, 2] {
             if turn[axis] != 0 && (!to_desired || desired[axis] != rotation[axis]) {
-                rotation[axis] = fixed_turn(rotation[axis], desired[axis], turn[axis], to_desired, fixed);
+                rotation[axis] = fixed_turn(rotation[axis], desired[axis], turn[axis], if to_desired { Toward::Desired } else { Toward::Spin }, fixed);
             }
         }
         if rotation != current {
@@ -1276,13 +1283,13 @@ mod tests {
 
     #[test]
     fn fixed_turn_takes_the_short_way() {
-        assert_eq!(fixed_turn(0, 1000, 300, true, false), 300);
-        assert_eq!(fixed_turn(0, 65000, 300, true, false), 65236);
-        assert_eq!(fixed_turn(100, 120, 300, true, false), 120);
-        assert_eq!(fixed_turn(65500, 100, 300, true, false), 100);
-        assert_eq!(fixed_turn(65500, 1000, 300, true, false), 264);
-        assert_eq!(fixed_turn(10, 5000, 300, false, false), 10);
-        assert_eq!(fixed_turn(65400, 0, 300, false, true), 164);
+        assert_eq!(fixed_turn(0, 1000, 300, Toward::Desired, false), 300);
+        assert_eq!(fixed_turn(0, 65000, 300, Toward::Desired, false), 65236);
+        assert_eq!(fixed_turn(100, 120, 300, Toward::Desired, false), 120);
+        assert_eq!(fixed_turn(65500, 100, 300, Toward::Desired, false), 100);
+        assert_eq!(fixed_turn(65500, 1000, 300, Toward::Desired, false), 264);
+        assert_eq!(fixed_turn(10, 5000, 300, Toward::Spin, false), 10);
+        assert_eq!(fixed_turn(65400, 0, 300, Toward::Spin, true), 164);
     }
 
     #[test]

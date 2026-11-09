@@ -2,6 +2,7 @@ use p2_math::{Rotator, Vector};
 use crate::interp::{float, int, truthy};
 use crate::native_id::{Native, NativeGroup};
 use crate::physics::Bases;
+use crate::senses::SightCheck;
 use crate::{Encroachment, Error, HostCommand, LoaderRef, MusicCommand, NameId, ObjectId, PlayedSound, Prop, ProjectorEvent, Value, Vm};
 
 pub const AUDIO_DEFAULT_RADIUS: f32 = 80.0;
@@ -469,7 +470,7 @@ fn sense_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Objec
             return Ok(None);
         }
         Native::LineOfSightTo => Value::Bool(match (this, object_arg(args, 0)) {
-            (Some(this), Some(other)) => vm.line_of_sight_to(this, other, false),
+            (Some(this), Some(other)) => vm.line_of_sight_to(this, other, SightCheck::Full),
             _ => false,
         }),
         Native::PlayerCanSeeMe => Value::Bool(this.is_some_and(|this| vm.player_can_see_me(this))),

@@ -1,5 +1,6 @@
 use p2_math::Vector;
 use crate::enums::EPhysics;
+use crate::volumes::{OldZone, ZoneEvents};
 use crate::{ClassId, Error, HostCommand, InteractionOrder, Kind, ObjectId, LoaderRef, Prop, Value, Vm};
 
 fn add_time(profile: &mut std::collections::HashMap<String, std::time::Duration>, name: &str, time: std::time::Duration) {
@@ -169,7 +170,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
         }
-        self.set_zone(actor, false, true)?;
+        self.set_zone(actor, ZoneEvents::Sent, OldZone::Level)?;
         if self.is_deleted(actor) {
             return Ok(None);
         }
@@ -351,7 +352,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.set_vector(actor, Prop::Location, location);
         self.relocate(actor);
-        self.set_zone(actor, false, false)?;
+        self.set_zone(actor, ZoneEvents::Sent, OldZone::Region)?;
         Ok(())
     }
 
@@ -882,7 +883,7 @@ impl<L: LoaderRef> Vm<L> {
         for event in ["PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState"] {
             if event == "PostBeginPlay" {
                 for &actor in &actors {
-                    if let Err(e) = self.set_zone(actor, true, true) {
+                    if let Err(e) = self.set_zone(actor, ZoneEvents::Silent, OldZone::Level) {
                         errors.push((self.object(actor).path.clone(), "SetZone", e));
                     }
                 }

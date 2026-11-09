@@ -302,6 +302,18 @@ fn build_node_lists(store: &mut ObjectStore, class_names: &ClassNames, game: Obj
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineOfSight {
+    Unknown,
+    Known,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnchorCheck {
+    Checked,
+    Skipped,
+}
+
 impl<L: LoaderRef> Vm<L> {
     fn graph(&mut self) -> &Graph {
         if self.nav_graph.is_none() {
@@ -331,7 +343,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Native::actorReachable => {
                 let reachable = match (self.object_of(this, Prop::Pawn), object(0)) {
-                    (Some(pawn), Some(target)) => self.actor_reachable(pawn, target, false, false),
+                    (Some(pawn), Some(target)) => self.actor_reachable(pawn, target, LineOfSight::Unknown, AnchorCheck::Checked),
                     _ => false,
                 };
                 Value::Bool(reachable)
@@ -467,7 +479,7 @@ impl<L: LoaderRef> Vm<L> {
             let (actor, node_location, node_height) = (node.actor, node.location, node.height);
             let visible = self.trace_world(node_location, location, Vector::ZERO).is_none()
                 || self.trace_world(Vector::new(node_location.x, node_location.y, node_location.z + node_height), Vector::new(location.x, location.y, location.z + height), Vector::ZERO).is_none();
-            if visible && self.actor_reachable(pawn, actor, true, true) {
+            if visible && self.actor_reachable(pawn, actor, LineOfSight::Known, AnchorCheck::Skipped) {
                 return Some(candidate);
             }
         }
@@ -515,20 +527,20 @@ impl<L: LoaderRef> Vm<L> {
                 let skip = to_pawn < SKIP_ANCHOR_DISTANCE
                     && to_pawn < (along + found.start_distance) * SKIP_ANCHOR_SHARE
                     && self.trace_world(next_location, location, Vector::ZERO).is_none()
-                    && self.actor_reachable(pawn, next, true, true);
+                    && self.actor_reachable(pawn, next, LineOfSight::Known, AnchorCheck::Skipped);
                 first = usize::from(skip);
             }
         }
         self.nav_graph.get_or_insert_with(Graph::default).finish_route(&mut self.store, controller, pawn, &route, &nodes, first);
     }
 
-    pub(crate) fn actor_reachable(&mut self, pawn: ObjectId, target: ObjectId, known_visible: bool, no_anchor_check: bool) -> bool {
+    pub(crate) fn actor_reachable(&mut self, pawn: ObjectId, target: ObjectId, sight: LineOfSight, anchor: AnchorCheck) -> bool {
         if self.is_deleted(target) {
             return false;
         }
         let location = self.vector(pawn, Prop::Location);
         let there = self.vector(target, Prop::Location);
-        if !no_anchor_check && self.object_of(pawn, Prop::Anchor) == Some(target) && self.valid_anchor(pawn) {
+        if anchor == AnchorCheck::Checked && self.object_of(pawn, Prop::Anchor) == Some(target) && self.valid_anchor(pawn) {
             return true;
         }
         let offset = there - location;
@@ -536,7 +548,7 @@ impl<L: LoaderRef> Vm<L> {
         if squared > REACH_DISTANCE_SQUARED || !(self.flag_of(pawn, Prop::bCanWalk) || self.flag_of(pawn, Prop::bCanFly)) {
             return false;
         }
-        if !known_visible {
+        if sight == LineOfSight::Unknown {
             let eyes = [location[0], location[1], location[2] + self.float_of(pawn, Prop::EyeHeight)];
             if self.trace_world(eyes.into(), there, Vector::ZERO).is_some() {
                 return false;

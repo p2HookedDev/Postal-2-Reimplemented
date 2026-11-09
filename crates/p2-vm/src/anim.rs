@@ -110,6 +110,12 @@ impl Anims {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Playback {
+    Once,
+    Looping,
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub fn anim_channel(&self, actor: ObjectId, channel: usize) -> Option<(&AnimChannel, Option<ObjectId>)> {
         let instance = self.instance(actor)?;
@@ -156,7 +162,7 @@ impl<L: LoaderRef> Vm<L> {
             Native::PlayAnim | Native::LoopAnim | Native::PlayAnimAt => {
                 let channel = int_at(args, 3);
                 let (rate, tween) = (optional_float(args, 1, 1.0), optional_float(args, 2, 0.0));
-                self.play(this, channel, name_arg(args, 0), rate, tween, native == Native::LoopAnim);
+                self.play(this, channel, name_arg(args, 0), rate, tween, if native == Native::LoopAnim { Playback::Looping } else { Playback::Once });
                 if native == Native::PlayAnimAt
                     && let Some(state) = self.channel_mut(this, channel)
                 {
@@ -165,7 +171,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::TweenAnim => {
-                self.play(this, int_at(args, 2), name_arg(args, 0), 0.0, optional_float(args, 1, 0.0), false);
+                self.play(this, int_at(args, 2), name_arg(args, 0), 0.0, optional_float(args, 1, 0.0), Playback::Once);
                 return Ok(None);
             }
             Native::IsAnimating => Value::Bool(self.is_animating(this, int_at(args, 0))),
@@ -360,7 +366,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     /// Rate 0 holds the first frame; `tween` -1 tweens at the previous rate.
-    pub(crate) fn play(&mut self, actor: ObjectId, channel: i32, sequence: NameId, rate: f32, tween: f32, looping: bool) -> bool {
+    pub(crate) fn play(&mut self, actor: ObjectId, channel: i32, sequence: NameId, rate: f32, tween: f32, playback: Playback) -> bool {
+        let looping = playback == Playback::Looping;
         if sequence == NameId::NONE || self.skeletal_mesh(actor).is_none() {
             return false;
         }

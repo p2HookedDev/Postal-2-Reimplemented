@@ -4,7 +4,7 @@ use common::{game_dir, ini, loader, object_of, system_ini};
 
 use p2_math::Rotator;
 use p2_package::Loader;
-use p2_vm::{Encroachment, HostCommand, InteractionOrder, NameId, ObjectId, ParticleCommand, PlayedSound, Value, Vm};
+use p2_vm::{Encroachment, FunctionProfiling, HostCommand, InteractionOrder, NameId, ObjectId, ParticleCommand, PlayedSound, Value, Vm};
 
 const ANIM_NATIVES: [&str; 17] = [
     "PlayAnim", "PlayAnimAt", "LoopAnim", "TweenAnim", "IsAnimating", "FinishAnim", "HasAnim", "StopAnimating",
@@ -1633,7 +1633,7 @@ fn monday_frame_profile() {
     eprintln!("frame without profiling: {:?}", plain / 180);
     for by_function in [false, true] {
         vm.take_work_counts();
-        vm.profile_functions(by_function);
+        vm.profile_functions(if by_function { FunctionProfiling::On } else { FunctionProfiling::Off });
         let frames = if by_function { 120 } else { 60 };
         for _ in 0..frames {
             vm.player_input(&[], [0.0, 0.0]).unwrap();

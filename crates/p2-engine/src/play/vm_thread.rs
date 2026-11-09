@@ -199,12 +199,12 @@ impl Simulation {
         if profile == VmProfile::Work {
             if self.work_since.is_none() {
                 self.vm.diagnostics.count_work = true;
-                self.vm.profile_functions(true);
+                self.vm.profile_functions(p2_vm::FunctionProfiling::On);
                 self.work_since = Some((Instant::now(), 0));
             }
         } else if self.work_since.take().is_some() {
             self.vm.diagnostics.count_work = false;
-            self.vm.profile_functions(false);
+            self.vm.profile_functions(p2_vm::FunctionProfiling::Off);
             self.work_second = WorkSecond::default();
         }
     }

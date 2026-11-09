@@ -3,6 +3,7 @@ use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::natives::vec3;
 use crate::physics::{Bases, MoveHit};
+use crate::senses::SightCheck;
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
 const VISIBILITY_SCALE: f32 = 1.0 / 128.0;
@@ -24,7 +25,7 @@ impl<L: LoaderRef> Vm<L> {
         let object = |n: usize| crate::natives::object_arg(args, n);
         Ok(Some(match native {
             Native::CanSee => Value::Bool(match object(0) {
-                Some(other) => self.see_pawn(this, other, false),
+                Some(other) => self.see_pawn(this, other, SightCheck::Full),
                 None => false,
             }),
             Native::PickWallAdjust => Value::Bool(self.pick_wall_adjust(this)),
@@ -41,10 +42,10 @@ impl<L: LoaderRef> Vm<L> {
         }))
     }
 
-    pub(crate) fn see_pawn(&mut self, controller: ObjectId, other: ObjectId, may_skip: bool) -> bool {
+    pub(crate) fn see_pawn(&mut self, controller: ObjectId, other: ObjectId, check: SightCheck) -> bool {
         let Some(pawn) = self.object_of(controller, Prop::Pawn) else { return false };
         if self.object_of(controller, Prop::Enemy) == Some(other) {
-            return self.line_of_sight_to(controller, other, false);
+            return self.line_of_sight_to(controller, other, SightCheck::Full);
         }
         let flag = self.flag_of(controller, Prop::bLOSflag);
         self.set(controller, Prop::bLOSflag, Value::Bool(!flag));
@@ -55,14 +56,14 @@ impl<L: LoaderRef> Vm<L> {
         if distance_squared > reach_squared {
             return false;
         }
-        if may_skip && reach_squared * 0.25 < distance_squared && self.random() < 0.5 {
+        if check == SightCheck::Periodic && reach_squared * 0.25 < distance_squared && self.random() < 0.5 {
             return false;
         }
         let facing = offset.safe_normal().dot(self.rotator_of(controller, Prop::Rotation).vector());
         if facing < self.float_of(pawn, Prop::PeripheralVision) {
             return false;
         }
-        if may_skip && self.random() * distance_squared > reach_squared * 0.01 {
+        if check == SightCheck::Periodic && self.random() * distance_squared > reach_squared * 0.01 {
             let flat = Vector::new(offset.x, offset.y, offset.z * 2.0);
             if flat.safe_normal().dot(self.rotator_of(controller, Prop::Rotation).vector()) < self.float_of(pawn, Prop::PeripheralVision) {
                 return false;
@@ -72,7 +73,7 @@ impl<L: LoaderRef> Vm<L> {
                 return false;
             }
         }
-        self.line_of_sight_to(controller, other, may_skip)
+        self.line_of_sight_to(controller, other, check)
     }
 
     /// Not modelled: retail skips the search under a level flag (unverified).
