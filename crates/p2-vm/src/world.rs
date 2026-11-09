@@ -5,7 +5,7 @@ use p2_collision::{BspHulls, MeshCollision};
 use p2_math::Vector;
 use p2_package::PackageId;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::{LoaderRef, ObjectId, Prop, Value, Vm};
 
@@ -120,10 +120,16 @@ pub(crate) struct World {
     lines: Vec<WorldShape>,
     box_grid: ShapeGrid,
     line_grid: ShapeGrid,
-    pub(crate) static_actors: FxHashSet<ObjectId>,
+    static_actors: Vec<bool>,
     mesh_materials: FxHashMap<ObjectId, Option<(PackageId, Arc<[i32]>)>>,
     pub(crate) primitives: crate::collision::Primitives,
     pub(crate) frame: u64,
+}
+
+impl World {
+    pub(crate) fn is_static(&self, actor: ObjectId) -> bool {
+        self.static_actors.get(actor.0 as usize).copied().unwrap_or_default()
+    }
 }
 
 impl<L: LoaderRef> Vm<L> {

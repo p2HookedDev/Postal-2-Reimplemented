@@ -157,20 +157,49 @@ impl MeshLight {
     }
 
     pub fn world_radius(&self) -> f32 {
-        25.0 * (self.radius as i32 + 1) as f32
+        light_world_radius(self.radius)
+    }
+
+    pub fn cone_sine(&self) -> f32 {
+        1.0 - f32::from(self.cone) / 256.0
+    }
+
+    fn prepare(&self) -> PreparedLight<'_> {
+        let direction = if matches!(self.effect, LE_SUNLIGHT | LE_SPOTLIGHT | LE_STATIC_SPOT) { self.rotation.vector() } else { Vector::ZERO };
+        let sine = self.cone_sine();
+        PreparedLight { light: self, radius: self.world_radius(), direction, sine, rsine: 1.0 / (1.0 - sine) }
     }
 
     pub fn sample_intensity(&self, position: Vector, normal: Vector) -> f32 {
-        let to_light = self.location - position;
+        self.prepare().sample_intensity(position, normal)
+    }
+}
+
+pub fn light_world_radius(radius: f32) -> f32 {
+    25.0 * (radius as i32 + 1) as f32
+}
+
+/// What [`MeshLight::sample_intensity`] derives from the light alone, worked out once for many samples.
+struct PreparedLight<'a> {
+    light: &'a MeshLight,
+    radius: f32,
+    direction: Vector,
+    sine: f32,
+    rsine: f32,
+}
+
+impl PreparedLight<'_> {
+    fn sample_intensity(&self, position: Vector, normal: Vector) -> f32 {
+        let PreparedLight { light, radius, direction, sine, rsine } = *self;
+        let to_light = light.location - position;
         let distance_squared = to_light.dot(to_light);
-        let radius = self.world_radius();
-        if self.effect != LE_SUNLIGHT && distance_squared >= radius * radius {
+        if light.effect != LE_SUNLIGHT && distance_squared >= radius * radius {
             return 0.0;
         }
         let distance = distance_squared.sqrt();
-        match self.effect {
+        match light.effect {
             LE_SUNLIGHT => {
-                let d = self.rotation.vector().dot(normal);
+                let d = direction.dot(normal);
                 if d < 0.0 { d * -2.0 } else { 0.0 }
             }
             LE_CYLINDER if distance < radius => {
@@ -183,9 +212,7 @@ impl MeshLight {
                 if base <= 0.0 {
                     return 0.0;
                 }
-                let sine = 1.0 - f32::from(self.cone) / 256.0;
-                let rsine = 1.0 / (1.0 - sine);
-                let along = -to_light.dot(self.rotation.vector());
+                let along = -to_light.dot(direction);
                 if along > 0.0 && along * along > sine * sine * distance_squared {
                     let falloff = along * rsine / distance - sine * rsine;
                     falloff * falloff * base
@@ -227,7 +254,7 @@ impl MeshPlacement {
         self.location + x * p.x + y * p.y + z * p.z
     }
 
-    fn world_vertices(&self, mesh: &StaticMesh) -> Vec<(Vector, Vector)> {
+    pub fn world_vertices(&self, mesh: &StaticMesh) -> Vec<(Vector, Vector)> {
         let axes = self.axes();
         let [x, y, z] = axes;
         mesh.positions
@@ -352,7 +379,7 @@ pub fn relevant_lights<'a>(candidates: impl IntoIterator<Item = &'a MeshLight>, 
                     let length = to_center.dot(to_center).sqrt().max(1e-6);
                     let along = to_center.dot(light.rotation.vector()) / length;
                     // The list's limit is squared, so wider than `sample_intensity`'s cone (unverified).
-                    let cone = 1.0 - f32::from(light.cone) / 256.0;
+                    let cone = light.cone_sine();
                     if along > 0.0 && along > cone * cone { (1.0 - to_center.dot(to_center) / (reach * reach)) * light.brightness } else { 0.0 }
                 }
                 _ => (1.0 - to_center.dot(to_center) / (reach * reach)) * light.brightness,
@@ -374,14 +401,14 @@ pub fn static_mesh_lighting(
     mesh: &StaticMesh,
     instance: &StaticMeshInstance,
     lights: &[Option<MeshLight>],
-    placement: &MeshPlacement,
+    world: &[(Vector, Vector)],
     level_brightness: f32,
 ) -> Vec<[u8; 4]> {
-    let world = placement.world_vertices(mesh);
     let mut colors = vec![[0u8; 4]; world.len()];
     for (info, light) in instance.lights.iter().zip(lights) {
         let Some(light) = light.filter(|l| !l.dynamic) else { continue };
         let color = light.color(level_brightness).map(|c| c * 0.5);
+        let light = light.prepare();
         for (index, (&(position, normal), out)) in world.iter().zip(&mut colors).enumerate() {
             if !info.reaches(index) {
                 continue;
@@ -435,20 +462,19 @@ pub fn static_mesh_colors(
     hardware: &[HardwareLight],
 ) -> Vec<[u8; 4]> {
     let fitting = instance.filter(|instance| instance_fits(mesh, instance));
+    let relight = fitting.is_some_and(|instance| needs_relight(instance, lights));
+    let applies = |light: &HardwareLight| fitting.is_none() || light.dynamic;
+    let world = if relight || hardware.iter().any(applies) { placement.world_vertices(mesh) } else { Vec::new() };
     let mut colors = match fitting {
-        Some(instance) if needs_relight(instance, lights) => {
-            static_mesh_lighting(mesh, instance, lights, placement, level_brightness)
-        }
+        Some(instance) if relight => static_mesh_lighting(mesh, instance, lights, &world, level_brightness),
         Some(instance) => instance.colors.clone(),
         None => vec![[0, 0, 0, 255]; mesh.positions.len()],
     };
-    let hardware: Vec<&HardwareLight> = hardware.iter().filter(|light| fitting.is_none() || light.dynamic).collect();
-    let world = if hardware.is_empty() { Vec::new() } else { placement.world_vertices(mesh) };
     let ambient = hardware_ambient(ambient);
     for (index, color) in colors.iter_mut().enumerate() {
         let mut light = ambient;
         if let Some(&(position, normal)) = world.get(index) {
-            for hardware in &hardware {
+            for hardware in hardware.iter().filter(|light| applies(light)) {
                 let [r, g, b] = hardware.sample(position, normal);
                 light = [light[0] + r * 255.0, light[1] + g * 255.0, light[2] + b * 255.0];
             }
@@ -504,7 +530,7 @@ mod tests {
         let instance = StaticMeshInstance { colors: vec![[0; 4]; 2], lights: vec![info(1), info(2)] };
         let placement = MeshPlacement { location: [0.0; 3].into(), rotation: [0; 3].into(), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into() };
         assert!(needs_relight(&instance, &[Some(light), None]));
-        let colors = static_mesh_lighting(&mesh, &instance, &[Some(light), None], &placement, 1.0);
+        let colors = static_mesh_lighting(&mesh, &instance, &[Some(light), None], &placement.world_vertices(&mesh), 1.0);
         assert_eq!(colors, [[104, 104, 104, 128], [0, 0, 0, 128]]);
         let ambient = [0.2, 0.1, 0.0];
         let hardware = HardwareLight::new(&light, 1.0, [0.0; 3].into(), 50.0).unwrap();

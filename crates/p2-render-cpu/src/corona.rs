@@ -67,7 +67,7 @@ pub fn corona_color(hue: u8, saturation: u8, bright: f32) -> [f32; 3] {
 }
 
 pub fn within_light_radius(distance: f32, light_radius: f32) -> bool {
-    let reach = 25.0 * (light_radius as i32 + 1) as f32;
+    let reach = crate::light_world_radius(light_radius);
     light_radius == 0.0 || distance * distance < reach * reach
 }
 

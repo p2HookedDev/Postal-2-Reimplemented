@@ -1,7 +1,6 @@
 use p2_math::{Rotator, Vector};
 
 use crate::enums::{ENetRole, EPhysics, EProbe};
-use crate::interp::int;
 use crate::anim::Playback;
 use crate::{Encroachment, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
 
@@ -107,7 +106,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         if !self.store.flag_of(pawn, Prop::bInitializeAnimation) {
             self.store.set(pawn, Prop::bInitializeAnimation, Value::Bool(true));
-            let (right, left) = (self.name_of(pawn, Prop::TurnRightAnim), self.name_of(pawn, Prop::TurnLeftAnim));
+            let (right, left) = (self.store.name_of(pawn, Prop::TurnRightAnim), self.store.name_of(pawn, Prop::TurnLeftAnim));
             self.play(pawn, RIGHT_TURN_CHANNEL, right, 1.0, 0.1, Playback::Looping);
             self.play(pawn, LEFT_TURN_CHANNEL, left, 1.0, 0.1, Playback::Looping);
             for i in 0..4 {
@@ -189,10 +188,9 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(pawn, Prop::FootRot, Value::Int(yaw));
             return;
         }
-        let int_of = |vm: &Self, property: Prop| vm.store.get(pawn, property).as_ref().map_or(0, int);
         let feet = FootTwist {
-            rot: int_of(self, Prop::FootRot),
-            turn_dir: int_of(self, Prop::TurnDir),
+            rot: self.store.int_of(pawn, Prop::FootRot),
+            turn_dir: self.store.int_of(pawn, Prop::TurnDir),
             turning: self.store.flag_of(pawn, Prop::FootTurning),
             still: self.store.flag_of(pawn, Prop::FootStill),
         };
@@ -298,7 +296,7 @@ impl<L: LoaderRef> Vm<L> {
                 (LEFT_TURN_CHANNEL, turn_rate < -MIN_TURN_RATE, Prop::TurnLeftAnim),
             ] {
                 if turning {
-                    let sequence = self.name_of(pawn, anim);
+                    let sequence = self.store.name_of(pawn, anim);
                     self.set_anim_sequence(pawn, channel, sequence);
                     self.update_blend_alpha(pawn, channel, 1.0, step);
                     self.set_anim_rate(pawn, channel, turn_rate.abs() / TURN_ANIM_YAW_RATE);
@@ -340,13 +338,6 @@ impl<L: LoaderRef> Vm<L> {
 
     fn movement_anim(&self, pawn: ObjectId, index: usize) -> NameId {
         match self.store.element_of(pawn, Prop::MovementAnims, index) {
-            Some(Value::Name(name)) => name,
-            _ => NameId::NONE,
-        }
-    }
-
-    fn name_of(&self, object: ObjectId, property: Prop) -> NameId {
-        match self.store.get(object, property) {
             Some(Value::Name(name)) => name,
             _ => NameId::NONE,
         }

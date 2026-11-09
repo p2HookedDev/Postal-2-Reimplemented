@@ -128,6 +128,10 @@ impl ObjectStore {
         }
     }
 
+    pub fn objects_of(&self, object: ObjectId, property: impl PropertyName) -> impl Iterator<Item = Option<ObjectId>> + '_ {
+        self.array_words(object, property).unwrap_or_default().iter().map(|&word| memory::object(word))
+    }
+
     pub(crate) fn element_of(&self, object: ObjectId, property: impl PropertyName, index: usize) -> Option<Value> {
         let field = self.field(object, property)?;
         let mem = &self.object(object).mem;
@@ -217,6 +221,23 @@ impl ObjectStore {
             Some((word, memory::Shape::Int)) => word as i32 as f32,
             Some((word, memory::Shape::Byte | memory::Shape::Bool)) => word as f32,
             _ => 0.0,
+        }
+    }
+
+    pub fn int_of(&self, object: ObjectId, property: impl PropertyName) -> i32 {
+        match self.word(object, property) {
+            Some((word, memory::Shape::Int)) => word as i32,
+            Some((word, memory::Shape::Byte)) => i32::from(word as u8),
+            Some((word, memory::Shape::Bool)) => i32::from(word != 0),
+            Some((word, memory::Shape::Float)) => f32::from_bits(word) as i32,
+            _ => 0,
+        }
+    }
+
+    pub fn name_of(&self, object: ObjectId, property: impl PropertyName) -> NameId {
+        match self.word(object, property) {
+            Some((word, memory::Shape::Name)) => NameId(word),
+            _ => NameId::NONE,
         }
     }
 

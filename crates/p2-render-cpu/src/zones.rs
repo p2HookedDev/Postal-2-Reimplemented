@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::ops::Range;
 
 use p2_assets::{BspNode, ConvexVolume, Model, poly_flags};
 
@@ -47,11 +48,18 @@ struct Antiportal {
     max: Vector,
 }
 
+/// An outward plane (the solid behind) with its world vertices.
+struct Face {
+    plane: Plane,
+    vertices: Vec<Vector>,
+    /// Per edge (vertex i to i + 1): the faces with vertices at both its ends.
+    neighbours: Vec<Vec<usize>>,
+}
+
 /// An antiportal actor: its convex volume and the zones its box touches. Seen from outside it hides
 /// what lies wholly in its shadow: behind every face the eye is in front of, inside its silhouette.
 pub struct AntiportalActor {
-    /// Faces as outward planes (the solid behind) with their world vertices.
-    faces: Vec<(Plane, Vec<Vector>)>,
+    faces: Vec<Face>,
     centre: Vector,
     zones: Vec<u8>,
     min: Vector,
@@ -69,7 +77,7 @@ impl AntiportalActor {
         }
         let centre = points().fold(Vector::ZERO, |sum, &p| sum + p) * (1.0 / count as f32);
         let (min, max) = bounding_box(points());
-        let faces = faces
+        let faces: Vec<(Plane, Vec<Vector>)> = faces
             .into_iter()
             .filter(|vertices| vertices.len() >= 3)
             .map(|vertices| {
@@ -80,22 +88,29 @@ impl AntiportalActor {
                 (if plane_dot(&plane, centre) > 0.0 { plane.flipped() } else { plane }, vertices)
             })
             .collect();
+        let near = |a: Vector, b: Vector| (0..3).all(|k| (a[k] - b[k]).abs() < 0.5);
+        let sharing = |a: Vector, b: Vector| -> Vec<usize> {
+            (0..faces.len()).filter(|&g| faces[g].1.iter().any(|&v| near(v, a)) && faces[g].1.iter().any(|&v| near(v, b))).collect()
+        };
+        let neighbours: Vec<Vec<Vec<usize>>> = faces
+            .iter()
+            .map(|(_, vertices)| (0..vertices.len()).map(|i| sharing(vertices[i], vertices[(i + 1) % vertices.len()])).collect())
+            .collect();
+        let faces = faces.into_iter().zip(neighbours).map(|((plane, vertices), neighbours)| Face { plane, vertices, neighbours }).collect();
         Some(Self { faces, centre, zones: zones(min, max), min, max })
     }
 
-    fn occluder(&self, eye: Vector) -> Option<Vec<Plane>> {
-        let front: Vec<bool> = self.faces.iter().map(|(plane, _)| plane_dot(plane, eye) > 0.0).collect();
-        if !front.contains(&true) {
-            return None;
+    /// Appends the occluder's planes to `planes`; `false` (nothing appended) when the eye faces no face.
+    fn occluder(&self, eye: Vector, planes: &mut Vec<Plane>) -> bool {
+        let front = |face: &Face| plane_dot(&face.plane, eye) > 0.0;
+        if !self.faces.iter().any(front) {
+            return false;
         }
-        let mut planes: Vec<Plane> = self.faces.iter().zip(&front).filter(|(_, front)| **front).map(|((plane, _), _)| plane.flipped()).collect();
-        let near = |a: Vector, b: Vector| (0..3).all(|k| (a[k] - b[k]).abs() < 0.5);
-        for ((_, vertices), _) in self.faces.iter().zip(&front).filter(|(_, front)| **front) {
-            for (i, &a) in vertices.iter().enumerate() {
-                let b = vertices[(i + 1) % vertices.len()];
-                let behind = self.faces.iter().zip(&front).any(|((_, other), front)| {
-                    !*front && other.iter().any(|&v| near(v, a)) && other.iter().any(|&v| near(v, b))
-                });
+        planes.extend(self.faces.iter().filter(|face| front(face)).map(|face| face.plane.flipped()));
+        for face in self.faces.iter().filter(|face| front(face)) {
+            for (i, (&a, neighbours)) in face.vertices.iter().zip(&face.neighbours).enumerate() {
+                let b = face.vertices[(i + 1) % face.vertices.len()];
+                let behind = neighbours.iter().any(|&g| !front(&self.faces[g]));
                 let normal = (a - eye).cross(b - eye).safe_normal();
                 if behind && normal != Vector::ZERO {
                     let plane = Plane { normal, d: normal.dot(eye) };
@@ -103,14 +118,23 @@ impl AntiportalActor {
                 }
             }
         }
-        Some(planes)
+        true
     }
+}
+
+#[derive(Clone, Default)]
+struct ZoneMembers {
+    portals: Vec<usize>,
+    antiportals: Vec<usize>,
+    actors: Vec<usize>,
 }
 
 pub struct ZonePortals {
     portals: Vec<Portal>,
     antiportals: Vec<Antiportal>,
     actors: Vec<AntiportalActor>,
+    /// By zone number, each list in ascending index order.
+    members: Vec<ZoneMembers>,
 }
 
 impl ZonePortals {
@@ -145,109 +169,167 @@ impl ZonePortals {
                 (polygon.len() >= 3).then_some(Antiportal { polygon, plane: node.plane.into(), zones: node.zones, two_sided, min, max })
             })
             .collect();
-        Self { portals, antiportals, actors }
+        Self::indexed(portals, antiportals, actors)
+    }
+
+    fn indexed(portals: Vec<Portal>, antiportals: Vec<Antiportal>, actors: Vec<AntiportalActor>) -> Self {
+        let mut members = vec![ZoneMembers::default(); 256];
+        let add = |list: &mut Vec<usize>, index: usize| {
+            if list.last() != Some(&index) {
+                list.push(index);
+            }
+        };
+        for (index, portal) in portals.iter().enumerate() {
+            portal.zones.iter().for_each(|&z| add(&mut members[usize::from(z)].portals, index));
+        }
+        for (index, anti) in antiportals.iter().enumerate() {
+            anti.zones.iter().for_each(|&z| add(&mut members[usize::from(z)].antiportals, index));
+        }
+        for (index, actor) in actors.iter().enumerate() {
+            actor.zones.iter().for_each(|&z| add(&mut members[usize::from(z)].actors, index));
+        }
+        Self { portals, antiportals, actors, members }
     }
 
     /// Each portal of a reached zone that the eye faces from that zone's side is clipped by the zone's view volumes; what is
     /// left opens the zone behind. Antiportals hide, in that zone, what lies wholly behind them, portals included (retail
     /// adds them as its front-to-back walk meets them; here as each volume is expanded). Zone 0 (outside the world) sees
-    /// everything.
-    pub fn visible(&self, eye: Vector, zone: u8, view: &[Plane]) -> VisibleZones {
+    /// everything. `seen` is reused from walk to walk.
+    pub fn visible(&self, eye: Vector, zone: u8, view: &[Plane], seen: &mut VisibleZones) {
+        let VisibleZones { walked, capped, planes, volumes, occluders, antiportals_used, actors_used, antiportal_sides, portal_sides, queue } =
+            seen;
+        *walked = false;
+        *capped = false;
         if zone == 0 || self.portals.is_empty() {
-            return VisibleZones::all();
+            return;
         }
-        let mut volumes: Vec<Vec<Vec<Plane>>> = vec![Vec::new(); 256];
-        let mut occluders: Vec<Vec<Vec<Plane>>> = vec![Vec::new(); 256];
-        let mut used = vec![false; self.antiportals.len()];
-        let mut actors_used = vec![false; self.actors.len()];
-        volumes[usize::from(zone)].push(view.to_vec());
-        let antiportal_sides: Vec<f32> = self.antiportals.iter().map(|anti| plane_dot(&anti.plane, eye)).collect();
-        let portal_sides: Vec<f32> = self.portals.iter().map(|portal| plane_dot(&portal.plane, eye)).collect();
-        let mut queue = VecDeque::from([(zone, 0)]);
+        planes.clear();
+        planes.extend_from_slice(view);
+        volumes.resize_with(256, Vec::new);
+        occluders.resize_with(256, Vec::new);
+        volumes.iter_mut().chain(occluders.iter_mut()).for_each(Vec::clear);
+        volumes[usize::from(zone)].push(0..planes.len());
+        antiportals_used.clear();
+        antiportals_used.resize(self.antiportals.len(), false);
+        actors_used.clear();
+        actors_used.resize(self.actors.len(), false);
+        antiportal_sides.clear();
+        antiportal_sides.extend(self.antiportals.iter().map(|anti| plane_dot(&anti.plane, eye)));
+        portal_sides.clear();
+        portal_sides.extend(self.portals.iter().map(|portal| plane_dot(&portal.plane, eye)));
+        queue.clear();
+        queue.push_back((zone, 0));
         let mut opened = 1;
         while let Some((zone, i)) = queue.pop_front() {
-            for ((anti, used), &side) in self.antiportals.iter().zip(&mut used).zip(&antiportal_sides).filter(|((_, used), _)| !**used) {
+            let members = &self.members[usize::from(zone)];
+            let here = usize::from(zone);
+            for &index in &members.antiportals {
+                if antiportals_used[index] {
+                    continue;
+                }
+                let (anti, side) = (&self.antiportals[index], antiportal_sides[index]);
                 let near = anti.zones[usize::from(side >= 0.0)];
                 if near != zone || side.abs() < IN_PORTAL || (side < 0.0 && !anti.two_sided) {
                     continue;
                 }
-                if !touches(&volumes[usize::from(zone)][i], anti.min, anti.max) {
+                if !touches(&planes[volumes[here][i].clone()], anti.min, anti.max) {
                     continue;
                 }
-                if let Some(mut planes) = through(eye, &anti.polygon, &anti.plane, side) {
-                    planes.rotate_right(1);
-                    planes[0].d += IN_PORTAL;
-                    occluders[usize::from(zone)].push(planes);
-                    *used = true;
+                let start = planes.len();
+                if through(eye, &anti.polygon, &anti.plane, side, planes) {
+                    planes[start..].rotate_right(1);
+                    planes[start].d += IN_PORTAL;
+                    occluders[here].push(start..planes.len());
+                    antiportals_used[index] = true;
                 }
             }
-            for (actor, used) in self.actors.iter().zip(&mut actors_used).filter(|(_, used)| !**used) {
-                if !actor.zones.contains(&zone) || !touches(&volumes[usize::from(zone)][i], actor.min, actor.max) {
+            for &index in &members.actors {
+                let actor = &self.actors[index];
+                if actors_used[index] || !touches(&planes[volumes[here][i].clone()], actor.min, actor.max) {
                     continue;
                 }
-                *used = true;
-                if let Some(planes) = actor.occluder(eye) {
+                actors_used[index] = true;
+                let start = planes.len();
+                if actor.occluder(eye, planes) {
                     for &z in &actor.zones {
-                        occluders[usize::from(z)].push(planes.clone());
+                        occluders[usize::from(z)].push(start..planes.len());
                     }
                 }
             }
-            for (portal, &side) in self.portals.iter().zip(&portal_sides) {
+            for &index in &members.portals {
+                let (portal, side) = (&self.portals[index], portal_sides[index]);
                 let [back, front] = portal.zones;
                 let (near, far) = if side >= 0.0 { (front, back) } else { (back, front) };
                 if near != zone {
                     continue;
                 }
                 if opened >= MAX_VOLUMES {
-                    return VisibleZones { volumes: None, capped: true };
+                    *capped = true;
+                    return;
                 }
-                let hidden = occluders[usize::from(zone)].iter().any(|o| portal.polygon.iter().all(|&p| o.iter().all(|plane| plane_dot(plane, p) >= 0.0)));
+                let hidden = occluders[here]
+                    .iter()
+                    .any(|o| portal.polygon.iter().all(|&p| planes[o.clone()].iter().all(|plane| plane_dot(plane, p) >= 0.0)));
                 if hidden {
                     continue;
                 }
-                let volume = &volumes[usize::from(zone)][i];
-                let opening = if side.abs() < IN_PORTAL {
-                    Some(volume.clone())
+                let volume = volumes[here][i].clone();
+                let start = planes.len();
+                let opens = if side.abs() < IN_PORTAL {
+                    planes.extend_from_within(volume);
+                    true
                 } else {
-                    through(eye, &clip(&portal.polygon, volume), &portal.plane, side)
+                    let clipped = clip(&portal.polygon, &planes[volume]);
+                    through(eye, &clipped, &portal.plane, side, planes)
                 };
-                let Some(opening) = opening else { continue };
-                volumes[usize::from(far)].push(opening);
+                if !opens {
+                    continue;
+                }
+                volumes[usize::from(far)].push(start..planes.len());
                 queue.push_back((far, volumes[usize::from(far)].len() - 1));
                 opened += 1;
             }
         }
-        VisibleZones { volumes: Some((volumes, occluders)), capped: false }
+        *walked = true;
     }
 }
 
+/// The result of [`ZonePortals::visible`], kept by the caller so its buffers are reused.
+#[derive(Default)]
 pub struct VisibleZones {
-    /// By zone number; `None`: everything is seen.
-    volumes: Option<(Vec<Vec<Vec<Plane>>>, Vec<Vec<Vec<Plane>>>)>,
+    /// `false`: everything is seen.
+    walked: bool,
     capped: bool,
+    /// The volumes and occluders are ranges of this.
+    planes: Vec<Plane>,
+    /// By zone number.
+    volumes: Vec<Vec<Range<usize>>>,
+    occluders: Vec<Vec<Range<usize>>>,
+    antiportals_used: Vec<bool>,
+    actors_used: Vec<bool>,
+    antiportal_sides: Vec<f32>,
+    portal_sides: Vec<f32>,
+    queue: VecDeque<(u8, usize)>,
 }
 
 impl VisibleZones {
-    pub fn all() -> Self {
-        Self { volumes: None, capped: false }
-    }
-    
     /// The walk passed its cap, so everything counts as seen: incomplete volumes would hide what is in view.
     pub fn capped(&self) -> bool {
         self.capped
     }
 
-
     pub fn reached(&self, zone: u8) -> bool {
-        self.volumes.as_ref().is_none_or(|(volumes, _)| volumes.get(usize::from(zone)).is_some_and(|volume| !volume.is_empty()))
+        !self.walked || self.volumes.get(usize::from(zone)).is_some_and(|volume| !volume.is_empty())
     }
 
     pub fn sees(&self, zone: u8, min: Vector, max: Vector) -> bool {
-        let Some((volumes, occluders)) = &self.volumes else { return true };
+        if !self.walked {
+            return true;
+        }
         let zone = usize::from(zone);
-        volumes[zone].iter().any(|volume| touches(volume, min, max))
-            && !occluders[zone].iter().any(|occluder| {
-                occluder.iter().all(|plane| {
+        self.volumes[zone].iter().any(|volume| touches(&self.planes[volume.clone()], min, max))
+            && !self.occluders[zone].iter().any(|occluder| {
+                self.planes[occluder.clone()].iter().all(|plane| {
                     let corner = [0, 1, 2].map(|k| if plane.normal[k] >= 0.0 { min[k] } else { max[k] }).into();
                     plane_dot(plane, corner) >= 0.0
                 })
@@ -318,12 +400,13 @@ fn clip(polygon: &[Vector], planes: &[Plane]) -> Vec<Vector> {
     out
 }
 
-fn through(eye: Vector, polygon: &[Vector], portal: &Plane, side: f32) -> Option<Vec<Plane>> {
+/// Appends the planes of the volume seen through `polygon` to `planes`; `false` (nothing appended) for a degenerate polygon.
+fn through(eye: Vector, polygon: &[Vector], portal: &Plane, side: f32, planes: &mut Vec<Plane>) -> bool {
     if polygon.len() < 3 {
-        return None;
+        return false;
     }
     let center = polygon.iter().fold(Vector::ZERO, |sum, &p| sum + p) * (1.0 / polygon.len() as f32);
-    let mut planes: Vec<Plane> = polygon
+    planes.extend(polygon
         .iter()
         .zip(polygon.iter().cycle().skip(1))
         .filter_map(|(&a, &b)| {
@@ -332,20 +415,29 @@ fn through(eye: Vector, polygon: &[Vector], portal: &Plane, side: f32) -> Option
                 let plane = Plane { normal, d: normal.dot(eye) };
                 if normal.dot(center) >= plane.d { plane } else { plane.flipped() }
             })
-        })
-        .collect();
+        }));
     let s = -side.signum();
     planes.push(Plane { normal: portal.normal * s, d: portal.d * s });
-    Some(planes)
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn doorway() -> ZonePortals {
+    fn door() -> Portal {
         let polygon = [[0.0, -1.0, -1.0], [0.0, 1.0, -1.0], [0.0, 1.0, 1.0], [0.0, -1.0, 1.0]].map(Vector::from).to_vec();
-        ZonePortals { portals: vec![Portal { polygon, plane: [1.0, 0.0, 0.0, 0.0].into(), zones: [1, 2] }], antiportals: Vec::new(), actors: Vec::new() }
+        Portal { polygon, plane: [1.0, 0.0, 0.0, 0.0].into(), zones: [1, 2] }
+    }
+
+    fn doorway() -> ZonePortals {
+        ZonePortals::indexed(vec![door()], Vec::new(), Vec::new())
+    }
+
+    fn walk(portals: &ZonePortals, eye: [f32; 3], zone: u8, view: &[Plane]) -> VisibleZones {
+        let mut seen = VisibleZones::default();
+        portals.visible(eye.into(), zone, view, &mut seen);
+        seen
     }
 
     fn cube() -> ConvexVolume {
@@ -370,14 +462,13 @@ mod tests {
     fn an_antiportal_actor_hides_its_shadow_in_its_zones() {
         let placement = MeshPlacement { location: [-2.5, 0.0, 0.0].into(), rotation: [0; 3].into(), scale: [2.0; 3].into(), pre_pivot: [0.0; 3].into() };
         let actor = AntiportalActor::new(&cube(), &placement, |_, _| vec![1]).unwrap();
-        let mut portals = doorway();
-        portals.actors.push(actor);
-        let seen = portals.visible([-10.0, 0.0, 0.0].into(), 1, &[]);
+        let portals = ZonePortals::indexed(vec![door()], Vec::new(), vec![actor]);
+        let seen = walk(&portals, [-10.0, 0.0, 0.0], 1, &[]);
         assert!(!seen.reached(2));
         assert!(!seen.sees(1, [-0.4, -0.5, -0.5].into(), [-0.2, 0.5, 0.5].into()));
         assert!(seen.sees(1, [-0.4, 9.0, -0.5].into(), [-0.2, 10.0, 0.5].into()));
         assert!(seen.sees(1, [-6.0, -0.5, -0.5].into(), [-0.2, 0.5, 0.5].into()));
-        assert!(portals.visible([-2.5, 0.0, 0.0].into(), 1, &[]).reached(2));
+        assert!(walk(&portals, [-2.5, 0.0, 0.0], 1, &[]).reached(2));
     }
 
     fn wall(y: f32, half: f32) -> Antiportal {
@@ -389,23 +480,21 @@ mod tests {
 
     #[test]
     fn an_antiportal_hides_what_lies_wholly_behind_it() {
-        let mut portals = doorway();
-        portals.antiportals.push(wall(0.0, 10.0));
-        let seen = portals.visible([-5.0, 0.0, 0.0].into(), 1, &[]);
+        let portals = ZonePortals::indexed(vec![door()], vec![wall(0.0, 10.0)], Vec::new());
+        let seen = walk(&portals, [-5.0, 0.0, 0.0], 1, &[]);
         assert!(!seen.reached(2));
         assert!(!seen.sees(1, [-0.9, -1.0, -1.0].into(), [-0.5, 1.0, 1.0].into()));
         assert!(seen.sees(1, [-3.0, -1.0, -1.0].into(), [-0.5, 1.0, 1.0].into()));
         assert!(seen.sees(1, [-2.0, -1.0, -1.0].into(), [-2.0, 1.0, 1.0].into()));
         assert!(seen.sees(1, [-0.9, 20.0, -1.0].into(), [-0.5, 21.0, 1.0].into()));
-        let seen = portals.visible([-1.0, 0.0, 0.0].into(), 1, &[]);
+        let seen = walk(&portals, [-1.0, 0.0, 0.0], 1, &[]);
         assert!(seen.sees(1, [-4.0, -1.0, -1.0].into(), [-3.5, 1.0, 1.0].into()));
     }
 
     #[test]
     fn an_antiportal_beside_a_portal_leaves_it_open() {
-        let mut portals = doorway();
-        portals.antiportals.push(wall(5.0, 2.0));
-        assert!(portals.visible([-5.0, 0.0, 0.0].into(), 1, &[]).reached(2));
+        let portals = ZonePortals::indexed(vec![door()], vec![wall(5.0, 2.0)], Vec::new());
+        assert!(walk(&portals, [-5.0, 0.0, 0.0], 1, &[]).reached(2));
     }
 
     #[test]
@@ -416,7 +505,7 @@ mod tests {
 
     #[test]
     fn a_portal_opens_the_zone_behind_it_narrowed() {
-        let seen = doorway().visible([-5.0, 0.0, 0.0].into(), 1, &[]);
+        let seen = walk(&doorway(), [-5.0, 0.0, 0.0], 1, &[]);
         assert!(seen.reached(2) && !seen.reached(3));
         assert!(seen.sees(2, [10.0, -0.5, -0.5].into(), [11.0, 0.5, 0.5].into()));
         assert!(!seen.sees(2, [10.0, 50.0, -0.5].into(), [11.0, 51.0, 0.5].into()));
@@ -425,27 +514,23 @@ mod tests {
 
     #[test]
     fn a_portal_out_of_view_opens_nothing() {
-        let seen = doorway().visible([-5.0, 0.0, 0.0].into(), 1, &[Plane::from([-1.0, 0.0, 0.0, 6.0])]);
+        let seen = walk(&doorway(), [-5.0, 0.0, 0.0], 1, &[Plane::from([-1.0, 0.0, 0.0, 6.0])]);
         assert!(!seen.reached(2));
         assert!(!seen.sees(2, [10.0, -0.5, -0.5].into(), [11.0, 0.5, 0.5].into()));
     }
 
     #[test]
     fn a_walk_past_its_cap_sees_all() {
-        let mut portals = doorway();
-        let portal = &portals.portals[0];
-        let copy = || Portal { polygon: portal.polygon.clone(), plane: portal.plane, zones: portal.zones };
-        let copies: Vec<_> = (0..MAX_VOLUMES).map(|_| copy()).collect();
-        portals.portals.extend(copies);
-        let seen = portals.visible([-5.0, 0.0, 0.0].into(), 1, &[]);
+        let portals = ZonePortals::indexed((0..=MAX_VOLUMES).map(|_| door()).collect(), Vec::new(), Vec::new());
+        let seen = walk(&portals, [-5.0, 0.0, 0.0], 1, &[]);
         assert!(seen.capped());
         assert!(seen.sees(2, [10.0, 50.0, -0.5].into(), [11.0, 51.0, 0.5].into()));
     }
 
     #[test]
     fn outside_the_world_or_in_the_portal_sees_all() {
-        assert!(doorway().visible([-5.0, 0.0, 0.0].into(), 0, &[]).sees(7, [0.0; 3].into(), [1.0; 3].into()));
-        let seen = doorway().visible([-0.5, 0.0, 0.0].into(), 1, &[]);
+        assert!(walk(&doorway(), [-5.0, 0.0, 0.0], 0, &[]).sees(7, [0.0; 3].into(), [1.0; 3].into()));
+        let seen = walk(&doorway(), [-0.5, 0.0, 0.0], 1, &[]);
         assert!(seen.sees(2, [10.0, 50.0, -0.5].into(), [11.0, 51.0, 0.5].into()));
     }
 }

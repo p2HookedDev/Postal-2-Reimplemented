@@ -86,7 +86,7 @@ fn static_mesh_lighting_matches_saved() {
                 continue;
             }
             assert!(!needs_relight(&instance, &lights));
-            let computed = static_mesh_lighting(&mesh, &instance, &lights, &placement, level_brightness);
+            let computed = static_mesh_lighting(&mesh, &instance, &lights, &placement.world_vertices(&mesh), level_brightness);
             instances += 1;
             for (a, b) in computed.iter().zip(&instance.colors) {
                 vertices += 1;

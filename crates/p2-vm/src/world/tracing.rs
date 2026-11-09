@@ -7,6 +7,8 @@ use crate::natives::vector_arg;
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 use super::trace;
 
+const OWNER_CHAIN: usize = 64;
+
 impl<L: LoaderRef> Vm<L> {
     pub fn trace_world(&self, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
         if extent != Vector::ZERO {
@@ -68,16 +70,12 @@ impl<L: LoaderRef> Vm<L> {
         self.world.line_grid.with_near(start, end, 0.0, f)
     }
 
+    fn owner_chain(&self, actor: ObjectId) -> impl Iterator<Item = ObjectId> {
+        std::iter::successors(Some(actor), |&at| self.store.object_of(at, Prop::Owner)).take(OWNER_CHAIN)
+    }
+
     pub(crate) fn is_owned_by(&self, actor: ObjectId, owner: ObjectId) -> bool {
-        let mut current = Some(actor);
-        for _ in 0..64 {
-            match current {
-                Some(at) if at == owner => return true,
-                Some(at) => current = self.store.object_of(at, Prop::Owner),
-                None => return false,
-            }
-        }
-        false
+        self.owner_chain(actor).any(|at| at == owner)
     }
 
     pub(crate) fn should_trace(&self, actor: ObjectId, source: Option<ObjectId>, flags: u32) -> bool {
@@ -198,14 +196,18 @@ impl<L: LoaderRef> Vm<L> {
         let blocks_traces = if zero_extent { Prop::bBlockZeroExtentTraces } else { Prop::bBlockNonZeroExtentTraces };
         let length = (end - start).size();
         let candidates = self.colliders_along([start.x, start.y], [end.x, end.y], extent.x.max(extent.y));
+        let mut source_owners = [None; OWNER_CHAIN];
+        for (slot, owner) in source_owners.iter_mut().zip(source.into_iter().flat_map(|s| self.owner_chain(s))) {
+            *slot = Some(owner);
+        }
         for entry in &candidates {
             let actor = entry.actor;
-            if self.world.static_actors.contains(&actor)
+            if self.world.is_static(actor)
                 || Some(actor) == source
                 || self.store.is_deleted(actor)
                 || !self.store.flag_of(actor, Prop::bCollideActors)
                 || !self.store.flag_of(actor, blocks_traces)
-                || source.is_some_and(|s| self.is_owned_by(s, actor))
+                || source_owners.iter().map_while(|&owner| owner).any(|owner| owner == actor)
                 || !self.should_trace(actor, source, flags)
             {
                 continue;

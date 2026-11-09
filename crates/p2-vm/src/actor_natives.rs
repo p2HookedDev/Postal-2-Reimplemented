@@ -205,13 +205,13 @@ impl<L: LoaderRef> Vm<L> {
             }
             // Spawns wrap over the oldest; the VM counts, the host simulates.
             Native::SpawnParticle if self.store.is_a(this, self.script.lookups.class_names.particle_emitter) => {
-                let max = self.store.get(this, Prop::MaxParticles).as_ref().map_or(0, int).clamp(0, MAX_SPAWN);
+                let max = self.store.int_of(this, Prop::MaxParticles).clamp(0, MAX_SPAWN);
                 let amount = args.first().map_or(0, int).clamp(0, max);
                 for _ in 0..amount {
                     self.host.commands.push(HostCommand::Particle(ParticleCommand::Spawn { emitter: this, offset: Vector::ZERO, line: None }));
                 }
                 if amount > 0 {
-                    let active = self.store.get(this, Prop::ActiveParticles).as_ref().map_or(0, int);
+                    let active = self.store.int_of(this, Prop::ActiveParticles);
                     self.store.set(this, Prop::ActiveParticles, Value::Int((active + amount).min(max)));
                 }
                 return Ok(None);
@@ -236,7 +236,7 @@ impl<L: LoaderRef> Vm<L> {
                 let Vector { x, y, .. } = vec3(args.first());
                 let (_, rotation) = self.camera();
                 let fov = self.player().map_or(90.0, |p| self.store.float_of(p, Prop::FovAngle));
-                let (width, height) = self.media.canvas.object.map_or((0, 0), |c| (self.int_prop(c, Prop::SizeX), self.int_prop(c, Prop::SizeY)));
+                let (width, height) = self.media.canvas.object.map_or((0, 0), |c| (self.store.int_of(c, Prop::SizeX), self.store.int_of(c, Prop::SizeY)));
                 Value::Vector(screen_to_near_plane([x, y], [width as f32, height as f32], if fov > 0.0 { fov } else { 90.0 }, rotation))
             }
             // `PlayFlashbangSound(Sound, OverrideDuration)`: the host stops the other sounds, silences the loops
@@ -428,10 +428,6 @@ impl<L: LoaderRef> Vm<L> {
             Ok(Some(view)) => (view.location, view.rotation),
             _ => (Vector::ZERO, [0; 3].into()),
         }
-    }
-
-    fn int_prop(&self, object: ObjectId, property: Prop) -> i32 {
-        self.store.get(object, property).as_ref().map_or(0, int)
     }
 
     fn skeleton_bone(&mut self, actor: ObjectId, bone: Option<&Value>) -> Option<NameId> {

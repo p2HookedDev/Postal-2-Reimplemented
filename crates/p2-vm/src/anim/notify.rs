@@ -1,5 +1,4 @@
 use p2_package::PackageId;
-use crate::interp::int;
 use crate::natives::AUDIO_DEFAULT_RADIUS;
 use crate::{Error, HostCommand, LoaderRef, NameId, ObjectId, PlayedSound, Value, Vm, Prop};
 
@@ -50,7 +49,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         if self.store.is_a(notify, sound) {
             if let Some(sound) = self.store.object_of(notify, Prop::Sound) {
-                let radius = match self.store.get(notify, Prop::Radius).as_ref().map_or(0, int) {
+                let radius = match self.store.int_of(notify, Prop::Radius) {
                     0 => AUDIO_DEFAULT_RADIUS,
                     radius => radius as f32,
                 };

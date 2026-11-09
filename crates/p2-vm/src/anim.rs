@@ -9,7 +9,7 @@ use p2_script::{ScriptObject, read_export};
 
 use p2_math::Rotator;
 
-use crate::{Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop};
+use crate::{Error, LoaderRef, NameId, ObjectId, Vm, Prop};
 
 mod natives;
 mod playback;
@@ -134,10 +134,7 @@ impl<L: LoaderRef> Vm<L> {
         if !self.store.flag_of(pawn, Prop::bDoTorsoTwist) {
             return;
         }
-        let bones = [Prop::HeadBone, Prop::SpineBone1, Prop::SpineBone2].map(|p| match self.store.get(pawn, p) {
-            Some(Value::Name(name)) => name,
-            _ => NameId::NONE,
-        });
+        let bones = [Prop::HeadBone, Prop::SpineBone1, Prop::SpineBone2].map(|p| self.store.name_of(pawn, p));
         let Some(instance) = self.instance_mut(pawn) else { return };
         for (bone, share) in bones.into_iter().zip([-0.45, -0.35, -0.2]) {
             let turn = [0, (f64::from(look) * share) as i32, 0];

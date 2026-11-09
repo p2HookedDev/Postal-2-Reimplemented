@@ -69,6 +69,7 @@ pub(super) fn zone_visibility(
     mut culled: Query<(Entity, &ZoneCulled, &mut Visibility, Option<&Children>)>,
     mut shadow_only: ResMut<ShadowOnly>,
     mut world_seen: ResMut<WorldSeenZones>,
+    mut walk: bevy::ecs::system::Local<VisibleZones>,
 ) {
     shadow_only.0.clear();
     let model = collision.model();
@@ -76,14 +77,16 @@ pub(super) fn zone_visibility(
         p2_collision::point_zone(model, from_bevy(transform.translation - shown.origin).into())
     });
     let mut eye_seen = None;
+    let all = VisibleZones::default();
     let seen = match (&shown.portals, cameras.iter().next(), view_zone) {
         (Some(portals), Some((transform, projection)), Some(zone)) => {
             let eye = from_bevy(transform.translation - shown.origin);
             let view = walk_view(transform, projection, shown.origin);
             eye_seen = Some(eye);
-            portals.visible(eye.into(), zone, &view)
+            portals.visible(eye.into(), zone, &view, &mut walk);
+            &*walk
         }
-        _ => VisibleZones::all(),
+        _ => &all,
     };
     if seen.capped() {
         bevy::log::warn_once!("portal walk passed its cap: no zone culling at such views");

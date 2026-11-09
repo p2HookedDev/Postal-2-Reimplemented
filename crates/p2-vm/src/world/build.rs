@@ -59,7 +59,11 @@ impl<L: LoaderRef> Vm<L> {
             if self.store.flag_of(actor, Prop::bBlockZeroExtentTraces) {
                 self.world.lines.push(WorldShape { shape: shape.lines, model: shape.model, actor });
             }
-            self.world.static_actors.insert(actor);
+            let i = actor.0 as usize;
+            if self.world.static_actors.len() <= i {
+                self.world.static_actors.resize(i + 1, false);
+            }
+            self.world.static_actors[i] = true;
         }
         self.world.box_grid = ShapeGrid::new(&self.world.boxes);
         self.world.line_grid = ShapeGrid::new(&self.world.lines);

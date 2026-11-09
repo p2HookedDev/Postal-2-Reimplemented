@@ -161,7 +161,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) || !self.store.flag_of(actor, Prop::bCollideActors) {
             return None;
         }
-        let world = self.world.static_actors.contains(&actor);
+        let world = self.world.is_static(actor);
         // A live ragdoll goes in by the box around its Karma bodies, not its cylinder:
         // the box's centre, reaching its larger horizontal half size.
         if let Some((min, max)) = self.ragdoll_box(actor) {
@@ -239,7 +239,7 @@ impl<L: LoaderRef> Vm<L> {
     /// `bBlockNonZeroExtentTraces` without moving the actor.
     fn current_entries(&self, mut found: Vec<Entry>) -> Vec<Entry> {
         for entry in &mut found {
-            entry.blocks = !self.world.static_actors.contains(&entry.actor) && self.store.flag_of(entry.actor, Prop::bBlockNonZeroExtentTraces);
+            entry.blocks = !self.world.is_static(entry.actor) &&self.store.flag_of(entry.actor, Prop::bBlockNonZeroExtentTraces);
         }
         found.sort_unstable_by_key(|e| e.actor);
         found

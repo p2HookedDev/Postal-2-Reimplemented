@@ -138,6 +138,7 @@ impl<L: LoaderRef> Vm<L> {
         let (min, max) = shape.boxes.bounds();
         let mut found = Vec::new();
         let nearby = self.colliders_near([min[0], min[1]], [max[0], max[1]], 0.0);
+        let blocking = self.blocking(mover);
         for other in nearby.iter().map(|e| e.actor) {
             if other != mover
                 && Some(other) != self.level
@@ -145,7 +146,7 @@ impl<L: LoaderRef> Vm<L> {
                 && self.store.is_a(other, Kind::Actor)
                 && !self.store.is_a(other, Kind::Brush)
                 && !self.is_based_on(other, mover)
-                && self.is_blocked_by(mover, other)
+                && blocking.blocked_by(self.blocking(other))
                 && self.primitive_overlaps(mover, other)
             {
                 found.push(other);

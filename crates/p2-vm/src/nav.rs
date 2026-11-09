@@ -1,7 +1,8 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use p2_math::{Rng, Vector};
+use rustc_hash::FxHashMap;
 use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::Prop;
@@ -12,6 +13,11 @@ use crate::{ClassNames, Error, Kind, LoaderRef, ObjectId, ObjectStore, Value, Vm
 
 const UNVISITED: i32 = 10_000_000;
 const ANCHOR_DISTANCE_SQUARED: i32 = 1_440_000;
+const ANCHOR_CELL: f32 = 1200.0;
+/// The anchor distance plus a margin for the rounding of the cell bounds.
+const ANCHOR_REACH: f32 = 1201.0;
+/// Within this the rounding stays far below the margin; a node or a query beyond it is scanned in full.
+const ANCHOR_GRID_LIMIT: f32 = 1_048_576.0;
 const REACH_DISTANCE_SQUARED: f32 = 1_000_000.0;
 const WALK_STEPS: usize = 100;
 const WALK_MIN_MOVE: f32 = 4.1;
@@ -84,8 +90,18 @@ struct Searched {
 #[derive(Debug, Default)]
 pub(crate) struct Graph {
     nodes: Vec<Node>,
-    index: HashMap<ObjectId, usize>,
+    index: FxHashMap<ObjectId, usize>,
+    cells: FxHashMap<(i32, i32), Vec<usize>>,
+    wide: Vec<usize>,
     search: Search,
+}
+
+fn anchor_cell(v: f32) -> i32 {
+    (v / ANCHOR_CELL).floor() as i32
+}
+
+fn gridded(location: Vector) -> bool {
+    location.x.abs() < ANCHOR_GRID_LIMIT && location.y.abs() < ANCHOR_GRID_LIMIT && location.z.is_finite()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,16 +121,25 @@ struct FoundRoute<'a> {
 
 impl Graph {
     fn nodes_near(&self, store: &ObjectStore, location: Vector) -> Vec<usize> {
-        let mut near: Vec<(i32, usize)> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, node)| {
-                let offset = location - node.location;
-                let squared = offset.dot(offset) as i32;
-                (squared < ANCHOR_DISTANCE_SQUARED && !store.flag_of(node.actor, Prop::bBlocked)).then_some((squared, i))
-            })
-            .collect();
+        let anchor = |i: usize| {
+            let node = &self.nodes[i];
+            let offset = location - node.location;
+            let squared = offset.dot(offset) as i32;
+            (squared < ANCHOR_DISTANCE_SQUARED && !store.flag_of(node.actor, Prop::bBlocked)).then_some((squared, i))
+        };
+        let mut near: Vec<(i32, usize)> = if gridded(location) {
+            let span = |v: f32| anchor_cell(v - ANCHOR_REACH)..=anchor_cell(v + ANCHOR_REACH);
+            let ys = span(location.y);
+            span(location.x)
+                .flat_map(|x| ys.clone().map(move |y| (x, y)))
+                .filter_map(|cell| self.cells.get(&cell))
+                .flatten()
+                .chain(&self.wide)
+                .filter_map(|&i| anchor(i))
+                .collect()
+        } else {
+            (0..self.nodes.len()).filter_map(anchor).collect()
+        };
         near.sort();
         near.into_iter().map(|(_, i)| i).collect()
     }
@@ -252,6 +277,13 @@ fn read_graph(store: &ObjectStore, level: Option<ObjectId>) -> Graph {
             height: store.float_of(actor, Prop::CollisionHeight),
             specs,
         });
+    }
+    for (i, node) in graph.nodes.iter().enumerate() {
+        if gridded(node.location) {
+            graph.cells.entry((anchor_cell(node.location.x), anchor_cell(node.location.y))).or_default().push(i);
+        } else {
+            graph.wide.push(i);
+        }
     }
     graph
 }

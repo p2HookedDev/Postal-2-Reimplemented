@@ -63,23 +63,50 @@ struct PoseKey {
     placement: [[u32; 3]; 3],
 }
 
+fn channel_key(&(c, a): &(&AnimChannel, Option<ObjectId>)) -> (NameId, NameId, Option<ObjectId>, [u32; 2], Option<usize>) {
+    (c.sequence, c.blend_bone, a, [c.frame.to_bits(), c.blend_alpha.to_bits()], c.tween().map(|(from, _)| Arc::as_ptr(from).addr()))
+}
+
+fn scale_key((bone, scale): (NameId, f32)) -> (NameId, u32) {
+    (bone, scale.to_bits())
+}
+
+fn placement_key(Placement { location, scale, pre_pivot, .. }: Placement) -> [[u32; 3]; 3] {
+    [location, scale, pre_pivot].map(|v: Vector| <[f32; 3]>::from(v).map(f32::to_bits))
+}
+
 impl PoseKey {
     fn new(
         mesh: ObjectId,
         channels: &[(&AnimChannel, Option<ObjectId>)],
-        scales: &[(NameId, f32)],
+        scales: impl IntoIterator<Item = (NameId, f32)>,
         turns: &[(NameId, Rotator)],
-        Placement { location, rotation, scale, pre_pivot }: Placement,
+        placement: Placement,
     ) -> Self {
-        let bits = |v: Vector| <[f32; 3]>::from(v).map(f32::to_bits);
         Self {
             mesh,
-            channels: channels.iter().map(|&(c, a)| (c.sequence, c.blend_bone, a, [c.frame.to_bits(), c.blend_alpha.to_bits()], c.tween().map(|(from, _)| Arc::as_ptr(from).addr()))).collect(),
-            scales: scales.iter().map(|&(bone, scale)| (bone, scale.to_bits())).collect(),
+            channels: channels.iter().map(channel_key).collect(),
+            scales: scales.into_iter().map(scale_key).collect(),
             turns: turns.to_vec(),
-            rotation,
-            placement: [location, scale, pre_pivot].map(bits),
+            rotation: placement.rotation,
+            placement: placement_key(placement),
         }
+    }
+
+    fn matches(
+        &self,
+        mesh: ObjectId,
+        channels: &[(&AnimChannel, Option<ObjectId>)],
+        scales: impl IntoIterator<Item = (NameId, f32)>,
+        turns: &[(NameId, Rotator)],
+        placement: Placement,
+    ) -> bool {
+        self.mesh == mesh
+            && self.rotation == placement.rotation
+            && self.placement == placement_key(placement)
+            && self.turns == turns
+            && self.channels.iter().copied().eq(channels.iter().map(channel_key))
+            && self.scales.iter().copied().eq(scales.into_iter().map(scale_key))
     }
 }
 
@@ -240,13 +267,14 @@ impl<L: LoaderRef> Vm<L> {
             while let Some(channel) = self.anim_channel(actor, channels.len()) {
                 channels.push(channel);
             }
-            PoseKey::new(mesh_object, &channels, &self.bone_scales(actor).collect::<Vec<_>>(), self.bone_rotations(actor), self.drawn_placement(actor))
+            let placement = self.drawn_placement(actor);
+            if let Some((kept, frames)) = self.media.bone_data.poses.get(&actor)
+                && kept.matches(mesh_object, &channels, self.bone_scales(actor), self.bone_rotations(actor), placement)
+            {
+                return Some((mesh, frames.clone()));
+            }
+            PoseKey::new(mesh_object, &channels, self.bone_scales(actor), self.bone_rotations(actor), placement)
         };
-        if let Some((kept, frames)) = self.media.bone_data.poses.get(&actor)
-            && *kept == key
-        {
-            return Some((mesh, frames.clone()));
-        }
         let frames: Arc<[Frame]> = self.pose_world_bone_frames(actor, mesh_object, &mesh).into();
         self.media.bone_data.keep_pose(&self.store, actor, key, frames.clone());
         Some((mesh, frames))
@@ -420,7 +448,19 @@ mod tests {
         channel.sequence = NameId(1);
         channel.frame = frame;
         let placement = Placement { location: [location, 0.0, 0.0].into(), rotation: Rotator::default(), scale: [1.0; 3].into(), pre_pivot: Vector::default() };
-        PoseKey::new(ObjectId(7), &[(&channel, Some(ObjectId(animation)))], &[(NameId(2), bone_scale)], turns, placement)
+        PoseKey::new(ObjectId(7), &[(&channel, Some(ObjectId(animation)))], [(NameId(2), bone_scale)], turns, placement)
+    }
+
+    #[test]
+    fn pose_key_matches_as_it_compares() {
+        let mut channel = AnimChannel::default();
+        channel.sequence = NameId(1);
+        let placement = Placement { location: [10.0, 0.0, 0.0].into(), rotation: Rotator::default(), scale: [1.0; 3].into(), pre_pivot: Vector::default() };
+        let kept = key(0.0, 10.0, 1.0, 8);
+        assert!(kept.matches(ObjectId(7), &[(&channel, Some(ObjectId(8)))], [(NameId(2), 1.0)], &[], placement));
+        assert!(!kept.matches(ObjectId(7), &[(&channel, Some(ObjectId(8)))], [(NameId(2), 2.0)], &[], placement));
+        assert!(!kept.matches(ObjectId(7), &[(&channel, Some(ObjectId(9)))], [(NameId(2), 1.0)], &[], placement));
+        assert!(!kept.matches(ObjectId(7), &[], [(NameId(2), 1.0)], &[], placement));
     }
 
     #[test]

@@ -52,21 +52,14 @@ pub(crate) fn object_path(vm: &Vm<impl LoaderRef>, value: Option<&Value>) -> Opt
 }
 
 pub(crate) fn skin_paths(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<Option<String>> {
-    match vm.store.get(actor, Prop::Skins) {
-        Some(Value::Array(skins)) => skins.iter().map(|skin| object_path(vm, Some(skin))).collect(),
-        _ => Vec::new(),
-    }
+    vm.store.objects_of(actor, Prop::Skins).map(|skin| skin.map(|skin| vm.store.object(skin).path.clone())).collect()
 }
 
 /// Key of what `actor`'s model is built from. Retail draws whatever the actor holds each frame, so scripts change looks
 /// live (`P2Pawn.SwapToBurnVictim`); the host rebuilds a model when its key changes ([`look_key`]). `AmbientGlow` is
 /// left out: it changes the light, not the model.
 pub fn actor_look(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u64 {
-    let skins = match vm.store.get(actor, Prop::Skins) {
-        Some(Value::Array(skins)) => skins,
-        _ => Vec::new(),
-    };
-    let skins = skins.iter().map(|skin| if let Value::Object(object) = skin { *object } else { None });
+    let skins = vm.store.objects_of(actor, Prop::Skins);
     let draw_type = vm.store.byte_of(actor, Prop::DrawType);
     let unlit = vm.store.flag_of(actor, Prop::bUnlit);
     look_key([vm.store.object_of(actor, Prop::Mesh), vm.store.object_of(actor, Prop::StaticMesh)].into_iter().chain(skins), draw_type, unlit)
@@ -369,14 +362,11 @@ pub fn emitter_properties(vm: &Vm<impl LoaderRef>, emitter: ObjectId) -> Emitter
 }
 
 pub fn emitters_disabled(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<bool> {
-    emitter_objects(vm, actor).into_iter().map(|emitter| vm.store.flag_of(emitter, Prop::Disabled)).collect()
+    vm.store.objects_of(actor, Prop::Emitters).flatten().map(|emitter| vm.store.flag_of(emitter, Prop::Disabled)).collect()
 }
 
 pub fn emitter_objects(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<ObjectId> {
-    match vm.store.get(actor, Prop::Emitters) {
-        Some(Value::Array(emitters)) => emitters.iter().filter_map(|e| if let &Value::Object(Some(e)) = e { Some(e) } else { None }).collect(),
-        _ => Vec::new(),
-    }
+    vm.store.objects_of(actor, Prop::Emitters).flatten().collect()
 }
 
 fn property_value(value: &Value) -> PropertyValue {

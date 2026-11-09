@@ -106,18 +106,14 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
                 _ => None,
             };
             let dynamic = (name == "DynamicActors").then(|| vm.dynamic_actors());
-            let keep = |object: ObjectId| tag.is_none_or(|tag| vm.store.get(object, Prop::Tag) == Some(Value::Name(tag)));
+            let keep = |object: ObjectId| tag.is_none_or(|tag| vm.store.name_of(object, Prop::Tag) == tag);
             match dynamic {
                 Some(dynamic) => of_class(vm, &mut dynamic.into_iter(), &keep),
                 None => objects(vm, &keep),
             }
         }
         "TouchingActors" => {
-            let touching = match this.and_then(|this| vm.store.get(this, Prop::Touching)) {
-                Some(Value::Array(list)) => list,
-                _ => Vec::new(),
-            };
-            touching.into_iter().filter(|v| matches!(v, &Value::Object(Some(o)) if vm.store.is_a(o, class))).collect()
+            this.map_or_else(Vec::new, |this| vm.store.objects_of(this, Prop::Touching).flatten().filter(|&o| vm.store.is_a(o, class)).map(|o| Value::Object(Some(o))).collect())
         }
         "ChildActors" => objects(vm, &|object| this.is_some() && vm.store.get(object, Prop::Owner) == Some(Value::Object(this))),
         "BasedActors" => objects(vm, &|object| this.is_some() && vm.store.get(object, Prop::Base) == Some(Value::Object(this))),
@@ -126,7 +122,7 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
         "RadiusActors" => {
             let centre = centre(vm);
             objects(vm, &|object| {
-                let radius = radius + vm.store.get(object, Prop::CollisionRadius).as_ref().map_or(0.0, float);
+                let radius = radius + vm.store.float_of(object, Prop::CollisionRadius);
                 let at = vm.store.vec3_of(object, Prop::Location);
                 (0..3).map(|i| (at[i] - centre[i]).powi(2)).sum::<f32>() < radius * radius
             })
