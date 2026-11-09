@@ -261,9 +261,8 @@ fn write_file<H: SessionHolder>(
 ) {
     let first = since.is_none();
     let (seconds, frames) = since.get_or_insert((0.0, 0));
-    *seconds += time.delta_secs();
     *frames += 1;
-    if !first && *seconds < 1.0 {
+    if !a_second_passed(seconds, time.delta_secs()) && !first {
         return;
     }
     let ms = *seconds * 1000.0 / *frames as f32;
@@ -462,9 +461,70 @@ fn frames_of(clock: &Mutex<StageClock>) -> u32 {
     clock.lock().unwrap_or_else(PoisonError::into_inner).frames
 }
 
+fn a_second_passed(since: &mut f32, delta: f32) -> bool {
+    *since += delta;
+    *since >= 1.0
+}
+
+#[derive(Default)]
+pub struct FrameWindow {
+    seconds: f32,
+    frames: u32,
+    shortest: f32,
+    longest: f32,
+}
+
+pub fn log_frame_times(mut times: ResMut<FrameTimes>, time: Res<Time<Real>>, mut since: Local<FrameWindow>) {
+    let delta = time.delta_secs();
+    if since.frames == 0 {
+        (since.shortest, since.longest) = (delta, delta);
+    }
+    since.frames += 1;
+    (since.shortest, since.longest) = (since.shortest.min(delta), since.longest.max(delta));
+    if !a_second_passed(&mut since.seconds, delta) {
+        return;
+    }
+    let frames = f64::from(since.frames);
+    let ms = |time: &std::time::Duration| time.as_secs_f64() * 1000.0;
+    let list = |parts: &mut dyn Iterator<Item = (&str, std::time::Duration)>, per: f64| {
+        parts.map(|(name, time)| format!("{name} {:.2}", ms(&time) / per)).collect::<Vec<_>>().join(", ")
+    };
+    bevy::log::info!(
+        "frames {:.2} to {:.2} ms; per frame (ms), main thread: {}; vm thread: {}",
+        since.shortest * 1000.0,
+        since.longest * 1000.0,
+        list(&mut times.totals.iter().map(|(n, t)| (*n, *t)), frames),
+        list(&mut times.vm_totals.iter().map(|(n, t)| (*n, *t)), frames)
+    );
+    if times.vm_profile == VmProfile::TickByClass {
+        let mut vm: Vec<_> = times.vm_parts.drain().collect();
+        vm.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
+        bevy::log::info!("vm tick by class and phase (ms per frame): {}", list(&mut vm.iter().take(10).map(|(n, t)| (n.as_str(), *t)), frames));
+    }
+    if let Some(mut slowest) = times.take_slowest() {
+        slowest.main.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+        slowest.vm.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+        let named: std::time::Duration = slowest.main.iter().map(|(_, time)| *time).sum();
+        bevy::log::info!(
+            "slowest frame {:.2} ms: main thread: {}, rest (Bevy, render) {:.2}; its vm frame: {}{}",
+            ms(&slowest.length),
+            list(&mut slowest.main.iter().take(6).map(|(n, t)| (*n, *t)), 1.0),
+            ms(&slowest.length.saturating_sub(named)),
+            list(&mut slowest.vm.iter().map(|(n, t)| (*n, *t)), 1.0),
+            if slowest.profile.is_empty() {
+                String::new()
+            } else {
+                format!("; vm tick: {}", list(&mut slowest.profile.iter().take(8).map(|(n, t)| (n.as_str(), *t)), 1.0))
+            }
+        );
+    }
+    times.totals.clear();
+    times.vm_totals.clear();
+    *since = Default::default();
+}
+
 fn log_stage_timing(clocks: Res<StageClocks>, time: Res<Time<Real>>, mut since: Local<f32>) {
-    *since += time.delta_secs();
-    if *since >= 1.0 {
+    if a_second_passed(&mut since, time.delta_secs()) {
         *since = 0.0;
         let render_frames = frames_of(&clocks.render);
         let main_frames = frames_of(&clocks.main);
@@ -499,8 +559,7 @@ fn log_asset_churn(
     counts[0] += changed(&mut mesh_events);
     counts[1] += changed(&mut actor_events);
     counts[2] += changed(&mut mesh_material_events);
-    *since += time.delta_secs();
-    if *since < 1.0 {
+    if !a_second_passed(&mut since, time.delta_secs()) {
         return;
     }
     let per_second = 1.0 / std::mem::take(&mut *since);
@@ -539,8 +598,7 @@ fn log_scene_counts(
             settings.msaa_samples()
         );
     }
-    *since += time.delta_secs();
-    if *since < 1.0 {
+    if !a_second_passed(&mut since, time.delta_secs()) {
         return;
     }
     *since = 0.0;
@@ -561,9 +619,8 @@ fn log_scene_counts(
 
 /// A pass runs once per camera and each run adds a sample, so a path's time per frame is its samples' rate over the frame rate.
 fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, mut since: Local<f32>, mut frames: Local<u32>) {
-    *since += time.delta_secs();
     *frames += 1;
-    if *since < 1.0 {
+    if !a_second_passed(&mut since, time.delta_secs()) {
         return;
     }
     let frames_per_second = f64::from(std::mem::take(&mut *frames)) / f64::from(std::mem::take(&mut *since));

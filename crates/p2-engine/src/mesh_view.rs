@@ -44,7 +44,7 @@ use p2_math::{Rotator, Vector};
 use p2_assets::{Blending, RenderState, UvModifier, uv_matrix};
 use p2_bevy_assets::{MODULATE_2X, rotator_matrix, to_bevy};
 
-use crate::render::actor_light::{ActorLit, LightEnvironment, animate_actor_speculars, light_actors};
+use crate::render::actor_light::{ActorLit, LightEnvironment, animate_actor_speculars, light_actors, settle_step};
 use crate::actors::ZoneFog;
 use crate::animation::FollowBone;
 use crate::render::blended::{BlendedMaterial, OpaqueDecals, TerrainLayer, TerrainLayerMaterial};
@@ -69,7 +69,8 @@ use materials::{SectionMaterials, scene_section_material};
 pub use materials::{ActorMaterialKey, SectionMaterial, follower_material, section_material, vertex_lit};
 pub(crate) use materials::{SceneLights, actor_standard, alpha_key, cached_actor_material};
 use camera::{SceneCameras, place_camera, place_overlay_cameras, plain_output, show_canvas_layers};
-pub use camera::{NEAR_CLIPPING_PLANE, view_rotation};
+pub use camera::view_rotation;
+pub use p2_vm::NEAR_CLIPPING_PLANE;
 use animated_materials::{AnimatedMaterials, MovingUv, animate_materials};
 pub(crate) use animated_materials::{set_specular_uv, set_uv_transform};
 pub use restyle::{SwitchedLook, restyle_switched};

@@ -449,7 +449,8 @@ fn attach_takes(project_tag: NameId, accepts: bool, tag: NameId, has_static_mesh
     accepts && has_static_mesh && (project_tag == NameId::NONE || project_tag == tag)
 }
 
-const NEAR_CLIPPING_PLANE: f32 = 5.0;
+/// Unreal units. Retail uses 5 for every scene: the view, the sky and each `DrawActor`.
+pub const NEAR_CLIPPING_PLANE: f32 = 5.0;
 
 /// `fov` is horizontal, in degrees. Not a unit vector, as retail: it is as long as the near plane is
 /// far (at least 5), and `MapScreen.DrawMarkerOnMap` doubles it to put its markers past the plane.

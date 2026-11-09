@@ -4,9 +4,8 @@
 
 use std::path::PathBuf;
 
-pub const CPF_PARM: u32 = 0x80;
-pub const CPF_OUT_PARM: u32 = 0x100;
-pub const CPF_RETURN_PARM: u32 = 0x400;
+use p2_package::PACKAGE_TAG;
+use p2_package::flags::RF_PUBLIC;
 
 pub mod token {
     pub const LOCAL_VARIABLE: u8 = 0x00;
@@ -19,11 +18,9 @@ pub mod token {
     pub const INT_CONST: u8 = 0x1d;
 }
 
-const PACKAGE_TAG: u32 = 0x9e2a_83c1;
 const VERSION: u16 = 118;
 const LICENSEE: u16 = 2;
 const SUMMARY_SIZE: usize = 64;
-const RF_PUBLIC: u32 = 0x0000_0004;
 const NONE: i32 = 0;
 const NO_LABEL: i32 = 0xffff;
 

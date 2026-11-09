@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use p2_script::{Callee, Expr};
 use crate::{ClassId, Error, ObjectId, LoaderRef, Value, Vm};
+use p2_script::flags::CPF_OUT_PARM;
 use super::{
-    CPF_OUT_PARM, Frame, Function, Place, SITE_FUNCTION_MASK, Target, is_place, linked, set_link, site_key, truthy,
+    Frame, Function, Place, SITE_FUNCTION_MASK, Target, is_place, linked, set_link, site_key, truthy,
 };
 
 impl<L: LoaderRef> Vm<L> {

@@ -583,7 +583,7 @@ mod tests {
 
     fn tiny_package() -> Package {
         let mut data = Vec::new();
-        data.extend(0x9e2a_83c1_u32.to_le_bytes());
+        data.extend(p2_package::PACKAGE_TAG.to_le_bytes());
         data.extend(118_u16.to_le_bytes());
         data.extend(2_u16.to_le_bytes());
         for value in [0, 1, 56, 0, 66, 0, 66_u32] {

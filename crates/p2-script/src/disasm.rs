@@ -4,10 +4,8 @@ use std::fmt::Write;
 use p2_package::Package;
 
 use crate::bytecode::{Callee, Expr, Statement, cast_name};
+use crate::flags::{FUNC_OPERATOR, FUNC_PRE_OPERATOR};
 use crate::{Function, ScriptObject, read_export};
-
-const FUNC_PRE_OPERATOR: u32 = 0x10;
-const FUNC_OPERATOR: u32 = 0x1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeName {

@@ -189,8 +189,7 @@ impl<L: LoaderRef> Vm<L> {
 }
 
 pub(crate) fn turned(from: Rotator, to: Rotator, offset: Vector) -> Vector {
-    let [x, y, z] = from.axes();
-    to.rotate([x.dot(offset), y.dot(offset), z.dot(offset)].into())
+    to.rotate(from.unrotate(offset))
 }
 
 #[cfg(test)]

@@ -5,8 +5,9 @@ use std::sync::Arc;
 use common::load_fixture;
 use p2_math::{Rotator, Vector};
 use p2_package::Loader;
+use p2_script::flags::{CPF_PARM, FUNC_NATIVE};
 use p2_test_package::token::{CONTEXT, INSTANCE_VARIABLE, LOCAL_VARIABLE, NOTHING, RETURN};
-use p2_test_package::{CPF_PARM, DefaultValue, PackageBuilder, PropertyType, Script};
+use p2_test_package::{DefaultValue, PackageBuilder, PropertyType, Script};
 use p2_vm::{CanvasItem, ObjectId, Value, Vm};
 
 const PHYS_WALKING: u8 = 1;
@@ -29,7 +30,6 @@ const FORK_LONG: Vector = Vector::new(50.0, -50.0, 0.0);
 const FORK_GOAL: Vector = Vector::new(200.0, 0.0, 0.0);
 const FORK_EDGES: [(usize, usize, i32, i32); 4] = [(0, 1, 100, 100), (1, 3, 100, 70), (0, 2, 50, 100), (2, 3, 400, 90)];
 
-const FUNC_NATIVE: u32 = 0x400;
 const END_FUNCTION_PARMS: u8 = 0x16;
 const FINAL_FUNCTION: u8 = 0x1c;
 const FLOAT_CONST: u8 = 0x1e;

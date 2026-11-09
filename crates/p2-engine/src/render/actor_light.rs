@@ -295,6 +295,10 @@ const VERTEX_UPDATES_PER_FRAME: usize = 64;
 /// Retail snaps an actor's light at a zone crossing; ours fades in both looks.
 const LIGHT_SETTLE_SECONDS: f32 = 0.3;
 
+pub(crate) fn settle_step(dt: f32, seconds: f32) -> f32 {
+    1.0 - (-dt / seconds).exp()
+}
+
 const SAME_LIGHT_DISTANCE: f32 = 8.0;
 
 const LIGHT_EPSILON: f32 = 1.0 / 255.0;
@@ -402,7 +406,7 @@ pub(crate) fn light_actors<F: ActorFrames>(
     let (Some(play), Some(environment)) = (frames.play.as_deref(), frames.shown.lighting.as_deref()) else { return };
     let (Some(origin), Some(model)) = (play.origin(), frames.collision.model()) else { return };
     let world = RelightWorld { environment, model, origin };
-    let step = 1.0 - (-frames.time.delta_secs() / LIGHT_SETTLE_SECONDS).exp();
+    let step = settle_step(frames.time.delta_secs(), LIGHT_SETTLE_SECONDS);
     let LightActorBuffers { colors, hud_bases } = &mut *buffers;
     colors.clear();
     hud_bases.clear();

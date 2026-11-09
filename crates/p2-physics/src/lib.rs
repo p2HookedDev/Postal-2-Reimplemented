@@ -16,7 +16,7 @@ pub use background::Background;
 pub use hit::{Hit, Throw};
 pub use ragdoll::{JointLimit, JointParams, PartParams, RagdollParams, shapes_inertia};
 
-const UNITS_PER_METER: f32 = 50.0;
+pub const UNITS_PER_METER: f32 = 50.0;
 /// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing.
 const MAX_STEP: f32 = 1.0 / 60.0;
 const MAX_SUBSTEPS: f32 = 30.0;

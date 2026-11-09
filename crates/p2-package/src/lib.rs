@@ -1,6 +1,7 @@
 //! Package reader: layouts follow POSTAL 2 (package version 118, licensee 2).
 
 mod caseless;
+pub mod flags;
 mod ini;
 mod object;
 mod reader;
@@ -13,6 +14,7 @@ pub use memmap2::Mmap;
 pub use resolve::{ExportsByName, LoadedPackage, Loader, PackageId, ResolveError, Resolved, import_path, map_file, search_paths};
 
 pub const PACKAGE_TAG: u32 = 0x9e2a_83c1;
+pub const MAP_EXTENSION: &str = "fuk";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

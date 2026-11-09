@@ -10,7 +10,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::Context;
-use p2_package::{Export, Package, TagValue};
+use p2_package::{Export, MAP_EXTENSION, Package, TagValue};
 use p2_script::{NativeName, ScriptObject, decode_script, disassemble, native_names, read_export};
 
 const USAGE: &str = "usage: p2-dump <package> [--props | --code] | p2-dump <folder> --shaders";
@@ -121,7 +121,7 @@ fn shader_census(dir: &Path, out: &mut impl Write) -> anyhow::Result<()> {
                 continue;
             }
             let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-            if !matches!(extension.as_deref(), Some("utx" | "usx" | "fuk")) {
+            if !matches!(extension.as_deref(), Some("utx" | "usx" | MAP_EXTENSION)) {
                 continue;
             }
             let data = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;

@@ -3,11 +3,14 @@
 
 pub mod bytecode;
 pub mod disasm;
+pub mod flags;
 pub mod layout;
 pub mod object;
 pub mod value;
 
 use p2_package::{Export, Package, Reader};
+
+use flags::{CPF_COMMENT_STRING, CPF_NET, FUNC_NET};
 
 pub use bytecode::{Callee, Expr, Statement, cast_name, decode_script, decode_script_linked};
 pub use disasm::{NativeName, disassemble, native_names};
@@ -175,10 +178,6 @@ impl ScriptObject {
         }
     }
 }
-
-const CPF_NET: u32 = 0x20;
-const CPF_COMMENT_STRING: u32 = 0x0200_0000;
-const FUNC_NET: u32 = 0x40;
 
 pub fn class_name<'p>(pkg: &'p Package, export: &Export) -> &'p str {
     match export.class_index {

@@ -3,7 +3,7 @@ use super::{
     ParticleEmitter, SURFACE_OFFSET, SpawnContext,
 };
 use super::draw::{particle_color, size_scale};
-use crate::math::{Vector, mirror};
+use crate::math::Vector;
 use crate::props::{CoordinateSystem, EmitterProperties};
 use crate::Rng;
 
@@ -195,7 +195,7 @@ impl ParticleEmitter {
         } else {
             let p = &mut self.particles[index];
             p.velocity -= self.props.acceleration * (dt * 0.5);
-            p.velocity = mirror(p.velocity, hit.normal);
+            p.velocity = p.velocity.mirror_by_normal(hit.normal);
             p.velocity *= self.props.damping_factor_range.rand(&mut *context.rng);
             if self.props.damp_rotation {
                 p.spins_per_second *= self.props.rotation_damping_factor_range.rand(&mut *context.rng);

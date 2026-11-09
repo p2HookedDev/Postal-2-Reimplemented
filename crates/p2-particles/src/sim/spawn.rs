@@ -3,6 +3,7 @@ use super::{
 };
 use crate::math::{Rotator, Vector};
 use crate::math::vrand;
+use p2_math::{QUARTER_TURN, RETAIL_UNITS_PER_TURN};
 use crate::props::{CoordinateSystem, EmitterKind, EmitterProperties};
 use crate::props::{RangeVector, RotationSource, StartLocationShape, VelocityDirection};
 use crate::Rng;
@@ -107,7 +108,7 @@ impl ParticleEmitter {
             RotationSource::Normal => {
                 let mut r = normal_rotation;
                 if normal_axis && props.effect_axis_positive_z {
-                    r[0] -= 0x4000;
+                    r[0] -= QUARTER_TURN;
                 }
                 r.rotate(v)
             }
@@ -154,8 +155,8 @@ impl ParticleEmitter {
             old_location,
             velocity,
             start_size,
-            spins_per_second: spins_per_second * 65535.0,
-            start_spin: start_spin * 65535.0,
+            spins_per_second: spins_per_second * RETAIL_UNITS_PER_TURN,
+            start_spin: start_spin * RETAIL_UNITS_PER_TURN,
             size: start_size,
             color_multiplier,
             color: p.color,

@@ -12,8 +12,6 @@ pub fn view_rotation(rotation: Rotator) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(right, up, -forward)).normalize()
 }
 
-/// Unreal units. Retail uses 5 for every scene: the view, the sky and each `DrawActor`.
-pub const NEAR_CLIPPING_PLANE: f32 = 5.0;
 
 /// `DefaultTexMipBias` as `Postal2.ini` ships it.
 const DEFAULT_MIP_BIAS: f32 = -0.5;

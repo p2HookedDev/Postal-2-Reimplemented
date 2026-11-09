@@ -7,7 +7,7 @@ pub(super) fn zone_fog(
     mut cameras: Query<(&SceneView, &mut DistanceFog)>,
 ) {
     let model = collision.model();
-    let t = 1.0 - (-time.delta_secs() / FOG_BLEND_SECONDS).exp();
+    let t = settle_step(time.delta_secs(), FOG_BLEND_SECONDS);
     for (view, mut fog) in &mut cameras {
         let zone = model.and_then(|model| {
             let position = from_bevy(view.position - shown.origin);

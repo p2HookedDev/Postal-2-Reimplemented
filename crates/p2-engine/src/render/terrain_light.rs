@@ -133,7 +133,8 @@ pub(crate) fn light_terrain(
         let environment = Arc::clone(environment);
         *job = Some(AsyncComputeTaskPool::get().spawn(async move {
             catch_unwind(AssertUnwindSafe(|| {
-                let reaches = |position, normal| crate::render::sun_mask::sun_reaches(&level, sun.rotation.vector(), position, normal, TRACE_LIFT);
+                let scene = p2_bake::Scene::new(&level.model, &level.terrains, &level.meshes);
+                let reaches = |position: Vector, normal: Vector| scene.sun_clear(position + normal * TRACE_LIFT, -sun.rotation.vector());
                 environment.terrain.iter().map(|sector| vertex_sun_mask(&sector.positions, &sector.normals, &sun, reaches)).collect()
             }))
         }));
@@ -234,6 +235,7 @@ mod tests {
     fn the_sun_reaches_everywhere_without_collision() {
         let sun = MeshLight { effect: LE_SUNLIGHT, rotation: p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 }, ..MeshLight::default() };
         let empty = StaticCollision { model: p2_assets::Model::default(), hulls: p2_collision::BspHulls::default(), terrains: Vec::new(), meshes: Vec::new() };
-        assert!(crate::render::sun_mask::sun_reaches(&empty, sun.rotation.vector(), Vector::default(), [0.0, 0.0, 1.0].into(), TRACE_LIFT));
+        let scene = p2_bake::Scene::new(&empty.model, &empty.terrains, &empty.meshes);
+        assert!(scene.sun_clear(Vector::default() + Vector::new(0.0, 0.0, 1.0) * TRACE_LIFT, -sun.rotation.vector()));
     }
 }

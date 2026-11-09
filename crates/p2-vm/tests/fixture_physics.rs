@@ -6,7 +6,8 @@ use common::load_fixture;
 use p2_math::Vector;
 use p2_package::Loader;
 use p2_test_package::token::{INSTANCE_VARIABLE, LET, LOCAL_VARIABLE, NOTHING, RETURN};
-use p2_test_package::{CPF_PARM, DefaultValue, PackageBuilder, PropertyType, Script};
+use p2_script::flags::CPF_PARM;
+use p2_test_package::{DefaultValue, PackageBuilder, PropertyType, Script};
 use p2_vm::{ObjectId, Value, Vm};
 
 const PHYS_WALKING: u8 = 1;

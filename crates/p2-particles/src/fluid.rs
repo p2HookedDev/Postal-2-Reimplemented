@@ -6,7 +6,7 @@ mod simulation;
 #[cfg(test)]
 mod tests;
 
-const ROW: f32 = 0.866_025;
+const ROW: f32 = p2_math::HEX_ROW_SPACING;
 
 const MAX_CATCH_UP_STEPS: u32 = 8;
 const MAX_WARM_UP_SECONDS: f32 = 10.0;

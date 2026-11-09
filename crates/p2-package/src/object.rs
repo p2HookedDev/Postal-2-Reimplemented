@@ -1,7 +1,6 @@
+use crate::flags::RF_HAS_STACK;
 use crate::reader::Reader;
 use crate::{Error, Export, Package, name_ref};
-
-const RF_HAS_STACK: u32 = 0x0200_0000;
 
 pub mod tag {
     pub const BYTE: u8 = 1;

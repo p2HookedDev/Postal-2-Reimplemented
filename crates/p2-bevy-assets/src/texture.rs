@@ -143,7 +143,7 @@ pub fn texture_glow(diffuse: (u32, u32, &[[u8; 4]]), glow: (u32, u32, &[[u8; 4]]
 }
 
 fn glow_texel(diffuse: [u8; 4], glow: [u8; 4], m: u8) -> ([u8; 4], [u8; 4]) {
-    let scale = |c: u8, f: u8| ((u16::from(c) * u16::from(f) + 127) / 255) as u8;
+    let scale = p2_math::mul_byte_round;
     let [r, g, b, _] = diffuse;
     let [gr, gg, gb, _] = glow;
     ([scale(r, 255 - m), scale(g, 255 - m), scale(b, 255 - m), m], [scale(gr, m), scale(gg, m), scale(gb, m), m])
@@ -203,7 +203,7 @@ pub fn texture_to_ui_image(texture: &Texture, palette: Option<&[[u8; 4]]>, addit
             if additive {
                 return [r, g, b, 0];
             }
-            let premultiply = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+            let premultiply = |c: u8| p2_math::mul_byte_round(c, a);
             [premultiply(r), premultiply(g), premultiply(b), a]
         })
         .collect();

@@ -2,7 +2,7 @@ use p2_assets::{Model, Terrain, poly_flags};
 use p2_collision::{MeshCollision, Sides, line_check, line_check_node, mesh_line_check, terrain_line_check};
 use p2_math::Vector;
 
-pub(crate) const SUN_DISTANCE: f32 = 65536.0;
+pub const SUN_DISTANCE: f32 = 65536.0;
 
 const MAX_TREE_DEPTH: usize = 64;
 
@@ -20,7 +20,7 @@ pub(crate) enum Seen {
     Other { time: f32 },
 }
 
-pub(crate) struct Scene<'a> {
+pub struct Scene<'a> {
     pub(crate) model: &'a Model,
     terrains: &'a [Terrain],
     meshes: &'a [MeshCollision],
@@ -34,7 +34,7 @@ enum MeshHit {
 }
 
 impl<'a> Scene<'a> {
-    pub(crate) fn new(model: &'a Model, terrains: &'a [Terrain], meshes: &'a [MeshCollision]) -> Self {
+    pub fn new(model: &'a Model, terrains: &'a [Terrain], meshes: &'a [MeshCollision]) -> Self {
         let mut scene = Self { model, terrains, meshes, tree: Vec::with_capacity(meshes.len() * 2) };
         let mut indices: Vec<u32> = (0..meshes.len() as u32).collect();
         if !indices.is_empty() {
@@ -117,7 +117,7 @@ impl<'a> Scene<'a> {
     }
 
     /// The sky counts as open: the sun's rays reach the world through backdrop surfaces.
-    pub(crate) fn sun_clear(&self, start: Vector, to_sun: Vector) -> bool {
+    pub fn sun_clear(&self, start: Vector, to_sun: Vector) -> bool {
         let far = start + to_sun * SUN_DISTANCE;
         let end = match line_check_node(self.model, start, far) {
             None => far,

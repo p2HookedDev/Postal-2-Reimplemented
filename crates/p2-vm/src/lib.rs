@@ -50,9 +50,10 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
+use p2_package::flags::{RF_LOAD_FOR_ANY, RF_LOAD_FOR_GAME};
 use p2_package::{Loader, Package, PackageId};
 use rustc_hash::{FxHashMap, FxHashSet};
-pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidPling, MovieState};
+pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidPling, MovieState, NEAR_CLIPPING_PLANE};
 pub use canvas::CanvasItem;
 pub use enums::ERenderStyle;
 pub use input::PlayerView;
@@ -464,9 +465,6 @@ impl<L: LoaderRef> Vm<L> {
 }
 
 const MAX_CLASS_DEPTH: u32 = 256;
-
-const RF_LOAD_FOR_ANY: u32 = 0x7_0000;
-const RF_LOAD_FOR_GAME: u32 = 0x3_0000;
 
 /// `RF_LoadForEdit` without `RF_LoadForClient` / `RF_LoadForServer` (the editor's viewport `Camera`s saved in maps): the
 /// game's linker does not create it, and references to it are None.

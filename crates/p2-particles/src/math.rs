@@ -1,10 +1,6 @@
-pub(crate) use p2_math::{Rotator, Vector, turn};
+pub(crate) use p2_math::{Rotator, Vector, rotate_by, turn};
 
 use crate::Rng;
-
-pub(crate) fn mirror(v: Vector, normal: Vector) -> Vector {
-    v - (normal * (2.0 * v.dot(normal)))
-}
 
 pub(crate) fn non_parallel(v: Vector) -> Vector {
     if v.x.abs() > 0.57 {
@@ -19,10 +15,6 @@ pub(crate) fn non_parallel(v: Vector) -> Vector {
 pub(crate) fn rotate_about(vs: [Vector; 2], units: i32, axis: Vector) -> [Vector; 2] {
     let (s, c) = turn(units).sin_cos();
     vs.map(|v| ((v * c) + (axis.cross(v) * s)) + (axis * (axis.dot(v) * (1.0 - c))))
-}
-
-pub(crate) fn rotate_by(axes: &[Vector; 3], v: Vector) -> Vector {
-    axes[0] * v.x + axes[1] * v.y + axes[2] * v.z
 }
 
 pub(crate) fn vrand(rng: &mut Rng) -> Vector {

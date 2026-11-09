@@ -4,7 +4,8 @@ use p2_package::PackageId;
 use p2_script::{Expr, ScriptObject, Source, class_name, decode_script_linked, read_export};
 use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{ClassId, Error, NameId, ObjectId, LoaderRef, Value, Vm};
-use super::{CPF_PARM, CPF_RETURN_PARM, Function, INTRINSIC_SUPER, UNLINKED, is_native_declaration};
+use p2_script::flags::{CPF_PARM, CPF_RETURN_PARM};
+use super::{Function, INTRINSIC_SUPER, UNLINKED, is_native_declaration};
 
 impl<L: LoaderRef> Vm<L> {
     pub fn find_function(&mut self, class: ClassId, name: &str) -> Result<Option<Arc<Function>>, Error> {

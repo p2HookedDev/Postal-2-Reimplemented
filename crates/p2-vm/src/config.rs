@@ -2,14 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use p2_package::Ini;
+use p2_script::flags::{CLASS_CONFIG, CPF_CONFIG, CPF_GLOBAL_CONFIG};
 use p2_script::{StructLayout, Type};
 
 use crate::{ClassId, HostCommand, LoaderRef, NameId, ObjectId, Value, Vm};
-
-const CLASS_CONFIG: u32 = 0x4;
-const CPF_CONFIG: u32 = 0x4000;
-/// Loaded and saved in the section of the declaring class, not the object's class (unverified).
-const CPF_GLOBAL_CONFIG: u32 = 0x0004_0000;
 
 const SETTINGS: &str = "settings";
 pub const VIEWPORT_MANAGER: &str = "ini:Engine.Engine.ViewportManager";

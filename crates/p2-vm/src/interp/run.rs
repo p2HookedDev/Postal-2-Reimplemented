@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use crate::memory::{LayoutId, Mem};
 use crate::{ClassId, Error, ObjectId, LoaderRef, Value, Vm, natives, zero_slot};
+use p2_script::flags::{CPF_OUT_PARM, FUNC_LATENT, FUNC_SINGULAR};
 use super::{
-    ARG_POOL, CPF_OUT_PARM, FRAME_POOL, FUNC_LATENT, FUNC_SINGULAR, Flow, Frame, Function, MAX_SCRIPT_DEPTH,
+    ARG_POOL, FRAME_POOL, Flow, Frame, Function, MAX_SCRIPT_DEPTH,
     RECURSION_CHAIN, RUNAWAY,
 };
 

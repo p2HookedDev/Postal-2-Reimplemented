@@ -652,7 +652,7 @@ fn split_by_cube<T>([a, b]: [T; 2], is_cube: impl Fn(&T) -> bool) -> Result<[T; 
 fn tint_texels(texels: &mut [[u8; 4]], tint: [u8; 4]) {
     for texel in texels {
         for (c, t) in texel[..3].iter_mut().zip(tint) {
-            *c = ((u16::from(*c) * u16::from(t) + 127) / 255) as u8;
+            *c = p2_math::mul_byte_round(*c, t);
         }
     }
 }

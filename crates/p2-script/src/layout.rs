@@ -4,6 +4,7 @@ use std::sync::Arc;
 use p2_package::{Loader, Package, import_path, tag};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
+use crate::flags::{CPF_NATIVE, CPF_TRANSIENT};
 use crate::{Error, PropertyKind, ScriptObject, read_child, read_export};
 
 /// Struct and array nesting limit; deeper means a reference cycle.
@@ -11,9 +12,6 @@ const MAX_DEPTH: usize = 64;
 
 /// Structs serialized as raw fields instead of tagged properties (version >= 118).
 const BINARY_STRUCTS: [&str; 3] = ["Vector", "Rotator", "Color"];
-
-const CPF_NATIVE: u32 = 0x1000;
-const CPF_TRANSIENT: u32 = 0x2000;
 
 #[derive(Clone, Copy)]
 pub struct Source<'a> {

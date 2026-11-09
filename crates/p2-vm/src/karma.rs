@@ -3,7 +3,6 @@
 mod shapes;
 
 use std::collections::{BTreeMap, HashSet};
-use std::f32::consts::PI;
 use std::sync::Arc;
 
 use p2_assets::{KMeshProps, read_kmesh_props, read_static_mesh};
@@ -11,7 +10,8 @@ use p2_package::Package;
 use p2_physics::{Background, BodyId, BodyParams, Shape};
 use rustc_hash::FxHashMap;
 
-use p2_math::{Rotator, Vector};
+use p2_math::{Rotator, Vector, quat_to_rotator, rotator_to_quat};
+use p2_math::matrix_to_quat;
 use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::interp::float;
@@ -25,9 +25,9 @@ pub(crate) const IMPULSE_SCALE: f32 = 0.01;
 /// The force reaches Karma unscaled (Karma lengths are 1/50 of Unreal's), so in Unreal units
 /// the acceleration is force × 50 / mass.
 const MAX_KARMA_TICK: f32 = 0.05;
-const FORCE_SCALE: f32 = 50.0;
+const FORCE_SCALE: f32 = p2_physics::UNITS_PER_METER;
 /// The torque reaches Karma unscaled; inertia in Unreal units is 50² times Karma's (unverified).
-const TORQUE_SCALE: f32 = 2500.0;
+const TORQUE_SCALE: f32 = p2_physics::UNITS_PER_METER * p2_physics::UNITS_PER_METER;
 
 #[derive(Default)]
 pub(crate) struct Karma {
@@ -473,59 +473,4 @@ fn change_body(world: &mut Option<Background>, body: Option<BodyId>, change: imp
     if let (Some(world), Some(id)) = (world.as_mut(), body) {
         world.change(move |w| change(w, id));
     }
-}
-
-pub(crate) fn rotator_to_quat(rotation: Rotator) -> [f32; 4] {
-    matrix_to_quat(rotation.axes())
-}
-
-pub(crate) fn matrix_to_quat([x, y, z]: [Vector; 3]) -> [f32; 4] {
-    let m = [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]];
-    let trace = m[0][0] + m[1][1] + m[2][2];
-    if trace > 0.0 {
-        let s = (trace + 1.0).sqrt() * 2.0;
-        [(m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s, s / 4.0]
-    } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
-        let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0;
-        [s / 4.0, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s]
-    } else if m[1][1] > m[2][2] {
-        let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0;
-        [(m[0][1] + m[1][0]) / s, s / 4.0, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s]
-    } else {
-        let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0;
-        [(m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, s / 4.0, (m[1][0] - m[0][1]) / s]
-    }
-}
-
-pub(crate) fn quat_to_rotator(q: [f32; 4]) -> Rotator {
-    let [x, y, z] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(|v| rotate(q, v.into()));
-    let units = |angle: f32| (angle * 32768.0 / PI).round() as i32;
-    [units(x[2].atan2(x[0].hypot(x[1]))), units(x[1].atan2(x[0])), units((-y[2]).atan2(z[2]))].into()
-}
-
-fn rotate([qx, qy, qz, w]: [f32; 4], v: Vector) -> Vector {
-    let cross = |a: Vector, b: Vector| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    let u = [qx, qy, qz];
-    let t = cross(u.into(), v).map(|c| c * 2.0);
-    let ut = cross(u.into(), t.into());
-    [0, 1, 2].map(|i| v[i] + w * t[i] + ut[i]).into()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rotator_quaternion_round_trip() {
-        for r in [[0, 0, 0], [0, 16384, 0], [4000, -9000, 2000], [-12000, 30000, -15000], [8192, 0, 32000]] {
-            let q = rotator_to_quat(r.into());
-            for v in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.3, -0.5, 0.8]] {
-                let (a, b) = (rotate(q, v.into()), Rotator::from(r).rotate(v.into()));
-                assert!((0..3).all(|i| (a[i] - b[i]).abs() < 1e-4), "{r:?} {v:?}: {a:?} vs {b:?}");
-            }
-            let back = quat_to_rotator(q);
-            assert!((0..3).all(|i| (back[i] - r[i]).rem_euclid(65536).min((r[i] - back[i]).rem_euclid(65536)) <= 2), "{r:?} -> {back:?}");
-        }
-    }
-
 }

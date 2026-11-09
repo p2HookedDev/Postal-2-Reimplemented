@@ -3,7 +3,7 @@ use p2_assets::{KaConeType, KaJointKind, KaShape, KaTwistType, KarmaAsset};
 use p2_physics::{JointLimit, JointParams, PartParams, Shape};
 use p2_math::Vector;
 use crate::bones::PosedMesh;
-use crate::karma::matrix_to_quat;
+use p2_math::matrix_to_quat;
 use super::{Built, CONE_SCALE, CUT_SCALE, MAX_CONE, MIN_TWIST, TrackedJoint};
 
 pub(super) fn cut_of(own: Option<&[f32]>, parents: &[usize]) -> Vec<bool> {

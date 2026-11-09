@@ -3,7 +3,7 @@ use p2_assets::pose::Frame;
 use p2_physics::{Background, RagdollParams};
 use p2_math::Vector;
 use crate::enums::EPhysics;
-use crate::karma::matrix_to_quat;
+use p2_math::matrix_to_quat;
 use crate::{Encroachment, Error, LoaderRef, ObjectId, Value, Vm, Prop, Kind};
 use super::{CORPSE_FRICTION, Corpse, MAX_JOINT_ERROR, MAX_SPEED, Ragdoll, ResolvedScales};
 use super::rig::{build, cut_of, frame_scale, orthonormal, scale_frames};

@@ -5,7 +5,7 @@ use p2_assets::{ElemTm, KMeshProps};
 use p2_physics::Shape;
 
 /// Unreal units per Karma length unit; `KMeshProps` shapes are stored in Karma units.
-const ME_TO_UNREAL: f32 = 50.0;
+const ME_TO_UNREAL: f32 = p2_physics::UNITS_PER_METER;
 const CYLINDER_SIDES: usize = 12;
 
 /// Boxes and cylinders become hulls so any scale stays exact; spheres take the largest scale.

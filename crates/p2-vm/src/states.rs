@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use p2_package::PackageId;
+use p2_script::flags::STATE_AUTO;
 use p2_script::{ScriptObject, read_export};
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -100,8 +101,6 @@ impl EventKey for Event {
         vm.script.lookups.events[self as usize]
     }
 }
-
-const STATE_AUTO: u32 = 0x02;
 
 const MAX_STATEMENTS: usize = 10_000;
 const MAX_STATE_CHANGES: usize = 5;

@@ -598,7 +598,7 @@ fn tex_modifier(class: MaterialClass, object: &ObjectProperties, state: &mut Ren
 impl RenderState {
     fn multiply_color(&mut self, color: [u8; 4]) {
         let current = self.color.unwrap_or([255; 4]);
-        self.color = Some(std::array::from_fn(|i| ((u16::from(current[i]) * u16::from(color[i]) + 127) / 255) as u8));
+        self.color = Some(std::array::from_fn(|i| p2_math::mul_byte_round(current[i], color[i])));
     }
 }
 

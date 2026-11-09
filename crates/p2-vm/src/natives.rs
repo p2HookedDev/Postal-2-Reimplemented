@@ -1,4 +1,4 @@
-use p2_math::{Rotator, Vector};
+use p2_math::{Rotator, Vector, units_truncated};
 use crate::interp::{float, int, truthy};
 use crate::native_id::{Native, NativeGroup};
 use crate::{Error, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
@@ -290,10 +290,9 @@ fn milliseconds_since_2000<L: LoaderRef>(vm: &mut Vm<L>, level: Option<ObjectId>
 }
 
 pub(crate) fn orthogonal_rotation(x: Vector, y: Vector, z: Vector) -> Rotator {
-    let units = |angle: f32| (angle * 32768.0 / std::f32::consts::PI) as i32;
-    let (pitch, yaw) = (units(x[2].atan2((x[0] * x[0] + x[1] * x[1]).sqrt())), units(x[1].atan2(x[0])));
+    let (pitch, yaw) = (units_truncated(x[2].atan2((x[0] * x[0] + x[1] * x[1]).sqrt())), units_truncated(x[1].atan2(x[0])));
     let unrolled = Rotator::new(pitch, yaw, 0).axes();
-    let roll = units(z.dot(unrolled[1]).atan2(y.dot(unrolled[1])));
+    let roll = units_truncated(z.dot(unrolled[1]).atan2(y.dot(unrolled[1])));
     [pitch, yaw, roll].into()
 }
 

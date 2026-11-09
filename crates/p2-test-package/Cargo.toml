@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[dev-dependencies]
+[dependencies]
 p2-package.workspace = true
 p2-script.workspace = true
 

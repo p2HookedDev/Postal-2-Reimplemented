@@ -3,7 +3,8 @@ mod common;
 use common::load_fixture;
 use p2_math::{Rotator, Vector};
 use p2_test_package::token::{CONTEXT, INSTANCE_VARIABLE, INT_CONST, LET, LOCAL_VARIABLE, NOTHING, RETURN};
-use p2_test_package::{CPF_PARM, DefaultValue, PackageBuilder, PropertyType, Script};
+use p2_script::flags::CPF_PARM;
+use p2_test_package::{DefaultValue, PackageBuilder, PropertyType, Script};
 use p2_vm::Value;
 
 const PHYS_FALLING: u8 = 2;

@@ -21,8 +21,6 @@ use crate::shown_scene::ShownScene;
 
 const LUMEL_LIFT: f32 = 2.0;
 
-const SUN_DISTANCE: f32 = 65536.0;
-
 pub fn faces_sun(direction: Vector, normal: Vector) -> bool {
     direction.dot(normal) < 0.0
 }
@@ -30,18 +28,6 @@ pub fn faces_sun(direction: Vector, normal: Vector) -> bool {
 pub fn masked(lumel: [u8; 4], reached: bool) -> [u8; 4] {
     let [r, g, b, _] = lumel;
     [r, g, b, if reached { 255 } else { 0 }]
-}
-
-pub(crate) fn sun_reaches(collision: &StaticCollision, direction: Vector, position: Vector, normal: Vector, lift: f32) -> bool {
-    let start = position + normal * lift;
-    let far = start - direction * SUN_DISTANCE;
-    let end = match p2_collision::line_check_node(&collision.model, start, far) {
-        None => far,
-        Some((hit, Some(node))) if p2_bake::is_sky(&collision.model, node) => hit.location,
-        Some(_) => return false,
-    };
-    p2_collision::mesh_line_check(&collision.meshes, start, end).is_none()
-        && collision.terrains.iter().all(|terrain| p2_collision::terrain_line_check(terrain, start, end, p2_collision::Sides::Both).is_none())
 }
 
 pub struct Traced {
@@ -52,6 +38,7 @@ pub struct Traced {
 fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
     let start = Instant::now();
     let model = &collision.model;
+    let scene = p2_bake::Scene::new(model, &collision.terrains, &collision.meshes);
     let mut atlases: Vec<_> =
         model.light_map_textures.iter().map(|atlas| atlas.texture().and_then(|texture| p2_assets::texture_rgba(&texture, None))).collect();
     for (_, _, texels) in atlases.iter_mut().flatten() {
@@ -86,7 +73,7 @@ fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
                 }
                 lumels += 1;
                 let Some(position_of) = &position_of else { continue };
-                let reached = sun_reaches(collision, sun, position_of(x as f32 + 0.5, y as f32 + 0.5), normal, LUMEL_LIFT);
+                let reached = scene.sun_clear(position_of(x as f32 + 0.5, y as f32 + 0.5) + normal * LUMEL_LIFT, -sun);
                 sunlit += usize::from(reached);
                 if let Some(texel) = texels.get_mut(ay * width + ax) {
                     *texel = masked(*texel, reached);

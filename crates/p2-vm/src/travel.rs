@@ -3,6 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use p2_script::flags::CPF_TRAVEL;
+
 use crate::Prop;
 use crate::{ClassId, Error, HostCommand, Kind, LoaderRef, ObjectId, Value, Vm};
 
@@ -88,8 +90,6 @@ impl ETravelType {
         }
     }
 }
-
-const CPF_TRAVEL: u32 = 0x0001_0000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TravelActor {

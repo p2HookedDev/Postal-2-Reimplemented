@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use p2_assets::{Model, read_model, read_static_mesh};
 use p2_collision::{BspHulls, Hit, MeshCollision, model_triangles, static_mesh_collision};
 
-use p2_math::{Rotator, Vector};
+use p2_math::{HEX_ROW_SPACING, Rotator, Vector};
 use crate::enums::EPhysics;
 use crate::{Kind, LoaderRef, ObjectId, Prop, Vm};
 
@@ -348,7 +348,7 @@ const FGT_HEXAGONAL: u8 = 1;
 /// so negative half sizes (a count of 0) still give min <= max.
 fn fluid_box(location: Vector, counts: [f32; 2], spacing: f32, hexagonal: bool) -> [Vector; 2] {
     let half = |count: f32| (count.clamp(0.0, 256.0) - 1.0) * 0.5 * spacing;
-    let (x, y) = (half(counts[0]), half(counts[1]) * if hexagonal { 0.866_025 } else { 1.0 });
+    let (x, y) = (half(counts[0]), half(counts[1]) * if hexagonal { HEX_ROW_SPACING } else { 1.0 });
     let low = [location[0] - x, location[1] - y, location[2] - 5.0];
     let high = [location[0] + x, location[1] + y, location[2] + 5.0];
     [[0, 1, 2].map(|i| low[i].min(high[i])).into(), [0, 1, 2].map(|i| low[i].max(high[i])).into()]

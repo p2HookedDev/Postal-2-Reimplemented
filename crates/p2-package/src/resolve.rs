@@ -4,9 +4,9 @@ use std::sync::{Arc, OnceLock};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::caseless::{Caseless, Text, caseless_cmp};
+use crate::flags::RF_PUBLIC;
 use crate::{Error, Export, Ini, Package, split_path};
 
-const RF_PUBLIC: u32 = 0x0000_0004;
 const MAX_IMPORT_DEPTH: usize = 64;
 
 #[derive(Debug, thiserror::Error)]

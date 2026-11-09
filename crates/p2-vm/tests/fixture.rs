@@ -2,7 +2,8 @@ mod common;
 
 use common::load_fixture;
 use p2_test_package::token::{INSTANCE_VARIABLE, INT_CONST, LET, LOCAL_VARIABLE, NOTHING, RETURN, STOP};
-use p2_test_package::{CPF_OUT_PARM, CPF_PARM, CPF_RETURN_PARM, PackageBuilder, Script};
+use p2_script::flags::{CPF_OUT_PARM, CPF_PARM, CPF_RETURN_PARM};
+use p2_test_package::{PackageBuilder, Script};
 use p2_vm::{NameId, Value};
 
 #[test]

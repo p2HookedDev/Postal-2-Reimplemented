@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use p2_math::{Rotator, Vector};
+use p2_script::flags::CPF_OUT_PARM;
 use p2_script::{Callee, Expr, Statement};
 
 use super::{
-    CPF_OUT_PARM, Flow, Frame, Function, Place, PrimCast, Target, case_matches, cast, int, is_place, linked, member_of_link,
+    Flow, Frame, Function, Place, PrimCast, Target, case_matches, cast, int, is_place, linked, member_of_link,
     truthy, unlink,
 };
 use crate::profiling::Work;

@@ -1,13 +1,13 @@
 //! The host simulates emitters, so these natives set script properties and queue the rest.
 
 use p2_math::Vector;
+use p2_package::MAP_EXTENSION;
 use crate::native_id::Native;
 use crate::natives::{float_arg, str_arg, vec3};
 
 use crate::{Error, HostCommand, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
 const LENGTH_SPAWN_LIMIT: usize = 5;
-const DEFAULT_MAP_EXT: &str = "fuk";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParticleCommand<Properties = ()> {
@@ -185,7 +185,7 @@ impl<L: LoaderRef> Vm<L> {
     /// A name in several folders counts once, from the first search path.
     pub(crate) fn map_files(&self) -> Vec<String> {
         let ext = match self.config_value("URL", "MapExt").unwrap_or_default() {
-            ext if ext.is_empty() => DEFAULT_MAP_EXT.to_owned(),
+            ext if ext.is_empty() => MAP_EXTENSION.to_owned(),
             ext => ext,
         };
         let mut files: Vec<(&std::path::Path, String)> = self

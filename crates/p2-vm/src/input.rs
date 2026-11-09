@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use p2_package::Ini;
 use p2_script::Type;
+use p2_script::flags::{CPF_INPUT, CPF_OPTIONAL_PARM, FUNC_EXEC};
 
 use p2_math::{Rotator, Vector};
 use crate::Prop;
@@ -16,9 +17,6 @@ pub struct PlayerView {
     pub behind: bool,
 }
 
-const CPF_INPUT: u32 = 0x4;
-const CPF_OPTIONAL_PARM: u32 = 0x10;
-const FUNC_EXEC: u32 = 0x200;
 const AXIS_RATE: f32 = 20.0;
 const ANALOG_SCALE: f32 = 0.01;
 

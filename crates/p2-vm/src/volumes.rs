@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use p2_assets::Model;
 
-use p2_math::{Rotator, Vector};
+use p2_math::{Rotator, Vector, unrotate_by};
 use crate::collision::Placement;
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
@@ -333,19 +333,15 @@ pub(crate) fn coords_of(value: Option<&Value>) -> [Vector; 4] {
     }
 }
 
-fn along(v: Vector, [x, y, z]: [Vector; 3]) -> Vector {
-    Vector::new(v.dot(x), v.dot(y), v.dot(z))
-}
-
 fn transposed([origin, x, y, z]: [Vector; 4]) -> [Vector; 4] {
     let column = |k: usize| Vector::new(x[k], y[k], z[k]);
-    [-along(origin, [x, y, z]), column(0), column(1), column(2)]
+    [-unrotate_by(&[x, y, z], origin), column(0), column(1), column(2)]
 }
 
 pub(crate) fn carry(coords: [Vector; 4], location: Vector, velocity: Vector, rotation: Rotator) -> (Vector, Vector, Rotator) {
     let [origin, axes @ ..] = coords;
-    let [x, y, z] = rotation.axes().map(|axis| along(axis, axes));
-    (along(location - origin, axes), along(velocity, axes), crate::natives::orthogonal_rotation(x, y, z))
+    let [x, y, z] = rotation.axes().map(|axis| unrotate_by(&axes, axis));
+    (unrotate_by(&axes, location - origin), unrotate_by(&axes, velocity), crate::natives::orthogonal_rotation(x, y, z))
 }
 
 pub(crate) fn warp(coords: [Vector; 4], location: Vector, velocity: Vector, rotation: Rotator) -> (Vector, Vector, Rotator) {

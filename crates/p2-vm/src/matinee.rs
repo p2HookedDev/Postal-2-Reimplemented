@@ -1,4 +1,4 @@
-use p2_math::{Rotator, Vector};
+use p2_math::{RETAIL_UNITS_PER_TURN, Rotator, Vector};
 use crate::interp::{float, int};
 use crate::natives::vec3;
 use crate::enums::{ECamOrientation, ESAStatus};
@@ -10,7 +10,6 @@ const LAST_SAMPLE: i32 = SAMPLES as i32 - 1;
 const MIN_PCT: f32 = 1e-4;
 const MAX_PCT: f32 = 100.0;
 const SKIP_MARGIN: f32 = 0.01;
-const REVERSE_TURN: f32 = 65535.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenOverlay {
@@ -31,11 +30,9 @@ pub struct TitleOverlay {
     pub alpha: f32,
 }
 
-/// Truncated, not wrapped, with 65535 units per turn, as retail.
-fn rotation(Vector { x, y, z }: Vector) -> [f32; 3] {
-    let units = |angle: f64| (angle * 65535.0 / std::f64::consts::TAU) as i32 as f32;
-    let horizontal = f64::from(x * x + y * y).sqrt();
-    [units(f64::from(z).atan2(horizontal)), units(f64::from(y).atan2(f64::from(x))), 0.0]
+fn rotation(v: Vector) -> [f32; 3] {
+    let Rotator { pitch, yaw, .. } = v.rotation();
+    [pitch as f32, yaw as f32, 0.0]
 }
 
 fn progress(value: f32) -> f32 {
@@ -428,7 +425,7 @@ impl<L: LoaderRef> Vm<L> {
         [0, 1, 2].map(|i| {
             let mut difference = target[i] - start[i];
             if reverse[i] {
-                difference += if difference >= 0.0 { -REVERSE_TURN } else { REVERSE_TURN };
+                difference += if difference >= 0.0 { -RETAIL_UNITS_PER_TURN } else { RETAIL_UNITS_PER_TURN };
             }
             (shake[i] + start[i] + difference * alpha) as i32
         }).into()

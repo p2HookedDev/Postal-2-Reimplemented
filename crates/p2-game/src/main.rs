@@ -12,21 +12,20 @@ use bevy::render::settings::{Backends, WgpuSettings};
 use bevy::app::{App, AppExit, PluginGroup, PostUpdate, Startup, Update};
 use bevy::ecs::error::Result;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::prelude::{Commands, Local, MessageWriter, Query, Res, ResMut, Resource, Single};
+use bevy::ecs::prelude::{Commands, MessageWriter, Query, Res, ResMut, Resource, Single};
 use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::state::prelude::{NextState, in_state};
-use bevy::time::{Real, Time};
 use bevy::log::LogPlugin;
 use bevy::math::UVec2;
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::query::With;
 use bevy::window::{CursorGrabMode, CursorOptions, Monitor, PrimaryWindow, Window, WindowMode, WindowPlugin};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use p2_engine::diagnostics::{DiagnosticsPlugin, StageTimingPlugin, capture_layer, install_panic_hook};
+use p2_engine::diagnostics::{DiagnosticsPlugin, StageTimingPlugin, capture_layer, install_panic_hook, log_frame_times};
 use p2_engine::display::{self, Display, Settings};
 use p2_engine::game_dir::known_game_dir;
-use p2_engine::map::{SceneTargets, Session, SessionHolder, map_package, present_session, spawn_hud_camera, travel_package};
-use p2_engine::play::{FrameTimes, Play, PlaySystems, PlayWorld};
+use p2_engine::map::{SceneTargets, Session, SessionHolder, map_package, present_session, spawn_hud_camera, start_map, travel_package};
+use p2_engine::play::{Play, PlaySystems, PlayWorld};
 use p2_engine::P2EnginePlugins;
 use p2_package::Ini;
 
@@ -49,18 +48,6 @@ impl SessionHolder for Game {
 fn main() {
     install_panic_hook();
     run();
-}
-
-fn start_map(args: impl IntoIterator<Item = String>, root: &Path) -> Option<String> {
-    args.into_iter().find(|arg| {
-        let path = Path::new(arg);
-        let extension = |wanted: &str| path.extension().is_some_and(|e| e.eq_ignore_ascii_case(wanted));
-        if extension("exe") || path.is_file() || arg.starts_with(['-', '+']) || arg.contains('=') {
-            return false;
-        }
-        let file = if extension("fuk") { arg.clone() } else { format!("{arg}.fuk") };
-        root.join("Maps").join(file).is_file()
-    })
 }
 
 fn system_ini(root: &Path) -> anyhow::Result<Ini> {
@@ -104,64 +91,6 @@ fn run() {
     .add_systems(EguiPrimaryContextPass, frame.run_if(resource_exists::<Game>))
     .add_systems(Update, log_frame_times);
     app.run();
-}
-
-#[derive(Default)]
-struct FrameWindow {
-    seconds: f32,
-    frames: u32,
-    shortest: f32,
-    longest: f32,
-}
-
-fn log_frame_times(mut times: ResMut<FrameTimes>, time: Res<Time<Real>>, mut since: Local<FrameWindow>) {
-    let delta = time.delta_secs();
-    if since.frames == 0 {
-        (since.shortest, since.longest) = (delta, delta);
-    }
-    since.seconds += delta;
-    since.frames += 1;
-    (since.shortest, since.longest) = (since.shortest.min(delta), since.longest.max(delta));
-    if since.seconds < 1.0 {
-        return;
-    }
-    let frames = f64::from(since.frames);
-    let ms = |time: &std::time::Duration| time.as_secs_f64() * 1000.0;
-    let list = |parts: &mut dyn Iterator<Item = (&str, std::time::Duration)>, per: f64| {
-        parts.map(|(name, time)| format!("{name} {:.2}", ms(&time) / per)).collect::<Vec<_>>().join(", ")
-    };
-    bevy::log::info!(
-        "frames {:.2} to {:.2} ms; per frame (ms), main thread: {}; vm thread: {}",
-        since.shortest * 1000.0,
-        since.longest * 1000.0,
-        list(&mut times.totals.iter().map(|(n, t)| (*n, *t)), frames),
-        list(&mut times.vm_totals.iter().map(|(n, t)| (*n, *t)), frames)
-    );
-    if times.vm_profile == p2_engine::play::VmProfile::TickByClass {
-        let mut vm: Vec<_> = times.vm_parts.drain().collect();
-        vm.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
-        bevy::log::info!("vm tick by class and phase (ms per frame): {}", list(&mut vm.iter().take(10).map(|(n, t)| (n.as_str(), *t)), frames));
-    }
-    if let Some(mut slowest) = times.take_slowest() {
-        slowest.main.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
-        slowest.vm.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
-        let named: std::time::Duration = slowest.main.iter().map(|(_, time)| *time).sum();
-        bevy::log::info!(
-            "slowest frame {:.2} ms: main thread: {}, rest (Bevy, render) {:.2}; its vm frame: {}{}",
-            ms(&slowest.length),
-            list(&mut slowest.main.iter().take(6).map(|(n, t)| (*n, *t)), 1.0),
-            ms(&slowest.length.saturating_sub(named)),
-            list(&mut slowest.vm.iter().map(|(n, t)| (*n, *t)), 1.0),
-            if slowest.profile.is_empty() {
-                String::new()
-            } else {
-                format!("; vm tick: {}", list(&mut slowest.profile.iter().take(8).map(|(n, t)| (n.as_str(), *t)), 1.0))
-            }
-        );
-    }
-    times.totals.clear();
-    times.vm_totals.clear();
-    *since = Default::default();
 }
 
 fn apply_display(
@@ -259,25 +188,4 @@ fn frame(
         game.session.frame(&ctx, rect, &mut contexts, &mut t);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn start_map_skips_what_names_no_map() {
-        let root = std::env::temp_dir().join("p2-game-start-map");
-        let maps = root.join("Maps");
-        std::fs::create_dir_all(&maps).expect("making the test Maps folder");
-        std::fs::write(maps.join("Church.fuk"), b"").expect("writing the test map");
-        let args = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
-        let file = maps.join("Church.fuk").display().to_string();
-        let skipped = args(&["C:\\Games\\p2-game.exe", file.as_str(), "-windowed", "+connect", "Game=x", "Nope", "Church"]);
-        assert_eq!(start_map(skipped, &root).as_deref(), Some("Church"));
-        assert_eq!(start_map(args(&["Church.fuk"]), &root).as_deref(), Some("Church.fuk"));
-        assert_eq!(start_map(args(&["Nope", "-log", "x=1"]), &root), None);
-        assert_eq!(start_map(args(&[file.as_str()]), &root), None);
-        assert_eq!(start_map(Vec::new(), &root), None);
-    }
 }

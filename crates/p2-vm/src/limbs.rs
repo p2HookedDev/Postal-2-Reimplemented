@@ -4,9 +4,8 @@ use std::collections::BTreeMap;
 
 use p2_physics::{Background, BodyId, BodyParams, Shape};
 
-use p2_math::{Rotator, Vector};
+use p2_math::{Rotator, Vector, quat_to_rotator, radians, rotator_to_quat};
 use crate::enums::{EDrawType, EPhysics};
-use crate::karma::{quat_to_rotator, rotator_to_quat};
 use crate::profiling::Work;
 use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
 
@@ -27,7 +26,6 @@ const HEARD: f32 = 200.0;
 const HARD_HIT: f32 = 150.0;
 const SPLAT: f32 = 700.0;
 const SPLAT_TICKS: u64 = 12;
-const ROTATION_TO_RADIANS: f32 = std::f32::consts::TAU / 65536.0;
 
 #[derive(Default)]
 pub(crate) struct Limbs {
@@ -259,7 +257,7 @@ impl<L: LoaderRef> Vm<L> {
         let velocity = self.store.vector(actor, Prop::Velocity);
         let Rotator { pitch, yaw, roll } = self.store.rotator_of(actor, Prop::RotationRate);
         self.store.set(actor, Prop::RotationRate, Value::Rotator([0; 3].into()));
-        let spin = [roll, pitch, yaw].map(|r| r as f32 * ROTATION_TO_RADIANS);
+        let spin = [roll, pitch, yaw].map(radians);
         let Some(limb) = self.karma.limbs.live.get_mut(&actor) else { return };
         (limb.wrote, limb.before) = (velocity, velocity);
         let id = limb.id;

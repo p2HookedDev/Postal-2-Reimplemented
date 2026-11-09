@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use p2_package::PackageId;
+use p2_script::flags::FUNC_NATIVE;
 use p2_script::{Expr, Statement, StructLayout};
 
 use p2_math::{Rotator, Vector};
@@ -20,13 +21,7 @@ mod run;
 
 const MAX_SCRIPT_DEPTH: u32 = 1000;
 const RECURSION_CHAIN: usize = 24;
-const CPF_PARM: u32 = 0x80;
-const CPF_RETURN_PARM: u32 = 0x400;
-const CPF_OUT_PARM: u32 = 0x100;
 const RUNAWAY: usize = 1_000_000;
-const FUNC_LATENT: u32 = 0x08;
-const FUNC_NATIVE: u32 = 0x400;
-const FUNC_SINGULAR: u32 = 0x20;
 
 #[derive(Debug)]
 pub struct Function {

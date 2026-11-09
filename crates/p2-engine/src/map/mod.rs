@@ -210,7 +210,18 @@ pub struct Session {
 }
 
 pub fn map_package(name: &str) -> String {
-    Path::new("Maps").join(format!("{}.fuk", name.trim_end_matches(".fuk"))).display().to_string()
+    let stem = name.len().checked_sub(4).filter(|&cut| name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(".fuk")).map_or(name, |cut| &name[..cut]);
+    Path::new("Maps").join(format!("{stem}.fuk")).display().to_string()
+}
+
+pub fn start_map(args: impl IntoIterator<Item = String>, root: &Path) -> Option<String> {
+    args.into_iter().find(|arg| {
+        let path = Path::new(arg);
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) || path.is_file() || arg.starts_with(['-', '+']) || arg.contains('=') {
+            return false;
+        }
+        root.join(map_package(arg)).is_file()
+    })
 }
 
 pub fn travel_package(url: &str) -> Option<String> {
@@ -625,12 +636,28 @@ impl Session {
 mod tests {
     use std::path::PathBuf;
 
-    use super::map_package;
+    use super::{map_package, start_map};
 
     #[test]
     fn map_names_become_package_paths() {
         let expected = PathBuf::from("Maps").join("Startup.fuk").display().to_string();
         assert_eq!(map_package("Startup.fuk"), expected);
         assert_eq!(map_package("Startup"), expected);
+    }
+
+    #[test]
+    fn start_map_skips_what_names_no_map() {
+        let root = std::env::temp_dir().join("p2-game-start-map");
+        let maps = root.join("Maps");
+        std::fs::create_dir_all(&maps).expect("making the test Maps folder");
+        std::fs::write(maps.join("Church.fuk"), b"").expect("writing the test map");
+        let args = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let file = maps.join("Church.fuk").display().to_string();
+        let skipped = args(&["C:\\Games\\p2-game.exe", file.as_str(), "-windowed", "+connect", "Game=x", "Nope", "Church"]);
+        assert_eq!(start_map(skipped, &root).as_deref(), Some("Church"));
+        assert_eq!(start_map(args(&["Church.fuk"]), &root).as_deref(), Some("Church.fuk"));
+        assert_eq!(start_map(args(&["Nope", "-log", "x=1"]), &root), None);
+        assert_eq!(start_map(args(&[file.as_str()]), &root), None);
+        assert_eq!(start_map(Vec::new(), &root), None);
     }
 }

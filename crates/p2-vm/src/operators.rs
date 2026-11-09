@@ -137,17 +137,10 @@ fn spatial(native: Native, args: &[Value]) -> Option<Value> {
             let length = value.size();
             Value::Vector(if length > 0.0 { value / length } else { Vector::ZERO })
         }
-        Native::VLerp => {
-            let (a, b, alpha) = (v(0), v(1), float_arg(args, 2));
-            Value::Vector([0, 1, 2].map(|i| a[i] + alpha * (b[i] - a[i])).into())
-        }
-        Native::MirrorVectorByNormal => {
-            let (a, n) = (v(0), v(1));
-            let d = 2.0 * a.dot(n);
-            Value::Vector([0, 1, 2].map(|i| a[i] - n[i] * d).into())
-        }
+        Native::VLerp => Value::Vector(v(0).lerp(v(1), float_arg(args, 2))),
+        Native::MirrorVectorByNormal => Value::Vector(v(0).mirror_by_normal(v(1))),
         Native::GreaterGreater_VectorRotator => Value::Vector(r(1).rotate(v(0))),
-        Native::LessLess_VectorRotator => Value::Vector(r(1).axes().map(|axis| axis.dot(v(0))).into()),
+        Native::LessLess_VectorRotator => Value::Vector(r(1).unrotate(v(0))),
         Native::Normalize => Value::Rotator(r(0).map(|c| {
             let c = c & 0xffff;
             if c > 32767 { c - 0x10000 } else { c }
@@ -157,16 +150,10 @@ fn spatial(native: Native, args: &[Value]) -> Option<Value> {
             Value::Rotator([0, 1, 2].map(|i| a[i] + (alpha * (b[i] - a[i]) as f32) as i32).into())
         }
         Native::OrthoRotation => Value::Rotator(orthogonal_rotation(v(0), v(1), v(2))),
-        Native::Add_RotatorRotator => {
-            let (a, b) = (r(0), r(1));
-            Value::Rotator([0, 1, 2].map(|i| a[i].wrapping_add(b[i])).into())
-        }
-        Native::Subtract_RotatorRotator => {
-            let (a, b) = (r(0), r(1));
-            Value::Rotator([0, 1, 2].map(|i| a[i].wrapping_sub(b[i])).into())
-        }
-        Native::Multiply_RotatorFloat => Value::Rotator(r(0).map(|c| (c as f32 * float_arg(args, 1)) as i32)),
-        Native::Multiply_FloatRotator => Value::Rotator(r(1).map(|c| (c as f32 * float_arg(args, 0)) as i32)),
+        Native::Add_RotatorRotator => Value::Rotator(r(0) + r(1)),
+        Native::Subtract_RotatorRotator => Value::Rotator(r(0) - r(1)),
+        Native::Multiply_RotatorFloat => Value::Rotator(r(0).scale(float_arg(args, 1))),
+        Native::Multiply_FloatRotator => Value::Rotator(r(1).scale(float_arg(args, 0))),
         Native::Divide_RotatorFloat => Value::Rotator(r(0).map(|c| (c as f32 / float_arg(args, 1)) as i32)),
         Native::EqualEqual_RotatorRotator => Value::Bool(r(0) == r(1)),
         Native::NotEqual_RotatorRotator => Value::Bool(r(0) != r(1)),
@@ -189,16 +176,10 @@ fn assignment(native: Native, args: &mut [Value]) -> Option<Value> {
         Native::DivideEqual_VectorFloat => Value::Vector(v(left) * (1.0 / float(right))),
         Native::AddEqual_VectorVector => Value::Vector(v(left) + v(right)),
         Native::SubtractEqual_VectorVector => Value::Vector(v(left) - v(right)),
-        Native::MultiplyEqual_RotatorFloat => Value::Rotator(r(left).map(|c| (c as f32 * float(right)) as i32)),
+        Native::MultiplyEqual_RotatorFloat => Value::Rotator(r(left).scale(float(right))),
         Native::DivideEqual_RotatorFloat => Value::Rotator(r(left).map(|c| (c as f32 / float(right)) as i32)),
-        Native::AddEqual_RotatorRotator => {
-            let (a, b) = (r(left), r(right));
-            Value::Rotator([0, 1, 2].map(|i| a[i].wrapping_add(b[i])).into())
-        }
-        Native::SubtractEqual_RotatorRotator => {
-            let (a, b) = (r(left), r(right));
-            Value::Rotator([0, 1, 2].map(|i| a[i].wrapping_sub(b[i])).into())
-        }
+        Native::AddEqual_RotatorRotator => Value::Rotator(r(left) + r(right)),
+        Native::SubtractEqual_RotatorRotator => Value::Rotator(r(left) - r(right)),
         Native::AddEqual_IntInt => Value::Int(int(left).wrapping_add(int(right))),
         Native::SubtractEqual_IntInt => Value::Int(int(left).wrapping_sub(int(right))),
         Native::MultiplyEqual_IntFloat => Value::Int((int(left) as f32 * float(right)) as i32),

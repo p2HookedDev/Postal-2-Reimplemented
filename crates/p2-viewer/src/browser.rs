@@ -16,7 +16,7 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, egui};
 use p2_assets::{read_palette, read_skeletal_mesh, read_sound, read_static_mesh, read_static_mesh_materials, read_texture};
 use p2_bevy_assets::{skin_points, texture_to_image, to_bevy, unreal_mesh_transform};
-use p2_package::Package;
+use p2_package::{MAP_EXTENSION, Package};
 use p2_script::Source;
 
 use crate::ViewerState;
@@ -49,7 +49,7 @@ fn loop_browsed_meshes(time: Res<Time>, animated: Res<Animated>, mut meshes: Res
     }
 }
 
-const EXTENSIONS: &[&str] = &["u", "utx", "usx", "ukx", "fuk", "uax"];
+const EXTENSIONS: &[&str] = &["u", "utx", "usx", "ukx", MAP_EXTENSION, "uax"];
 
 pub struct AssetBrowserPlugin;
 

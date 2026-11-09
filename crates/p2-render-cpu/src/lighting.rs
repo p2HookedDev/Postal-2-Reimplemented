@@ -424,7 +424,7 @@ pub fn static_mesh_lighting(
         let source = mesh.colors.get(index).copied().unwrap_or([255; 4]);
         if mesh.use_vertex_color {
             for channel in 0..3 {
-                out[channel] = (u16::from(source[channel]) * u16::from(out[channel]) / 255) as u8;
+                out[channel] = p2_math::mul_byte_floor(source[channel], out[channel]);
             }
         }
         out[3] = source[3];
