@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::ai_move::LatentMove;
 use crate::memory::{self, Mem, Shape};
 use crate::states::ObjectState;
-use crate::{Error, HostCommand, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
+use crate::{ClassId, Error, HostCommand, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
+use p2_script::flags::CPF_TRANSIENT;
 
 const MAGIC: &[u8; 8] = b"P2RSAVE\0";
 /// The format's version (u32 little-endian after the magic): a save of another version is refused.
@@ -152,6 +153,17 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         errors
+    }
+
+    /// As retail, a save keeps no transient property: each starts again from its class default.
+    fn reset_transient_properties(&mut self, object: ObjectId, class: ClassId) {
+        let transient: Vec<usize> =
+            self.store.class(class).layout.properties.iter().enumerate().filter(|(_, f)| f.flags & CPF_TRANSIENT != 0).map(|(i, _)| i).collect();
+        for index in transient {
+            let Some(&field) = self.store.memory.get(self.store.class(class).mem).fields.get(index) else { continue };
+            let value = self.store.memory.read_field(&field, &self.store.class(class).defaults);
+            self.store.set_property_at(object, index, value);
+        }
     }
 
     fn is_transient_object(&self, object: ObjectId) -> bool {
@@ -341,6 +353,7 @@ impl<L: LoaderRef> Vm<L> {
                 };
             });
             self.store.objects[id.0 as usize].mem = mem;
+            self.reset_transient_properties(id, class);
             if let Some(state) = &saved.state {
                 self.restore_state(id, state, &reference, &name);
             }
