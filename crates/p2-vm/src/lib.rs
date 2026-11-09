@@ -634,7 +634,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     /// For a reader that asks the same names in the same order every time: later runs read the i-th name asked by the i-th
-    /// recorded slot, without hashing, after checking it is that name. The values are those of [`Vm::get`].
+    /// recorded slot, without hashing, after checking it is that name. The values are those of [`ObjectStore::get`].
     pub fn read_ordered<R>(&self, object: ObjectId, reader: &'static str, f: impl FnOnce(&dyn Fn(&str) -> Option<Value>) -> R) -> R {
         let Some(class) = self.store.object(object).class else {
             return f(&|name: &str| self.store.get(object, name));
