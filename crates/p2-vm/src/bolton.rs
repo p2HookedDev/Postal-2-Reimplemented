@@ -18,6 +18,8 @@ const THROW_MAX: f32 = 1500.0;
 const DEATH_BACK: f32 = 120.0;
 /// A thrown bolt-on starts inside its owner's corpse; until then it touches only the level, so it is not shot out.
 const LEVEL_ONLY: f32 = 0.3;
+/// `Limb`'s default mass: a hit moves a loose bolt-on as it moves a cut limb.
+const LIMB_MASS: f32 = 90.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BoltonHook {
@@ -64,6 +66,15 @@ impl Boltons {
 fn clamp_throw(v: Vector) -> Vector {
     let length = v.size();
     if length <= THROW_MAX { v } else { v.map(|c| c * THROW_MAX / length) }
+}
+
+fn struck_velocity(damage: f32, momentum: Vector) -> Option<Vector> {
+    (damage > 0.0 && momentum.size() > 0.0).then(|| clamp_throw(momentum * (1.0 / LIMB_MASS)))
+}
+
+/// Radius and half height about the body's origin.
+pub(crate) fn hull_size(points: &[[f32; 3]]) -> [f32; 2] {
+    points.iter().fold([0.0, 0.0], |[radius, height]: [f32; 2], p| [radius.max(p[0].hypot(p[1])), height.max(p[2].abs())])
 }
 
 fn thrown_back(velocity: Vector, yaw: i32) -> Vector {
@@ -156,10 +167,16 @@ impl<L: LoaderRef> Vm<L> {
         self.level.and_then(|level| self.store.object_of(level, Prop::Game)).map_or(0.0, |game| self.store.float_of(game, "LimbsLifetimeMax"))
     }
 
-    /// A bolt-on took a body: the limbs' life over retail's one second, and at most [`CAP`] at once.
-    pub(crate) fn bolton_adopted(&mut self, actor: ObjectId, id: BodyId) {
+
+    pub(crate) fn bolton_adopted(&mut self, actor: ObjectId, id: BodyId, [radius, height]: [f32; 2]) {
         let life = self.bolton_life();
         self.store.set(actor, Prop::LifeSpan, Value::Float(life));
+        for (property, value) in [(Prop::bCollideActors, true), (Prop::bBlockActors, false), (Prop::bBlockPlayers, false), (Prop::bProjTarget, true)] {
+            self.store.set(actor, property, Value::Bool(value));
+        }
+        self.store.set(actor, Prop::CollisionRadius, Value::Float(radius));
+        self.store.set(actor, Prop::CollisionHeight, Value::Float(height));
+        self.relocate(actor);
         let store = &self.store;
         let boltons = &mut self.karma.boltons;
         boltons.bodies.retain(|&a| a != actor && !store.is_deleted(a));
@@ -172,6 +189,15 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(world) = &mut self.karma.world {
             world.change(move |w| w.set_contacts(id, Contacts::LevelOnly));
         }
+    }
+
+    pub(crate) fn bolton_struck(&mut self, part: ObjectId, args: &[Value]) -> Result<(), Error> {
+        if !self.karma.limbs.drives(part) || !self.store.is_a(part, self.script.lookups.class_names.bolton_part) {
+            return Ok(());
+        }
+        let damage = args.first().map_or(0.0, crate::interp::float);
+        let Some(velocity) = struck_velocity(damage, crate::natives::vec3(args.get(3))) else { return Ok(()) };
+        self.event(part, "GiveMomentum", [Value::Vector(velocity)])
     }
 
     pub(crate) fn age_young_boltons(&mut self, delta: f32) {
@@ -220,6 +246,22 @@ mod tests {
         assert_eq!(admit(&mut bodies, ObjectId(99)), Some(ObjectId(0)));
         assert_eq!(bodies.len(), CAP);
         assert_eq!(bodies.back(), Some(&ObjectId(99)));
+    }
+
+    #[test]
+    fn struck_scaled_like_a_limb() {
+        let push = struck_velocity(5.0, Vector::new(9000.0, 0.0, 4500.0)).unwrap_or(Vector::ZERO);
+        assert!((push[0] - 100.0).abs() < 1e-3 && (push[2] - 50.0).abs() < 1e-3);
+        assert_eq!(struck_velocity(0.0, Vector::new(9000.0, 0.0, 0.0)), None);
+        assert_eq!(struck_velocity(5.0, Vector::ZERO), None);
+        let blast = struck_velocity(50.0, Vector::new(0.0, 0.0, 1.0e6)).unwrap_or(Vector::ZERO);
+        assert!((blast.size() - THROW_MAX).abs() < 1e-2);
+    }
+
+    #[test]
+    fn hull_size_about_origin() {
+        assert_eq!(hull_size(&[[3.0, 4.0, -2.0], [-1.0, 0.0, 6.0]]), [5.0, 6.0]);
+        assert_eq!(hull_size(&[]), [0.0, 0.0]);
     }
 
     #[test]

@@ -136,6 +136,7 @@ impl<L: LoaderRef> Vm<L> {
             let half = 0.5 * (self.store.float_of(victim, Prop::CollisionHeight) + self.store.float_of(victim, Prop::CollisionRadius));
             let hit = at - (direction * half);
             let args = [Value::Int((damage as i32).max(1)), Value::Object(instigator), Value::Vector(hit), Value::Vector(push), damage_type.clone()];
+            self.bolton_struck(victim, &args)?;
             self.event(victim, crate::states::Event::TakeDamage, args)?;
             matched |= class_matches;
         }

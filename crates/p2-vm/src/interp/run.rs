@@ -124,6 +124,7 @@ impl<L: LoaderRef> Vm<L> {
                 count = k + 1;
             }
             self.hit_seen(victim, &values[..count]);
+            self.bolton_struck(victim, &values[..count])?;
         }
         self.script.script_depth += 1;
         let started = self.function_enter();

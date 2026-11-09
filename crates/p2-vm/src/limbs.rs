@@ -209,7 +209,8 @@ impl<L: LoaderRef> Vm<L> {
     fn add_limb(&mut self, actor: ObjectId, mesh: ObjectId) {
         let Some(shape) = self.karma_mesh(mesh) else { return };
         let placement = self.drawn_placement(actor);
-        let hull = shape.points.iter().map(|p| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i])).collect();
+        let hull: Vec<[f32; 3]> = shape.points.iter().map(|p| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i])).collect();
+        let bolton_size = self.store.is_a(actor, self.script.lookups.class_names.bolton_part).then(|| crate::bolton::hull_size(&hull));
         let location = placement.location;
         let body = BodyParams {
             shapes: vec![Shape::Hull(hull)],
@@ -231,8 +232,8 @@ impl<L: LoaderRef> Vm<L> {
         self.karma.actors.insert(id, actor);
         self.karma.limbs.live.insert(actor, Limb { id, mesh, wrote: [0.0; 3].into(), before: [0.0; 3].into(), at: location, splat_tick: 0 });
         self.take_limb_motion(actor);
-        if self.store.is_a(actor, self.script.lookups.class_names.bolton_part) {
-            self.bolton_adopted(actor, id);
+        if let Some(size) = bolton_size {
+            self.bolton_adopted(actor, id, size);
         }
     }
 
