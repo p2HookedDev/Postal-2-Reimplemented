@@ -10,7 +10,7 @@ import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TA
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::modern::{
-    ambient_occlusion, base_relief, is_modern, key_shading, masked_sun_visibility, sun_highlight, sun_shadowed,
+    base_relief, is_modern, key_shading, masked_sun_visibility, static_occlusion, sun_highlight, sun_shadowed,
 };
 @if(BINDLESS)
 import package::p2_engine::layer_bindings::indices;
@@ -73,7 +73,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         let relief = base_relief(vertex_output, pbr_input, normal, layers.specular.x, layers.detail.z);
         let key = key_shading(normal, relief, pbr_input.world_position.xyz);
         let sun = sun_highlight(relief, mask, visibility, pbr_input.world_position.xyz, normal);
-        light *= ambient_occlusion(pbr_input.frag_coord.xy);
+        light *= static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy);
         shine = key.y * to_linear(2.0 * min(light, vec3(1.0))) + sun;
         light *= key.x;
     }

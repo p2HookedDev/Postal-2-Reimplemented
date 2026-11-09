@@ -7,7 +7,7 @@ import bevy_pbr::{
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, mesh_target, project};
 import package::p2_engine::dynamic_light::{dynamic_light, dynamic_light_relief};
-import package::p2_engine::modern::{ambient_occlusion, base_relief, is_modern, key_shading, to_eye};
+import package::p2_engine::modern::{base_relief, is_modern, key_shading, static_occlusion, to_eye};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
 @if(BINDLESS)
@@ -41,7 +41,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let relief = base_relief(in, pbr_input, normal, layers.specular.x, layers.detail.z);
         let key = key_shading(normal, relief, position.xyz);
         let lights = dynamic_light_relief(position, relief, to_eye(position.xyz), ranges);
-        light *= ambient_occlusion(pbr_input.frag_coord.xy);
+        light *= static_occlusion(position.xyz, normal, pbr_input.frag_coord.xy);
         let baked = key.x * to_display(light) / 2.0;
         let lit = to_linear(2.0 * min(baked + lights.diffuse, vec3(1.0)));
         color = vec4(color.rgb * lit + key.y * light + lights.specular, color.a);

@@ -1,5 +1,5 @@
-//! Modern sun mask: atlases keep retail's RGB and carry in alpha where the bake's sun reached each
-//! lumel, so shaders darken only the baked sun. Traced off the main thread.
+//! Modern light maps, off the main thread. With the relit world on, atlases come from our own bake. Otherwise they keep
+//! retail's RGB and carry in alpha where the bake's sun reached each lumel. Either way shaders darken only the baked sun.
 
 use std::sync::Arc;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -11,11 +11,13 @@ use bevy::image::Image;
 use bevy::log::{info, warn};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
-use p2_assets::{LightMap, Model, poly_flags};
+use p2_assets::{Model, poly_flags};
 use p2_math::Vector;
 
 use crate::display::Settings;
+use crate::game_dir::config_folder;
 use crate::level_collision::{LevelCollision, StaticCollision};
+use crate::render::actor_light::LightEnvironment;
 use crate::shown_scene::ShownScene;
 
 const LUMEL_LIFT: f32 = 2.0;
@@ -29,24 +31,6 @@ pub fn faces_sun(direction: Vector, normal: Vector) -> bool {
 pub fn masked(lumel: [u8; 4], reached: bool) -> [u8; 4] {
     let [r, g, b, _] = lumel;
     [r, g, b, if reached { 255 } else { 0 }]
-}
-
-pub fn lumel_positions(map: &LightMap) -> Option<impl Fn(usize, usize) -> Vector> {
-    let m = &map.world_to_light_map;
-    let uv = |[px, py, pz]: [f32; 3], w: f32| [px * m[0] + py * m[4] + pz * m[8] + w * m[12], px * m[1] + py * m[5] + pz * m[9] + w * m[13]];
-    let [u0, v0] = uv(map.base, 1.0);
-    let [ux, vx] = uv(map.axis_x, 0.0);
-    let [uy, vy] = uv(map.axis_y, 0.0);
-    let det = ux * vy - uy * vx;
-    if det.abs() < 1e-12 {
-        return None;
-    }
-    let (base, axis_x, axis_y) = (Vector::from(map.base), Vector::from(map.axis_x), Vector::from(map.axis_y));
-    Some(move |x: usize, y: usize| {
-        let (du, dv) = (x as f32 + 0.5 - u0, y as f32 + 0.5 - v0);
-        let (a, b) = ((du * vy - uy * dv) / det, (ux * dv - du * vx) / det);
-        base + axis_x * a + axis_y * b
-    })
 }
 
 pub(crate) fn sun_reaches(collision: &StaticCollision, direction: Vector, position: Vector, normal: Vector, lift: f32) -> bool {
@@ -67,9 +51,7 @@ fn sky(model: &Model, node: usize) -> bool {
 
 pub struct Traced {
     atlases: Vec<Option<(u32, u32, Vec<[u8; 4]>)>>,
-    lumels: usize,
-    sunlit: usize,
-    millis: u128,
+    report: String,
 }
 
 fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
@@ -100,7 +82,7 @@ fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
         else {
             continue;
         };
-        let position_of = lumel_positions(map).filter(|_| faces_sun(sun, normal));
+        let position_of = p2_bake::lumel_positions(map).filter(|_| faces_sun(sun, normal));
         for y in 0..sy {
             for x in 0..sx {
                 let (ax, ay) = (ox + x, oy + y);
@@ -109,7 +91,7 @@ fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
                 }
                 lumels += 1;
                 let Some(position_of) = &position_of else { continue };
-                let reached = sun_reaches(collision, sun, position_of(x, y), normal, LUMEL_LIFT);
+                let reached = sun_reaches(collision, sun, position_of(x as f32 + 0.5, y as f32 + 0.5), normal, LUMEL_LIFT);
                 sunlit += usize::from(reached);
                 if let Some(texel) = texels.get_mut(ay * width + ax) {
                     *texel = masked(*texel, reached);
@@ -117,7 +99,48 @@ fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
             }
         }
     }
-    Traced { atlases, lumels, sunlit, millis: start.elapsed().as_millis() }
+    Traced { atlases, report: format!("modern sun mask: {lumels} lumels, {sunlit} sunlit, {} ms", start.elapsed().as_millis()) }
+}
+
+fn relit(collision: &StaticCollision, environment: &LightEnvironment) -> Traced {
+    let mut lights: Vec<_> = environment.lights.values().filter(|light| !light.dynamic).copied().collect();
+    // The lights come in hash order, which differs between runs; the cache key must not.
+    lights.sort_by(|a, b| {
+        <[f32; 3]>::from(a.location).partial_cmp(&<[f32; 3]>::from(b.location)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let shadow_sun = environment.sun.as_ref().and_then(|(sun, _)| lights.iter().position(|light| light.effect == sun.effect && light.location == sun.location));
+    let input = p2_bake::BakeInput {
+        model: &collision.model,
+        terrains: &collision.terrains,
+        meshes: &collision.meshes,
+        lights: &lights,
+        shadow_sun,
+        zone_ambients: &environment.zone_ambients,
+        level_brightness: environment.level_brightness,
+    };
+    let file = config_folder().map(|folder| folder.join("bake").join(format!("{:016x}.bake", p2_bake::cache_key(&input))));
+    let as_traced = |atlases: Vec<Option<p2_bake::Atlas>>, report: String| Traced {
+        atlases: atlases.into_iter().map(|atlas| atlas.map(|atlas| (atlas.width, atlas.height, atlas.texels))).collect(),
+        report,
+    };
+    if let Some(atlases) = file.as_deref().and_then(p2_bake::load) {
+        return as_traced(atlases, "modern bake: loaded from the cache".to_owned());
+    }
+    let baked = p2_bake::bake(&input);
+    let saved = file.as_deref().map(|file| p2_bake::save(file, &baked.atlases));
+    if let Some(Err(error)) = saved {
+        warn!("modern bake not cached: {error}");
+    }
+    let report = format!(
+        "modern bake: {} lights, {} texels, {} ms; mean light retail {:.3}, ours direct {:.3}, ours final {:.3}",
+        lights.len(),
+        baked.texels,
+        baked.millis,
+        baked.mean_retail,
+        baked.mean_direct,
+        baked.mean_final
+    );
+    as_traced(baked.atlases, report)
 }
 
 #[derive(Resource, Default)]
@@ -129,12 +152,14 @@ pub struct SunMask {
 enum Job {
     #[default]
     Idle,
-    Running { key: usize, task: Task<std::thread::Result<Traced>> },
-    Done { key: usize, collision: Arc<StaticCollision>, swapped: Vec<(usize, Handle<Image>)> },
+    Running { key: JobKey, task: Task<std::thread::Result<Traced>> },
+    Done { key: JobKey, collision: Arc<StaticCollision>, swapped: Vec<(usize, Handle<Image>)> },
 }
 
+type JobKey = (usize, bool);
+
 impl SunMask {
-    fn key(&self) -> Option<usize> {
+    fn key(&self) -> Option<JobKey> {
         match &self.job {
             Job::Idle => None,
             Job::Running { key, .. } | Job::Done { key, .. } => Some(*key),
@@ -166,26 +191,34 @@ pub fn sun_mask(
         .lighting
         .as_deref()
         .and_then(|e| e.sun.as_ref().map(|(_, hardware)| hardware.direction));
-    let wanted = level.0.as_ref().filter(lit).filter(|_| settings.modern_shadows()).zip(sun);
-    let key = wanted.map(|(collision, _)| Arc::as_ptr(collision).addr());
+    let environment = shown.lighting.clone();
+    let bake = settings.modern_bake() && environment.is_some();
+    let wanted = level.0.as_ref().filter(lit).filter(|_| bake || (settings.modern_shadows() && sun.is_some()));
+    let key = wanted.map(|collision| (Arc::as_ptr(collision).addr(), bake));
     if mask.key() != key {
         match std::mem::take(&mut mask.job) {
             Job::Done { collision, swapped, .. } => restore(&collision, &swapped, &mut images),
             Job::Running { .. } | Job::Idle => {}
         }
     }
-    let (Some((collision, sun)), Some(key)) = (wanted, key) else { return };
+    let (Some(collision), Some(key)) = (wanted, key) else { return };
     match std::mem::take(&mut mask.job) {
         Job::Idle => {
             let level = collision.clone();
-            let task = AsyncComputeTaskPool::get().spawn(async move { catch_unwind(AssertUnwindSafe(|| trace(&level, sun))) });
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                catch_unwind(AssertUnwindSafe(|| match (environment.filter(|_| bake), sun) {
+                    (Some(environment), _) => relit(&level, &environment),
+                    (None, Some(sun)) => trace(&level, sun),
+                    (None, None) => Traced { atlases: Vec::new(), report: String::new() },
+                }))
+            });
             mask.job = Job::Running { key, task };
         }
         Job::Running { key, task } if task.is_finished() => {
             let swapped = match block_on(task) {
                 Ok(traced) => {
-                    let Traced { atlases, lumels, sunlit, millis } = traced;
-                    info!("modern sun mask: {lumels} lumels, {sunlit} sunlit, {millis} ms");
+                    let Traced { atlases, report } = traced;
+                    info!("{report}");
                     let mut swapped = Vec::new();
                     for (index, atlas) in atlases.into_iter().enumerate() {
                         let (Some((width, height, texels)), Some(Some(handle))) = (atlas, shown.light_maps.get(index)) else { continue };
@@ -205,7 +238,7 @@ pub fn sun_mask(
                     swapped
                 }
                 Err(_) => {
-                    warn!("modern sun mask failed: the light maps keep alpha as retail's, no sun mask");
+                    warn!("modern light maps failed: the level keeps retail's");
                     Vec::new()
                 }
             };
@@ -234,29 +267,5 @@ mod tests {
     fn the_mask_goes_into_alpha_and_rgb_stay_retail() {
         assert_eq!(masked([200, 150, 120, 7], true), [200, 150, 120, 255]);
         assert_eq!(masked([200, 150, 120, 255], false), [200, 150, 120, 0]);
-    }
-
-    #[test]
-    fn a_lumel_lies_where_the_renderer_samples_it() {
-        let mut matrix = [0.0; 16];
-        matrix[0] = 0.5;
-        matrix[5] = 0.5;
-        matrix[12] = -50.0;
-        matrix[13] = -25.0;
-        let map = LightMap {
-            texture: 0,
-            surface: 0,
-            zone: 0,
-            offset: [0, 0],
-            size: [4, 4],
-            world_to_light_map: matrix,
-            base: [100.0, 50.0, 16.0],
-            axis_x: [2.0, 0.0, 0.0],
-            axis_y: [0.0, 2.0, 0.0],
-        };
-        let at = lumel_positions(&map).expect("a lumel")(1, 2);
-        assert!((at - Vector::new(103.0, 55.0, 16.0)).dot(at - Vector::new(103.0, 55.0, 16.0)) < 1e-6);
-        let degenerate = LightMap { axis_y: [2.0, 0.0, 0.0], ..map };
-        assert!(lumel_positions(&degenerate).is_none());
     }
 }

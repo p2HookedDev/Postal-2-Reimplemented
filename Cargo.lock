@@ -3229,6 +3229,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "mach2"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3949,6 +3958,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "p2-bake"
+version = "0.2.0"
+dependencies = [
+ "lz4_flex",
+ "p2-assets",
+ "p2-collision",
+ "p2-math",
+ "p2-render-cpu",
+ "rayon",
+ "rustc-hash 2.1.3",
+]
+
+[[package]]
 name = "p2-bevy-assets"
 version = "0.2.0"
 dependencies = [
@@ -3986,6 +4008,7 @@ dependencies = [
  "dirs",
  "naga",
  "p2-assets",
+ "p2-bake",
  "p2-bevy-assets",
  "p2-collision",
  "p2-math",

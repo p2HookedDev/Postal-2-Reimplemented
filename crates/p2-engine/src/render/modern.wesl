@@ -15,27 +15,27 @@ import bevy_pbr::render::mesh_view_bindings::screen_space_ambient_occlusion_text
 @if(CONTACT_SHADOWS)
 import bevy_pbr::render::mesh_view_bindings::contact_shadows_settings;
 @if(CONTACT_SHADOWS && DEPTH_PREPASS)
-import bevy_pbr::render::pbr_functions::calculate_contact_shadow;
+import bevy_pbr::{render::{mesh_view_bindings::depth_prepass_texture, utils::interleaved_gradient_noise, view_transformations::position_world_to_ndc}, ssr::raymarch};
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
 @if(BINDLESS)
 import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
 
-const RELIEF_STRENGTH: f32 = 2.0;
-const RELIEF_MAX_TILT: f32 = 0.35;
-const RELIEF_NEAR: f32 = 512.0;
-const RELIEF_FAR: f32 = 2048.0;
+const RELIEF_STRENGTH: f32 = 3.0;
+const RELIEF_MAX_TILT: f32 = 0.45;
+const RELIEF_NEAR: f32 = 1024.0;
+const RELIEF_FAR: f32 = 4096.0;
 const RELIEF_MINIFIED_FROM: f32 = 1.0;
 const RELIEF_MINIFIED_TO: f32 = 3.0;
 const RELIEF_SKEW_FROM: f32 = 0.05;
 const RELIEF_SKEW_TO: f32 = 0.2;
 const RELIEF_LIGHT_MIN_COS: f32 = 0.25;
-const RELIEF_LIGHT_RANGE: f32 = 0.3;
+const RELIEF_LIGHT_RANGE: f32 = 0.4;
 const KEY_DIRECTION: vec3<f32> = vec3(0.458088, 0.814379, 0.356291);
-const KEY_SPECULAR: f32 = 0.5;
+const KEY_SPECULAR: f32 = 0.7;
 const SUN_SPECULAR: f32 = 2.0;
-const SPECULAR_STRENGTH: f32 = 0.35;
-const GLOSS_FROM: f32 = 0.25;
+const SPECULAR_STRENGTH: f32 = 0.5;
+const GLOSS_FROM: f32 = 0.2;
 const GLOSS_FULL: f32 = 0.65;
 const ROUGH_FAR: f32 = 0.5;
 const ACTOR_GLOSS: f32 = 0.1;
@@ -44,6 +44,10 @@ const ACTOR_GLOSS: f32 = 0.1;
 const ACTOR_TERMINATOR_COS: f32 = 0.35;
 const ACTOR_SHININESS: f32 = 20.0;
 const AO_STRENGTH: f32 = 0.8;
+const CONTACT_STRENGTH: f32 = 0.5;
+const CONTACT_GRAZING_COS: f32 = 0.15;
+const CONTACT_NEAR: f32 = 1024.0;
+const CONTACT_FAR: f32 = 3072.0;
 const SHININESS_SMOOTH: f32 = 48.0;
 const SHININESS_ROUGH: f32 = 10.0;
 const ROUGH_SLOPE: f32 = 0.15;
@@ -233,20 +237,67 @@ fn sun_map_visibility(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: 
     return shadows::fetch_directional_shadow(sun, world_position, normal, view_z, frag_coord);
 }
 
+fn contact_sun_index() -> u32 {
+    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
+        if (lights.directional_lights[i].flags & DIRECTIONAL_LIGHT_FLAGS_CONTACT_SHADOWS_ENABLED_BIT) != 0u {
+            return i;
+        }
+    }
+    return lights.n_directional_lights;
+}
+
+// How much of a short ray towards the sun is clear in the depth buffer, 1 when clear. The jitter stays the same each
+// frame: Bevy's own changes per frame and shimmers on the ground without temporal smoothing.
+fn contact_clear(world_position: vec3<f32>, frag_coord: vec2<f32>, to_sun: vec3<f32>) -> f32 {
+@if(CONTACT_SHADOWS && DEPTH_PREPASS) {
+    var march = raymarch::depth_ray_march_new_from_depth(vec2<f32>(textureDimensions(depth_prepass_texture)));
+    raymarch::depth_ray_march_from_cs(&march, position_world_to_ndc(world_position));
+    raymarch::depth_ray_march_to_ws(&march, world_position + to_sun * contact_shadows_settings.length);
+    march.linear_steps = contact_shadows_settings.linear_steps;
+    march.depth_thickness_linear_z = contact_shadows_settings.thickness;
+    march.march_behind_surfaces = true;
+    march.jitter = interleaved_gradient_noise(frag_coord, 0u);
+    let result = raymarch::depth_ray_march_march(&march);
+    if result.hit {
+        return clamp((result.hit_penetration_frac - 0.5) * 2.0, 0.0, 1.0);
+    }
+}
+    return 1.0;
+}
+
 fn sun_visibility(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
     var visibility = sun_map_visibility(world_position, normal, frag_coord);
-    let sun = sun_index();
+    let sun = contact_sun_index();
     @if(CONTACT_SHADOWS && DEPTH_PREPASS)
-    if visibility > 0.0 && sun < lights.n_directional_lights && contact_shadows_settings.linear_steps > 0u
-        && (lights.directional_lights[sun].flags & DIRECTIONAL_LIGHT_FLAGS_CONTACT_SHADOWS_ENABLED_BIT) != 0u {
-        visibility *= calculate_contact_shadow(
-            world_position.xyz,
-            frag_coord,
-            lights.directional_lights[sun].direction_to_light,
-            contact_shadows_settings.linear_steps
-        );
+    if visibility > 0.0 && sun < lights.n_directional_lights && contact_shadows_settings.linear_steps > 0u {
+        visibility *= contact_clear(world_position.xyz, frag_coord, lights.directional_lights[sun].direction_to_light);
     }
     return visibility;
+}
+
+// Darkens all of a static surface's light, baked sun or not, so shaded ground shows contact too. Partial, because the
+// depth buffer also holds the static world, whose shade the bake already has. Only surfaces facing the sun's side.
+fn contact_shade(world_position: vec3<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
+@if(CONTACT_SHADOWS && DEPTH_PREPASS) {
+    let sun = contact_sun_index();
+    if sun >= lights.n_directional_lights || contact_shadows_settings.linear_steps == 0u {
+        return 1.0;
+    }
+    let to_sun = lights.directional_lights[sun].direction_to_light;
+    let reach = smoothstep(0.0, CONTACT_GRAZING_COS, dot(normal, to_sun))
+        * (1.0 - smoothstep(CONTACT_NEAR, CONTACT_FAR, distance(view.world_position.xyz, world_position)));
+    if reach <= 0.0 {
+        return 1.0;
+    }
+    return 1.0 - CONTACT_STRENGTH * reach * (1.0 - contact_clear(world_position, frag_coord, to_sun));
+}
+@else {
+    return 1.0;
+}
+}
+
+fn static_occlusion(world_position: vec3<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
+    return ambient_occlusion(frag_coord) * contact_shade(world_position, normal, frag_coord);
 }
 
 fn masked_sun_visibility(mask: f32, world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {

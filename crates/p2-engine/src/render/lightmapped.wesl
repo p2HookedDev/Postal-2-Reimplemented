@@ -12,7 +12,7 @@ import package::p2_engine::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::modern::{
-    ambient_occlusion, base_relief, highlight, is_modern, key_shading, masked_sun_visibility, no_relief, relief_light, sun_highlight,
+    base_relief, highlight, is_modern, key_shading, masked_sun_visibility, no_relief, relief_light, static_occlusion, sun_highlight,
     sun_shadowed_linear,
     to_eye,
 };
@@ -102,7 +102,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         relief = base_relief(vertex_output, pbr_input, normal, layers.specular.x, layers.detail.z);
         let key = key_shading(normal, relief, pbr_input.world_position.xyz);
         let sun = sun_highlight(relief, mask, visibility, pbr_input.world_position.xyz, normal);
-        surface = ambient_occlusion(pbr_input.frag_coord.xy) * light_map * (key.x * color.rgb + key.y) + sun;
+        surface = static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy) * light_map * (key.x * color.rgb + key.y) + sun;
     }
     let layered = apply_layers(vertex_output, vec4(surface, color.a), base_alpha, pbr_input, layers);
     var lit = layered.rgb;

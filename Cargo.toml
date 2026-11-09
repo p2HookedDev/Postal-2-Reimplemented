@@ -16,6 +16,7 @@ p2-bevy-assets = { path = "crates/p2-bevy-assets" }
 p2-script = { path = "crates/p2-script" }
 p2-vm = { path = "crates/p2-vm" }
 p2-collision = { path = "crates/p2-collision" }
+p2-bake = { path = "crates/p2-bake" }
 p2-engine = { path = "crates/p2-engine" }
 p2-particles = { path = "crates/p2-particles" }
 p2-render-cpu = { path = "crates/p2-render-cpu" }
@@ -26,6 +27,7 @@ p2-test-package = { path = "crates/p2-test-package" }
 anyhow = "1"
 rapier3d = { version = "0.36", features = ["parallel"] }
 rayon = "1"
+lz4_flex = "0.14"
 bevy = { version = "0.20", default-features = false }
 bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }
 dirs = "7"
@@ -104,6 +106,8 @@ opt-level = 3
 [profile.dev.package.p2-script]
 opt-level = 3
 [profile.dev.package.p2-collision]
+opt-level = 3
+[profile.dev.package.p2-bake]
 opt-level = 3
 [profile.dev.package.p2-assets]
 opt-level = 3

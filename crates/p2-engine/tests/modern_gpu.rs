@@ -103,7 +103,7 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
     }
     let caster = world.resource_mut::<Assets<Mesh>>().add(quad(3.0, 5.0, 1.0));
     let plain = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
-    let caster_layer = if ground_kind == Ground::Indoor { 0 } else { CASTER_LAYER };
+    let caster_layer = if ground_kind == Ground::Indoor { 3 } else { CASTER_LAYER };
     world.spawn((Mesh3d(caster), MeshMaterial3d(plain), Transform::default(), RenderLayers::layer(caster_layer)));
     let sun = DirectionalLight {
         color: Color::LinearRgba(LinearRgba::rgb(SUN_TERM, SUN_TERM, SUN_TERM)),
@@ -150,7 +150,7 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
 #[test]
 #[ignore = "needs a GPU"]
 fn a_static_vertex_lit_ground_keeps_its_bake_under_a_dynamic_caster() {
-    let (under, beside) = ground_under_and_beside(true, Ground::StaticMesh);
+    let (under, beside) = ground_with_flag(7.0, Ground::StaticMesh);
     assert!(beside > 0, "the ground did not draw");
     assert!(under.abs_diff(beside) <= 2, "a realtime shadow on a static vertex-lit mesh: under {under}, beside {beside}");
 }

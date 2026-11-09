@@ -1,0 +1,19 @@
+[package]
+name = "p2-bake"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+p2-assets.workspace = true
+p2-collision.workspace = true
+p2-math.workspace = true
+p2-render-cpu.workspace = true
+lz4_flex.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

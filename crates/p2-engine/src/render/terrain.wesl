@@ -13,8 +13,8 @@ import bevy_pbr::{
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::modern::{
-    LUMINANCE, MODERN_ON, NO_GLOSS, NO_RELIEF, allowed_relief, ambient_occlusion, key_shading,
-    masked_sun_visibility, no_relief, relief_from, sun_highlight, sun_shadowed,
+    LUMINANCE, MODERN_ON, NO_GLOSS, NO_RELIEF, allowed_relief, key_shading,
+    masked_sun_visibility, no_relief, relief_from, static_occlusion, sun_highlight, sun_shadowed,
 };
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
@@ -179,7 +179,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     if modern {
         sun_seen = masked_sun_visibility(mask, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
         light = sun_shadowed(light, mask, sun_seen, normal);
-        light *= ambient_occlusion(pbr_input.frag_coord.xy);
+        light *= static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy);
         linear_light = to_linear(2.0 * min(light, vec3(1.0)));
     }
     let ranges = cluster_ranges(pbr_input);

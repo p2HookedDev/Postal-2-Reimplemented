@@ -22,6 +22,7 @@ p2-script.workspace = true
 p2-vm.workspace = true
 p2-movie.workspace = true
 p2-collision.workspace = true
+p2-bake.workspace = true
 p2-particles.workspace = true
 p2-render-cpu.workspace = true
 thiserror.workspace = true

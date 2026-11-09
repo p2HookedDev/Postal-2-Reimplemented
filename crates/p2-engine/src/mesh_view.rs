@@ -135,10 +135,10 @@ fn steady_decal_order(settings: Option<ResMut<GlobalClusterSettings>>) {
 }
 
 /// The 3D cameras draw into one target, so they must agree. Off unless set, as Bevy's default 4× costs every pass (the
-/// depth prepass included); a host without settings (the asset viewer) keeps it off.
+/// depth prepass included); a host without settings (the asset viewer) keeps it off. Ambient occlusion needs it off.
 fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera3d>>) {
     let Some(settings) = settings.filter(|settings| settings.is_changed()) else { return };
-    let wanted = Msaa::from_samples(settings.msaa_samples());
+    let wanted = if settings.modern_ao() { Msaa::Off } else { Msaa::from_samples(settings.msaa_samples()) };
     for mut msaa in &mut cameras {
         msaa.set_if_neq(wanted);
     }
