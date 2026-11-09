@@ -1,6 +1,7 @@
 mod actor_natives;
 mod actors;
 mod bolton;
+mod bullet_hole;
 mod bones;
 mod ai_move;
 mod ai_natives;
@@ -336,6 +337,8 @@ pub(crate) struct Lookups {
     pub(crate) names: FxHashMap<(PackageId, usize), NameId>,
     pub(crate) object_consts: FxHashMap<(PackageId, i32), ObjectId>,
     pub(crate) class_objects: FxHashMap<ObjectId, Option<ClassId>>,
+    /// By function index.
+    pub(crate) hole_splats: FxHashMap<u32, Option<ClassId>>,
     pub(crate) casts: FxHashMap<(ClassId, PackageId, i32, bool), bool>,
     /// Ancestry is then tested by `NameId`: interning is case-insensitive, so this is `UnrealScript`'s by-name test without
     /// strings, and stays right while classes load lazily.

@@ -146,6 +146,7 @@ pub(super) struct Simulation {
     pub(super) hud_drawn: Vec<ObjectId>,
     pub(super) hud_looks: FxHashMap<ObjectId, u64>,
     pub(super) seen: usize,
+    pub(super) logged: FxHashSet<String>,
     pub(super) recent: [Vec<ObjectId>; 2],
     pub(super) recent_read: Vec<ObjectId>,
     pub(super) lights: Vec<ObjectId>,

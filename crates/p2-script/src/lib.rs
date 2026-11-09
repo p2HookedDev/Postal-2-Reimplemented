@@ -7,6 +7,7 @@ pub mod flags;
 pub mod layout;
 pub mod object;
 pub mod value;
+mod visit;
 
 use p2_package::{Export, Package, Reader};
 

@@ -104,7 +104,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Found once per reference until the level is left (`leave_level` drops the map's objects). Only found objects are
     /// kept: a reference whose object failed to load gives its stub next time.
-    pub(super) fn object_const(&mut self, package: PackageId, reference: i32) -> Value {
+    pub(crate) fn object_const(&mut self, package: PackageId, reference: i32) -> Value {
         if let Some(&object) = self.script.lookups.object_consts.get(&(package, reference)) {
             return Value::Object(Some(object));
         }

@@ -40,7 +40,13 @@ impl Simulation {
         for (actor, error) in errors.iter().take(3) {
             bevy::log::warn!("{actor}: {error}");
         }
-        self.vm.diagnostics.log.clear();
+        // Each distinct line once: a script error repeated every tick would flood the log.
+        for line in self.vm.diagnostics.log.drain(..) {
+            if !self.logged.contains(&line) {
+                bevy::log::info!("vm: {line}");
+                self.logged.insert(line);
+            }
+        }
         let started = Instant::now();
         // Played, the player's controller decides the view (`PlayerCalcView`: first person, a Matinee camera, ...),
         // before the actors are read: what is drawn depends on it.

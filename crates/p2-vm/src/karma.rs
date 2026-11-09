@@ -48,6 +48,13 @@ impl Karma {
     }
 }
 
+/// A static mesh asking for simple Karma collision without `KPhysicsProps`: retail gives level meshes none, our movers a hull.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WithoutProps {
+    Skip,
+    Hull,
+}
+
 #[derive(Clone, Copy)]
 struct Body {
     id: BodyId,
@@ -292,12 +299,16 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn karma_mover_body(&mut self, mover: ObjectId) -> Option<Body> {
-        let (shapes, location, quat) = self.karma_placed_shapes(mover)?;
+        let path = self.store.object(mover).path.clone();
+        let Some((shapes, location, quat)) = self.karma_placed_shapes(mover, WithoutProps::Hull) else {
+            self.diagnostics.log.push(format!("Karma mover {path}: no collision shape"));
+            return None;
+        };
         let added = self.karma.world.as_mut()?.world()?.add_mover(&shapes, location, quat);
         match added {
             Ok(id) => Some(Body { id, location, rotation: self.store.rotator_of(mover, Prop::Rotation) }),
             Err(e) => {
-                self.diagnostics.log.push(format!("Karma mover {}: {e}", self.store.object(mover).path));
+                self.diagnostics.log.push(format!("Karma mover {path}: {e}"));
                 None
             }
         }
@@ -335,7 +346,7 @@ impl<L: LoaderRef> Vm<L> {
             .collect();
         let mut placed = Vec::new();
         for actor in actors {
-            let Some((shapes, location, rotation)) = self.karma_placed_shapes(actor) else { continue };
+            let Some((shapes, location, rotation)) = self.karma_placed_shapes(actor, WithoutProps::Skip) else { continue };
             placed.extend(shapes.into_iter().map(|shape| (shape, location, rotation)));
         }
         placed
@@ -343,15 +354,15 @@ impl<L: LoaderRef> Vm<L> {
 
     /// As retail, never by triangles: `KPhysicsProps` shapes with simple collision, otherwise one convex hull.
     /// A brush is one hull of its corners, so a concave brush is filled in.
-    fn karma_placed_shapes(&mut self, actor: ObjectId) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
+    fn karma_placed_shapes(&mut self, actor: ObjectId, without_props: WithoutProps) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
         let placement = self.drawn_placement(actor);
         let place = |p: &[f32; 3]| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i]);
         let shapes = if self.draw_type_of(actor) == Some(crate::enums::EDrawType::StaticMesh) {
             let mesh = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh))?;
             match (mesh.use_simple_collision, &mesh.props) {
                 (true, Some(props)) => shapes::mesh_shapes(Some(props), (mesh.min, mesh.max), placement.scale, placement.pre_pivot),
-                (true, None) => return None,
-                (false, _) => vec![Shape::Hull(mesh.points.iter().map(place).collect())],
+                (true, None) if without_props == WithoutProps::Skip => return None,
+                _ => vec![Shape::Hull(mesh.points.iter().map(place).collect())],
             }
         } else {
             let model = self.store.object_of(actor, Prop::Brush).and_then(|brush| self.brush_model(brush))?;

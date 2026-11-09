@@ -129,6 +129,7 @@ impl PlayWorld {
             seen,
             recent: Default::default(),
             recent_read: Vec::new(),
+            logged: FxHashSet::default(),
             lights,
             light_clock: Default::default(),
             volumes,

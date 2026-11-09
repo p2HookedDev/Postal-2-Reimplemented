@@ -1,6 +1,7 @@
 use p2_math::{Rotator, Vector};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::interp::{int, truthy};
 use crate::natives::{float_arg, given, int_arg, object_arg, optional_float, rot3, vec3};
@@ -79,6 +80,7 @@ pub struct ActorFx {
     directions: FxHashMap<ObjectId, Vec<BoneDirection>>,
     projected: Vec<(ObjectId, ObjectId)>,
     projected_sent: FxHashSet<ObjectId>,
+    following: FxHashMap<ObjectId, ObjectId>,
     movies: FxHashMap<ObjectId, MovieState>,
     movie_textures: FxHashMap<ObjectId, ObjectId>,
     pub plings: Vec<FluidPling>,
@@ -92,6 +94,7 @@ impl ActorFx {
         self.controls.retain(|id, _| !gone.contains(id));
         self.directions.retain(|id, _| !gone.contains(id));
         self.projected.retain(|(projector, actor)| !gone.contains(projector) && !gone.contains(actor));
+        self.following.retain(|projector, actor| !gone.contains(projector) && !gone.contains(actor));
         self.movies.retain(|id, _| !gone.contains(id));
         self.movie_textures.retain(|texture, movie| !gone.contains(texture) && !gone.contains(movie));
         self.com_offsets.retain(|id, _| !gone.contains(id));
@@ -112,8 +115,13 @@ impl<L: LoaderRef> Vm<L> {
         Some(actors)
     }
 
-    pub fn projector_mover(&self, projector: ObjectId) -> Option<ObjectId> {
-        self.actor_fx.projected.iter().find(|&&(p, actor)| p == projector && self.store.is_a(actor, Kind::Mover)).map(|&(_, actor)| actor)
+    pub fn projector_follows(&self, projector: ObjectId) -> Option<ObjectId> {
+        self.actor_fx.following.get(&projector).copied()
+    }
+
+    /// Our addition: retail leaves Karma props out (`bAcceptsProjectors` off) and decals where they were cast.
+    pub(crate) fn moving_receiver(&self, actor: ObjectId) -> bool {
+        self.store.is_a(actor, Kind::Mover) || self.store.is_a(actor, "KActor") || self.store.physics_of(actor) == Some(EPhysics::Karma)
     }
 
     pub(crate) fn attach_static_meshes(&mut self, projector: ObjectId) {
@@ -121,7 +129,10 @@ impl<L: LoaderRef> Vm<L> {
             return;
         }
         let Some(texture) = self.store.object_of(projector, Prop::ProjTexture) else { return };
-        let Some(frustum) = self.projector_frustum(projector, texture) else { return };
+        let Some(frustum) = self.projector_frustum(projector, texture) else {
+            self.diagnostics.log.push(format!("Projector texture {} has no size: it attaches to no actor", self.store.object(texture).path));
+            return;
+        };
         let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
         for vertex in frustum.vertices {
             min = [min[0].min(vertex.x), min[1].min(vertex.y)];
@@ -140,20 +151,41 @@ impl<L: LoaderRef> Vm<L> {
                 actor != projector
                     && self.store.is_a(actor, Kind::Actor)
                     && !self.store.is_deleted(actor)
-                    && attach_takes(project_tag, self.store.get(actor, "bAcceptsProjectors") == Some(Value::Bool(true)), name(self.store.get(actor, Prop::Tag)), self.store.object_of(actor, Prop::StaticMesh).is_some())
+                    && attach_takes(
+                        project_tag,
+                        self.store.get(actor, "bAcceptsProjectors") == Some(Value::Bool(true)) || self.moving_receiver(actor),
+                        name(self.store.get(actor, Prop::Tag)),
+                        self.store.object_of(actor, Prop::StaticMesh).is_some(),
+                    )
                     && self.shapes_overlap(projector, actor)
             })
             .collect();
         self.give_entries(nearby);
-        for actor in attached {
+        let location = self.store.vector(projector, Prop::Location);
+        let follows = attached.iter().copied().find(|&actor| {
+            self.moving_receiver(actor) && {
+                let (center, extent) = self.encroach_box(actor);
+                on_receiver(location, center, extent)
+            }
+        });
+        for &actor in &attached {
             if !self.actor_fx.projected.contains(&(projector, actor)) {
                 self.actor_fx.projected.push((projector, actor));
+            }
+        }
+        match follows {
+            Some(receiver) => {
+                self.actor_fx.following.insert(projector, receiver);
+            }
+            None => {
+                self.actor_fx.following.remove(&projector);
             }
         }
     }
 
     pub(crate) fn detach_projected_actors(&mut self, projector: ObjectId) {
         self.actor_fx.projected.retain(|&(p, _)| p != projector);
+        self.actor_fx.following.remove(&projector);
     }
 
     /// `Movie` and `TextureMovie`'s `Movie` live in the transient package. Script cannot assign `Movie`:
@@ -453,6 +485,13 @@ fn attach_takes(project_tag: NameId, accepts: bool, tag: NameId, has_static_mesh
     accepts && has_static_mesh && (project_tag == NameId::NONE || project_tag == tag)
 }
 
+/// Unreal units. Splats are spawned at the hit, on the receiver's surface.
+const ON_SURFACE: f32 = 8.0;
+
+fn on_receiver(location: Vector, center: Vector, extent: Vector) -> bool {
+    (0..3).all(|i| (location[i] - center[i]).abs() <= extent[i] + ON_SURFACE)
+}
+
 /// Unreal units. Retail uses 5 for every scene: the view, the sky and each `DrawActor`.
 pub const NEAR_CLIPPING_PLANE: f32 = 5.0;
 
@@ -481,6 +520,15 @@ mod tests {
         assert!(!attach_takes(tag, true, other, true));
         assert!(!attach_takes(NameId::NONE, false, other, true));
         assert!(!attach_takes(NameId::NONE, true, other, false));
+    }
+
+    #[test]
+    fn a_splat_on_a_door_face_is_on_the_door() {
+        let (center, extent) = (Vector::new(100.0, 0.0, 50.0), Vector::new(4.0, 32.0, 50.0));
+        assert!(on_receiver(Vector::new(104.0, 10.0, 60.0), center, extent));
+        assert!(on_receiver(Vector::new(110.0, 10.0, 60.0), center, extent));
+        assert!(!on_receiver(Vector::new(120.0, 10.0, 60.0), center, extent));
+        assert!(!on_receiver(Vector::new(100.0, 50.0, 60.0), center, extent));
     }
 
     #[test]

@@ -113,7 +113,7 @@ const ATTACHED_TAG: u32 = 2;
 /// A static mesh lit as an actor (a mover relit as it moves) still takes static mesh projectors.
 const STATIC_MESH_TAG: u32 = 4;
 const MOVER_TAG: u32 = 8;
-/// In a projector's tag: the decal follows a mover and draws on movers only. Frame buffer blends stop at 6, so bit 7 is free.
+/// In a projector's tag: the decal follows a mover or Karma prop and draws on those only. Frame buffer blends stop at 6, so bit 7 is free.
 const MOVER_ONLY_TAG: u32 = 1 << 7;
 
 fn projector_mesh_tag((follow, bone): (Option<&FollowActor>, Option<&FollowBone>), attached: &FxHashSet<ObjectId>, movers: &FxHashSet<ObjectId>) -> u32 {
@@ -447,7 +447,7 @@ impl Session {
                     };
                     let Some((image, size, final_blend)) = found else { continue };
                     let transform = Transform::from_translation(origin) * projector_transform(&projector, size);
-                    let mover = projector.mover.and_then(|mover| {
+                    let mover = projector.follows.and_then(|mover| {
                         let frame = t.play.world()?.actor(mover).filter(|frame| !frame.gone)?;
                         Some(MoverDecal::new(mover, mover_pose(origin, frame.location, frame.rotation), transform))
                     });

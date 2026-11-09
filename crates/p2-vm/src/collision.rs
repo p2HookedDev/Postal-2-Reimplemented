@@ -268,7 +268,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// A static mesh uses its placed collision triangles' bounds (retail's placed box can be larger).
     /// A skeletal mesh, a ragdoll too, keeps the cylinder, not its Karma bodies.
-    fn encroach_box(&mut self, actor: ObjectId) -> (Vector, Vector) {
+    pub(crate) fn encroach_box(&mut self, actor: ObjectId) -> (Vector, Vector) {
         if let Some(shape) = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement)).filter(|shape| !shape.model) {
             let (min, max) = shape.boxes.bounds();
             if min[0] <= max[0] {
@@ -316,7 +316,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn projector_frustum(&mut self, projector: ObjectId, texture: ObjectId) -> Option<crate::projector::Frustum> {
-        let [u, v] = self.texture_size(texture);
+        let base = self.base_texture(texture);
+        let [u, v] = self.texture_size(base);
         if u <= 0 || v <= 0 {
             return None;
         }
@@ -335,7 +336,21 @@ impl<L: LoaderRef> Vm<L> {
         };
         Some(crate::projector::frustum(&shape))
     }
+
+    /// A material is as large as the texture under it: a `FinalBlend` or other modifier's, a shader's diffuse, a
+    /// combiner's first (unverified). Splats project such materials, which have no size of their own.
+    fn base_texture(&mut self, mut material: ObjectId) -> ObjectId {
+        for _ in 0..MAX_MATERIAL_DEPTH {
+            self.load_stub(material);
+            let Some(next) = MATERIAL_SOURCES.iter().find(|(class, _)| self.store.is_a(material, *class)).and_then(|&(_, source)| self.store.object_of(material, source)) else { break };
+            material = next;
+        }
+        material
+    }
 }
+
+const MATERIAL_SOURCES: [(&str, &str); 3] = [("Modifier", "Material"), ("Shader", "Diffuse"), ("Combiner", "Material1")];
+const MAX_MATERIAL_DEPTH: usize = 8;
 
 /// The box's x half size adds to the radius and its z half size to the height.
 fn cylinder_meets_box(at: Vector, radius: f32, height: f32, center: Vector, extent: Vector) -> bool {

@@ -417,7 +417,7 @@ pub struct ProjectorActor {
     pub material_blending: ProjectorBlending,
     pub targets: ProjectTargets,
     pub tagged: bool,
-    pub mover: Option<ObjectId>,
+    pub follows: Option<ObjectId>,
 }
 
 pub const PROJECT_BSP: u8 = 1;
@@ -468,7 +468,7 @@ pub fn projector_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Proje
         })
         .fold(0, |bits, (_, _, bit)| bits | bit)),
         tagged: matches!(vm.store.get(actor, "ProjectTag"), Some(Value::Name(tag)) if tag != p2_vm::NameId::NONE),
-        mover: vm.projector_mover(actor),
+        follows: vm.projector_follows(actor),
     })
 }
 

@@ -126,6 +126,10 @@ impl<L: LoaderRef> Vm<L> {
             self.hit_seen(victim, &values[..count]);
             self.bolton_struck(victim, &values[..count])?;
         }
+        if function.trace_hit {
+            let hit = std::array::from_fn(|k| hit_arg(&*self, &args, k, function.params[k]));
+            self.bullet_hole(function, hit)?;
+        }
         self.script.script_depth += 1;
         let started = self.function_enter();
         let mut result = run(self, function, this, class, args);

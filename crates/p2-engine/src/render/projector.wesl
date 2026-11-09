@@ -45,7 +45,7 @@ const ATTACHED: u32 = 2u;
 // A static mesh lit as an actor still takes static mesh projectors.
 const STATIC_MESH: u32 = 4u;
 const MOVER: u32 = 8u;
-// In a projector's tag: it follows a mover and draws on movers only; in a surface: it is a mover.
+// In a projector's tag: it follows a mover or Karma prop and draws on those only; in a surface: it is one.
 const ON_MOVER: u32 = 0x80u;
 
 fn section_target(instance_index: u32, kind: u32) -> u32 {

@@ -106,6 +106,7 @@ impl<L: LoaderRef> Vm<L> {
         let native_id = if is_native_declaration(native, flags) { crate::native_id::Native::from_name(&object_name) } else { None };
         let mem = self.store.memory.of(&layout);
         let take_damage = object_name.eq_ignore_ascii_case("TakeDamage") && params.len() >= 5;
+        let trace_hit = object_name.eq_ignore_ascii_case("ProcessTraceHit") && params.len() >= 4;
         let mut labels = FxHashMap::default();
         for statement in &statements {
             if let Expr::LabelTable(table) = &statement.expr {
@@ -131,6 +132,7 @@ impl<L: LoaderRef> Vm<L> {
             native_id,
             fast: native_id.filter(|native| native.is_fast()),
             take_damage,
+            trace_hit,
             bolton,
             links: (0..links).map(|_| AtomicU64::new(UNLINKED)).collect(),
             index: u32::try_from(self.script.lookups.function_table.len()).unwrap_or(u32::MAX),
