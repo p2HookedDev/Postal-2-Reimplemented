@@ -197,7 +197,7 @@ impl Material for ParticleMaterial {
 /// floor (traces' hits are not exact) while one 5 units under stays hidden.
 const PARTICLE_DEPTH_BIAS: (i32, f32) = (16, 0.05);
 
-/// The D3D blend per draw style (unverified). The engine blends in display space, the framebuffer
+/// The D3D blend per draw style. The engine blends in display space, the framebuffer
 /// here in linear light: `particle.wesl` makes up for it.
 pub(crate) fn particle_blend(style: DrawStyle) -> BlendState {
     let color = |src_factor, dst_factor| BlendComponent { src_factor, dst_factor, operation: BlendOperation::Add };
