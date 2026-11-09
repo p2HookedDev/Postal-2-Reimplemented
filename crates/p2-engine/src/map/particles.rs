@@ -5,7 +5,6 @@ use bevy::mesh::MeshTag;
 use bevy::render::storage::ShaderBuffer;
 use bevy::shape::Aabb3d;
 use p2_math::Vector;
-use p2_collision::{Hit, Sides, line_check, mesh_line_check, terrain_line_check};
 use p2_particles::{Beam, CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner, StripPoint};
 
 use super::*;
@@ -96,10 +95,7 @@ struct EmitterMesh {
 }
 
 pub(super) fn particle_collision(world: &StaticCollision, start: Vector, end: Vector) -> Option<CollisionHit> {
-    let bsp = line_check(&world.model, start, end);
-    let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end, Sides::Both));
-    let mesh = mesh_line_check(&world.meshes, start, end);
-    let hit: Hit = bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))?;
+    let hit = world.first_hit(start, end)?;
     Some(CollisionHit { location: hit.location, normal: hit.normal })
 }
 

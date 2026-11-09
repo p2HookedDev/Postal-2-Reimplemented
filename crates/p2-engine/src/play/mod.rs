@@ -39,8 +39,8 @@ use p2_vm::{
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::actors::{
-    BoneAttachment, EmitterActor, MeshActor, ProjectorActor, SkeletalActor, actor_glow, actor_look, actor_scale, bone_attachment, emitter_actor,
-    emitter_properties, emitters_disabled, location_rotation, mesh_actor, object_path, projector_actor, skeletal_actor, skin_paths, vector,
+    BoneAttachment, EmitterActor, MeshActor, ProjectorActor, SkeletalActor, actor_look, actor_scale, bone_attachment, emitter_actor,
+    emitter_properties, emitters_disabled, location_rotation, mesh_actor, object_path, projector_actor, skeletal_actor, skin_paths,
 };
 use crate::animation::{AttachmentPlaces, BoneFrame, FollowBone};
 use crate::components::{ActorModel, CanvasDrawn, FollowActor, SceneView};

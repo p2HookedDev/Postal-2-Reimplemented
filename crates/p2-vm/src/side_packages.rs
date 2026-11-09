@@ -18,10 +18,7 @@ impl SidePackage {
     fn open(file: &Path) -> Option<Self> {
         let data = p2_package::map_file(file).ok()?;
         let package = Package::parse(&data).ok()?;
-        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, export) in package.exports.iter().enumerate() {
-            by_name.entry(package.name(export.object_name).to_ascii_lowercase()).or_default().push(index);
-        }
+        let by_name = p2_package::exports_by_name(&package);
         Some(Self { package, data, by_name })
     }
 

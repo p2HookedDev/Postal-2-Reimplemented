@@ -3,7 +3,7 @@ use p2_package::{Export, Package, Reader};
 
 use crate::Error;
 use crate::pose::{LocalBone, dot};
-use crate::read::{array, invalid};
+use crate::read::{array, invalid, vec3, vec4};
 
 /// Rotation keys: the root bone's quaternion rotates as stored (`v' = q v q*`), every other bone's
 /// as its conjugate.
@@ -203,8 +203,8 @@ fn read_motion_chunk(r: &mut Reader) -> Result<MotionChunk, Error> {
 
 fn read_track(r: &mut Reader) -> Result<AnalogTrack, Error> {
     let flags = r.u32()?;
-    let rotations = array(r, |r| Ok([r.f32()?, r.f32()?, r.f32()?, r.f32()?]))?;
-    let positions = array(r, |r| Ok([r.f32()?, r.f32()?, r.f32()?]))?;
+    let rotations = array(r, vec4)?;
+    let positions = array(r, vec3)?;
     let times: Vec<f32> = array(r, |r| Ok(r.f32()?))?;
     let times_sorted = times.windows(2).all(|pair| pair[0] <= pair[1]);
     Ok(AnalogTrack { flags, rotations, positions, times, times_sorted })

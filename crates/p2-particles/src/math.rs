@@ -1,4 +1,4 @@
-pub(crate) use p2_math::{Rotator, Vector, radians};
+pub(crate) use p2_math::{Rotator, Vector, turn};
 
 use crate::Rng;
 
@@ -17,7 +17,7 @@ pub(crate) fn non_parallel(v: Vector) -> Vector {
 }
 
 pub(crate) fn rotate_about(v: Vector, units: i32, axis: Vector) -> Vector {
-    let (s, c) = radians((units & 0xffff) as f32).sin_cos();
+    let (s, c) = turn(units).sin_cos();
     ((v * c) + (axis.cross(v) * s)) + (axis * (axis.dot(v) * (1.0 - c)))
 }
 

@@ -119,7 +119,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model, sky_zone: Optio
     }
     for &object in &zone_actors {
         zone_fogs.push(object.and_then(|object| zone_fog(&vm, object)));
-        terrain_zones.push(object.or(level_info).is_some_and(|object| vm.store.get(object, "bTerrainZone") == Some(p2_vm::Value::Bool(true))));
+        terrain_zones.push(object.or(level_info).is_some_and(|object| vm.store.flag_of(object, "bTerrainZone")));
         zone_ambients.push(object.or(level_info).map_or([0.0; 3], |object| zone_ambient(&vm, object)));
     }
     if let Some(p2_vm::Value::Float(brightness)) = level_info.and_then(|info| vm.store.get(info, "Brightness")) {

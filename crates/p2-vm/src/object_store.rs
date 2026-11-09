@@ -211,7 +211,7 @@ impl ObjectStore {
         Some(self.memory.read_field(&field, &self.class(class).defaults))
     }
 
-    pub(crate) fn float_of(&self, object: ObjectId, property: impl PropertyName) -> f32 {
+    pub fn float_of(&self, object: ObjectId, property: impl PropertyName) -> f32 {
         match self.word(object, property) {
             Some((word, memory::Shape::Float)) => f32::from_bits(word),
             Some((word, memory::Shape::Int)) => word as i32 as f32,
@@ -220,18 +220,22 @@ impl ObjectStore {
         }
     }
 
-    pub(crate) fn flag_of(&self, object: ObjectId, property: impl PropertyName) -> bool {
+    pub fn collision_size(&self, object: ObjectId) -> (f32, f32) {
+        (self.float_of(object, Prop::CollisionRadius), self.float_of(object, Prop::CollisionHeight))
+    }
+
+    pub fn flag_of(&self, object: ObjectId, property: impl PropertyName) -> bool {
         matches!(self.word(object, property), Some((word, memory::Shape::Bool)) if word != 0)
     }
 
-    pub(crate) fn object_of(&self, object: ObjectId, property: impl PropertyName) -> Option<ObjectId> {
+    pub fn object_of(&self, object: ObjectId, property: impl PropertyName) -> Option<ObjectId> {
         match self.word(object, property) {
             Some((word, memory::Shape::Object)) => memory::object(word),
             _ => None,
         }
     }
 
-    pub(crate) fn byte_of(&self, object: ObjectId, property: impl PropertyName) -> u8 {
+    pub fn byte_of(&self, object: ObjectId, property: impl PropertyName) -> u8 {
         match self.word(object, property) {
             Some((word, memory::Shape::Byte | memory::Shape::Bool | memory::Shape::Int)) => word as u8,
             Some((word, memory::Shape::Float)) => f32::from_bits(word) as i32 as u8,
@@ -239,7 +243,7 @@ impl ObjectStore {
         }
     }
 
-    pub(crate) fn rotator_of(&self, object: ObjectId, property: impl PropertyName) -> Rotator {
+    pub fn rotator_of(&self, object: ObjectId, property: impl PropertyName) -> Rotator {
         self.members::<3>(object, property).map_or([0; 3].into(), |members| members.map(|m| int(&m)).into())
     }
 
@@ -247,7 +251,7 @@ impl ObjectStore {
         self.set_members(object, property, <[f32; 3]>::from(value).map(Value::Float));
     }
 
-    pub(crate) fn vector(&self, object: ObjectId, property: impl PropertyName) -> Vector {
+    pub fn vector(&self, object: ObjectId, property: impl PropertyName) -> Vector {
         self.member_words::<3>(object, property).map_or(Vector::ZERO, |members| {
             members.map(|m| match m {
                 (word, memory::Shape::Float) => f32::from_bits(word),

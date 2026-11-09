@@ -17,7 +17,7 @@ impl<L: LoaderRef> Vm<L> {
         let desired_move = self.walking_velocity(pawn, delta, friction);
         let grav_dir = gravity_direction(gravity);
         let down = grav_dir * FLOOR_CHECK;
-        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(pawn);
         let start = WalkStart { location: self.store.vector(pawn, Prop::Location), floor: self.store.vector(pawn, Prop::Floor), base: self.store.object_of(pawn, Prop::Base) };
         self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
         let avoids_ledges = (self.store.flag_of(pawn, Prop::bIsWalking) || self.store.flag_of(pawn, Prop::bIsCrouched))

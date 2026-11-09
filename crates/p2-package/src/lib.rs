@@ -9,7 +9,7 @@ pub use ini::Ini;
 pub use object::{ObjectData, Property, PropertyTag, TagValue, tag};
 pub use reader::Reader;
 pub use memmap2::Mmap;
-pub use resolve::{LoadedPackage, Loader, PackageId, ResolveError, Resolved, import_path, map_file, search_paths};
+pub use resolve::{LoadedPackage, Loader, PackageId, ResolveError, Resolved, exports_by_name, import_path, map_file, search_paths};
 
 pub const PACKAGE_TAG: u32 = 0x9e2a_83c1;
 

@@ -2,8 +2,8 @@ use p2_math::Vector;
 use crate::native_id::Native;
 use crate::Prop;
 use crate::enums::ENetRole;
-use crate::interp::{float, truthy};
-use crate::natives::vec3;
+use crate::interp::float;
+use crate::natives::{bool_arg, float_arg, object_arg, vec3};
 
 use crate::world::trace;
 use crate::{Error, Kind, LoaderRef, NameId, ObjectId, Value, Vm};
@@ -36,31 +36,25 @@ struct HurtOptions<'a> {
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn hurt_radius_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let Some(this) = this else { return Ok(None) };
-        let f = |n: usize| args.get(n).map_or(0.0, float);
-        let b = |n: usize| args.get(n).is_some_and(truthy);
-        let object = |n: usize| match args.get(n) {
-            Some(&Value::Object(o)) => o,
-            _ => None,
-        };
         let mut options = HurtOptions::default();
         if native == Native::HurtRadiusEX {
             options = HurtOptions {
-                no_scale: b(5),
-                round_up_if: f(6),
-                stop_at_wall: b(7),
-                ignore_instigator: b(8),
-                ignore: object(9),
-                target_class: object(10).map(|class| self.store.object(class).name),
-                explosion: b(11),
+                no_scale: bool_arg(args, 5),
+                round_up_if: float_arg(args, 6),
+                stop_at_wall: bool_arg(args, 7),
+                ignore_instigator: bool_arg(args, 8),
+                ignore: object_arg(args, 9),
+                target_class: object_arg(args, 10).map(|class| self.store.object(class).name),
+                explosion: bool_arg(args, 11),
                 class_check: match args.get(12) {
                     Some(Value::Str(list)) => list.as_str(),
                     _ => "",
                 },
-                instigator_radius: f(14),
+                instigator_radius: float_arg(args, 14),
             };
         }
         let damage_type = args.get(2).cloned().unwrap_or(Value::Object(None));
-        let (hit, matched) = self.hurt_radius(this, RadiusDamage { amount: f(0), radius: f(1), damage_type, momentum: f(3), centre: vec3(args.get(4)) }, &options)?;
+        let (hit, matched) = self.hurt_radius(this, RadiusDamage { amount: float_arg(args, 0), radius: float_arg(args, 1), damage_type, momentum: float_arg(args, 3), centre: vec3(args.get(4)) }, &options)?;
         if native == Native::HurtRadiusEX {
             if let Some(slot) = args.get_mut(13) {
                 *slot = Value::Int(i32::from(matched));

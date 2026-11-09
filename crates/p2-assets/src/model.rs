@@ -1,7 +1,7 @@
 use p2_math::Vector;
 use p2_package::{Export, Package, Reader};
 
-use crate::read::{array, count, invalid, lazy_bytes, skip_primitive, vec3};
+use crate::read::{array, count, invalid, lazy_bytes, skip_primitive, vec3, vec4};
 use crate::{Error, Mip, Texture, TextureFormat};
 
 const MIN_VERSION: u16 = 116;
@@ -568,10 +568,6 @@ fn to_optional(value: i32, offset: usize) -> Result<Option<usize>, Error> {
         -1 => Ok(None),
         v => usize::try_from(v).map(Some).map_err(|_| invalid("index", offset)),
     }
-}
-
-fn vec4(r: &mut Reader) -> Result<[f32; 4], Error> {
-    Ok([r.f32()?, r.f32()?, r.f32()?, r.f32()?])
 }
 
 #[cfg(test)]

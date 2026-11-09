@@ -333,7 +333,7 @@ impl<L: LoaderRef> Vm<L> {
             (local_to_world, None)
         };
         let sphere = saved.unwrap_or_else(|| {
-            let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+            let (radius, height) = self.store.collision_size(actor);
             [0.0, 0.0, 0.0, (radius * radius + height * height).sqrt()]
         });
         let [x, y, z, w] = transform_sphere(&frame, sphere);

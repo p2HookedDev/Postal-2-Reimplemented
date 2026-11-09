@@ -345,9 +345,8 @@ impl<L: LoaderRef> Vm<L> {
             Some(&Value::Object(Some(class))) => self.store.object(class).name,
             _ => self.script.lookups.class_names.actor,
         };
-        let vector_arg = |n: usize| vector_arg(args, n);
         let here = this.map_or(Vector::ZERO, |this| self.store.vector(this, Prop::Location));
-        let (end, start, extent) = (vector_arg(3).unwrap_or(here), vector_arg(4).unwrap_or(here), vector_arg(5).unwrap_or(Vector::ZERO));
+        let (end, start, extent) = (vector_arg(args, 3).unwrap_or(here), vector_arg(args, 4).unwrap_or(here), vector_arg(args, 5).unwrap_or(Vector::ZERO));
         self.line_check(start, end, extent, this, trace::ALL_COLLIDING)
             .into_iter()
             .map(|(actor, hit)| match actor {

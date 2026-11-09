@@ -29,9 +29,8 @@ pub struct CoronaActor {
 }
 
 fn corona_texture(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<ObjectId> {
-    let flag = |property: Prop| vm.store.get(actor, property) == Some(Value::Bool(true));
     let lit = matches!(vm.store.get(actor, Prop::LightType), Some(Value::Byte(light_type)) if light_type != 0);
-    if !flag(Prop::bCorona) || !lit || flag(Prop::bDeleteMe) || vm.store.is_deleted(actor) {
+    if !vm.store.flag_of(actor, Prop::bCorona) || !lit || vm.store.flag_of(actor, Prop::bDeleteMe) || vm.store.is_deleted(actor) {
         return None;
     }
     let Some(Value::Array(skins)) = vm.store.get(actor, Prop::Skins) else { return None };
@@ -49,10 +48,6 @@ pub fn is_corona(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> bool {
 
 pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaActor> {
     let texture = corona_texture(vm, actor)?;
-    let byte = |name: &str| match vm.store.get(actor, name) {
-        Some(Value::Byte(value)) => value,
-        _ => 0,
-    };
     let float = |name: &str, default: f32| match vm.store.get(actor, name) {
         Some(Value::Float(value)) => value,
         _ => default,
@@ -64,9 +59,9 @@ pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaAc
         location,
         rotation,
         draw_scale: float("DrawScale", 1.0),
-        draw_scale3d: crate::actors::vector(vm, actor, "DrawScale3D").into(),
-        hue: byte("LightHue"),
-        saturation: byte("LightSaturation"),
+        draw_scale3d: vm.store.vector(actor, "DrawScale3D").into(),
+        hue: vm.store.byte_of(actor, "LightHue"),
+        saturation: vm.store.byte_of(actor, "LightSaturation"),
         sizes: vm.store.is_a(actor, "Light").then(|| (float("MinCoronaSize", 0.0), float("MaxCoronaSize", 0.0))),
         light_radius: float("LightRadius", 0.0),
     })

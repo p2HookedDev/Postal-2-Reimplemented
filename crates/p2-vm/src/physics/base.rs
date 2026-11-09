@@ -164,7 +164,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn find_base(&mut self, actor: ObjectId) -> Result<(), Error> {
         let at = self.store.vector(actor, Prop::Location);
-        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(actor);
         let hit = self.sweep(actor, Sweep { start: at, delta: [0.0, 0.0, -FIND_BASE_DEPTH].into(), radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         let base = hit.actor;
         if self.store.object_of(actor, Prop::Base) != base {

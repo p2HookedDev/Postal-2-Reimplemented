@@ -157,7 +157,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn primitive_overlaps(&mut self, mover: ObjectId, other: ObjectId) -> bool {
         let Some(shape) = self.actor_shape(mover) else { return false };
-        let (radius, height) = (self.store.float_of(other, Prop::CollisionRadius), self.store.float_of(other, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(other);
         mesh_box_overlaps([&*shape.boxes], self.store.vector(other, Prop::Location), [radius, radius, height].into())
     }
 

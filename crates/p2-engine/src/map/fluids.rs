@@ -231,8 +231,7 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
     let s = &surface.settings;
     let row = if s.hexagonal { HEX_ROW_SPACING } else { 1.0 };
     let half = Vector::new((s.x_size - 1).max(0) as f32 * 0.5 * s.spacing, (s.y_size - 1).max(0) as f32 * 0.5 * s.spacing * row, s.spacing);
-    let flag = |name: &str| vm.store.get(actor, name) == Some(Value::Bool(true));
-    Some(FluidActor { object: actor, bounds: (location - half, location + half), skin, hidden: flag("bHidden"), surface })
+    Some(FluidActor { object: actor, bounds: (location - half, location + half), skin, hidden: vm.store.flag_of(actor, "bHidden"), surface })
 }
 
 pub(super) struct FluidShown {

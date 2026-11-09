@@ -1,7 +1,7 @@
 use p2_math::Vector;
-use crate::interp::{float, int, truthy};
+use crate::interp::{float, int};
 use crate::native_id::Native;
-use crate::natives::{name_arg, orthogonal_rotation, rot3, vec3};
+use crate::natives::{bool_arg, float_arg, int_arg, name_arg, object_arg, orthogonal_rotation, rot3, vec3};
 use crate::Value;
 
 pub(crate) fn operate(native: Native, args: &mut [Value]) -> Option<Value> {
@@ -13,93 +13,86 @@ pub(crate) fn operate(native: Native, args: &mut [Value]) -> Option<Value> {
 }
 
 fn scalar(native: Native, args: &[Value]) -> Option<Value> {
-    let i = |n: usize| args.get(n).map_or(0, int);
-    let f = |n: usize| args.get(n).map_or(0.0, float);
-    let b = |n: usize| args.get(n).is_some_and(truthy);
     let v = |n: usize| vec3(args.get(n));
-    let object = |n: usize| match args.get(n) {
-        Some(&Value::Object(object)) => object,
-        _ => None,
-    };
     let color = |n: usize| match args.get(n) {
         Some(Value::Struct(members)) => [0, 1, 2, 3].map(|i| members.get(i).map_or(0, int) as u8),
         _ => [0; 4],
     };
     let colour = |bytes: [u8; 4]| Value::Struct(bytes.map(Value::Byte).to_vec());
     Some(match native {
-        Native::Not_PreBool => Value::Bool(!b(0)),
-        Native::EqualEqual_BoolBool => Value::Bool(b(0) == b(1)),
-        Native::NotEqual_BoolBool | Native::XorXor_BoolBool => Value::Bool(b(0) != b(1)),
-        Native::AndAnd_BoolBool => Value::Bool(b(0) && b(1)),
-        Native::OrOr_BoolBool => Value::Bool(b(0) || b(1)),
-        Native::Subtract_PreInt => Value::Int(i(0).wrapping_neg()),
-        Native::Complement_PreInt => Value::Int(!i(0)),
-        Native::Add_IntInt => Value::Int(i(0).wrapping_add(i(1))),
-        Native::Subtract_IntInt => Value::Int(i(0).wrapping_sub(i(1))),
-        Native::Multiply_IntInt => Value::Int(i(0).wrapping_mul(i(1))),
-        Native::Divide_IntInt => Value::Int(if i(1) == 0 { 0 } else { i(0).wrapping_div(i(1)) }),
-        Native::LessLess_IntInt => Value::Int(i(0).wrapping_shl(i(1) as u32)),
-        Native::GreaterGreater_IntInt => Value::Int(i(0).wrapping_shr(i(1) as u32)),
-        Native::GreaterGreaterGreater_IntInt => Value::Int((i(0) as u32).wrapping_shr(i(1) as u32) as i32),
-        Native::And_IntInt => Value::Int(i(0) & i(1)),
-        Native::Or_IntInt => Value::Int(i(0) | i(1)),
-        Native::Xor_IntInt => Value::Int(i(0) ^ i(1)),
-        Native::Less_IntInt => Value::Bool(i(0) < i(1)),
-        Native::Greater_IntInt => Value::Bool(i(0) > i(1)),
-        Native::LessEqual_IntInt => Value::Bool(i(0) <= i(1)),
-        Native::GreaterEqual_IntInt => Value::Bool(i(0) >= i(1)),
-        Native::EqualEqual_IntInt => Value::Bool(i(0) == i(1)),
-        Native::NotEqual_IntInt => Value::Bool(i(0) != i(1)),
-        Native::Min => Value::Int(i(0).min(i(1))),
-        Native::Max => Value::Int(i(0).max(i(1))),
-        Native::Clamp => Value::Int(i(0).max(i(1)).min(i(2))),
+        Native::Not_PreBool => Value::Bool(!bool_arg(args, 0)),
+        Native::EqualEqual_BoolBool => Value::Bool(bool_arg(args, 0) == bool_arg(args, 1)),
+        Native::NotEqual_BoolBool | Native::XorXor_BoolBool => Value::Bool(bool_arg(args, 0) != bool_arg(args, 1)),
+        Native::AndAnd_BoolBool => Value::Bool(bool_arg(args, 0) && bool_arg(args, 1)),
+        Native::OrOr_BoolBool => Value::Bool(bool_arg(args, 0) || bool_arg(args, 1)),
+        Native::Subtract_PreInt => Value::Int(int_arg(args, 0).wrapping_neg()),
+        Native::Complement_PreInt => Value::Int(!int_arg(args, 0)),
+        Native::Add_IntInt => Value::Int(int_arg(args, 0).wrapping_add(int_arg(args, 1))),
+        Native::Subtract_IntInt => Value::Int(int_arg(args, 0).wrapping_sub(int_arg(args, 1))),
+        Native::Multiply_IntInt => Value::Int(int_arg(args, 0).wrapping_mul(int_arg(args, 1))),
+        Native::Divide_IntInt => Value::Int(if int_arg(args, 1) == 0 { 0 } else { int_arg(args, 0).wrapping_div(int_arg(args, 1)) }),
+        Native::LessLess_IntInt => Value::Int(int_arg(args, 0).wrapping_shl(int_arg(args, 1) as u32)),
+        Native::GreaterGreater_IntInt => Value::Int(int_arg(args, 0).wrapping_shr(int_arg(args, 1) as u32)),
+        Native::GreaterGreaterGreater_IntInt => Value::Int((int_arg(args, 0) as u32).wrapping_shr(int_arg(args, 1) as u32) as i32),
+        Native::And_IntInt => Value::Int(int_arg(args, 0) & int_arg(args, 1)),
+        Native::Or_IntInt => Value::Int(int_arg(args, 0) | int_arg(args, 1)),
+        Native::Xor_IntInt => Value::Int(int_arg(args, 0) ^ int_arg(args, 1)),
+        Native::Less_IntInt => Value::Bool(int_arg(args, 0) < int_arg(args, 1)),
+        Native::Greater_IntInt => Value::Bool(int_arg(args, 0) > int_arg(args, 1)),
+        Native::LessEqual_IntInt => Value::Bool(int_arg(args, 0) <= int_arg(args, 1)),
+        Native::GreaterEqual_IntInt => Value::Bool(int_arg(args, 0) >= int_arg(args, 1)),
+        Native::EqualEqual_IntInt => Value::Bool(int_arg(args, 0) == int_arg(args, 1)),
+        Native::NotEqual_IntInt => Value::Bool(int_arg(args, 0) != int_arg(args, 1)),
+        Native::Min => Value::Int(int_arg(args, 0).min(int_arg(args, 1))),
+        Native::Max => Value::Int(int_arg(args, 0).max(int_arg(args, 1))),
+        Native::Clamp => Value::Int(int_arg(args, 0).max(int_arg(args, 1)).min(int_arg(args, 2))),
         Native::ClockwiseFrom_IntInt => {
-            let (a, b) = (i(0) & 0xffff, i(1) & 0xffff);
+            let (a, b) = (int_arg(args, 0) & 0xffff, int_arg(args, 1) & 0xffff);
             Value::Bool(if (a - b).abs() > 32768 { a < b } else { a > b })
         }
-        Native::Subtract_PreFloat => Value::Float(-f(0)),
-        Native::Add_FloatFloat => Value::Float(f(0) + f(1)),
-        Native::Subtract_FloatFloat => Value::Float(f(0) - f(1)),
-        Native::Multiply_FloatFloat => Value::Float(f(0) * f(1)),
-        Native::Divide_FloatFloat => Value::Float(f(0) / f(1)),
-        Native::Percent_FloatFloat => Value::Float(f(0) % f(1)),
-        Native::MultiplyMultiply_FloatFloat => Value::Float(f(0).powf(f(1))),
-        Native::Less_FloatFloat => Value::Bool(f(0) < f(1)),
-        Native::Greater_FloatFloat => Value::Bool(f(0) > f(1)),
-        Native::LessEqual_FloatFloat => Value::Bool(f(0) <= f(1)),
-        Native::GreaterEqual_FloatFloat => Value::Bool(f(0) >= f(1)),
-        Native::EqualEqual_FloatFloat => Value::Bool(f(0) == f(1)),
-        Native::NotEqual_FloatFloat => Value::Bool(f(0) != f(1)),
-        Native::ComplementEqual_FloatFloat => Value::Bool((f(0) - f(1)).abs() < 1e-4),
-        Native::Abs => Value::Float(f(0).abs()),
-        Native::Sqrt => Value::Float(f(0).sqrt()),
-        Native::Square => Value::Float(f(0) * f(0)),
-        Native::Sin => Value::Float(f(0).sin()),
-        Native::Cos => Value::Float(f(0).cos()),
-        Native::Tan => Value::Float(f(0).tan()),
-        Native::Atan => Value::Float(f(0).atan()),
-        Native::Asin => Value::Float(f(0).asin()),
-        Native::Acos => Value::Float(f(0).acos()),
-        Native::Atan2 => Value::Float(f(0).atan2(f(1))),
-        Native::Exp => Value::Float(f(0).exp()),
-        Native::Loge => Value::Float(f(0).ln()),
-        Native::Log10 => Value::Float(f(0).log10()),
-        Native::Ceil => Value::Float(f(0).ceil()),
-        Native::FMin => Value::Float(f(0).min(f(1))),
-        Native::FMax => Value::Float(f(0).max(f(1))),
-        Native::FClamp => Value::Float(f(0).max(f(1)).min(f(2))),
-        Native::Lerp => Value::Float(f(1) + (f(2) - f(1)) * f(0)),
+        Native::Subtract_PreFloat => Value::Float(-float_arg(args, 0)),
+        Native::Add_FloatFloat => Value::Float(float_arg(args, 0) + float_arg(args, 1)),
+        Native::Subtract_FloatFloat => Value::Float(float_arg(args, 0) - float_arg(args, 1)),
+        Native::Multiply_FloatFloat => Value::Float(float_arg(args, 0) * float_arg(args, 1)),
+        Native::Divide_FloatFloat => Value::Float(float_arg(args, 0) / float_arg(args, 1)),
+        Native::Percent_FloatFloat => Value::Float(float_arg(args, 0) % float_arg(args, 1)),
+        Native::MultiplyMultiply_FloatFloat => Value::Float(float_arg(args, 0).powf(float_arg(args, 1))),
+        Native::Less_FloatFloat => Value::Bool(float_arg(args, 0) < float_arg(args, 1)),
+        Native::Greater_FloatFloat => Value::Bool(float_arg(args, 0) > float_arg(args, 1)),
+        Native::LessEqual_FloatFloat => Value::Bool(float_arg(args, 0) <= float_arg(args, 1)),
+        Native::GreaterEqual_FloatFloat => Value::Bool(float_arg(args, 0) >= float_arg(args, 1)),
+        Native::EqualEqual_FloatFloat => Value::Bool(float_arg(args, 0) == float_arg(args, 1)),
+        Native::NotEqual_FloatFloat => Value::Bool(float_arg(args, 0) != float_arg(args, 1)),
+        Native::ComplementEqual_FloatFloat => Value::Bool((float_arg(args, 0) - float_arg(args, 1)).abs() < 1e-4),
+        Native::Abs => Value::Float(float_arg(args, 0).abs()),
+        Native::Sqrt => Value::Float(float_arg(args, 0).sqrt()),
+        Native::Square => Value::Float(float_arg(args, 0) * float_arg(args, 0)),
+        Native::Sin => Value::Float(float_arg(args, 0).sin()),
+        Native::Cos => Value::Float(float_arg(args, 0).cos()),
+        Native::Tan => Value::Float(float_arg(args, 0).tan()),
+        Native::Atan => Value::Float(float_arg(args, 0).atan()),
+        Native::Asin => Value::Float(float_arg(args, 0).asin()),
+        Native::Acos => Value::Float(float_arg(args, 0).acos()),
+        Native::Atan2 => Value::Float(float_arg(args, 0).atan2(float_arg(args, 1))),
+        Native::Exp => Value::Float(float_arg(args, 0).exp()),
+        Native::Loge => Value::Float(float_arg(args, 0).ln()),
+        Native::Log10 => Value::Float(float_arg(args, 0).log10()),
+        Native::Ceil => Value::Float(float_arg(args, 0).ceil()),
+        Native::FMin => Value::Float(float_arg(args, 0).min(float_arg(args, 1))),
+        Native::FMax => Value::Float(float_arg(args, 0).max(float_arg(args, 1))),
+        Native::FClamp => Value::Float(float_arg(args, 0).max(float_arg(args, 1)).min(float_arg(args, 2))),
+        Native::Lerp => Value::Float(float_arg(args, 1) + (float_arg(args, 2) - float_arg(args, 1)) * float_arg(args, 0)),
         Native::Smerp => {
-            let alpha = f(0);
-            Value::Float(f(1) + (3.0 * alpha * alpha - 2.0 * alpha * alpha * alpha) * (f(2) - f(1)))
+            let alpha = float_arg(args, 0);
+            Value::Float(float_arg(args, 1) + (3.0 * alpha * alpha - 2.0 * alpha * alpha * alpha) * (float_arg(args, 2) - float_arg(args, 1)))
         }
-        Native::FloatSpringInterp => Value::Float(spring(f(0), f(1), f(2), f(3))),
+        Native::FloatSpringInterp => Value::Float(spring(float_arg(args, 0), float_arg(args, 1), float_arg(args, 2), float_arg(args, 3))),
         Native::VectorSpringInterp => {
             let (dest, current) = (v(0), v(1));
-            Value::Vector([0, 1, 2].map(|i| spring(dest[i], current[i], f(2), f(3))).into())
+            Value::Vector([0, 1, 2].map(|i| spring(dest[i], current[i], float_arg(args, 2), float_arg(args, 3))).into())
         }
-        Native::EqualEqual_ObjectObject => Value::Bool(object(0) == object(1)),
-        Native::NotEqual_ObjectObject => Value::Bool(object(0) != object(1)),
+        Native::EqualEqual_ObjectObject => Value::Bool(object_arg(args, 0) == object_arg(args, 1)),
+        Native::NotEqual_ObjectObject => Value::Bool(object_arg(args, 0) != object_arg(args, 1)),
         Native::EqualEqual_NameName => Value::Bool(name_arg(args, 0) == name_arg(args, 1)),
         Native::NotEqual_NameName => Value::Bool(name_arg(args, 0) != name_arg(args, 1)),
         // Per byte member: sums and differences wrap; products truncate, out of range saturates (unverified).
@@ -112,11 +105,11 @@ fn scalar(native: Native, args: &[Value]) -> Option<Value> {
             colour([0, 1, 2, 3].map(|k| a[k].wrapping_add(c[k])))
         }
         Native::Multiply_FloatColor => {
-            let scale = f(0);
+            let scale = float_arg(args, 0);
             colour(color(1).map(|c| (f32::from(c) * scale) as u8))
         }
         Native::Multiply_ColorFloat => {
-            let scale = f(1);
+            let scale = float_arg(args, 1);
             colour(color(0).map(|c| (f32::from(c) * scale) as u8))
         }
         _ => return None,
@@ -124,7 +117,6 @@ fn scalar(native: Native, args: &[Value]) -> Option<Value> {
 }
 
 fn spatial(native: Native, args: &[Value]) -> Option<Value> {
-    let f = |n: usize| args.get(n).map_or(0.0, float);
     let v = |n: usize| vec3(args.get(n));
     let r = |n: usize| rot3(args.get(n));
     Some(match native {
@@ -132,9 +124,9 @@ fn spatial(native: Native, args: &[Value]) -> Option<Value> {
         Native::Add_VectorVector => Value::Vector(v(0) + v(1)),
         Native::Subtract_VectorVector => Value::Vector(v(0) - v(1)),
         Native::Multiply_VectorVector => Value::Vector(v(0) * v(1)),
-        Native::Multiply_VectorFloat => Value::Vector(v(0) * f(1)),
-        Native::Multiply_FloatVector => Value::Vector(v(1) * f(0)),
-        Native::Divide_VectorFloat => Value::Vector(v(0) / f(1)),
+        Native::Multiply_VectorFloat => Value::Vector(v(0) * float_arg(args, 1)),
+        Native::Multiply_FloatVector => Value::Vector(v(1) * float_arg(args, 0)),
+        Native::Divide_VectorFloat => Value::Vector(v(0) / float_arg(args, 1)),
         Native::Dot_VectorVector => Value::Float(v(0).dot(v(1))),
         Native::Cross_VectorVector => Value::Vector(v(0).cross(v(1))),
         Native::EqualEqual_VectorVector => Value::Bool(v(0) == v(1)),
@@ -146,7 +138,7 @@ fn spatial(native: Native, args: &[Value]) -> Option<Value> {
             Value::Vector(if length > 0.0 { value / length } else { Vector::ZERO })
         }
         Native::VLerp => {
-            let (a, b, alpha) = (v(0), v(1), f(2));
+            let (a, b, alpha) = (v(0), v(1), float_arg(args, 2));
             Value::Vector([0, 1, 2].map(|i| a[i] + alpha * (b[i] - a[i])).into())
         }
         Native::MirrorVectorByNormal => {
@@ -161,7 +153,7 @@ fn spatial(native: Native, args: &[Value]) -> Option<Value> {
             if c > 32767 { c - 0x10000 } else { c }
         })),
         Native::RLerp => {
-            let (a, b, alpha) = (r(0), r(1), f(2));
+            let (a, b, alpha) = (r(0), r(1), float_arg(args, 2));
             Value::Rotator([0, 1, 2].map(|i| a[i] + (alpha * (b[i] - a[i]) as f32) as i32).into())
         }
         Native::OrthoRotation => Value::Rotator(orthogonal_rotation(v(0), v(1), v(2))),
@@ -173,9 +165,9 @@ fn spatial(native: Native, args: &[Value]) -> Option<Value> {
             let (a, b) = (r(0), r(1));
             Value::Rotator([0, 1, 2].map(|i| a[i].wrapping_sub(b[i])).into())
         }
-        Native::Multiply_RotatorFloat => Value::Rotator(r(0).map(|c| (c as f32 * f(1)) as i32)),
-        Native::Multiply_FloatRotator => Value::Rotator(r(1).map(|c| (c as f32 * f(0)) as i32)),
-        Native::Divide_RotatorFloat => Value::Rotator(r(0).map(|c| (c as f32 / f(1)) as i32)),
+        Native::Multiply_RotatorFloat => Value::Rotator(r(0).map(|c| (c as f32 * float_arg(args, 1)) as i32)),
+        Native::Multiply_FloatRotator => Value::Rotator(r(1).map(|c| (c as f32 * float_arg(args, 0)) as i32)),
+        Native::Divide_RotatorFloat => Value::Rotator(r(0).map(|c| (c as f32 / float_arg(args, 1)) as i32)),
         Native::EqualEqual_RotatorRotator => Value::Bool(r(0) == r(1)),
         Native::NotEqual_RotatorRotator => Value::Bool(r(0) != r(1)),
         _ => return None,

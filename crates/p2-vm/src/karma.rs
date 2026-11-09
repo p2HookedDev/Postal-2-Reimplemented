@@ -15,7 +15,7 @@ use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::interp::float;
-use crate::natives::vec3;
+use crate::natives::{bool_arg, float_arg, vec3};
 use crate::physics::DEFAULT_GRAVITY;
 use crate::profiling::Work;
 use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop};
@@ -300,7 +300,7 @@ impl<L: LoaderRef> Vm<L> {
         let placement = self.drawn_placement(actor);
         let mesh = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh));
         let Some(mesh) = mesh else {
-            let (r, h) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+            let (r, h) = self.store.collision_size(actor);
             return vec![Shape::Box([r.max(1.0), r.max(1.0), h.max(1.0)].into())];
         };
         shapes::mesh_shapes(mesh.props.as_ref(), (mesh.min, mesh.max), placement.scale, placement.pre_pivot)
@@ -377,8 +377,6 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn karma_params_native(&mut self, native: Native, params: Option<ObjectId>, body: Option<BodyId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
-        let f = |n: usize| args.get(n).map_or(0.0, float);
-        let b = |n: usize| args.get(n).is_some_and(crate::interp::truthy);
         let param = |vm: &Self, name: Prop| params.map_or(0.0, |k| vm.store.float_of(k, name));
         let set_param = |vm: &mut Self, name: Prop, value: Value| {
             if let Some(k) = params {
@@ -388,7 +386,7 @@ impl<L: LoaderRef> Vm<L> {
         let world = &mut self.karma.world;
         let value = match native {
             Native::KSetMass => {
-                let mass = f(0).max(1e-3);
+                let mass = float_arg(args, 0).max(1e-3);
                 change_body(world, body, move |w, id| w.set_mass(id, mass));
                 set_param(self, Prop::KMass, Value::Float(mass));
                 None
@@ -398,19 +396,19 @@ impl<L: LoaderRef> Vm<L> {
                 _ => param(self, Prop::KMass),
             })),
             Native::KSetFriction => {
-                let friction = f(0);
+                let friction = float_arg(args, 0);
                 change_body(world, body, move |w, id| w.set_friction(id, friction));
                 set_param(self, Prop::KFriction, Value::Float(friction));
                 None
             }
             Native::KSetRestitution => {
-                let restitution = f(0);
+                let restitution = float_arg(args, 0);
                 change_body(world, body, move |w, id| w.set_restitution(id, restitution));
                 set_param(self, Prop::KRestitution, Value::Float(restitution));
                 None
             }
             Native::KSetDampingProps => {
-                let (linear, angular) = (f(0), f(1));
+                let (linear, angular) = (float_arg(args, 0), float_arg(args, 1));
                 let mass = param(self, Prop::KMass).max(1e-3);
                 change_body(&mut self.karma.world, body, move |w, id| w.set_damping(id, linear / mass, angular / mass));
                 set_param(self, Prop::KLinearDamping, Value::Float(linear));
@@ -428,12 +426,12 @@ impl<L: LoaderRef> Vm<L> {
             Native::KGetFriction => Some(Value::Float(param(self, Prop::KFriction))),
             Native::KGetRestitution => Some(Value::Float(param(self, Prop::KRestitution))),
             Native::KSetImpactThreshold => {
-                set_param(self, Prop::KImpactThreshold, Value::Float(f(0)));
+                set_param(self, Prop::KImpactThreshold, Value::Float(float_arg(args, 0)));
                 None
             }
             Native::KGetImpactThreshold => Some(Value::Float(param(self, Prop::KImpactThreshold))),
             Native::KSetStayUpright => {
-                let (upright, allow) = (b(0), b(1));
+                let (upright, allow) = (bool_arg(args, 0), bool_arg(args, 1));
                 change_body(world, body, move |w, id| w.set_stay_upright(id, upright, allow));
                 set_param(self, Prop::bKStayUpright, Value::Bool(upright));
                 set_param(self, Prop::bKAllowRotate, Value::Bool(allow));

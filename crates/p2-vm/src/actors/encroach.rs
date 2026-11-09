@@ -110,7 +110,7 @@ impl<L: LoaderRef> Vm<L> {
         let (fit, encroach) = far_move_tests(encroachment, flags);
         let mut to = location;
         if fit {
-            let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+            let (radius, height) = self.store.collision_size(actor);
             if !crate::find_spot::find_spot(self, Vector::new(radius, radius, height), &mut to) {
                 return Ok(false);
             }

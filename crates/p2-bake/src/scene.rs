@@ -150,7 +150,7 @@ impl<'a> Scene<'a> {
     }
 }
 
-fn is_sky(model: &Model, node: usize) -> bool {
+pub fn is_sky(model: &Model, node: usize) -> bool {
     model.nodes.get(node).and_then(|node| model.surfaces.get(node.surface)).is_some_and(|surface| surface.poly_flags & poly_flags::FAKE_BACKDROP != 0)
 }
 

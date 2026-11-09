@@ -25,6 +25,14 @@ pub enum ResolveError {
     BadReference(i32),
 }
 
+pub fn exports_by_name(package: &Package) -> HashMap<String, Vec<usize>> {
+    let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, export) in package.exports.iter().enumerate() {
+        by_name.entry(package.name(export.object_name).to_ascii_lowercase()).or_default().push(index);
+    }
+    by_name
+}
+
 pub fn map_file(path: &Path) -> std::io::Result<memmap2::Mmap> {
     let file = std::fs::File::open(path)?;
     #[expect(unsafe_code, reason = "package files memory-mapped")]
@@ -123,10 +131,7 @@ impl Loader {
         let data = map_file(&path).map_err(|source| ResolveError::Io { path: path.clone(), source })?;
         let package = Package::parse(&data).map_err(|source| ResolveError::Parse { path: path.clone(), source })?;
 
-        let mut exports_by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, export) in package.exports.iter().enumerate() {
-            exports_by_name.entry(package.name(export.object_name).to_ascii_lowercase()).or_default().push(index);
-        }
+        let exports_by_name = exports_by_name(&package);
         let name = path.file_stem().map_or_else(|| name.to_owned(), |s| s.to_string_lossy().into_owned());
         let id = PackageId(self.packages.len());
         let loaded = Arc::new(LoadedPackage { name, path, package, data, exports_by_name });

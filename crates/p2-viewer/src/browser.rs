@@ -23,11 +23,11 @@ use crate::ViewerState;
 use crate::controls::ViewerInput;
 use p2_engine::animation::{Animated, AnimationSystems};
 use p2_engine::game_dir_form::GameDirForm;
-use p2_engine::library::{Library, SectionTexture};
+use p2_engine::library::Library;
 use p2_engine::map::{
-    AssetStores, SceneTargets, SectionChunks, Session, SessionHolder, animate_mesh_with, present_session, sections_of_static_mesh, skeletal_mesh_sections, travel_package,
+    SceneTargets, SectionChunks, Session, SessionHolder, animate_mesh_with, material_images, present_session, sections_of_static_mesh, skeletal_mesh_sections, travel_package,
 };
-use p2_engine::mesh_view::{MaterialImages, ModelView, Scene};
+use p2_engine::mesh_view::{ModelView, Scene};
 use p2_engine::play::{PlaySystems, PlayWorld};
 
 fn loop_browsed_meshes(time: Res<Time>, animated: Res<Animated>, mut meshes: ResMut<Assets<Mesh>>) {
@@ -359,8 +359,7 @@ fn show_static_mesh(open: &OpenPackage, index: usize, library: &mut Library, roo
     let sections = sections_of_static_mesh(&mesh, &mut t.scene.assets, SectionChunks::Whole, |t, i| {
         let material = *materials.get(i)?;
         let (game, id) = game.as_mut().ok()?;
-        let texture = game.material_texture(*id, material)?;
-        Some(material_images(texture, t))
+        material_images(game, t, *id, material)
     });
     let textured = sections.iter().filter(|s| s.texture.is_some()).count();
     let textures = match &game {
@@ -392,11 +391,7 @@ fn show_skeletal_mesh(open: &OpenPackage, index: usize, library: &mut Library, r
     let mut handles = Vec::new();
     let mut sections = Vec::new();
     if let Ok((game, id)) = library.open(root, path) {
-        let texture = &mut |game: &mut p2_engine::library::Game, t: &mut AssetStores, package, material| {
-            let texture = game.material_texture(package, material)?;
-            Some(material_images(texture, t))
-        };
-        (sections, handles) = skeletal_mesh_sections(game, &mut t.scene.assets, texture, &mesh, id, &[], false);
+        (sections, handles) = skeletal_mesh_sections(game, &mut t.scene.assets, &mut material_images, &mesh, id, &[], false);
     }
     let textured = sections.iter().filter(|s| s.texture.is_some()).count();
     let animations: Vec<_> = (pkg.exports.iter())
@@ -412,16 +407,6 @@ fn show_skeletal_mesh(open: &OpenPackage, index: usize, library: &mut Library, r
     };
     show_model(&mut t.scene, ModelView { sections, instances: vec![placement], zone: None }, min, max);
     Ok(format!("{status}, {textured} textured{playing}"))
-}
-
-fn material_images(texture: SectionTexture, t: &mut AssetStores) -> MaterialImages {
-    MaterialImages {
-        image: t.images.add(texture.image),
-        glow: texture.glow.map(|glow| t.images.add(glow)),
-        detail: texture.detail.map(|detail| t.images.add(detail)),
-        specular: texture.specular.map(|(cube, params)| (t.images.add(cube), params)),
-        state: texture.state,
-    }
 }
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> (Vec3, Vec3) {

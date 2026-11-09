@@ -1,6 +1,5 @@
 use crate::native_id::Native;
-use crate::interp::int;
-use crate::natives::{name_arg, optional_float};
+use crate::natives::{int_arg, name_arg, optional_float};
 use crate::{Error, LoaderRef, NameId, ObjectId, Value, Vm};
 use super::{Playback, channel_animating};
 
@@ -12,11 +11,10 @@ impl<L: LoaderRef> Vm<L> {
         args: &mut [Value],
     ) -> Result<Option<Value>, Error> {
         // Omitted optional arguments arrive as `Value::Map`: the engine's defaults apply.
-        let int_at = |args: &[Value], n: usize| args.get(n).map_or(0, int);
         let Some(this) = this else { return Ok(None) };
         Ok(Some(match native {
             Native::PlayAnim | Native::LoopAnim | Native::PlayAnimAt => {
-                let channel = int_at(args, 3);
+                let channel = int_arg(args, 3);
                 let (rate, tween) = (optional_float(args, 1, 1.0), optional_float(args, 2, 0.0));
                 self.play(this, channel, name_arg(args, 0), rate, tween, if native == Native::LoopAnim { Playback::Looping } else { Playback::Once });
                 if native == Native::PlayAnimAt
@@ -27,16 +25,16 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::TweenAnim => {
-                self.play(this, int_at(args, 2), name_arg(args, 0), 0.0, optional_float(args, 1, 0.0), Playback::Once);
+                self.play(this, int_arg(args, 2), name_arg(args, 0), 0.0, optional_float(args, 1, 0.0), Playback::Once);
                 return Ok(None);
             }
-            Native::IsAnimating => Value::Bool(self.is_animating(this, int_at(args, 0))),
+            Native::IsAnimating => Value::Bool(self.is_animating(this, int_arg(args, 0))),
             Native::IsTweening => Value::Bool(
-                self.channel(this, int_at(args, 0)).is_some_and(|state| state.frame < 0.0 && channel_animating(state)),
+                self.channel(this, int_arg(args, 0)).is_some_and(|state| state.frame < 0.0 && channel_animating(state)),
             ),
             Native::HasAnim => Value::Bool(self.find_sequence_with(this, name_arg(args, 0), |_| ()).is_some()),
             Native::AnimIsInGroup => {
-                let sequence = self.channel(this, int_at(args, 0)).map_or(NameId::NONE, |state| state.sequence);
+                let sequence = self.channel(this, int_arg(args, 0)).map_or(NameId::NONE, |state| state.sequence);
                 let group = name_arg(args, 1);
                 Value::Bool(
                     sequence != NameId::NONE
@@ -44,7 +42,7 @@ impl<L: LoaderRef> Vm<L> {
                 )
             }
             Native::GetAnimParams => {
-                let state = self.channel(this, int_at(args, 0)).cloned();
+                let state = self.channel(this, int_arg(args, 0)).cloned();
                 let (sequence, frame, rate) = match state {
                     Some(s) => (s.sequence, s.frame, if s.orig_rate == 0.0 { 1.0 } else { s.rate / s.orig_rate }),
                     None => (NameId::NONE, 0.0, 0.0),
@@ -55,7 +53,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::FinishAnim => {
-                self.finish_anim(this, int_at(args, 0));
+                self.finish_anim(this, int_arg(args, 0));
                 return Ok(None);
             }
             Native::StopAnimating => {
@@ -83,7 +81,7 @@ impl<L: LoaderRef> Vm<L> {
                 _ => None,
             }),
             Native::AnimBlendParams => {
-                let stage = int_at(args, 0);
+                let stage = int_arg(args, 0);
                 let (alpha, bone, global) = (optional_float(args, 1, 0.0), name_arg(args, 4), args.get(5).is_some_and(crate::interp::truthy));
                 let (blend_in, blend_out) = (optional_float(args, 2, 0.0).min(1.0), optional_float(args, 3, 0.0).min(1.0));
                 if stage == 0 {
@@ -99,13 +97,13 @@ impl<L: LoaderRef> Vm<L> {
             }
             Native::AnimBlendToAlpha => {
                 let (target, time) = (optional_float(args, 1, 0.0), optional_float(args, 2, 0.0));
-                if let Some(state) = self.channel_mut(this, int_at(args, 0)) {
+                if let Some(state) = self.channel_mut(this, int_arg(args, 0)) {
                     state.blending = Some((target, time));
                 }
                 return Ok(None);
             }
             Native::SetBoneScale => {
-                let (slot, scale, bone) = (int_at(args, 0), optional_float(args, 1, 1.0), name_arg(args, 2));
+                let (slot, scale, bone) = (int_arg(args, 0), optional_float(args, 1, 1.0), name_arg(args, 2));
                 if let (Ok(slot @ 0..=256), Some(instance)) = (usize::try_from(slot), self.instance_mut(this)) {
                     if instance.bone_scales.len() <= slot {
                         instance.bone_scales.resize(slot + 1, (NameId::NONE, 1.0));
@@ -116,7 +114,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Native::EnableChannelNotify => {
                 let enable = optional_float(args, 1, 1.0) != 0.0;
-                if let Some(state) = self.valid_channel(this, int_at(args, 0)) {
+                if let Some(state) = self.valid_channel(this, int_arg(args, 0)) {
                     state.notify_disabled = !enable;
                 }
                 return Ok(None);

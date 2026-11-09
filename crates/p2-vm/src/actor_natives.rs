@@ -2,8 +2,8 @@ use p2_math::{Rotator, Vector};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::native_id::Native;
-use crate::interp::{float, int, truthy};
-use crate::natives::{rot3, vec3};
+use crate::interp::{int, truthy};
+use crate::natives::{float_arg, given, int_arg, object_arg, optional_float, rot3, vec3};
 use crate::{Error, HostCommand, Kind, LoaderRef, NameId, ObjectId, ParticleCommand, Prop, Value, Vm};
 
 const MAX_BONE_CONTROLS: usize = 256;
@@ -181,14 +181,12 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn actor_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let Some(this) = this else { return Ok(None) };
-        let f = |n: usize| args.get(n).map_or(0.0, float);
-        let object = |n: usize| crate::natives::object_arg(args, n);
         let unknown = || Error::UnknownNative(format!("{native:?}"));
         let value = match native {
             // Not modelled: a controller's pawn joining with it, and retail doing nothing while the projector
             // has no projection yet.
             Native::AttachActor if self.store.is_a(this, Kind::Projector) => {
-                if let Some(actor) = object(0)
+                if let Some(actor) = object_arg(args, 0)
                     && !self.actor_fx.projected.contains(&(this, actor))
                 {
                     self.actor_fx.projected.push((this, actor));
@@ -196,7 +194,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::DetachActor if self.store.is_a(this, Kind::Projector) => {
-                if let Some(actor) = object(0) {
+                if let Some(actor) = object_arg(args, 0) {
                     self.actor_fx.projected.retain(|&pair| pair != (this, actor));
                 }
                 return Ok(None);
@@ -219,7 +217,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::Pling if self.store.is_a(this, self.script.lookups.class_names.fluid_surface_info) => {
-                let pling = FluidPling { surface: this, position: vec3(args.first()), strength: f(1), radius: f(2) };
+                let pling = FluidPling { surface: this, position: vec3(args.first()), strength: float_arg(args, 1), radius: float_arg(args, 2) };
                 queue(&mut self.actor_fx.plings, pling);
                 return Ok(None);
             }
@@ -244,10 +242,10 @@ impl<L: LoaderRef> Vm<L> {
             // `PlayFlashbangSound(Sound, OverrideDuration)`: the host stops the other sounds, silences the loops
             // and plays no new ones for the duration.
             Native::PlayFlashbangSound => {
-                if let Some(sound) = object(0) {
+                if let Some(sound) = object_arg(args, 0) {
                     let volume = self.sound_volume().clamp(0.0, 1.0);
                     let sound = self.store.object(sound).path.clone();
-                    let played = crate::PlayedSound { actor: Some(this), sound, slot: 0, volume, radius: crate::natives::AUDIO_DEFAULT_RADIUS, pitch: 1.0, attenuate: false, no_override: false, flashbang: Some(f(1).max(0.0)) };
+                    let played = crate::PlayedSound { actor: Some(this), sound, slot: 0, volume, radius: crate::natives::AUDIO_DEFAULT_RADIUS, pitch: 1.0, attenuate: false, no_override: false, flashbang: Some(float_arg(args, 1).max(0.0)) };
                     self.subtitle_insert_sound(played.actor, &played.sound);
                     self.host.commands.push(HostCommand::Sound(played));
                 }
@@ -262,27 +260,25 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn bone_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
-        let given = |n: usize| !matches!(args.get(n), None | Some(Value::Map));
-        let f = |n: usize| args.get(n).map_or(0.0, float);
         match native {
             Native::SetBoneRotation => {
-                let turn = if given(1) { rot3(args.get(1)) } else { Rotator::ZERO };
-                let (space, alpha) = (args.get(2).map_or(0, int), if given(3) { f(3) } else { 1.0 });
+                let turn = if given(args, 1) { rot3(args.get(1)) } else { Rotator::ZERO };
+                let (space, alpha) = (int_arg(args, 2), optional_float(args, 3, 1.0));
                 if let Some(entry) = self.bone_control(this, args.first()) {
                     (entry.rotation, entry.space, entry.rotation_alpha) = (turn, space, alpha);
                 }
             }
             Native::SetBoneLocation => {
-                let location = if given(1) { vec3(args.get(1)) } else { Vector::ZERO };
-                let alpha = if given(2) { f(2) } else { 0.0 };
+                let location = if given(args, 1) { vec3(args.get(1)) } else { Vector::ZERO };
+                let alpha = optional_float(args, 2, 0.0);
                 if let Some(entry) = self.bone_control(this, args.first()) {
                     (entry.location, entry.location_alpha) = (location, alpha);
                 }
             }
             Native::SetBoneDirection => {
                 let turn = rot3(args.get(1));
-                let translation = if given(2) { vec3(args.get(2)) } else { Vector::ZERO };
-                let alpha = if given(3) { f(3) } else { 1.0 };
+                let translation = if given(args, 2) { vec3(args.get(2)) } else { Vector::ZERO };
+                let alpha = optional_float(args, 3, 1.0);
                 if let Some(bone) = self.skeleton_bone(this, args.first()) {
                     let list = self.actor_fx.directions.entry(this).or_default();
                     let entry = BoneDirection { bone, turn, translation, alpha };
@@ -297,14 +293,11 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn lod_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
-        let given = |n: usize| !matches!(args.get(n), None | Some(Value::Map));
-        let f = |n: usize| args.get(n).map_or(0.0, float);
-        let object = |n: usize| crate::natives::object_arg(args, n);
         let value = match native {
             // No shipped script calls these three natives and the host draws no LOD, so the list only answers
             // `DeleteLodStaticMesh`.
             Native::SetLodStaticMesh => {
-                let (distance, mesh) = (f(0), object(1));
+                let (distance, mesh) = (float_arg(args, 0), object_arg(args, 1));
                 let list = self.actor_fx.lods.entry(this).or_default();
                 match list.iter_mut().find(|(d, _)| *d == distance) {
                     Some(entry) => entry.1 = mesh,
@@ -317,7 +310,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::DeleteLodStaticMesh => {
-                let (distance, mesh) = (given(0).then(|| f(0)), object(1));
+                let (distance, mesh) = (given(args, 0).then(|| float_arg(args, 0)), object_arg(args, 1));
                 let list = self.actor_fx.lods.entry(this).or_default();
                 let before = list.len();
                 list.retain(|&(d, m)| !(distance.is_none_or(|x| x == d) && (mesh.is_none() || m == mesh)));

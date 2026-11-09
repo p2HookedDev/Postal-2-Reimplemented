@@ -11,7 +11,6 @@ use bevy::image::Image;
 use bevy::log::{info, warn};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
-use p2_assets::{Model, poly_flags};
 use p2_math::Vector;
 
 use crate::display::{MODERN_BAKE, MODERN_SHADOWS, Settings};
@@ -38,15 +37,11 @@ pub(crate) fn sun_reaches(collision: &StaticCollision, direction: Vector, positi
     let far = start - direction * SUN_DISTANCE;
     let end = match p2_collision::line_check_node(&collision.model, start, far) {
         None => far,
-        Some((hit, Some(node))) if sky(&collision.model, node) => hit.location,
+        Some((hit, Some(node))) if p2_bake::is_sky(&collision.model, node) => hit.location,
         Some(_) => return false,
     };
     p2_collision::mesh_line_check(&collision.meshes, start, end).is_none()
         && collision.terrains.iter().all(|terrain| p2_collision::terrain_line_check(terrain, start, end, p2_collision::Sides::Both).is_none())
-}
-
-fn sky(model: &Model, node: usize) -> bool {
-    model.nodes.get(node).and_then(|node| model.surfaces.get(node.surface)).is_some_and(|surface| surface.poly_flags & poly_flags::FAKE_BACKDROP != 0)
 }
 
 pub struct Traced {

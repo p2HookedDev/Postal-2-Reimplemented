@@ -73,7 +73,7 @@ impl<L: LoaderRef> Vm<L> {
                 self.set_physics(pawn, EPhysics::Falling, None)?;
                 return Ok(true);
             }
-            let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+            let (radius, height) = self.store.collision_size(pawn);
             let out = move_dir.safe_normal() * (1.1 * height);
             self.move_actor(pawn, out, Bases::Block)?;
             self.move_actor(pawn, look * (0.5 * radius), Bases::Block)?;
@@ -160,7 +160,7 @@ impl<L: LoaderRef> Vm<L> {
         let desired_move = velocity;
         let old_location = self.store.vector(pawn, Prop::Location);
         self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
-        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(pawn);
         let max_step_squared = (radius * radius).min(MAX_STEP_HEIGHT * MAX_STEP_HEIGHT);
         let mut remaining = delta;
         while remaining > 0.0 && iterations < MAX_ITERATIONS {

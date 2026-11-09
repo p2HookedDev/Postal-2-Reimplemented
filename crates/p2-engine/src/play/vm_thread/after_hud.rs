@@ -22,7 +22,7 @@ impl Simulation {
         frame.dynamic_lights.extend(
             self.lights
                 .iter()
-                .filter(|&&actor| vm.store.get(actor, Prop::bDynamicLight) == Some(p2_vm::Value::Bool(true)))
+                .filter(|&&actor| vm.store.flag_of(actor, Prop::bDynamicLight))
                 .filter_map(|&actor| crate::actors::mesh_light(vm, actor))
                 .map(|light| clock.animate(light, now)),
         );
@@ -141,7 +141,7 @@ impl Simulation {
         track(
             &mut self.lights,
             new,
-            |actor| vm.store.get(actor, Prop::bDynamicLight) == Some(p2_vm::Value::Bool(true)) || crate::actors::mesh_light(vm, actor).is_some(),
+            |actor| vm.store.flag_of(actor, Prop::bDynamicLight) || crate::actors::mesh_light(vm, actor).is_some(),
             destroyed,
         );
         track(&mut self.volumes, new, |actor| vm.store.is_a(actor, Kind::Volume), destroyed);
@@ -225,7 +225,7 @@ fn fluid_touchers(vm: &Vm<Arc<Loader>>, surfaces: &[ObjectId], touchers: &mut Ve
         let disturbing: Vec<_> = touching
             .iter()
             .filter_map(|value| if let p2_vm::Value::Object(Some(actor)) = value { Some(*actor) } else { None })
-            .filter(|&actor| vm.store.get(actor, "bDisturbFluidSurface") == Some(p2_vm::Value::Bool(true)))
+            .filter(|&actor| vm.store.flag_of(actor, "bDisturbFluidSurface"))
             .map(|actor| p2_particles::FluidToucher {
                 location: vm.store.location(actor),
                 velocity: vm.velocity(actor),

@@ -7,15 +7,15 @@ use rustc_hash::FxHashMap;
 
 use crate::render::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
 use p2_particles::{EmitterKind, EmitterProperties, EmitterSettings, PropertyValue};
-use p2_vm::{Kind, LoaderRef, ObjectId, Prop, PropertyName, Value, Vm};
+use p2_vm::{Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
 pub fn antiportal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<(String, MeshPlacement)> {
-    if vm.draw_type_of(actor) != Some(EDrawType::AntiPortal) || vm.store.get(actor, Prop::bHidden) == Some(Value::Bool(true)) || vm.store.is_deleted(actor) {
+    if vm.draw_type_of(actor) != Some(EDrawType::AntiPortal) || vm.store.flag_of(actor, Prop::bHidden) || vm.store.is_deleted(actor) {
         return None;
     }
     let Some(Value::Object(Some(volume))) = vm.store.get(actor, Prop::AntiPortal) else { return None };
     let (location, rotation) = location_rotation(vm, actor);
-    let placement = MeshPlacement { location, rotation, scale: actor_scale(vm, actor), pre_pivot: vector(vm, actor, Prop::PrePivot) };
+    let placement = MeshPlacement { location, rotation, scale: actor_scale(vm, actor), pre_pivot: vm.store.vector(actor, Prop::PrePivot) };
     Some((vm.store.object(volume).path.clone(), placement))
 }
 
@@ -33,17 +33,10 @@ pub struct SkeletalActor {
     pub lighting: ActorLighting,
 }
 
-pub fn actor_glow(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u8 {
-    match vm.store.get(actor, Prop::AmbientGlow) {
-        Some(Value::Byte(glow)) => glow,
-        _ => 0,
-    }
-}
-
 pub fn actor_lighting(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> ActorLighting {
     ActorLighting {
-        unlit: vm.store.get(actor, Prop::bUnlit) == Some(Value::Bool(true)),
-        glow: actor_glow(vm, actor),
+        unlit: vm.store.flag_of(actor, Prop::bUnlit),
+        glow: vm.store.byte_of(actor, Prop::AmbientGlow),
         max_lights: match vm.store.get(actor, Prop::MaxLights) {
             Some(Value::Byte(value)) => value,
             _ => DEFAULT_MAX_LIGHTS,
@@ -69,21 +62,14 @@ pub(crate) fn skin_paths(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<Option
 /// live (`P2Pawn.SwapToBurnVictim`); the host rebuilds a model when its key changes ([`look_key`]). `AmbientGlow` is
 /// left out: it changes the light, not the model.
 pub fn actor_look(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u64 {
-    let object = |property: Prop| match vm.store.get(actor, property) {
-        Some(Value::Object(object)) => object,
-        _ => None,
-    };
     let skins = match vm.store.get(actor, Prop::Skins) {
         Some(Value::Array(skins)) => skins,
         _ => Vec::new(),
     };
     let skins = skins.iter().map(|skin| if let Value::Object(object) = skin { *object } else { None });
-    let draw_type = match vm.store.get(actor, Prop::DrawType) {
-        Some(Value::Byte(draw_type)) => draw_type,
-        _ => 0,
-    };
-    let unlit = vm.store.get(actor, Prop::bUnlit) == Some(Value::Bool(true));
-    look_key([object(Prop::Mesh), object(Prop::StaticMesh)].into_iter().chain(skins), draw_type, unlit)
+    let draw_type = vm.store.byte_of(actor, Prop::DrawType);
+    let unlit = vm.store.flag_of(actor, Prop::bUnlit);
+    look_key([vm.store.object_of(actor, Prop::Mesh), vm.store.object_of(actor, Prop::StaticMesh)].into_iter().chain(skins), draw_type, unlit)
 }
 
 /// Applied to the transform as it changes: scripts grow puddles and streams every frame, so not part of [`actor_look`].
@@ -92,7 +78,7 @@ pub fn actor_scale(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vector {
         Some(Value::Float(scale)) => scale,
         _ => 1.0,
     };
-    vector(vm, actor, Prop::DrawScale3D).map(|s| s * draw_scale)
+    vm.store.vector(actor, Prop::DrawScale3D).map(|s| s * draw_scale)
 }
 
 pub fn look_key<T: std::hash::Hash>(objects: impl IntoIterator<Item = Option<T>>, draw_type: u8, unlit: bool) -> u64 {
@@ -116,13 +102,13 @@ pub fn skeletal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Skelet
     Some(SkeletalActor {
         object: actor,
         attached_to: attached_bone(vm, actor).map(|(base, bone)| (base, vm.store.name(bone).to_owned())),
-        relative_location: vector(vm, actor, Prop::RelativeLocation),
-        relative_rotation: relative_rotation(vm, actor),
+        relative_location: vm.store.vector(actor, Prop::RelativeLocation),
+        relative_rotation: vm.store.rotator_of(actor, Prop::RelativeRotation),
         mesh,
         location,
         rotation,
         scale: actor_scale(vm, actor),
-        pre_pivot: vector(vm, actor, Prop::PrePivot),
+        pre_pivot: vm.store.vector(actor, Prop::PrePivot),
         skins,
         lighting: actor_lighting(vm, actor),
     })
@@ -151,16 +137,9 @@ pub fn bone_attachment(vm: &Vm<impl LoaderRef>, actor: ObjectId, names: &mut FxH
         base,
         bone: Arc::clone(bone),
         bone_id,
-        relative_location: vector(vm, actor, Prop::RelativeLocation),
-        relative_rotation: relative_rotation(vm, actor),
+        relative_location: vm.store.vector(actor, Prop::RelativeLocation),
+        relative_rotation: vm.store.rotator_of(actor, Prop::RelativeRotation),
     })
-}
-
-fn relative_rotation(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Rotator {
-    match vm.store.get(actor, Prop::RelativeRotation) {
-        Some(Value::Rotator(r)) => r,
-        _ => [0; 3].into(),
-    }
 }
 
 #[derive(Clone)]
@@ -181,8 +160,7 @@ pub struct MeshActor {
 }
 
 pub fn mesh_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshActor> {
-    let flag = |property: Prop| vm.store.get(actor, property) == Some(Value::Bool(true));
-    if vm.draw_type_of(actor) != Some(EDrawType::StaticMesh) || vm.store.is_deleted(actor) || (flag(Prop::bHidden) && flag(Prop::bStatic)) {
+    if vm.draw_type_of(actor) != Some(EDrawType::StaticMesh) || vm.store.is_deleted(actor) || (vm.store.flag_of(actor, Prop::bHidden) && vm.store.flag_of(actor, Prop::bStatic)) {
         return None;
     }
     let static_mesh = object_path(vm, vm.store.get(actor, Prop::StaticMesh).as_ref())?;
@@ -193,18 +171,18 @@ pub fn mesh_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshActor>
         location,
         rotation,
         scale: actor_scale(vm, actor),
-        pre_pivot: vector(vm, actor, Prop::PrePivot),
+        pre_pivot: vm.store.vector(actor, Prop::PrePivot),
         instance: object_path(vm, vm.store.get(actor, Prop::StaticMeshInstance).as_ref()),
         lighting: actor_lighting(vm, actor),
-        blocks: flag(Prop::bCollideActors) && flag(Prop::bBlockActors),
+        blocks: vm.store.flag_of(actor, Prop::bCollideActors) && vm.store.flag_of(actor, Prop::bBlockActors),
         forced_zone_tag: match vm.store.get(actor, "ForcedVisibilityZoneTag") {
             Some(Value::Name(tag)) if tag != p2_vm::NameId::NONE => Some(tag),
             _ => None,
         },
         skins,
         object: actor,
-        movable: !flag(Prop::bStatic),
-        accepts_projectors: vm.store.get(actor, "bAcceptsProjectors") == Some(Value::Bool(true)),
+        movable: !vm.store.flag_of(actor, Prop::bStatic),
+        accepts_projectors: vm.store.flag_of(actor, "bAcceptsProjectors"),
     })
 }
 
@@ -241,8 +219,7 @@ pub struct SpriteActor {
 /// Hidden ones that can move are kept (scripts may show them later); static hidden ones (lights, navigation points:
 /// editor-only sprites retail hides in game through `bHidden`) are not.
 pub fn sprite_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SpriteActor> {
-    let flag = |property: Prop| vm.store.get(actor, property) == Some(Value::Bool(true));
-    if vm.draw_type_of(actor) != Some(EDrawType::Sprite) || vm.store.is_deleted(actor) || (flag(Prop::bHidden) && flag(Prop::bStatic)) {
+    if vm.draw_type_of(actor) != Some(EDrawType::Sprite) || vm.store.is_deleted(actor) || (vm.store.flag_of(actor, Prop::bHidden) && vm.store.flag_of(actor, Prop::bStatic)) {
         return None;
     }
     let Some(Value::Object(Some(texture))) = vm.store.get(actor, Prop::Texture) else { return None };
@@ -255,7 +232,7 @@ pub fn sprite_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SpriteAc
             Some(Value::Byte(style)) => style,
             _ => 1,
         }),
-        hidden: flag(Prop::bHidden),
+        hidden: vm.store.flag_of(actor, Prop::bHidden),
     })
 }
 
@@ -263,23 +240,8 @@ pub fn location_rotation(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> (Vector, R
     (vm.store.location(actor), vm.store.rotation(actor))
 }
 
-pub(crate) fn vector(vm: &Vm<impl LoaderRef>, actor: ObjectId, property: impl PropertyName) -> Vector {
-    match vm.store.get(actor, property) {
-        Some(Value::Vector(v)) => v,
-        _ => [0.0; 3].into(),
-    }
-}
-
 pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight> {
-    let byte = |property: Prop| match vm.store.get(actor, property) {
-        Some(Value::Byte(value)) => value,
-        _ => 0,
-    };
-    let float = |property: Prop| match vm.store.get(actor, property) {
-        Some(Value::Float(value)) => value,
-        _ => 0.0,
-    };
-    let light_type = byte(Prop::LightType);
+    let light_type = vm.store.byte_of(actor, Prop::LightType);
     if light_type == 0 || vm.store.is_deleted(actor) {
         return None;
     }
@@ -288,25 +250,21 @@ pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight>
         location,
         rotation,
         light_type: p2_render_cpu::LightType(light_type),
-        period: byte(Prop::LightPeriod),
-        phase: byte(Prop::LightPhase),
+        period: vm.store.byte_of(actor, Prop::LightPeriod),
+        phase: vm.store.byte_of(actor, Prop::LightPhase),
         intensity: 1.0,
-        effect: p2_render_cpu::LightEffect(byte(Prop::LightEffect)),
-        brightness: float(Prop::LightBrightness),
-        hue: byte(Prop::LightHue),
-        saturation: byte(Prop::LightSaturation),
-        radius: float(Prop::LightRadius),
-        cone: byte(Prop::LightCone),
-        dynamic: vm.store.get(actor, Prop::bDynamicLight) == Some(Value::Bool(true)),
+        effect: p2_render_cpu::LightEffect(vm.store.byte_of(actor, Prop::LightEffect)),
+        brightness: vm.store.float_of(actor, Prop::LightBrightness),
+        hue: vm.store.byte_of(actor, Prop::LightHue),
+        saturation: vm.store.byte_of(actor, Prop::LightSaturation),
+        radius: vm.store.float_of(actor, Prop::LightRadius),
+        cone: vm.store.byte_of(actor, Prop::LightCone),
+        dynamic: vm.store.flag_of(actor, Prop::bDynamicLight),
     })
 }
 
 pub fn zone_ambient(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> [f32; 3] {
-    let byte = |name: &str| match vm.store.get(zone, name) {
-        Some(Value::Byte(value)) => value,
-        _ => 0,
-    };
-    hsv_color(byte("AmbientHue"), byte("AmbientSaturation"), byte("AmbientBrightness"))
+    hsv_color(vm.store.byte_of(zone, "AmbientHue"), vm.store.byte_of(zone, "AmbientSaturation"), vm.store.byte_of(zone, "AmbientBrightness"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -317,18 +275,14 @@ pub struct ZoneFog {
 }
 
 pub fn zone_fog(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> Option<ZoneFog> {
-    if vm.store.get(zone, "bDistanceFog") != Some(Value::Bool(true)) {
+    if !vm.store.flag_of(zone, "bDistanceFog") {
         return None;
     }
-    let float = |name: &str| match vm.store.get(zone, name) {
-        Some(Value::Float(value)) => value,
-        _ => 0.0,
-    };
     let color = ["R", "G", "B"].map(|channel| match vm.store.get_path(zone, &["DistanceFogColor", channel]) {
         Some(Value::Byte(value)) => value,
         _ => 0,
     });
-    Some(ZoneFog { color, start: float("DistanceFogStart"), end: float("DistanceFogEnd") })
+    Some(ZoneFog { color, start: vm.store.float_of(zone, "DistanceFogStart"), end: vm.store.float_of(zone, "DistanceFogEnd") })
 }
 
 pub struct AmbientActor {
@@ -349,13 +303,10 @@ pub fn ambient_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Ambient
         Some(Value::Byte(value)) => value,
         _ => default,
     };
-    let radius = match vm.store.get(actor, Prop::SoundRadius) {
-        Some(Value::Float(radius)) => radius,
-        _ => 0.0,
-    };
+    let radius = vm.store.float_of(actor, Prop::SoundRadius);
     Some(AmbientActor {
         sound,
-        location: vector(vm, actor, Prop::Location),
+        location: vm.store.vector(actor, Prop::Location),
         radius,
         volume: f32::from(byte(Prop::SoundVolume, 128)) / 255.0,
         pitch: f32::from(byte(Prop::SoundPitch, 64)) / 64.0,
@@ -418,7 +369,7 @@ pub fn emitter_properties(vm: &Vm<impl LoaderRef>, emitter: ObjectId) -> Emitter
 }
 
 pub fn emitters_disabled(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<bool> {
-    emitter_objects(vm, actor).into_iter().map(|emitter| vm.store.get(emitter, Prop::Disabled) == Some(Value::Bool(true))).collect()
+    emitter_objects(vm, actor).into_iter().map(|emitter| vm.store.flag_of(emitter, Prop::Disabled)).collect()
 }
 
 pub fn emitter_objects(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<ObjectId> {

@@ -28,7 +28,7 @@ impl Simulation {
             location,
             rotation,
             scale: actor_scale(vm, actor),
-            pre_pivot: vector(vm, actor, Prop::PrePivot),
+            pre_pivot: vm.store.vector(actor, Prop::PrePivot),
             velocity: vm.velocity(actor),
             time_scale: vm.particle_time_scale(actor),
             gone: vm.store.is_deleted(actor),
@@ -36,7 +36,7 @@ impl Simulation {
             attachment: bone_attachment(vm, actor, &mut self.lower_names),
             emitters_disabled: emitters_disabled(vm, actor),
             look: actor_look(vm, actor),
-            glow: actor_glow(vm, actor),
+            glow: vm.store.byte_of(actor, Prop::AmbientGlow),
         }
     }
 
@@ -53,7 +53,7 @@ impl Simulation {
         let path = object_path(vm, vm.store.get(actor, Prop::Mesh).as_ref())?;
         let skins = skin_paths(vm, actor);
         let scale = actor_scale(vm, actor);
-        let follow = FollowActor { actor, scale, pre_pivot: vector(vm, actor, Prop::PrePivot), skeletal: None };
+        let follow = FollowActor { actor, scale, pre_pivot: vm.store.vector(actor, Prop::PrePivot), skeletal: None };
         Some(CanvasMesh { path, skins, follow })
     }
 

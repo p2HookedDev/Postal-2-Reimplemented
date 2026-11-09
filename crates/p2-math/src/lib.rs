@@ -4,15 +4,20 @@ mod rng;
 pub use rng::Rng;
 
 #[inline]
-pub fn radians(units: f32) -> f32 {
-    units * std::f32::consts::TAU / 65536.0
+pub fn radians(units: i32) -> f32 {
+    units as f32 * std::f32::consts::TAU / 65536.0
+}
+
+#[inline]
+pub fn color_byte(unit: f32) -> u8 {
+    (unit.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 /// An angle of a rotator in radians, taken within one turn as the engine's sine table reads it (`& 0xffff`): huge
 /// accumulated angles keep their precision.
 #[inline]
-fn turn(units: i32) -> f32 {
-    radians((units & 0xffff) as f32)
+pub fn turn(units: i32) -> f32 {
+    radians(units & 0xffff)
 }
 
 #[inline]

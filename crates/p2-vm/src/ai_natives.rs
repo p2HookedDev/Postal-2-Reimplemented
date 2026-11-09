@@ -1,7 +1,7 @@
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
 use crate::native_id::Native;
-use crate::natives::vec3;
+use crate::natives::{object_arg, vec3};
 use crate::physics::{Bases, MoveHit};
 use crate::senses::SightCheck;
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
@@ -22,15 +22,14 @@ const MAX_NAVIGATION_POINTS: i32 = 100_000;
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn ai_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let Some(this) = this else { return Ok(Some(Value::Bool(false))) };
-        let object = |n: usize| crate::natives::object_arg(args, n);
         Ok(Some(match native {
-            Native::CanSee => Value::Bool(match object(0) {
+            Native::CanSee => Value::Bool(match object_arg(args, 0) {
                 Some(other) => self.see_pawn(this, other, SightCheck::Full),
                 None => false,
             }),
             Native::PickWallAdjust => Value::Bool(self.pick_wall_adjust(this)),
             Native::FindPathTowardNearest => {
-                let class = match object(0) {
+                let class = match object_arg(args, 0) {
                     Some(class) => self.class_of_object(class)?,
                     None => None,
                 };
@@ -112,7 +111,7 @@ impl<L: LoaderRef> Vm<L> {
             return false;
         }
         let location = self.store.vector(pawn, Prop::Location);
-        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(pawn);
         let to = self.store.vector(controller, Prop::Destination) - location;
         let flat = Vector::new(to.x, to.y, 0.0);
         if to[2] < height && flat.dot(flat) - radius * radius < 0.0 {

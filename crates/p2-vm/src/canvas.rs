@@ -10,6 +10,7 @@ use crate::native_id::Native;
 use crate::Prop;
 use crate::enums::ERenderStyle;
 use crate::interp::{float, truthy};
+use crate::natives::float_arg;
 use crate::{Error, InteractionOrder, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const CHAR_WIDTH: f32 = 8.0;
@@ -171,10 +172,9 @@ impl Canvas {
                     Some(&Value::Object(Some(material))) => self.canvas_path(store, material),
                     _ => return Ok(None),
                 };
-                let f = |n: usize| args.get(n).map_or(0.0, float);
                 let (org, clip) = ([float_of(store, Prop::OrgX), float_of(store, Prop::OrgY)], [float_of(store, Prop::ClipX), float_of(store, Prop::ClipY)]);
                 let at = [float_of(store, Prop::CurX), float_of(store, Prop::CurY)];
-                if let Some((at, size, uv)) = clip_tile(at, [f(1), f(2)], [f(3), f(4), f(5), f(6)], clip) {
+                if let Some((at, size, uv)) = clip_tile(at, [float_arg(args, 1), float_arg(args, 2)], [float_arg(args, 3), float_arg(args, 4), float_arg(args, 5), float_arg(args, 6)], clip) {
                     let style = style(store);
                     if ERenderStyle::from_byte(style) != Some(ERenderStyle::None) {
                         let position = [org[0] + at[0], org[1] + at[1]];
@@ -190,13 +190,12 @@ impl Canvas {
                     Some(&Value::Object(Some(material))) => self.canvas_path(store, material),
                     _ => return Ok(None),
                 };
-                let f = |n: usize| args.get(n).map_or(0.0, float);
-                let size = [f(1), f(2)];
+                let size = [float_arg(args, 1), float_arg(args, 2)];
                 let style = style(store);
                 if ERenderStyle::from_byte(style) != Some(ERenderStyle::None) {
                     let position = [float_of(store, Prop::OrgX) + float_of(store, Prop::CurX), float_of(store, Prop::OrgY) + float_of(store, Prop::CurY)];
                     let color = color(store);
-                    self.items.push(CanvasItem::Tile { material, position, size, uv: [f(3), f(4), f(5), f(6)], color, style });
+                    self.items.push(CanvasItem::Tile { material, position, size, uv: [float_arg(args, 3), float_arg(args, 4), float_arg(args, 5), float_arg(args, 6)], color, style });
                 }
                 store.set(canvas, Prop::CurX, Value::Float(float_of(store, Prop::CurX) + size[0]));
                 store.set(canvas, Prop::CurYL, Value::Float(size[1]));

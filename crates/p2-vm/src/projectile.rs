@@ -125,17 +125,11 @@ impl<L: LoaderRef> Vm<L> {
             iterations += 1;
             let tick = substep(remaining);
             remaining -= tick;
-            let old_location = self.store.vector(actor, Prop::Location);
-            self.store.set(actor, Prop::bJustTeleported, Value::Bool(false));
-            let mut old_velocity = self.store.vector(actor, Prop::Velocity);
+            let (old_location, mut old_velocity) = self.begin_fall_step(actor);
             let acceleration = self.store.vector(actor, Prop::Acceleration);
             let velocity = old_velocity + ((acceleration + gravity) * (0.5 * tick));
-            self.set_vector(actor, Prop::Velocity, velocity);
             let adjusted = (velocity + zone_velocity) * tick;
-            let hit = self.move_actor(actor, adjusted, Bases::Block)?;
-            if self.store.is_deleted(actor) {
-                return Ok(());
-            }
+            let Some(hit) = self.fall_step_move(actor, velocity, adjusted)? else { return Ok(()) };
             if hit.time < 1.0 {
                 if self.store.flag_of(actor, Prop::bBounce) {
                     self.event(actor, "HitWall", [Value::Vector(hit.normal), Value::Object(hit.actor)])?;

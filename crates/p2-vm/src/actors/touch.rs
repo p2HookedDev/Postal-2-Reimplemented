@@ -32,12 +32,12 @@ impl<L: LoaderRef> Vm<L> {
         let collides = flag(self, actor, Prop::bCollideActors) && !self.store.is_deleted(actor);
         let now: Vec<ObjectId> = if collides {
             let at = self.store.vector(actor, Prop::Location);
-            let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+            let (radius, height) = self.store.collision_size(actor);
             let blocks = flag(self, actor, Prop::bBlockActors);
             let side = self.overlap_side(actor);
             let by_primitive = self.overlaps_by_primitive(actor);
             let cylinders = |vm: &Self, other: ObjectId| {
-                let (r, h) = (vm.store.float_of(other, Prop::CollisionRadius), vm.store.float_of(other, Prop::CollisionHeight));
+                let (r, h) = vm.store.collision_size(other);
                 cylinders_meet(at, vm.store.vector(other, Prop::Location), radius + r, height + h)
             };
             let can_touch = |vm: &Self, other: ObjectId| {

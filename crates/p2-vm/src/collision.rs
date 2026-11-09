@@ -274,13 +274,13 @@ impl<L: LoaderRef> Vm<L> {
                 return ([0, 1, 2].map(|i| (min[i] + max[i]) * 0.5).into(), [0, 1, 2].map(|i| (max[i] - min[i]) * 0.5).into());
             }
         }
-        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(actor);
         (self.store.vector(actor, Prop::Location), [radius, radius, height].into())
     }
 
     fn primitive_meets_box(&mut self, actor: ObjectId, center: Vector, extent: Vector) -> bool {
         let cylinder = |vm: &Self| {
-            let (radius, height) = (vm.store.float_of(actor, Prop::CollisionRadius), vm.store.float_of(actor, Prop::CollisionHeight));
+            let (radius, height) = vm.store.collision_size(actor);
             cylinder_meets_box(vm.store.vector(actor, Prop::Location), radius, height, center, extent)
         };
         if self.store.is_a(actor, Kind::Projector) {

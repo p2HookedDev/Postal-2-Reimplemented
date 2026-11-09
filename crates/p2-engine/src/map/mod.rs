@@ -66,6 +66,7 @@ pub use particles::ParticleReport;
 pub use particles::{emitter_sort_bias, pad_bounds};
 pub use sprites::{SpriteQuad, face_sprites};
 pub use coronas::{CoronaActor, corona_actor, draw_coronas, is_corona};
+pub use spawned::material_images;
 pub use scene::{SceneAssets, SectionChunks, animate_mesh_with, sections_of_static_mesh, skeletal_mesh_sections, skeletal_sections};
 use scene::{ActorTexture, projector_image, projector_tag, projector_transform, scene_preparer};
 pub use scene::projector_box;

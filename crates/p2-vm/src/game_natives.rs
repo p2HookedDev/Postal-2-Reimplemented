@@ -2,7 +2,7 @@
 
 use p2_math::Vector;
 use crate::native_id::Native;
-use crate::natives::vec3;
+use crate::natives::{float_arg, str_arg, vec3};
 
 use crate::{Error, HostCommand, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
@@ -37,17 +37,12 @@ impl ParticleCommand {
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn game_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
-        let f = |n: usize| args.get(n).map_or(0.0, crate::interp::float);
         let v = |n: usize| vec3(args.get(n));
-        let s = |n: usize| match args.get(n) {
-            Some(Value::Str(text)) => text.as_str(),
-            _ => "",
-        };
         Ok(Some(match native {
-            Native::SafeToGoIntoStasis => Value::Bool(this.is_none_or(|this| self.safe_to_go_into_stasis(this, f(0)))),
+            Native::SafeToGoIntoStasis => Value::Bool(this.is_none_or(|this| self.safe_to_go_into_stasis(this, float_arg(args, 0)))),
             Native::GetGameMap => {
                 let dir = args.get(2).map_or(0, crate::interp::int);
-                Value::Str(game_map(&self.map_files(), s(0), s(1), dir))
+                Value::Str(game_map(&self.map_files(), str_arg(args, 0), str_arg(args, 1), dir))
             }
             Native::PointToLineDist => {
                 let Some((distance, u)) = point_to_line_dist(v(0), v(1), v(2)) else { return Ok(Some(Value::Bool(false))) };
@@ -59,12 +54,12 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 Value::Bool(true)
             }
-            Native::VectorsInFuzz => Value::Bool(vectors_in_fuzz(v(0), v(1), f(2))),
-            Native::ThickLineCylinderCollide => Value::Bool(thick_line_cylinder_collide(v(0), v(1), f(2), f(3), v(4), f(5), f(6))),
+            Native::VectorsInFuzz => Value::Bool(vectors_in_fuzz(v(0), v(1), float_arg(args, 2))),
+            Native::ThickLineCylinderCollide => Value::Bool(thick_line_cylinder_collide(v(0), v(1), float_arg(args, 2), float_arg(args, 3), v(4), float_arg(args, 5), float_arg(args, 6))),
             Native::FireHurtRadius => {
                 if let Some(this) = this {
                     let damage_type = args.get(2).cloned().unwrap_or(Value::Object(None));
-                    self.fire_hurt_radius(this, f(0), f(1), damage_type, [v(3), v(4)], [f(5), f(6)])?;
+                    self.fire_hurt_radius(this, float_arg(args, 0), float_arg(args, 1), damage_type, [v(3), v(4)], [float_arg(args, 5), float_arg(args, 6)])?;
                 }
                 return Ok(None);
             }
@@ -78,7 +73,6 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn emitter_native(&mut self, native: Native, emitter: ObjectId, args: &[Value]) {
-        let f = |n: usize| args.get(n).map_or(0.0, crate::interp::float);
         match native {
             Native::ForceInit => {
                 self.store.set(emitter, Prop::ActiveParticles, Value::Int(0));
@@ -105,8 +99,8 @@ impl<L: LoaderRef> Vm<L> {
                 self.initialize_projection_normal(emitter);
                 self.host.commands.push(HostCommand::Particle(ParticleCommand::Reset(emitter, ())));
             }
-            Native::SetLiveParticleTimes => self.host.commands.push(HostCommand::Particle(ParticleCommand::CapTime { emitter, time: f(0) })),
-            Native::SpawnParticleLength => self.spawn_particle_length(emitter, vec3(args.first()), vec3(args.get(1)), f(2)),
+            Native::SetLiveParticleTimes => self.host.commands.push(HostCommand::Particle(ParticleCommand::CapTime { emitter, time: float_arg(args, 0) })),
+            Native::SpawnParticleLength => self.spawn_particle_length(emitter, vec3(args.first()), vec3(args.get(1)), float_arg(args, 2)),
             _ => {}
         }
     }
@@ -176,7 +170,7 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             }
             let location = self.store.vector(actor, Prop::Location);
-            let (actor_radius, actor_height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+            let (actor_radius, actor_height) = self.store.collision_size(actor);
             let hit = self.store.is_a(actor, Kind::FluidPuddle)
                 || thick_line_cylinder_collide(line[0], line[1], default_size[0], default_size[1], location, actor_radius, actor_height);
             if hit {

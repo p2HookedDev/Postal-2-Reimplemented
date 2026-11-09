@@ -125,7 +125,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn crouch(&mut self, pawn: ObjectId) -> Result<(), Error> {
-        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(pawn);
         let (crouch_radius, crouch_height) = (self.store.float_of(pawn, Prop::CrouchRadius), self.store.float_of(pawn, Prop::CrouchHeight));
         if radius == crouch_radius && height == crouch_height {
             return Ok(());
@@ -150,7 +150,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(class) = self.store.object(pawn).class else { return Ok(()) };
         let default = |vm: &Self, name: Prop| vm.store.default_value(class, name).as_ref().map_or(0.0, float);
         let (radius, height) = (default(self, Prop::CollisionRadius), default(self, Prop::CollisionHeight));
-        let (crouch_radius, crouch_height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (crouch_radius, crouch_height) = self.store.collision_size(pawn);
         let adjust = height - crouch_height;
         let location = self.store.vector(pawn, Prop::Location);
         let up = Vector::new(location.x, location.y, location.z + 2.0 * adjust);

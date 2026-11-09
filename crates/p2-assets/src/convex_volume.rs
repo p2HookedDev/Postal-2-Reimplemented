@@ -1,7 +1,7 @@
 use p2_package::{Export, Package};
 
 use crate::Error;
-use crate::read::{BOX_SIZE, array, invalid, skip_primitive, vec3};
+use crate::read::{BOX_SIZE, array, invalid, skip_primitive, vec3, vec4};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvexVolume {
@@ -26,7 +26,7 @@ pub fn read_convex_volume(pkg: &Package, file: &[u8], export: &Export) -> Result
     let mut r = pkg.native_reader(file, export)?;
     let r = &mut r;
     skip_primitive(r)?;
-    let faces: Vec<ConvexFace> = array(r, |r| Ok(ConvexFace { plane: [r.f32()?, r.f32()?, r.f32()?, r.f32()?], vertices: array(r, vec3)? }))?;
+    let faces: Vec<ConvexFace> = array(r, |r| Ok(ConvexFace { plane: vec4(r)?, vertices: array(r, vec3)? }))?;
     let edges = array(r, |r| {
         let offset = r.pos();
         let index = |v: i32| usize::try_from(v).map_err(|_| invalid("convex volume edge", offset));

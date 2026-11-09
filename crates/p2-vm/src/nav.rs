@@ -6,7 +6,7 @@ use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::Prop;
 use crate::interp::{float, int};
-use crate::natives::vec3;
+use crate::natives::{object_arg, vec3};
 use crate::physics::{MAX_STEP_HEIGHT, MIN_FLOOR_Z, Sweep, SweepAgainst};
 use crate::{ClassNames, Error, Kind, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
@@ -123,7 +123,7 @@ impl Graph {
         let can_crouch = store.flag_of(pawn, Prop::bCanCrouch);
         let (radius, height) = match can_crouch {
             true => (store.float_of(pawn, Prop::CrouchRadius), store.float_of(pawn, Prop::CrouchHeight)),
-            false => (store.float_of(pawn, Prop::CollisionRadius), store.float_of(pawn, Prop::CollisionHeight)),
+            false => store.collision_size(pawn),
         };
         let (radius, height) = (radius as i32, height as i32);
         let max_fall = store.float_of(pawn, Prop::MaxFallSpeed) as i32;
@@ -325,10 +325,9 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn nav_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let Some(this) = this else { return Ok(None) };
-        let object = |n: usize| crate::natives::object_arg(args, n);
         Ok(Some(match native {
             Native::FindPathToward => {
-                let Some(goal) = object(0) else {
+                let Some(goal) = object_arg(args, 0) else {
                     self.diagnostics.log.push(format!("Warning: No goal for FindPathToward by {}", self.store.object(this).path));
                     return Ok(Some(Value::Object(None)));
                 };
@@ -342,7 +341,7 @@ impl<L: LoaderRef> Vm<L> {
                 Value::Object(goal)
             }
             Native::actorReachable => {
-                let reachable = match (self.store.object_of(this, Prop::Pawn), object(0)) {
+                let reachable = match (self.store.object_of(this, Prop::Pawn), object_arg(args, 0)) {
                     (Some(pawn), Some(target)) => self.actor_reachable(pawn, target, LineOfSight::Unknown, AnchorCheck::Checked),
                     _ => false,
                 };
@@ -396,7 +395,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(goal) = goal {
             goal_location = self.store.vector(goal, Prop::Location);
             if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
-                let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+                let (radius, height) = self.store.collision_size(pawn);
                 let hit = self.sweep(pawn, Sweep { start: goal_location, delta: [0.0, 0.0, -1000.0].into(), radius, height }, SweepAgainst::WORLD, None);
                 goal_location[2] -= 1000.0 * hit.time;
             }
@@ -588,7 +587,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// A fall shortens the steps to 35 once; jumps are not tried (unverified).
     fn walk_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
-        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(pawn);
         let mut step_size = radius.max(if self.store.flag_of(pawn, Prop::bCanJump) { 128.0 } else { 12.0 });
         let mut location = from;
         for _ in 0..WALK_STEPS {
@@ -618,7 +617,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> WalkMove {
-        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(pawn);
         let go = |vm: &mut Self, at: &mut Vector, delta: Vector| {
             let hit = vm.sweep(pawn, Sweep { start: *at, delta, radius, height }, SweepAgainst::WORLD, None);
             *at += delta * hit.time;

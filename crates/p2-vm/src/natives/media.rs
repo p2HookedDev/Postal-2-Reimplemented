@@ -1,7 +1,6 @@
-use crate::interp::{float, int, truthy};
 use crate::native_id::Native;
 use crate::{Error, HostCommand, LoaderRef, MusicCommand, ObjectId, PlayedSound, Prop, ProjectorEvent, Value, Vm};
-use super::{AUDIO_DEFAULT_RADIUS, float_arg, int_arg, object_arg, str_arg};
+use super::{AUDIO_DEFAULT_RADIUS, bool_arg, float_arg, given, int_arg, object_arg, optional_float, str_arg};
 
 pub(super) fn sound_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
     let value = match native {
@@ -68,12 +67,9 @@ pub(super) fn presentation_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, 
 }
 
 fn play_sound<L: LoaderRef>(vm: &mut Vm<L>, this: Option<ObjectId>, args: &[Value]) {
-    let f = |n: usize| args.get(n).map_or(0.0, float);
-    let b = |n: usize| args.get(n).is_some_and(truthy);
-    let given = |n: usize| !matches!(args.get(n), None | Some(Value::Map));
     let Some(&Value::Object(Some(sound))) = args.first() else { return };
-    let volume = (if given(2) { f(2) } else { actor_float(vm, this, Prop::TransientSoundVolume) } * vm.sound_volume()).clamp(0.0, 1.0);
-    let radius = match if given(4) { f(4) } else { actor_float(vm, this, Prop::TransientSoundRadius) } {
+    let volume = (if given(args, 2) { float_arg(args, 2) } else { actor_float(vm, this, Prop::TransientSoundVolume) } * vm.sound_volume()).clamp(0.0, 1.0);
+    let radius = match if given(args, 4) { float_arg(args, 4) } else { actor_float(vm, this, Prop::TransientSoundRadius) } {
         0.0 => AUDIO_DEFAULT_RADIUS,
         radius => radius,
     };
@@ -81,27 +77,25 @@ fn play_sound<L: LoaderRef>(vm: &mut Vm<L>, this: Option<ObjectId>, args: &[Valu
         Some(Value::Float(dilation)) => dilation,
         _ => 1.0,
     };
-    let pitch = if given(5) { f(5) } else { 1.0 } * dilation;
-    let slot = if given(1) { args.get(1).map_or(0, int) as u8 } else { 1 };
-    let attenuate = !given(6) || b(6);
-    let played = PlayedSound { actor: this, sound: vm.store.object(sound).path.clone(), slot, volume, radius, pitch, attenuate, no_override: given(3) && b(3), flashbang: None };
+    let pitch = optional_float(args, 5, 1.0) * dilation;
+    let slot = if given(args, 1) { int_arg(args, 1) as u8 } else { 1 };
+    let attenuate = !given(args, 6) || bool_arg(args, 6);
+    let played = PlayedSound { actor: this, sound: vm.store.object(sound).path.clone(), slot, volume, radius, pitch, attenuate, no_override: given(args, 3) && bool_arg(args, 3), flashbang: None };
     vm.subtitle_insert_sound(played.actor, &played.sound);
     vm.host.commands.push(HostCommand::Sound(played));
 }
 
 fn play_music<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Value {
-    let f = |n: usize| args.get(n).map_or(0.0, float);
-    let given = |n: usize| !matches!(args.get(n), None | Some(Value::Map));
     let attenuate = native == Native::PlayMusicAttenuate;
-    let override_volume = f(if attenuate { 5 } else { 2 });
+    let override_volume = float_arg(args, if attenuate { 5 } else { 2 });
     let music_volume = if override_volume > 0.0 { override_volume } else { vm.music_volume() };
-    let volume = if attenuate { (if given(2) { f(2) } else { actor_float(vm, this, Prop::TransientSoundVolume) }) * music_volume } else { music_volume };
+    let volume = if attenuate { (if given(args, 2) { float_arg(args, 2) } else { actor_float(vm, this, Prop::TransientSoundVolume) }) * music_volume } else { music_volume };
     let volume = volume.clamp(0.0, 1.0);
     if volume == 0.0 {
         return Value::Int(0);
     }
     vm.host.music_handle += 1;
-    let radius = if attenuate { if given(3) { f(3) } else { actor_float(vm, this, Prop::TransientSoundRadius) } } else { 0.0 };
+    let radius = if attenuate { if given(args, 3) { float_arg(args, 3) } else { actor_float(vm, this, Prop::TransientSoundRadius) } } else { 0.0 };
     let song = match args.first() {
         Some(Value::Str(song)) => song.clone(),
         _ => String::new(),
@@ -110,10 +104,10 @@ fn play_music<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectI
         handle: vm.host.music_handle,
         song,
         actor: this.filter(|_| attenuate),
-        fade_in: f(1),
+        fade_in: float_arg(args, 1),
         volume,
         radius: if attenuate && radius <= 0.0 { 80.0 } else { radius },
-        pitch: if attenuate && given(4) { f(4) } else { 1.0 },
+        pitch: if attenuate && given(args, 4) { float_arg(args, 4) } else { 1.0 },
     };
     vm.host.commands.push(HostCommand::Music(play));
     Value::Int(vm.host.music_handle)

@@ -1,7 +1,7 @@
 //! The viewer's walk mode (`G`): a simple body for looking around a map at eye height. Not the game's player: the game
 //! moves its pawn by the VM's physics. Unreal units and coordinates.
 
-use p2_collision::{Hit, Sides, box_check, line_check, mesh_line_check, terrain_line_check};
+use p2_collision::{Hit, Sides, box_check, mesh_line_check, terrain_line_check};
 use p2_engine::map::StaticCollision;
 use p2_math::Vector;
 
@@ -20,13 +20,6 @@ pub struct Body {
     pub center: Vector,
     pub fall_speed: f32,
     pub grounded: bool,
-}
-
-fn trace(world: &StaticCollision, start: Vector, end: Vector) -> Option<Hit> {
-    let bsp = line_check(&world.model, start, end);
-    let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end, Sides::Both));
-    let mesh = mesh_line_check(&world.meshes, start, end);
-    bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
 }
 
 /// The bottom is `STEP` raised, so ledges up to `STEP` pass underneath: a box against BSP, a knee-height line against
@@ -73,7 +66,7 @@ pub fn step(world: &StaticCollision, body: &mut Body, wish: [f32; 2], speed: f32
     let Vector { x, y, z } = body.center;
     let from = Vector::new(x, y, z + reach);
     let to = Vector::new(x, y, z - HALF_HEIGHT - fall.max(0.0) - reach);
-    match (body.fall_speed >= 0.0).then(|| trace(world, from, to)).flatten().filter(|hit| hit.normal.z > MIN_FLOOR_NORMAL) {
+    match (body.fall_speed >= 0.0).then(|| world.first_hit(from, to)).flatten().filter(|hit| hit.normal.z > MIN_FLOOR_NORMAL) {
         Some(floor) => {
             body.center.z = floor.location.z + HALF_HEIGHT;
             body.fall_speed = 0.0;
@@ -82,7 +75,7 @@ pub fn step(world: &StaticCollision, body: &mut Body, wish: [f32; 2], speed: f32
         None => {
             if fall < 0.0 {
                 let head = Vector::new(x, y, z + HALF_HEIGHT);
-                if trace(world, head, Vector::new(x, y, head.z - fall)).is_some() {
+                if world.first_hit(head, Vector::new(x, y, head.z - fall)).is_some() {
                     body.fall_speed = 0.0;
                     return;
                 }
@@ -98,6 +91,7 @@ mod tests {
     use std::path::PathBuf;
 
     use p2_assets::{read_actor_location, read_level, read_model, read_terrain, read_texture, texture_heights};
+    use p2_collision::line_check;
     use p2_package::{LoadedPackage, Loader};
     use p2_script::{Layouts, Objects, Source};
 

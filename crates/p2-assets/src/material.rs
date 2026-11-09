@@ -209,7 +209,7 @@ impl UvModifier {
             Self::Scaler { scale, offset } => [[scale[0], 0.0, offset[0]], [0.0, scale[1], offset[1]]],
             Self::Rotator { rotation, constant, offset } => {
                 let rotation = if constant { rotation.map(|r| (r as f32 * seconds) as i32 & 0xffff) } else { rotation };
-                let [x, y, z] = p2_math::axes_at(rotation.map(radians));
+                let [x, y, z] = p2_math::axes_at(rotation.map(p2_math::radians));
                 around([[x.x, y.x, z.x], [x.y, y.y, z.y]], pivot(offset))
             }
             Self::Oscillator { rate, phase, amplitude, kind, offset } => {
@@ -314,8 +314,7 @@ impl CombineOps {
             AlphaOperation::Material1 => f(a[3]),
             AlphaOperation::Material2 => f(b[3]),
         };
-        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        [byte(color(0)), byte(color(1)), byte(color(2)), byte(out_alpha)]
+        [color(0), color(1), color(2), out_alpha].map(p2_math::color_byte)
     }
 }
 
@@ -564,7 +563,7 @@ fn tex_modifier(class: MaterialClass, object: &ObjectProperties, state: &mut Ren
     match class {
         MaterialClass::TexPanner => {
             let [pitch, yaw, _] = object.rotator("PanDirection");
-            let (pitch, yaw) = (radians(pitch), radians(yaw));
+            let (pitch, yaw) = (p2_math::radians(pitch), p2_math::radians(yaw));
             let direction = [pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin()];
             state.uv.push(UvModifier::Panner { direction, rate: float("PanRate") });
         }
@@ -603,9 +602,6 @@ impl RenderState {
     }
 }
 
-fn radians(units: i32) -> f32 {
-    p2_math::radians(units as f32)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

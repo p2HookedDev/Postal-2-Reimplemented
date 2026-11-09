@@ -240,7 +240,7 @@ fn spawned_material(
     crate::mesh_view::cached_actor_material(shared, section, materials, mesh_lit, || crate::mesh_view::actor_standard(section, crate::mesh_view::SceneLights::Ignored))
 }
 
-fn material_images<S: SceneAssets>(game: &mut Game, t: &mut S, package: PackageId, material: i32) -> Option<MaterialImages> {
+pub fn material_images<S: SceneAssets>(game: &mut Game, t: &mut S, package: PackageId, material: i32) -> Option<MaterialImages> {
     let texture = game.material_texture(package, material)?;
     Some(MaterialImages { image: t.add_image(texture.image), glow: texture.glow.map(|glow| t.add_image(glow)), detail: texture.detail.map(|detail| t.add_image(detail)), specular: texture.specular.map(|(cube, params)| (t.add_image(cube), params)), state: texture.state })
 }

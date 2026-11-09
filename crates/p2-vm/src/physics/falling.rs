@@ -4,10 +4,22 @@ use crate::interp::int;
 use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm, Kind};
 use super::{
     AIR_BURST_SPEED, Bases, MAX_ITERATIONS, MIN_AIR_CONTROL, MIN_FLOOR_Z, MIN_LANDING_SECONDS, MIN_LANDING_TIME,
-    VolumeProps, horizontal_size, substep, two_wall_adjust,
+    MoveHit, VolumeProps, horizontal_size, substep, two_wall_adjust,
 };
 
 impl<L: LoaderRef> Vm<L> {
+    pub(crate) fn begin_fall_step(&mut self, actor: ObjectId) -> (Vector, Vector) {
+        let old_location = self.store.vector(actor, Prop::Location);
+        self.store.set(actor, Prop::bJustTeleported, Value::Bool(false));
+        (old_location, self.store.vector(actor, Prop::Velocity))
+    }
+
+    pub(crate) fn fall_step_move(&mut self, actor: ObjectId, velocity: Vector, adjusted: Vector) -> Result<Option<MoveHit>, Error> {
+        self.set_vector(actor, Prop::Velocity, velocity);
+        let hit = self.move_actor(actor, adjusted, Bases::Block)?;
+        Ok((!self.store.is_deleted(actor)).then_some(hit))
+    }
+
     pub(super) fn phys_falling(&mut self, pawn: ObjectId, delta: f32, mut iterations: u32) -> Result<(), Error> {
         let VolumeProps { gravity, terminal_velocity: terminal, zone_velocity, .. } = self.volume(pawn);
         let mut real_acceleration = self.store.vector(pawn, Prop::Acceleration);
@@ -20,21 +32,15 @@ impl<L: LoaderRef> Vm<L> {
             iterations += 1;
             let tick = substep(remaining);
             remaining -= tick;
-            let old_location = self.store.vector(pawn, Prop::Location);
-            self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
-            let mut old_velocity = self.store.vector(pawn, Prop::Velocity);
+            let (old_location, mut old_velocity) = self.begin_fall_step(pawn);
             let total = (acceleration + gravity) + constant;
             let mut velocity = old_velocity + (total * (0.5 * tick));
             if bound_speed != 0.0 && horizontal_size(velocity) > bound_speed {
                 let flat = Vector::new(velocity[0], velocity[1], 0.0).safe_normal() * bound_speed;
                 velocity = [flat[0], flat[1], velocity[2]].into();
             }
-            self.set_vector(pawn, Prop::Velocity, velocity);
             let adjusted = (velocity + zone_velocity) * tick;
-            let hit = self.move_actor(pawn, adjusted, Bases::Block)?;
-            if self.store.is_deleted(pawn) {
-                return Ok(());
-            }
+            let Some(hit) = self.fall_step_move(pawn, velocity, adjusted)? else { return Ok(()) };
             if self.store.physics_of(pawn) == Some(EPhysics::Swimming) {
                 return self.start_swimming(pawn, old_location, old_velocity, tick, (1.0 - hit.time) * tick + remaining, iterations);
             }
@@ -93,7 +99,7 @@ impl<L: LoaderRef> Vm<L> {
         acceleration[2] = 0.0;
         let mut air_control = self.store.float_of(pawn, Prop::AirControl);
         if air_control > MIN_AIR_CONTROL {
-            let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+            let (radius, height) = self.store.collision_size(pawn);
             let mut test = ((acceleration.safe_normal() * (air_control * accel_rate)) + self.store.vector(pawn, Prop::Velocity)) * delta;
             test[2] = 0.0;
             let at = self.store.vector(pawn, Prop::Location);

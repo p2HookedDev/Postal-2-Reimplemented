@@ -15,6 +15,7 @@ use p2_render_cpu::{LE_SUNLIGHT, MeshLight};
 use rayon::prelude::*;
 
 pub use cache::{cache_key, load, save};
+pub use scene::is_sky;
 use scene::{Scene, Seen};
 
 pub const SCALE: usize = 2;
@@ -402,8 +403,7 @@ fn compose(atlas: &mut Atlas, retail: Option<&(u32, u32, Vec<[u8; 4]>)>, map: &L
             if ax >= width || ay >= height {
                 continue;
             }
-            let byte = |part: f32| (part.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            atlas.texels[ay * width + ax] = [byte(light[0]), byte(light[1]), byte(light[2]), byte(lit.shadow_sun[at])];
+            atlas.texels[ay * width + ax] = [light[0], light[1], light[2], lit.shadow_sun[at]].map(p2_math::color_byte);
             means.direct += luma(plain);
             means.last += luma(light);
             means.count += 1;

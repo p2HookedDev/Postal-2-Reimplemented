@@ -183,26 +183,27 @@ pub(crate) fn object_arg(args: &[Value], n: usize) -> Option<ObjectId> {
     }
 }
 
+pub(crate) fn given(args: &[Value], n: usize) -> bool {
+    !matches!(args.get(n), None | Some(Value::Map))
+}
+
 pub(crate) fn optional_float(args: &[Value], n: usize, default: f32) -> f32 {
-    match args.get(n) {
-        None | Some(Value::Map) => default,
-        Some(value) => float(value),
-    }
+    if given(args, n) { float_arg(args, n) } else { default }
 }
 
 pub(crate) fn bool_arg(args: &[Value], n: usize) -> bool {
     args.get(n).is_some_and(truthy)
 }
 
-fn int_arg(args: &[Value], n: usize) -> i32 {
+pub(crate) fn int_arg(args: &[Value], n: usize) -> i32 {
     args.get(n).map_or(0, int)
 }
 
-fn float_arg(args: &[Value], n: usize) -> f32 {
+pub(crate) fn float_arg(args: &[Value], n: usize) -> f32 {
     args.get(n).map_or(0.0, float)
 }
 
-fn str_arg(args: &[Value], n: usize) -> &str {
+pub(crate) fn str_arg(args: &[Value], n: usize) -> &str {
     match args.get(n) {
         Some(Value::Str(text)) => text.as_str(),
         _ => "",

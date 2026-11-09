@@ -56,7 +56,7 @@ impl Frame {
     /// Rotation matrix of a rotator (pitch, yaw, roll in 65536ths of a turn). The angles are not wrapped
     /// as [`Rotator::axes`] wraps them, which moves the last bits of any negative or huge angle.
     pub fn from_rotator(rotation: [i32; 3]) -> Self {
-        let axes = p2_math::axes_at(rotation.map(|u| p2_math::radians(u as f32)));
+        let axes = p2_math::axes_at(rotation.map(p2_math::radians));
         Self { axes: axes.map(<[f32; 3]>::from), origin: [0.0; 3] }
     }
 

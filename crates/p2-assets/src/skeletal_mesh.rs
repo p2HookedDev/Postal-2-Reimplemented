@@ -2,7 +2,7 @@ use p2_math::{Rotator, Vector};
 use p2_package::{Export, Package, Reader};
 
 use crate::Error;
-use crate::read::{BOX_SIZE, array, invalid, skip_array, skip_lazy_array, skip_primitive, vec3};
+use crate::read::{BOX_SIZE, array, invalid, skip_array, skip_lazy_array, skip_primitive, vec3, vec4};
 
 #[derive(Debug, Clone)]
 pub struct SkeletalMesh {
@@ -101,7 +101,7 @@ impl LodModel {
 pub fn read_primitive_sphere(pkg: &Package, file: &[u8], export: &Export) -> Result<[f32; 4], Error> {
     let mut r = pkg.native_reader(file, export)?;
     r.bytes(BOX_SIZE)?;
-    Ok([r.f32()?, r.f32()?, r.f32()?, r.f32()?])
+    vec4(&mut r)
 }
 
 pub fn read_skeletal_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<SkeletalMesh, Error> {
@@ -181,7 +181,7 @@ pub fn read_skeletal_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result
 fn read_bone(pkg: &Package, r: &mut Reader) -> Result<Bone, Error> {
     let name = pkg.read_name(r)?;
     r.u32()?;
-    let orientation = [r.f32()?, r.f32()?, r.f32()?, r.f32()?];
+    let orientation = vec4(r)?;
     let position = vec3(r)?;
     r.bytes(16)?;
     let num_children = r.i32()?;

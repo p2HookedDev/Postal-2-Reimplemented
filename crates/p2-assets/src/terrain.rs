@@ -3,7 +3,7 @@ use p2_package::{Export, Package, Reader};
 use p2_script::{Properties, StructLayout, StoredValue, read_properties};
 
 use crate::Error;
-use crate::read::{array, invalid, skip_array};
+use crate::read::{array, invalid, skip_array, vec3};
 use crate::terrain_deco::{DecoLayer, read_deco_layer};
 
 #[derive(Debug, Clone)]
@@ -166,7 +166,7 @@ pub fn read_terrain(pkg: &Package, file: &[u8], export: &Export, layout: &Struct
 
     let r = &mut r;
     array(r, |r| Ok(r.compact()?))?;
-    let vertices = array(r, |r| Ok([r.f32()?, r.f32()?, r.f32()?]))?;
+    let vertices = array(r, vec3)?;
     r.bytes(8)?;
     skip_array(r, 24)?;
     r.bytes(2 * 12 * 4)?; // ToWorld, ToHeightmap: 12 floats each

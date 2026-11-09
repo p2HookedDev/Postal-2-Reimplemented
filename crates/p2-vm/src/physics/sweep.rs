@@ -102,7 +102,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn move_check(&mut self, actor: ObjectId, start: Vector, delta: Vector) -> Option<(f32, Vector, Option<ObjectId>)> {
-        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(actor);
         let hit = self.sweep(actor, Sweep { start, delta, radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         (hit.time < 1.0).then_some((hit.time, hit.normal, hit.actor))
     }
@@ -117,7 +117,7 @@ impl<L: LoaderRef> Vm<L> {
             self.volume_moved(actor);
             return Ok(MoveHit::NONE);
         }
-        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+        let (radius, height) = self.store.collision_size(actor);
         let length = delta.size();
         let direction = delta * (1.0 / length);
         let test = delta + (direction * MOVE_TEST_ADJUST);

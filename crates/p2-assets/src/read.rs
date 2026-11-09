@@ -28,6 +28,10 @@ pub(crate) fn vec3(r: &mut Reader) -> Result<[f32; 3], Error> {
     Ok([r.f32()?, r.f32()?, r.f32()?])
 }
 
+pub(crate) fn vec4(r: &mut Reader) -> Result<[f32; 4], Error> {
+    Ok([r.f32()?, r.f32()?, r.f32()?, r.f32()?])
+}
+
 pub(crate) fn skip_primitive(r: &mut Reader) -> Result<(), Error> {
     r.bytes(BOX_SIZE + 16)?;
     Ok(())
