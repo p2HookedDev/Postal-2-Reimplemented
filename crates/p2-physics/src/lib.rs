@@ -188,6 +188,7 @@ pub struct World {
     started: Vec<Started>,
     /// Where each mover must be at the end of the next step.
     moving: FxHashMap<RigidBodyHandle, Pose>,
+    cones: Vec<ragdoll::Cone>,
 }
 
 impl World {
@@ -215,6 +216,7 @@ impl World {
             level: Vec::new(),
             started: Vec::new(),
             moving: FxHashMap::default(),
+            cones: Vec::new(),
         }
     }
 
@@ -490,6 +492,7 @@ impl World {
                 &self.hooks,
                 &self.hooks,
             );
+            self.hold_cones(step);
             let mut started = std::mem::take(&mut self.started);
             if let Ok(mut events) = self.hooks.started.lock() {
                 std::mem::swap(&mut *events, &mut started);

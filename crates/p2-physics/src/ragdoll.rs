@@ -56,6 +56,31 @@ const MASS_RATIO: [f32; 2] = [0.8, 1.2];
 /// Rapier corrects a stiff limit in one step with no speed cap, which throws the corpse.
 const LIMIT_HZ: f32 = 15.0;
 const LIMIT_DAMPING: f32 = 5.0;
+/// The share of a cone overshoot taken back per substep, so a limb returns over a few substeps instead of snapping.
+const CONE_HOLD: f32 = 0.3;
+/// In rad/s: slower than this, a limb past the cone is only stopped, not pulled back, or a pile never sleeps.
+const CONE_RESTING: f32 = 1.0;
+
+/// Rapier limits swing per axis, a box whose corners reach about 1.4 times past Karma's elliptical cone; this holds the
+/// swing inside the ellipse.
+pub(crate) struct Cone {
+    parent: RigidBodyHandle,
+    child: RigidBodyHandle,
+    parent_frame: Rotation,
+    child_frame: Rotation,
+    half_angles: [f32; 2],
+}
+
+/// How far the twist axis `d` (in the parent's joint frame) swings past the ellipse, and the axis that swings it further.
+fn swing_excess(d: Vector, [about_y, about_z]: [f32; 2]) -> Option<(f32, Vector)> {
+    let side = (d.y * d.y + d.z * d.z).sqrt();
+    if side < 1e-6 {
+        return None;
+    }
+    let angle = d.x.clamp(-1.0, 1.0).acos();
+    let reach = ((angle * d.z / side / about_y).powi(2) + (angle * d.y / side / about_z).powi(2)).sqrt();
+    (reach > 1.0).then(|| (angle - angle / reach, Vector::new(0.0, -d.z, d.y) / side))
+}
 
 /// Each jointed tree keeps its total mass, so the body's flight stays retail's.
 fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math::Vector)> {
@@ -101,6 +126,37 @@ pub fn shapes_inertia(shapes: &[Shape], mass: f32) -> Option<p2_math::Vector> {
 }
 
 impl World {
+    pub(crate) fn hold_cones(&mut self, dt: f32) {
+        let bodies = &mut self.bodies;
+        self.cones.retain(|cone| bodies.contains(cone.parent) && bodies.contains(cone.child));
+        let mut impulses = Vec::new();
+        for cone in &self.cones {
+            let (Some(parent), Some(child)) = (bodies.get(cone.parent), bodies.get(cone.child)) else { continue };
+            if parent.is_sleeping() && child.is_sleeping() {
+                continue;
+            }
+            let frame = *parent.rotation() * cone.parent_frame;
+            let twist_axis = frame.inverse() * (*child.rotation() * cone.child_frame) * Vector::X;
+            let Some((excess, axis)) = swing_excess(twist_axis, cone.half_angles) else { continue };
+            let axis = frame * axis;
+            let inverse_inertia = |body: &RigidBody| axis.dot(body.mass_properties().effective_world_inv_inertia * axis);
+            let resistance = inverse_inertia(parent) + inverse_inertia(child);
+            let spin = child.angvel() - parent.angvel();
+            let (speed, wanted) = (spin.dot(axis), if spin.length() > CONE_RESTING { -CONE_HOLD * excess / dt } else { 0.0 });
+            if speed > wanted && resistance > 0.0 {
+                impulses.push((cone.parent, cone.child, axis * ((wanted - speed) / resistance)));
+            }
+        }
+        for (parent, child, impulse) in impulses {
+            if let Some(body) = bodies.get_mut(child) {
+                body.apply_torque_impulse(impulse, false);
+            }
+            if let Some(body) = bodies.get_mut(parent) {
+                body.apply_torque_impulse(-impulse, false);
+            }
+        }
+    }
+
     pub fn add_ragdoll(&mut self, params: &RagdollParams) -> Vec<BodyId> {
         let masses = stabilize(&params.parts, &params.joints);
         let mut activation = RigidBodyActivation::active();
@@ -154,16 +210,23 @@ impl World {
         let build = |axes: JointAxesMask| {
             GenericJointBuilder::new(axes).local_frame1(frame(joint.parent_anchor, joint.parent_axes)).local_frame2(frame(joint.child_anchor, joint.child_axes)).contacts_enabled(false)
         };
-        self.impulse_joints.insert(parent.0, child.0, build(JointAxesMask::LIN_AXES).build(), true);
+        // A hinge's off axes are locked as hard as the anchor: soft, they let knees and elbows bend sideways. They start
+        // with no error, since the joint frames come from the death pose.
+        let locked = match joint.limit {
+            JointLimit::Hinge(_) => JointAxesMask::LIN_AXES | JointAxesMask::ANG_Y | JointAxesMask::ANG_Z,
+            JointLimit::Cone { .. } => JointAxesMask::LIN_AXES,
+        };
+        self.impulse_joints.insert(parent.0, child.0, build(locked).build(), true);
+        if let JointLimit::Cone { swing: Some(half_angles), .. } = joint.limit
+            && half_angles.iter().all(|&a| a > 0.0)
+        {
+            let parent_frame = frame(joint.parent_anchor, joint.parent_axes).rotation;
+            let child_frame = frame(joint.child_anchor, joint.child_axes).rotation;
+            self.cones.push(Cone { parent: parent.0, child: child.0, parent_frame, child_frame, half_angles });
+        }
         let limits = match joint.limit {
-            JointLimit::Hinge(limits) => {
-                let hinge = build(JointAxesMask::ANG_Y | JointAxesMask::ANG_Z);
-                Some(match limits {
-                    Some(limits) => hinge.limits(JointAxis::AngX, limits),
-                    None => hinge,
-                })
-            }
-            JointLimit::Cone { swing: None, twist: None } => None,
+            JointLimit::Hinge(None) | JointLimit::Cone { swing: None, twist: None } => None,
+            JointLimit::Hinge(Some(limits)) => Some(build(JointAxesMask::empty()).limits(JointAxis::AngX, limits)),
             JointLimit::Cone { swing, twist } => {
                 let mut cone = build(JointAxesMask::empty());
                 if let Some([y, z]) = swing {
@@ -287,6 +350,29 @@ mod tests {
             restitution: 0.0,
             asleep: false,
         }
+    }
+
+    fn swing_between(world: &World, parent: BodyId, child: BodyId) -> f32 {
+        let axis = |id: BodyId| {
+            let [x, y, z, w] = world.pose(id).unwrap().1;
+            Rotation::from_xyzw(x, y, z, w) * Vector::X
+        };
+        axis(parent).dot(axis(child)).clamp(-1.0, 1.0).acos()
+    }
+
+    #[test]
+    fn a_diagonal_swing_stops_at_the_ellipse_not_the_box_corner() {
+        let mut world = World::new([0.0; 3].into());
+        let limit = JointLimit::Cone { swing: Some([0.5, 0.5]), twist: Some(0.1) };
+        let bodies = world.add_ragdoll(&chain(0.0, limit, [0.0; 3].into()));
+        world.set_spin(bodies[2], [0.0, 6.0, 6.0].into());
+        let mut widest = 0.0_f32;
+        for _ in 0..90 {
+            world.step(1.0 / 60.0);
+            widest = widest.max(swing_between(&world, bodies[1], bodies[2]));
+        }
+        let last = swing_between(&world, bodies[1], bodies[2]);
+        assert!(widest < 0.65 && last < 0.53, "swung {widest} rad, ended at {last}; the box corner is 0.7");
     }
 
     fn origin(world: &World, id: BodyId) -> p2_math::Vector {
