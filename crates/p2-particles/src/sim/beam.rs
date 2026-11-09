@@ -1,7 +1,8 @@
 //! Beam emitters: a particle's points are worked out once when it spawns, and later updates only age
 //! and colour it, so the bolt stays where it was spawned.
 
-use super::{Collide, Emitter, ParticleEmitter, key_span};
+use super::draw::key_span;
+use super::{Collide, Emitter, ParticleEmitter};
 use crate::Rng;
 use crate::math::{Vector, fractional, rotate_by};
 use crate::props::{BeamEnd, BeamEndPoint, BeamScale, CoordinateSystem, EmitterKind, EmitterProperties, RangeVector};
