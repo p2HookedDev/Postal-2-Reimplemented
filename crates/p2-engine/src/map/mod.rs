@@ -23,7 +23,7 @@ use wgpu_types::BlendState;
 use p2_assets::{Blending, DecoMaps, Font, MeshAnimation, Model, ModelPolygon, RenderState, SkeletalMesh, StaticMesh, TexelMap, poly_flags, read_convex_volume, read_font, read_level, read_mesh_animation, read_model, read_skeletal_mesh, read_static_mesh, read_static_mesh_instance, read_static_mesh_materials, read_terrain, texture_alpha, texture_bgra, texture_heights};
 use p2_render_cpu::{AntiportalActor, MeshPlacement, instance_fits};
 use p2_bevy_assets::{
-    alpha_map_image, bone_matrices, lighting_colors, model_polygons_to_mesh, modulate_2x, rotator_matrix, skeletal_mesh_to_meshes, skin_bind_transforms, skin_inverse_bindposes, static_mesh_to_meshes,
+    alpha_map_image, bone_matrices, lighting_colors, model_polygons_to_mesh, modulate_2x, rotator_matrix, skeletal_mesh_to_meshes, skin_bind, static_mesh_to_meshes,
     terrain_layer_mesh, texture_to_image, to_bevy, unreal_mesh_matrix, unreal_to_bevy, unreal_transform,
 };
 use p2_collision::MeshCollision;

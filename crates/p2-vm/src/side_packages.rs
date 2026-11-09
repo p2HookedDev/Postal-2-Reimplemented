@@ -1,33 +1,24 @@
 //! Packages the loader has not loaded, mapped from their files, so only the pages read come from disk.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use p2_package::{Mmap, Package};
+use p2_package::{ExportsByName, Mmap, Package};
 
 use crate::{LoaderRef, Vm};
 
 pub(crate) struct SidePackage {
     pub package: Package,
     pub data: Mmap,
-    by_name: HashMap<String, Vec<usize>>,
+    by_name: ExportsByName,
 }
 
 impl SidePackage {
     fn open(file: &Path) -> Option<Self> {
         let data = p2_package::map_file(file).ok()?;
         let package = Package::parse(&data).ok()?;
-        let by_name = p2_package::exports_by_name(&package);
+        let by_name = ExportsByName::new(&package);
         Some(Self { package, data, by_name })
-    }
-
-    fn export_by_path(&self, path: &str) -> Option<usize> {
-        let parts: Vec<&str> = path.split('.').collect();
-        let (name, outers) = parts.split_last()?;
-        let named = self.by_name.get(&name.to_ascii_lowercase())?;
-        let exact = named.iter().copied().find(|&i| self.package.export_in(i, outers));
-        exact.or_else(|| if outers.is_empty() { named.first().copied() } else { None })
     }
 }
 
@@ -42,7 +33,7 @@ impl<L: LoaderRef> Vm<L> {
             self.profile_phase("load: package file", phase);
         }
         let side = self.side_packages.get(&key)?.as_ref()?;
-        let export = side.export_by_path(rest)?;
+        let export = side.by_name.export_by_path(&side.package, rest)?;
         Some((Arc::clone(side), export))
     }
 

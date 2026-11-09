@@ -1,6 +1,8 @@
 //! Script bytecode decoded into expression trees. The script size counts bytes in memory (references
 //! and names take 4 each; compact on disk), and jump and case offsets are in-memory offsets.
 
+use std::marker::PhantomData;
+
 use p2_package::{Package, Reader};
 
 use crate::Error;
@@ -140,49 +142,92 @@ pub enum Expr {
 }
 
 pub fn decode_script(pkg: &Package, script: &[u8], size: u32) -> Result<Vec<Statement>, Error> {
-    decode(pkg, &mut Reader::new(script), size, None).map(|(statements, _)| statements)
+    decode_tree(pkg, script, size, None).map(|(statements, _)| statements)
 }
 
 pub fn decode_script_linked(pkg: &Package, script: &[u8], size: u32) -> Result<(Vec<Statement>, u32), Error> {
-    decode(pkg, &mut Reader::new(script), size, Some(0))
+    decode_tree(pkg, script, size, Some(0))
 }
 
 pub(crate) fn skip_script(pkg: &Package, r: &mut Reader, size: u32) -> Result<(), Error> {
-    decode(pkg, r, size, None).map(drop)
+    decode::<Walk>(pkg, r, size, None, |_, ()| {}).map(drop)
 }
 
-fn decode(pkg: &Package, r: &mut Reader, size: u32, links: Option<u32>) -> Result<(Vec<Statement>, u32), Error> {
-    let start = r.pos();
-    let mut decoder = Decoder { pkg, r, code: 0, size, links, depth: 0 };
+fn decode_tree(pkg: &Package, script: &[u8], size: u32, links: Option<u32>) -> Result<(Vec<Statement>, u32), Error> {
     let mut statements = Vec::new();
+    let links = decode::<Tree>(pkg, &mut Reader::new(script), size, links, |offset, expr| statements.push(Statement { offset, expr }))?;
+    Ok((statements, links))
+}
+
+fn decode<B: Build>(pkg: &Package, r: &mut Reader, size: u32, links: Option<u32>, mut statement: impl FnMut(u32, B::Node)) -> Result<u32, Error> {
+    let start = r.pos();
+    let mut decoder = Decoder { pkg, r, code: 0, size, links, depth: 0, build: PhantomData::<B> };
     while decoder.code < size {
         let offset = decoder.code;
-        statements.push(Statement { offset, expr: decoder.expr()? });
+        statement(offset, decoder.child()?);
     }
     if decoder.code != size {
         return Err(Error::ScriptSize { walked: decoder.code, declared: size, offset: start });
     }
-    Ok((statements, decoder.links.unwrap_or(0)))
+    Ok(decoder.links.unwrap_or(0))
 }
 
-struct Decoder<'p, 'r, 'a> {
+/// What decoding makes of an expression: the tree, or nothing for a walk that only measures the script.
+trait Build {
+    type Node;
+    fn node(make: impl FnOnce() -> Expr) -> Self::Node;
+    fn expr(node: Self::Node) -> Expr;
+
+    fn boxed(node: Self::Node) -> Box<Expr> {
+        Box::new(Self::expr(node))
+    }
+}
+
+struct Tree;
+struct Walk;
+
+impl Build for Tree {
+    type Node = Expr;
+
+    fn node(make: impl FnOnce() -> Expr) -> Expr {
+        make()
+    }
+
+    fn expr(node: Expr) -> Expr {
+        node
+    }
+}
+
+impl Build for Walk {
+    type Node = ();
+
+    fn node(_: impl FnOnce() -> Expr) {}
+
+    /// Never called: a walk makes no expressions.
+    fn expr((): ()) -> Expr {
+        Expr::Nothing
+    }
+}
+
+struct Decoder<'p, 'r, 'a, B> {
     pkg: &'p Package,
     r: &'r mut Reader<'a>,
     code: u32,
     size: u32,
     links: Option<u32>,
     depth: usize,
+    build: PhantomData<B>,
 }
 
-impl Decoder<'_, '_, '_> {
-    fn link(&mut self, expr: Expr) -> Expr {
+impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
+    fn link(&mut self, make: impl FnOnce() -> Expr) -> B::Node {
         match &mut self.links {
             Some(next) => {
                 let link = *next;
                 *next += 1;
-                Expr::Linked { link, expr: Box::new(expr) }
+                B::node(|| Expr::Linked { link, expr: Box::new(make()) })
             }
-            None => expr,
+            None => B::node(make),
         }
     }
 
@@ -218,27 +263,31 @@ impl Decoder<'_, '_, '_> {
         Ok(self.pkg.read_name(self.r)?)
     }
 
-    fn boxed(&mut self) -> Result<Box<Expr>, Error> {
-        Ok(Box::new(self.expr()?))
+    fn child(&mut self) -> Result<B::Node, Error> {
+        Ok(self.expr()?.1)
     }
 
-    fn c_string(&mut self) -> Result<String, Error> {
-        let mut text = String::new();
-        loop {
-            match self.byte()? {
-                0 => return Ok(text),
-                byte => text.push(char::from(byte)),
-            }
-        }
+    fn read_since(&mut self, start: usize) -> Result<&'a [u8], Error> {
+        let end = self.r.pos();
+        self.r.seek(start)?;
+        Ok(self.r.bytes(end - start)?)
     }
 
-    fn call(&mut self, callee: Callee) -> Result<Expr, Error> {
+    /// Latin-1 text up to a 0 byte, without it.
+    fn c_string(&mut self) -> Result<&'a [u8], Error> {
+        let start = self.r.pos();
+        while self.byte()? != 0 {}
+        let text = self.read_since(start)?;
+        Ok(text.strip_suffix(&[0]).unwrap_or(text))
+    }
+
+    fn call(&mut self, callee: Callee) -> Result<B::Node, Error> {
         let is_delegate = matches!(callee, Callee::Delegate { .. });
         let mut args = Vec::new();
         loop {
             match self.expr()? {
-                Expr::EndFunctionParms => break,
-                arg => args.push(arg),
+                (END_FUNCTION_PARMS, _) => break,
+                (_, arg) => args.push(arg),
             }
         }
         if !is_delegate && self.code < self.size {
@@ -250,11 +299,12 @@ impl Decoder<'_, '_, '_> {
                 self.expr()?;
             }
         }
-        let call = Expr::Call { callee, args };
-        Ok(if is_delegate { call } else { self.link(call) })
+        let call = move || Expr::Call { callee, args: args.into_iter().map(B::expr).collect() };
+        Ok(if is_delegate { B::node(call) } else { self.link(call) })
     }
 
-    fn expr(&mut self) -> Result<Expr, Error> {
+    /// The expression's first token, and what was made of it.
+    fn expr(&mut self) -> Result<(u8, B::Node), Error> {
         if self.depth >= MAX_EXPR_DEPTH {
             return Err(Error::TooDeep { limit: MAX_EXPR_DEPTH, offset: self.r.pos() });
         }
@@ -265,71 +315,67 @@ impl Decoder<'_, '_, '_> {
     }
 
     #[expect(clippy::too_many_lines, reason = "one match over every expression kind; the link step grew it")]
-    fn token_expr(&mut self) -> Result<Expr, Error> {
+    fn token_expr(&mut self) -> Result<(u8, B::Node), Error> {
         let offset = self.r.pos();
         let token = self.byte()?;
-        Ok(match token {
+        let node = match token {
+            0x04..=0x0e => self.flow_expr(token, offset)?,
+            0x1d..=0x24 | 0x2c | 0x34 => self.const_expr(token, offset)?,
             0x70..=0xff => self.call(Callee::Native(u16::from(token)))?,
             0x60..=0x6f => {
                 let index = u16::from(token - 0x60) << 8 | u16::from(self.byte()?);
                 self.call(Callee::Native(index))?
             }
             0x00 => {
-                let expr = Expr::LocalVariable(self.object()?);
-                self.link(expr)
+                let index = self.object()?;
+                self.link(|| Expr::LocalVariable(index))
             }
             0x01 => {
-                let expr = Expr::InstanceVariable(self.object()?);
-                self.link(expr)
+                let index = self.object()?;
+                self.link(|| Expr::InstanceVariable(index))
             }
             0x02 => {
-                let expr = Expr::DefaultVariable(self.object()?);
-                self.link(expr)
+                let index = self.object()?;
+                self.link(|| Expr::DefaultVariable(index))
             }
-            0x04 => Expr::Return(self.boxed()?),
-            0x05 => Expr::Switch { size: self.byte()?, value: self.boxed()? },
-            0x06 => Expr::Jump(self.word()?),
-            0x07 => Expr::JumpIfNot { target: self.word()?, condition: self.boxed()? },
-            0x08 => Expr::Stop,
-            0x09 => Expr::Assert { line: self.word()?, condition: self.boxed()? },
-            0x0a => {
-                let next = self.word()?;
-                let value = if next == 0xffff { None } else { Some(self.boxed()?) };
-                Expr::Case { next, value }
+            0x0f => {
+                let (target, value) = (self.child()?, self.child()?);
+                B::node(|| Expr::Let { target: B::boxed(target), value: B::boxed(value) })
             }
-            0x0b => Expr::Nothing,
-            0x0c => {
-                let mut labels = Vec::new();
-                loop {
-                    let name = self.name()?;
-                    let code = self.int()?;
-                    if self.pkg.name(name).eq_ignore_ascii_case("None") {
-                        break Expr::LabelTable(labels);
-                    }
-                    labels.push((name, code));
-                }
+            0x10 => {
+                let (index, array) = (self.child()?, self.child()?);
+                B::node(|| Expr::DynArrayElement { index: B::boxed(index), array: B::boxed(array) })
             }
-            0x0d => Expr::GotoLabel(self.boxed()?),
-            0x0e => Expr::EatString(self.boxed()?),
-            0x0f => Expr::Let { target: self.boxed()?, value: self.boxed()? },
-            0x10 => Expr::DynArrayElement { index: self.boxed()?, array: self.boxed()? },
-            0x11 => Expr::New { outer: self.boxed()?, name: self.boxed()?, flags: self.boxed()?, class: self.boxed()? },
-            0x12 => Expr::ClassContext {
-                object: self.boxed()?,
-                skip: self.word()?,
-                size: self.byte()?,
-                member: self.boxed()?,
-            },
+            0x11 => {
+                let (outer, name, flags, class) = (self.child()?, self.child()?, self.child()?, self.child()?);
+                B::node(|| Expr::New { outer: B::boxed(outer), name: B::boxed(name), flags: B::boxed(flags), class: B::boxed(class) })
+            }
+            0x12 => {
+                let (object, skip, size, member) = (self.child()?, self.word()?, self.byte()?, self.child()?);
+                B::node(|| Expr::ClassContext { object: B::boxed(object), skip, size, member: B::boxed(member) })
+            }
             0x13 => {
-                let expr = Expr::MetaCast { class: self.object()?, value: self.boxed()? };
-                self.link(expr)
+                let (class, value) = (self.object()?, self.child()?);
+                self.link(|| Expr::MetaCast { class, value: B::boxed(value) })
             }
-            0x14 => Expr::LetBool { target: self.boxed()?, value: self.boxed()? },
-            END_FUNCTION_PARMS => Expr::EndFunctionParms,
-            0x17 => Expr::SelfObject,
-            0x18 => Expr::Skip { size: self.word()?, value: self.boxed()? },
-            0x19 => Expr::Context { object: self.boxed()?, skip: self.word()?, size: self.byte()?, member: self.boxed()? },
-            0x1a => Expr::ArrayElement { index: self.boxed()?, array: self.boxed()? },
+            0x14 => {
+                let (target, value) = (self.child()?, self.child()?);
+                B::node(|| Expr::LetBool { target: B::boxed(target), value: B::boxed(value) })
+            }
+            END_FUNCTION_PARMS => B::node(|| Expr::EndFunctionParms),
+            0x17 => B::node(|| Expr::SelfObject),
+            0x18 => {
+                let (size, value) = (self.word()?, self.child()?);
+                B::node(|| Expr::Skip { size, value: B::boxed(value) })
+            }
+            0x19 => {
+                let (object, skip, size, member) = (self.child()?, self.word()?, self.byte()?, self.child()?);
+                B::node(|| Expr::Context { object: B::boxed(object), skip, size, member: B::boxed(member) })
+            }
+            0x1a => {
+                let (index, array) = (self.child()?, self.child()?);
+                B::node(|| Expr::ArrayElement { index: B::boxed(index), array: B::boxed(array) })
+            }
             0x1b => {
                 let name = self.name()?;
                 self.call(Callee::Virtual(name))?
@@ -338,67 +384,66 @@ impl Decoder<'_, '_, '_> {
                 let function = self.object()?;
                 self.call(Callee::Final(function))?
             }
-            0x1d => Expr::IntConst(self.int()?),
-            0x1e => Expr::FloatConst(self.float()?),
-            0x1f => Expr::StringConst(self.c_string()?),
-            0x20 => Expr::ObjectConst(self.object()?),
-            0x21 => {
-                let expr = Expr::NameConst(self.name()?);
-                self.link(expr)
+            0x25 => B::node(|| Expr::IntZero),
+            0x26 => B::node(|| Expr::IntOne),
+            0x27 => B::node(|| Expr::True),
+            0x28 => B::node(|| Expr::False),
+            0x29 => {
+                let property = self.object()?;
+                B::node(|| Expr::NativeParm(property))
             }
-            0x22 => Expr::RotationConst([self.int()?, self.int()?, self.int()?]),
-            0x23 => Expr::VectorConst([self.float()?, self.float()?, self.float()?]),
-            0x24 => Expr::ByteConst(self.byte()?),
-            0x25 => Expr::IntZero,
-            0x26 => Expr::IntOne,
-            0x27 => Expr::True,
-            0x28 => Expr::False,
-            0x29 => Expr::NativeParm(self.object()?),
-            0x2a => Expr::NoObject,
-            0x2c => Expr::IntConstByte(self.byte()?),
+            0x2a => B::node(|| Expr::NoObject),
             // A bool variable token runs the next expression (the variable).
-            0x2d => Expr::BoolVariable(self.boxed()?),
-            0x2e => {
-                let expr = Expr::DynamicCast { class: self.object()?, value: self.boxed()? };
-                self.link(expr)
+            0x2d => {
+                let variable = self.child()?;
+                B::node(|| Expr::BoolVariable(B::boxed(variable)))
             }
-            0x2f => Expr::Iterator { iterator: self.boxed()?, end: self.word()? },
-            0x30 => Expr::IteratorPop,
-            0x31 => Expr::IteratorNext,
-            0x32 => Expr::StructCmpEq { structure: self.object()?, left: self.boxed()?, right: self.boxed()? },
-            0x33 => Expr::StructCmpNe { structure: self.object()?, left: self.boxed()?, right: self.boxed()? },
-            // Words until one whose high byte is 0 (the engine tests the last byte read).
-            0x34 => {
-                let mut units = Vec::new();
-                loop {
-                    let unit = self.word()?;
-                    if unit >> 8 == 0 {
-                        if unit != 0 {
-                            units.push(unit);
-                        }
-                        break Expr::UnicodeStringConst(String::from_utf16_lossy(&units));
-                    }
-                    units.push(unit);
-                }
+            0x2e => {
+                let (class, value) = (self.object()?, self.child()?);
+                self.link(|| Expr::DynamicCast { class, value: B::boxed(value) })
+            }
+            0x2f => {
+                let (iterator, end) = (self.child()?, self.word()?);
+                B::node(|| Expr::Iterator { iterator: B::boxed(iterator), end })
+            }
+            0x30 => B::node(|| Expr::IteratorPop),
+            0x31 => B::node(|| Expr::IteratorNext),
+            0x32 => {
+                let (structure, left, right) = (self.object()?, self.child()?, self.child()?);
+                B::node(|| Expr::StructCmpEq { structure, left: B::boxed(left), right: B::boxed(right) })
+            }
+            0x33 => {
+                let (structure, left, right) = (self.object()?, self.child()?, self.child()?);
+                B::node(|| Expr::StructCmpNe { structure, left: B::boxed(left), right: B::boxed(right) })
             }
             0x36 => {
-                let expr = Expr::StructMember { member: self.object()?, value: self.boxed()? };
-                self.link(expr)
+                let (member, value) = (self.object()?, self.child()?);
+                self.link(|| Expr::StructMember { member, value: B::boxed(value) })
             }
-            0x37 => Expr::DynArrayLength(self.boxed()?),
+            0x37 => {
+                let array = self.child()?;
+                B::node(|| Expr::DynArrayLength(B::boxed(array)))
+            }
             0x38 => {
                 let name = self.name()?;
                 self.call(Callee::Global(name))?
             }
-            0x39 => Expr::PrimitiveCast { kind: self.byte()?, value: self.boxed()? },
-            0x40 => Expr::DynArrayInsert { array: self.boxed()?, index: self.boxed()?, count: self.boxed()? },
-            0x41 => Expr::DynArrayRemove { array: self.boxed()?, index: self.boxed()?, count: self.boxed()? },
-            DEBUG_INFO => Expr::DebugInfo {
-                version: self.int()?,
-                line: self.int()?,
-                position: self.int()?,
-                opcode: self.c_string()?,
-            },
+            0x39 => {
+                let (kind, value) = (self.byte()?, self.child()?);
+                B::node(|| Expr::PrimitiveCast { kind, value: B::boxed(value) })
+            }
+            0x40 => {
+                let (array, index, count) = (self.child()?, self.child()?, self.child()?);
+                B::node(|| Expr::DynArrayInsert { array: B::boxed(array), index: B::boxed(index), count: B::boxed(count) })
+            }
+            0x41 => {
+                let (array, index, count) = (self.child()?, self.child()?, self.child()?);
+                B::node(|| Expr::DynArrayRemove { array: B::boxed(array), index: B::boxed(index), count: B::boxed(count) })
+            }
+            DEBUG_INFO => {
+                let (version, line, position, opcode) = (self.int()?, self.int()?, self.int()?, self.c_string()?);
+                B::node(|| Expr::DebugInfo { version, line, position, opcode: latin1(opcode) })
+            }
             // A delegate call: property, name, then call parameters. The serializer reads these linearly and
             // attaches no debug info.
             0x43 => {
@@ -406,11 +451,130 @@ impl Decoder<'_, '_, '_> {
                 let name = self.name()?;
                 self.call(Callee::Delegate { property, name })?
             }
-            0x44 => Expr::DelegateProperty(self.name()?),
-            0x45 => Expr::LetDelegate { target: self.boxed()?, value: self.boxed()? },
+            0x44 => {
+                let name = self.name()?;
+                B::node(|| Expr::DelegateProperty(name))
+            }
+            0x45 => {
+                let (target, value) = (self.child()?, self.child()?);
+                B::node(|| Expr::LetDelegate { target: B::boxed(target), value: B::boxed(value) })
+            }
+            _ => return Err(Error::BadToken { token, offset }),
+        };
+        Ok((token, node))
+    }
+
+    fn flow_expr(&mut self, token: u8, offset: usize) -> Result<B::Node, Error> {
+        Ok(match token {
+            0x04 => {
+                let value = self.child()?;
+                B::node(|| Expr::Return(B::boxed(value)))
+            }
+            0x05 => {
+                let (size, value) = (self.byte()?, self.child()?);
+                B::node(|| Expr::Switch { size, value: B::boxed(value) })
+            }
+            0x06 => {
+                let target = self.word()?;
+                B::node(|| Expr::Jump(target))
+            }
+            0x07 => {
+                let (target, condition) = (self.word()?, self.child()?);
+                B::node(|| Expr::JumpIfNot { target, condition: B::boxed(condition) })
+            }
+            0x08 => B::node(|| Expr::Stop),
+            0x09 => {
+                let (line, condition) = (self.word()?, self.child()?);
+                B::node(|| Expr::Assert { line, condition: B::boxed(condition) })
+            }
+            0x0a => {
+                let next = self.word()?;
+                let value = if next == 0xffff { None } else { Some(self.child()?) };
+                B::node(|| Expr::Case { next, value: value.map(B::boxed) })
+            }
+            0x0b => B::node(|| Expr::Nothing),
+            0x0c => {
+                let mut labels = Vec::new();
+                loop {
+                    let name = self.name()?;
+                    let code = self.int()?;
+                    if self.pkg.name(name).eq_ignore_ascii_case("None") {
+                        break B::node(|| Expr::LabelTable(labels));
+                    }
+                    labels.push((name, code));
+                }
+            }
+            0x0d => {
+                let value = self.child()?;
+                B::node(|| Expr::GotoLabel(B::boxed(value)))
+            }
+            0x0e => {
+                let value = self.child()?;
+                B::node(|| Expr::EatString(B::boxed(value)))
+            }
             _ => return Err(Error::BadToken { token, offset }),
         })
     }
+
+    fn const_expr(&mut self, token: u8, offset: usize) -> Result<B::Node, Error> {
+        Ok(match token {
+            0x1d => {
+                let value = self.int()?;
+                B::node(|| Expr::IntConst(value))
+            }
+            0x1e => {
+                let value = self.float()?;
+                B::node(|| Expr::FloatConst(value))
+            }
+            0x1f => {
+                let text = self.c_string()?;
+                B::node(|| Expr::StringConst(latin1(text)))
+            }
+            0x20 => {
+                let object = self.object()?;
+                B::node(|| Expr::ObjectConst(object))
+            }
+            0x21 => {
+                let name = self.name()?;
+                self.link(|| Expr::NameConst(name))
+            }
+            0x22 => {
+                let value = [self.int()?, self.int()?, self.int()?];
+                B::node(|| Expr::RotationConst(value))
+            }
+            0x23 => {
+                let value = [self.float()?, self.float()?, self.float()?];
+                B::node(|| Expr::VectorConst(value))
+            }
+            0x24 => {
+                let value = self.byte()?;
+                B::node(|| Expr::ByteConst(value))
+            }
+            0x2c => {
+                let value = self.byte()?;
+                B::node(|| Expr::IntConstByte(value))
+            }
+            // Words until one whose high byte is 0 (the engine tests the last byte read); a final 0 is no character.
+            0x34 => {
+                let start = self.r.pos();
+                while self.word()? >> 8 != 0 {}
+                let bytes = self.read_since(start)?;
+                B::node(|| {
+                    let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|&unit| u16::from_le_bytes(unit)).collect();
+                    let text = match units.split_last() {
+                        Some((&0, text)) => text,
+                        _ => units.as_slice(),
+                    };
+                    Expr::UnicodeStringConst(String::from_utf16_lossy(text))
+                })
+            }
+            _ => return Err(Error::BadToken { token, offset }),
+        })
+    }
+}
+
+fn latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|&byte| char::from(byte)).collect()
 }
 
 #[cfg(test)]

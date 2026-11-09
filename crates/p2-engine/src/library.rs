@@ -9,7 +9,7 @@ use p2_assets::{BaseTexture, Blending, CombineOps, Mip, RenderState, Texture, Te
 use p2_render_cpu::{WetSim};
 use p2_bevy_assets::{alpha_on_black_image, cube_image, Compression, texture_combined, texture_glow, texture_image, texture_to_image, texture_to_ui_image, texture_with_constant_alpha, texture_with_opacity};
 use p2_package::{Ini, Loader, Package, PackageId, ResolveError, Resolved};
-use p2_script::{Objects, Source};
+use p2_script::{LayoutCache, Objects, Source};
 
 const MAX_HOPS: usize = 16;
 
@@ -28,6 +28,8 @@ pub struct Library {
 pub struct Game {
     loader: Loader,
     system: PathBuf,
+    /// Safe to keep: the loader never drops a package, so no address in its keys is reused.
+    layouts: LayoutCache,
 }
 
 pub type PlayLoaderTask<T> = std::thread::JoinHandle<Result<T, LoadError>>;
@@ -186,7 +188,7 @@ impl Library {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 // Scripts first: assets read with their class defaults.
-                entry.insert(Game { loader: Game::script_loader(&system)?, system: system.clone() })
+                entry.insert(Game { loader: Game::script_loader(&system)?, system: system.clone(), layouts: LayoutCache::default() })
             }
         };
 
@@ -298,6 +300,14 @@ impl Game {
         Objects::new(&self.loader)
     }
 
+    fn with_objects<T>(&mut self, id: PackageId, read: impl for<'a> FnOnce(&mut Objects<'a, Loader>, Source<'a>) -> T) -> T {
+        let loaded = self.loader.package(id);
+        let mut objects = Objects::with_layout_cache(&self.loader, std::mem::take(&mut self.layouts));
+        let value = read(&mut objects, Source { package: &loaded.package, data: &loaded.data });
+        self.layouts = objects.into_layout_cache();
+        value
+    }
+
     pub fn export_of(&mut self, id: PackageId, reference: i32) -> Option<(PackageId, usize)> {
         match self.loader.resolve(id, reference).ok()?? {
             Resolved { package, export: Some(export) } => Some((package, export)),
@@ -349,8 +359,7 @@ impl Game {
     }
 
     fn combiner_at(&mut self, id: PackageId, export: usize) -> Option<p2_assets::Combiner> {
-        let (package, data) = self.data(id);
-        read_combiner(&mut Objects::new(&self.loader), Source { package, data }, export).ok()
+        self.with_objects(id, |objects, source| read_combiner(objects, source, export).ok())
     }
 
     fn combiner_tint(&mut self, id: PackageId, export: usize) -> Option<[u8; 4]> {
@@ -431,10 +440,7 @@ impl Game {
     pub fn specular_image(&mut self, specular: SpecularSource) -> Option<Image> {
         let (id, export) = specular.image;
         Some(if specular.cube {
-            let faces = {
-                let (package, data) = self.data(id);
-                read_cubemap_faces(&mut Objects::new(&self.loader), Source { package, data }, export).ok()?
-            };
+            let faces = self.with_objects(id, |objects, source| read_cubemap_faces(objects, source, export).ok())?;
             let mut decoded = Vec::new();
             for face in faces {
                 let (face_id, face_export) = self.export_of(id, face)?;
@@ -481,10 +487,7 @@ impl Game {
     }
 
     fn combine_source(&mut self, id: PackageId, export: usize) -> Option<CombineSource> {
-        let combiner = {
-            let (package, data) = self.data(id);
-            read_combiner(&mut Objects::new(&self.loader), Source { package, data }, export).ok()?
-        };
+        let combiner = self.combiner_at(id, export)?;
         let material1 = self.still_texture(id, combiner.material1)?;
         let material2 = self.still_texture(id, combiner.material2)?;
         let mask = match combiner.mask {
@@ -516,13 +519,11 @@ impl Game {
     pub fn wet_source(&mut self, source: TextureSource) -> Option<WetSource> {
         let (wet_id, wet_export) = source.wet?;
         let (texture_id, texture_export) = source.texture?;
-        let (params, size) = {
-            let (package, data) = self.data(wet_id);
-            let (source, mut objects) = (Source { package, data }, self.objects());
-            let texture = read_texture(&mut objects, source, wet_export);
+        let (params, size) = self.with_objects(wet_id, |objects, source| {
+            let texture = read_texture(objects, source, wet_export);
             let size = texture.ok().and_then(|t| t.mips.first().map(|m| (m.width, m.height)));
-            (read_wet_params(&mut objects, source, wet_export).ok()?, size)
-        };
+            Some((read_wet_params(objects, source, wet_export).ok()?, size))
+        })?;
         let (texture, palette) = self.texture_at(texture_id, texture_export)?;
         let palette = palette.filter(|_| texture.format == TextureFormat::P8)?;
         let mip = texture.mips.first()?;
@@ -587,10 +588,7 @@ impl Game {
     }
 
     fn texture_at(&mut self, id: PackageId, export: usize) -> Option<(Texture, Option<Vec<[u8; 4]>>)> {
-        let texture = {
-            let (package, data) = self.data(id);
-            read_texture(&mut Objects::new(&self.loader), Source { package, data }, export).ok()?
-        };
+        let texture = self.with_objects(id, |objects, source| read_texture(objects, source, export).ok())?;
         let palette = match texture.palette {
             Some(reference) => {
                 let (palette_id, palette_export) = self.export_of(id, reference)?;
@@ -617,8 +615,7 @@ impl Game {
         let mut specular = None;
         let mut switch = None;
         for _ in 0..MAX_HOPS {
-            let (package, data) = self.data(id);
-            let found = base_texture(&mut Objects::new(&self.loader), Source { package, data }, material, state).ok()?;
+            let found = self.with_objects(id, |objects, source| base_texture(objects, source, material, &mut *state)).ok()?;
             let export = |reference: Option<i32>| reference.and_then(|reference| usize::try_from(reference - 1).ok().map(|export| (id, export)));
             opacity = opacity.or(state.opacity.map(|reference| (id, reference)));
             wet = wet.or(export(state.wet));

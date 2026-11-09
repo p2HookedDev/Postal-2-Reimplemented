@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 p2-package.workspace = true
+rustc-hash.workspace = true
 thiserror.workspace = true
 
 [lints]

@@ -23,7 +23,7 @@ use bevy::time::{Time, TimeUpdateStrategy};
 use bevy::transform::TransformPlugin;
 use bevy::transform::components::{GlobalTransform, Transform, TransformTreeChanged};
 use p2_assets::{AnalogTrack, AnimSequence, Bone, Influence, MeshAnimation, NamedBone, SkelMeshSection, SkeletalMesh, Wedge};
-use p2_bevy_assets::{bone_matrices, skeletal_mesh_to_meshes, skin_bind_transforms, skin_inverse_bindposes, unreal_to_bevy};
+use p2_bevy_assets::{bone_matrices, skeletal_mesh_to_meshes, skin_bind, unreal_to_bevy};
 use p2_engine::animation::{Animated, AnimatedMesh, AnimationPlugin};
 use p2_engine::mesh_view::{ActorModel, FollowActor, SectionMaterial, SectionView, Skin, SkinJoint, spawn_actor_sections};
 use p2_engine::play::FrameTimes;
@@ -241,8 +241,9 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
     let animation = Arc::new(pawn_animation(&pawn));
     let sections: Vec<Handle<Mesh>> =
         skeletal_mesh_to_meshes(&pawn, true).into_iter().map(|(mesh, _)| world.resource_mut::<Assets<Mesh>>().add(mesh)).collect();
-    let inverse_bindposes = world.resource_mut::<Assets<SkinnedMeshInverseBindposes>>().add(SkinnedMeshInverseBindposes::from(skin_inverse_bindposes(&pawn)));
-    let skin = Skin { inverse_bindposes, bind: skin_bind_transforms(&pawn).into() };
+    let (inverse, bind) = skin_bind(&pawn);
+    let inverse_bindposes = world.resource_mut::<Assets<SkinnedMeshInverseBindposes>>().add(SkinnedMeshInverseBindposes::from(inverse));
+    let skin = Skin { inverse_bindposes, bind: bind.into() };
     let small = world.resource_mut::<Assets<Mesh>>().add(triangle());
     let center = Vec3::new(5000.0, 0.0, 5000.0);
     let root = world.spawn((Transform::from_translation(-center), Visibility::default())).id();

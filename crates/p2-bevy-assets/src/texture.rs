@@ -42,33 +42,41 @@ pub fn texture_image(texture: &Texture, palette: Option<&[[u8; 4]]>, compression
         _ => &[],
     };
 
-    let mut data = Vec::new();
+    let passthrough = match texture.format {
+        TextureFormat::Rgba8 => true,
+        TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5 => compressed,
+        _ => false,
+    };
+    let mips = texture.mips.iter().take(32);
+    let mut data = Vec::with_capacity(mips.clone().map(|mip| if passthrough { mip.data.len() } else { mip.width as usize * mip.height as usize * 4 }).sum());
     let mut levels = 0;
-    for (level, mip) in texture.mips.iter().enumerate().take(32) {
+    for (level, mip) in mips.enumerate() {
         let expected = ((base.width >> level).max(1), (base.height >> level).max(1));
         if mip.data.is_empty() || (mip.width, mip.height) != expected || mip.data.len() < texture.format.mip_bytes(mip.width, mip.height) {
             break;
         }
-        match texture.format {
-            TextureFormat::Rgba8 => data.extend_from_slice(&mip.data),
-            TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5 if compressed => data.extend_from_slice(&mip.data),
-            _ => {
-                let Some((_, _, texels)) = p2_assets::mip_rgba(texture, level, Some(palette)) else { break };
-                data.extend(texels.iter().flatten());
-            }
+        if passthrough {
+            data.extend_from_slice(&mip.data);
+        } else {
+            let Some((_, _, texels)) = p2_assets::mip_rgba(texture, level, Some(palette)) else { break };
+            data.extend(texels.iter().flatten());
         }
         levels += 1;
     }
     if levels == 0 {
         return None;
     }
+    let sampler = texture_quality().sampler(texture.lod_set, levels, [ImageAddressMode::Repeat; 2]);
+    Some(image_2d([base.width, base.height, 1], format, (data, levels), sampler))
+}
 
-    let size = Extent3d { width: base.width, height: base.height, depth_or_array_layers: 1 };
+pub(crate) fn image_2d([width, height, layers]: [u32; 3], format: GpuFormat, (data, levels): (Vec<u8>, u32), sampler: ImageSampler) -> Image {
+    let size = Extent3d { width, height, depth_or_array_layers: layers };
     let mut image = Image::new_uninit(size, TextureDimension::D2, format, RenderAssetUsages::RENDER_WORLD);
     image.texture_descriptor.mip_level_count = levels;
     image.data = Some(data);
-    image.sampler = texture_quality().sampler(texture.lod_set, levels, [ImageAddressMode::Repeat; 2]);
-    Some(image)
+    image.sampler = sampler;
+    image
 }
 
 pub fn texture_with_opacity(
@@ -150,28 +158,22 @@ pub fn cube_image(faces: [(u32, u32, &[[u8; 4]]); 6]) -> Image {
             data.extend(texels.get(((y * h / height) * w + x * w / width) as usize).copied().unwrap_or([0; 4]));
         }
     }
-    let size = Extent3d { width, height, depth_or_array_layers: 6 };
-    let mut image = Image::new_uninit(size, TextureDimension::D2, GpuFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    image.data = Some(data);
+    let mut image = image_2d([width, height, 6], GpuFormat::Rgba8UnormSrgb, (data, 1), ImageSampler::Descriptor(ImageSamplerDescriptor::linear()));
     image.texture_view_descriptor =
         Some(wgpu_types::TextureViewDescriptor { dimension: Some(wgpu_types::TextureViewDimension::Cube), ..Default::default() });
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
     image
 }
 
 fn rgba_image(width: u32, height: u32, texels: Vec<[u8; 4]>) -> Image {
     let (data, levels) = with_mips(width, height, texels);
-    let size = Extent3d { width, height, depth_or_array_layers: 1 };
-    let mut image = Image::new_uninit(size, TextureDimension::D2, GpuFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    image.texture_descriptor.mip_level_count = levels;
-    image.data = Some(data);
-    image.sampler = texture_quality().sampler(0, levels, [ImageAddressMode::Repeat; 2]);
-    image
+    let sampler = texture_quality().sampler(0, levels, [ImageAddressMode::Repeat; 2]);
+    image_2d([width, height, 1], GpuFormat::Rgba8UnormSrgb, (data, levels), sampler)
 }
 
 pub(crate) fn with_mips<const N: usize>(width: u32, height: u32, mut texels: Vec<[u8; N]>) -> (Vec<u8>, u32) {
     let (mut w, mut h) = (width, height);
-    let mut data: Vec<u8> = texels.iter().flatten().copied().collect();
+    let mut data = Vec::with_capacity(texels.len() * N * 4 / 3 + N);
+    data.extend(texels.iter().flatten());
     let mut levels = 1;
     while w > 1 && h > 1 && w % 2 == 0 && h % 2 == 0 {
         let previous = texels;

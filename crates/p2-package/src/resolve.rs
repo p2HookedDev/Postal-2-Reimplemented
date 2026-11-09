@@ -1,8 +1,10 @@
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use crate::{Error, Export, Ini, Package};
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::caseless::{Caseless, Text, caseless_cmp};
+use crate::{Error, Export, Ini, Package, split_path};
 
 const RF_PUBLIC: u32 = 0x0000_0004;
 const MAX_IMPORT_DEPTH: usize = 64;
@@ -25,12 +27,30 @@ pub enum ResolveError {
     BadReference(i32),
 }
 
-pub fn exports_by_name(package: &Package) -> HashMap<String, Vec<usize>> {
-    let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, export) in package.exports.iter().enumerate() {
-        by_name.entry(package.name(export.object_name).to_ascii_lowercase()).or_default().push(index);
+/// Export indices sorted by name, any case; every call takes the package it was built from.
+#[derive(Debug)]
+pub struct ExportsByName(Box<[usize]>);
+
+impl ExportsByName {
+    pub fn new(package: &Package) -> Self {
+        let names: Vec<_> = package.exports.iter().map(|export| package.name(export.object_name)).collect();
+        let mut order: Vec<usize> = (0..package.exports.len()).collect();
+        order.sort_by(|&a, &b| caseless_cmp(names[a], names[b]));
+        Self(order.into_boxed_slice())
     }
-    by_name
+
+    /// The exports named `name`, ascending.
+    pub fn get(&self, package: &Package, name: &str) -> &[usize] {
+        let order_of = |index: &usize| caseless_cmp(package.name(package.exports[*index].object_name), name);
+        let start = self.0.partition_point(|index| order_of(index).is_lt());
+        let len = self.0[start..].partition_point(|index| order_of(index).is_eq());
+        &self.0[start..start + len]
+    }
+
+    pub fn export_by_path(&self, package: &Package, path: &str) -> Option<usize> {
+        let (outers, name) = split_path(path);
+        package.export_among(self.get(package, name).iter().copied(), outers)
+    }
 }
 
 pub fn map_file(path: &Path) -> std::io::Result<memmap2::Mmap> {
@@ -56,17 +76,19 @@ pub struct LoadedPackage {
     pub path: PathBuf,
     pub package: Package,
     pub data: memmap2::Mmap,
-    exports_by_name: HashMap<String, Vec<usize>>,
+    exports_by_name: ExportsByName,
 }
 
-/// Finds packages by name in the search paths, loads them on demand, and resolves imports. Cloning is cheap (loaded
-/// packages are shared): a clone that loads more packages keeps every [`PackageId`] of the original.
+/// Finds packages by name in the search paths, loads them on demand, and resolves imports. A clone shares the loaded
+/// packages and copies the resolved-import cache: a clone that loads more packages keeps every [`PackageId`] of the original.
 #[derive(Debug, Default, Clone)]
 pub struct Loader {
-    files: HashMap<String, PathBuf>,
+    files: FxHashMap<Caseless, PathBuf>,
     packages: Vec<Arc<LoadedPackage>>,
-    ids: HashMap<String, PackageId>,
-    ids_by_address: HashMap<usize, PackageId>,
+    ids: FxHashMap<Caseless, PackageId>,
+    ids_by_address: FxHashMap<usize, PackageId>,
+    /// Successes only: a package's imports never change and ids only grow, while a failure may resolve after a later load.
+    resolved_imports: Vec<Box<[OnceLock<Resolved>]>>,
 }
 
 pub fn search_paths(ini: &str) -> Vec<String> {
@@ -93,7 +115,7 @@ impl Loader {
     }
 
     pub fn new(system_dir: &Path, search_paths: &[String]) -> Result<Self, ResolveError> {
-        let mut files = HashMap::new();
+        let mut files = FxHashMap::default();
         for pattern in search_paths {
             let Some((dir, ext)) = pattern.split_once('*') else { continue };
             let dir = system_dir.join(dir.replace('\\', "/"));
@@ -107,7 +129,7 @@ impl Loader {
                 let entry = entry.map_err(|source| ResolveError::Io { path: dir.clone(), source })?;
                 let Some(file_name) = entry.file_name().to_str().map(str::to_ascii_lowercase) else { continue };
                 if let Some(name) = file_name.strip_suffix(&ext) {
-                    files.entry(name.to_owned()).or_insert_with(|| entry.path());
+                    files.entry(Caseless(name.into())).or_insert_with(|| entry.path());
                 }
             }
         }
@@ -115,37 +137,41 @@ impl Loader {
     }
 
     pub fn package_names(&self) -> impl Iterator<Item = &str> {
-        self.files.keys().map(String::as_str)
+        self.files.keys().map(|key| &*key.0)
     }
 
     pub fn find(&self, name: &str) -> Option<&Path> {
-        self.files.get(&name.to_ascii_lowercase()).map(PathBuf::as_path)
+        self.files.get(&name as &dyn Text).map(PathBuf::as_path)
     }
 
     pub fn load(&mut self, name: &str) -> Result<PackageId, ResolveError> {
-        let key = name.to_ascii_lowercase();
-        if let Some(&id) = self.ids.get(&key) {
+        if let Some(id) = self.loaded_id(name) {
             return Ok(id);
         }
-        let path = self.files.get(&key).ok_or_else(|| ResolveError::PackageNotFound(name.to_owned()))?.clone();
+        let (key, path) = self.files.get_key_value(&name as &dyn Text).ok_or_else(|| ResolveError::PackageNotFound(name.to_owned()))?;
+        let (key, path) = (key.clone(), path.clone());
         let data = map_file(&path).map_err(|source| ResolveError::Io { path: path.clone(), source })?;
         let package = Package::parse(&data).map_err(|source| ResolveError::Parse { path: path.clone(), source })?;
 
-        let exports_by_name = exports_by_name(&package);
+        let exports_by_name = ExportsByName::new(&package);
         let name = path.file_stem().map_or_else(|| name.to_owned(), |s| s.to_string_lossy().into_owned());
+        Ok(self.push(key, Arc::new(LoadedPackage { name, path, package, data, exports_by_name })))
+    }
+
+    fn push(&mut self, key: Caseless, loaded: Arc<LoadedPackage>) -> PackageId {
         let id = PackageId(self.packages.len());
-        let loaded = Arc::new(LoadedPackage { name, path, package, data, exports_by_name });
         self.ids_by_address.insert(std::ptr::from_ref(&loaded.package) as usize, id);
+        self.resolved_imports.push(loaded.package.imports.iter().map(|_| OnceLock::new()).collect());
         self.packages.push(loaded);
         self.ids.insert(key, id);
-        Ok(id)
+        id
     }
 
     pub fn load_scripts(&mut self) -> Result<(), ResolveError> {
         let is_script = |path: &PathBuf| path.extension().is_some_and(|e| e.eq_ignore_ascii_case("u"));
-        let names: Vec<String> = self.files.iter().filter(|(_, path)| is_script(path)).map(|(n, _)| n.clone()).collect();
+        let names: Vec<Caseless> = self.files.iter().filter(|(_, path)| is_script(path)).map(|(n, _)| n.clone()).collect();
         for name in names {
-            self.load(&name)?;
+            self.load(&name.0)?;
         }
         Ok(())
     }
@@ -166,8 +192,12 @@ impl Loader {
     }
 
     pub fn resolve_import(&mut self, id: PackageId, index: usize) -> Result<Resolved, ResolveError> {
+        if let Some(&resolved) = self.resolved_imports[id.0].get(index).and_then(OnceLock::get) {
+            return Ok(resolved);
+        }
         let top = self.top_package(id, index)?;
-        self.load(&top)?;
+        let loaded = Arc::clone(&self.packages[id.0]);
+        self.load(loaded.package.name(top))?;
         self.resolve_loaded_import(id, index, 0)
     }
 
@@ -182,19 +212,22 @@ impl Loader {
     }
 
     pub fn export_by_path(&mut self, path: &str) -> Result<Option<(PackageId, usize)>, ResolveError> {
-        if let Some((package, _)) = path.split_once('.') {
-            self.load(package)?;
-        }
-        Ok(self.loaded_export_by_path(path))
+        self.load_path_package(path)?;
+        Ok(self.find_loaded_export(path, None))
     }
 
     /// A package may hold objects of different classes under one name (`ED_Weapons.ED_Chainsaw_NEW` is a
     /// mesh and its `MeshAnimation`), so the class tells them apart.
     pub fn export_by_path_of_class(&mut self, path: &str, class: &str) -> Result<Option<(PackageId, usize)>, ResolveError> {
+        self.load_path_package(path)?;
+        Ok(self.find_loaded_export(path, Some(class)))
+    }
+
+    fn load_path_package(&mut self, path: &str) -> Result<(), ResolveError> {
         if let Some((package, _)) = path.split_once('.') {
             self.load(package)?;
         }
-        Ok(self.find_loaded_export(path, Some(class)))
+        Ok(())
     }
 
     pub fn loaded_export_by_path(&self, path: &str) -> Option<(PackageId, usize)> {
@@ -206,18 +239,15 @@ impl Loader {
     }
 
     fn find_loaded_export(&self, path: &str, class: Option<&str>) -> Option<(PackageId, usize)> {
-        let mut parts: Vec<&str> = path.split('.').collect();
-        if parts.len() < 2 {
-            return None;
-        }
-        let id = self.loaded_id(parts.remove(0))?;
+        let (package, rest) = path.split_once('.')?;
+        let id = self.loaded_id(package)?;
         let loaded = self.package(id);
         let pkg = &loaded.package;
-        let (name, outers) = parts.split_last()?;
+        let (outers, name) = split_path(rest);
         let of_class = |index: &usize| {
             class.is_none_or(|class| pkg.object_name(pkg.exports[*index].class_index).unwrap_or("Class").eq_ignore_ascii_case(class))
         };
-        let candidates = loaded.exports_by_name.get(&name.to_ascii_lowercase()).into_iter().flatten().copied().filter(of_class);
+        let candidates = loaded.exports_by_name.get(pkg, name).iter().copied().filter(of_class);
         pkg.export_among(candidates, outers).map(|index| (id, index))
     }
 
@@ -227,7 +257,7 @@ impl Loader {
 
     pub fn load_imports_with(&mut self, id: PackageId, mut progress: impl FnMut(usize, usize)) -> Result<(), ResolveError> {
         let mut pending = vec![id];
-        let mut reached = HashSet::from([id]);
+        let mut reached: FxHashSet<PackageId> = [id].into_iter().collect();
         let mut done = 0;
         while let Some(id) = pending.pop() {
             done += 1;
@@ -253,42 +283,39 @@ impl Loader {
     pub fn load_imported(&mut self, classes: &[&str]) -> Result<usize, ResolveError> {
         let (mut scanned, mut count) = (0, 0);
         while scanned < self.packages.len() {
-            let mut wanted = Vec::new();
+            let mut wanted: Vec<String> = Vec::new();
             for index in scanned..self.packages.len() {
                 let pkg = &self.packages[index].package;
                 for (i, import) in pkg.imports.iter().enumerate() {
                     if classes.iter().any(|c| pkg.name(import.class_name).eq_ignore_ascii_case(c))
-                        && let Ok(name) = self.top_package(PackageId(index), i)
+                        && let Ok(name) = self.top_package(PackageId(index), i).map(|top| pkg.name(top))
+                        && self.loaded_id(name).is_none()
+                        && self.find(name).is_some()
+                        && !wanted.iter().any(|known| known.eq_ignore_ascii_case(name))
                     {
-                        wanted.push(name);
+                        wanted.push(name.to_owned());
                     }
                 }
             }
             scanned = self.packages.len();
             for name in wanted {
-                if self.loaded_id(&name).is_none() && self.find(&name).is_some() {
-                    self.load(&name)?;
-                    count += 1;
-                }
+                self.load(&name)?;
+                count += 1;
             }
         }
         Ok(count)
     }
 
     pub fn adopt(&mut self, other: &Self) {
-        let mut added: Vec<(&String, PackageId)> = other.ids.iter().filter(|(key, _)| !self.ids.contains_key(*key)).map(|(k, &id)| (k, id)).collect();
+        let mut added: Vec<(&Caseless, PackageId)> = other.ids.iter().filter(|(key, _)| !self.ids.contains_key(*key)).map(|(k, &id)| (k, id)).collect();
         added.sort_by_key(|(_, id)| id.0);
         for (key, id) in added {
-            let adopted = PackageId(self.packages.len());
-            self.ids.insert(key.clone(), adopted);
-            let loaded = Arc::clone(&other.packages[id.0]);
-            self.ids_by_address.insert(std::ptr::from_ref(&loaded.package) as usize, adopted);
-            self.packages.push(loaded);
+            self.push(key.clone(), Arc::clone(&other.packages[id.0]));
         }
     }
 
     pub fn loaded_id(&self, name: &str) -> Option<PackageId> {
-        self.ids.get(&name.to_ascii_lowercase()).copied()
+        self.ids.get(&name as &dyn Text).copied()
     }
 
     pub fn id_of(&self, package: &Package) -> Option<PackageId> {
@@ -300,13 +327,14 @@ impl Loader {
         Some((resolved.package, resolved.export?))
     }
 
-    fn top_package(&self, id: PackageId, index: usize) -> Result<String, ResolveError> {
+    /// The name index of the package at the top of import `index`'s outer chain.
+    fn top_package(&self, id: PackageId, index: usize) -> Result<usize, ResolveError> {
         let pkg = &self.package(id).package;
         let mut current = index;
         for _ in 0..=pkg.imports.len() {
             let import = pkg.imports.get(current).ok_or(ResolveError::BadReference(-(current as i32) - 1))?;
             match import.package_index {
-                0 => return Ok(pkg.name(import.object_name).to_owned()),
+                0 => return Ok(import.object_name),
                 n @ ..0 => current = n.unsigned_abs() as usize - 1,
                 _ => break,
             }
@@ -315,8 +343,17 @@ impl Loader {
     }
 
     fn resolve_loaded_import(&self, id: PackageId, index: usize, depth: usize) -> Result<Resolved, ResolveError> {
+        let cached = self.resolved_imports[id.0].get(index).ok_or(ResolveError::BadReference(-(index as i32) - 1))?;
+        if let Some(&resolved) = cached.get() {
+            return Ok(resolved);
+        }
+        let resolved = self.resolve_uncached_import(id, index, depth)?;
+        Ok(*cached.get_or_init(|| resolved))
+    }
+
+    fn resolve_uncached_import(&self, id: PackageId, index: usize, depth: usize) -> Result<Resolved, ResolveError> {
         let pkg = &self.package(id).package;
-        let import = pkg.imports.get(index).ok_or(ResolveError::BadReference(-(index as i32) - 1))?;
+        let import = &pkg.imports[index];
         if depth > MAX_IMPORT_DEPTH {
             return Err(ResolveError::BadImport(import_path(pkg, index)));
         }
@@ -326,8 +363,7 @@ impl Loader {
 
         let outer = match import.package_index {
             0 if class_name.eq_ignore_ascii_case("Package") && class_package.eq_ignore_ascii_case("Core") => {
-                let package = self.ids.get(&object_name.to_ascii_lowercase()).copied();
-                let package = package.ok_or_else(|| ResolveError::PackageNotFound(object_name.to_owned()))?;
+                let package = self.loaded_id(object_name).ok_or_else(|| ResolveError::PackageNotFound(object_name.to_owned()))?;
                 return Ok(Resolved { package, export: None });
             }
             n @ ..0 => self.resolve_loaded_import(id, n.unsigned_abs() as usize - 1, depth + 1)?,
@@ -350,8 +386,7 @@ impl Loader {
 
 impl LoadedPackage {
     fn find_export(&self, name: &str, class_name: &str, class_package: &str, outer: Option<usize>) -> Option<usize> {
-        let candidates = self.exports_by_name.get(&name.to_ascii_lowercase())?;
-        candidates.iter().rev().copied().find(|&index| {
+        self.exports_by_name.get(&self.package, name).iter().rev().copied().find(|&index| {
             let export = &self.package.exports[index];
             let (export_class, export_class_package) = self.export_class(export);
             let outer_matches = match outer {

@@ -111,9 +111,9 @@ pub fn skeletal_mesh_sections<S: SceneAssets>(
     gpu_skin: bool,
 ) -> (Vec<SectionView>, Vec<Handle<Mesh>>) {
     let mut handles = Vec::new();
-    let gpu_skin = (gpu_skin && mesh.bones.len() <= MAX_JOINTS).then(|| Skin {
-        inverse_bindposes: t.add_bindposes(SkinnedMeshInverseBindposes::from(skin_inverse_bindposes(mesh))),
-        bind: skin_bind_transforms(mesh).into(),
+    let gpu_skin = (gpu_skin && mesh.bones.len() <= MAX_JOINTS).then(|| {
+        let (inverse, bind) = skin_bind(mesh);
+        Skin { inverse_bindposes: t.add_bindposes(SkinnedMeshInverseBindposes::from(inverse)), bind: bind.into() }
     });
     let sections = skeletal_mesh_to_meshes(mesh, gpu_skin.is_some())
         .into_iter()

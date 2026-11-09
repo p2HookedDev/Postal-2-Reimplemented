@@ -1,9 +1,9 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
-use wgpu_types::{Extent3d, TextureDimension, TextureFormat as GpuFormat};
+use wgpu_types::TextureFormat as GpuFormat;
 use crate::coords::to_bevy;
-use crate::texture::with_mips;
+use crate::texture::{image_2d, with_mips};
 
 pub struct SectorVertices<'a> {
     triangles: &'a [[usize; 3]],
@@ -60,13 +60,8 @@ pub fn terrain_vertex_color(lighting: Option<&[[u8; 4]]>, index: usize) -> [f32;
 }
 
 pub fn alpha_map_image(width: u32, height: u32, alpha: &[u8]) -> Image {
-    let (data, levels) = with_mips(width, height, alpha.iter().map(|&a| [a]).collect::<Vec<[u8; 1]>>());
-    let size = Extent3d { width, height, depth_or_array_layers: 1 };
-    let mut image = Image::new_uninit(size, TextureDimension::D2, GpuFormat::R8Unorm, RenderAssetUsages::RENDER_WORLD);
-    image.texture_descriptor.mip_level_count = levels;
-    image.data = Some(data);
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
-    image
+    let mips = with_mips(width, height, alpha.iter().map(|&a| [a]).collect::<Vec<[u8; 1]>>());
+    image_2d([width, height, 1], GpuFormat::R8Unorm, mips, ImageSampler::Descriptor(ImageSamplerDescriptor::linear()))
 }
 
 #[cfg(test)]

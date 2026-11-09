@@ -68,6 +68,10 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.array()?))
     }
 
+    pub fn u64(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_le_bytes(self.array()?))
+    }
+
     pub fn i32(&mut self) -> Result<i32, Error> {
         Ok(i32::from_le_bytes(self.array()?))
     }

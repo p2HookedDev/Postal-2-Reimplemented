@@ -1,12 +1,12 @@
 //! An object's properties as loaded: its class's defaults, then its saved tags over them. The two
 //! index different packages, so every value is found together with the package it indexes.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use p2_package::Package;
+use rustc_hash::FxHashMap;
 
-use crate::layout::{Layouts, Resolve, Source, reference};
+use crate::layout::{LayoutCache, Layouts, Resolve, Source, layout_key, reference};
 use crate::value::{Properties, StoredValue, read_properties};
 use crate::Error;
 
@@ -79,24 +79,28 @@ impl<'a> ObjectProperties<'a> {
     }
 
     pub fn vector(&self, name: &str) -> [f32; 3] {
-        ["X", "Y", "Z"].map(|member| match self.member(name, 0, member) {
-            Some((_, &StoredValue::Float(value))) => value,
-            _ => 0.0,
+        self.members(name, ["X", "Y", "Z"], |value| match *value {
+            StoredValue::Float(value) => Some(value),
+            _ => None,
         })
     }
 
     pub fn rotator(&self, name: &str) -> [i32; 3] {
-        ["Pitch", "Yaw", "Roll"].map(|member| match self.member(name, 0, member) {
-            Some((_, &StoredValue::Int(value))) => value,
-            _ => 0,
+        self.members(name, ["Pitch", "Yaw", "Roll"], |value| match *value {
+            StoredValue::Int(value) => Some(value),
+            _ => None,
         })
     }
 
     pub fn color(&self, name: &str) -> [u8; 4] {
-        ["R", "G", "B", "A"].map(|member| match self.member(name, 0, member) {
-            Some((_, &StoredValue::Byte(value))) => value,
-            _ => 0,
+        self.members(name, ["R", "G", "B", "A"], |value| match *value {
+            StoredValue::Byte(value) => Some(value),
+            _ => None,
         })
+    }
+
+    fn members<T: Default, const N: usize>(&self, name: &str, members: [&str; N], value: impl Fn(&StoredValue) -> Option<T>) -> [T; N] {
+        members.map(|member| self.member(name, 0, member).and_then(|(_, stored)| value(stored)).unwrap_or_default())
     }
 
     fn layers(&self) -> impl DoubleEndedIterator<Item = &Layer<'a>> {
@@ -111,12 +115,21 @@ fn find<'v>(properties: &'v Properties, name: &str, index: u32) -> Option<&'v St
 pub struct Objects<'a, R: ?Sized> {
     resolver: &'a R,
     layouts: Layouts<&'a R>,
-    defaults: HashMap<(usize, usize), Arc<[Arc<Layer<'a>>]>>,
+    defaults: FxHashMap<(usize, usize), Arc<[Arc<Layer<'a>>]>>,
 }
 
 impl<'a, R: Resolve + ?Sized> Objects<'a, R> {
     pub fn new(resolver: &'a R) -> Self {
-        Self { resolver, layouts: Layouts::new(resolver), defaults: HashMap::new() }
+        Self::with_layout_cache(resolver, LayoutCache::default())
+    }
+
+    /// See [`LayoutCache`] for when a cache may be reused.
+    pub fn with_layout_cache(resolver: &'a R, cache: LayoutCache) -> Self {
+        Self { resolver, layouts: Layouts::with_cache(resolver, cache), defaults: FxHashMap::default() }
+    }
+
+    pub fn into_layout_cache(self) -> LayoutCache {
+        self.layouts.cache
     }
 
     /// Properties of object `export` of `src` (not of a class: classes save no tags of their own).
@@ -133,7 +146,7 @@ impl<'a, R: Resolve + ?Sized> Objects<'a, R> {
     }
 
     fn defaults(&mut self, src: Source<'a>, export: usize) -> Result<Arc<[Arc<Layer<'a>>]>, Error> {
-        let key = (std::ptr::from_ref(src.package) as usize, export);
+        let key = layout_key(src.package, export);
         if let Some(layers) = self.defaults.get(&key) {
             return Ok(Arc::clone(layers));
         }

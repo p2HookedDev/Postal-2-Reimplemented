@@ -11,7 +11,7 @@ use p2_package::{Export, Package, Reader};
 
 pub use bytecode::{Callee, Expr, Statement, cast_name, decode_script, decode_script_linked};
 pub use disasm::{NativeName, disassemble, native_names};
-pub use layout::{FieldLayout, Layouts, Resolve, Source, StructLayout, Type};
+pub use layout::{FieldLayout, LayoutCache, Layouts, Resolve, Source, StructLayout, Type};
 pub use object::{Layer, ObjectProperties, Objects};
 pub use value::{Properties, PropertyValue, SkipReason, SkippedTag, StoredValue, read_properties};
 
@@ -261,32 +261,33 @@ enum PropertyClass {
     Delegate,
 }
 
+const DEFINITIONS: [(&str, Definition); 21] = [
+    ("Class", Definition::Class),
+    ("Struct", Definition::Struct),
+    ("State", Definition::State),
+    ("Function", Definition::Function),
+    ("Enum", Definition::Enum),
+    ("Const", Definition::Const),
+    ("TextBuffer", Definition::TextBuffer),
+    ("ByteProperty", Definition::Property(PropertyClass::Byte)),
+    ("IntProperty", Definition::Property(PropertyClass::Int)),
+    ("BoolProperty", Definition::Property(PropertyClass::Bool)),
+    ("FloatProperty", Definition::Property(PropertyClass::Float)),
+    ("ObjectProperty", Definition::Property(PropertyClass::Object)),
+    ("ClassProperty", Definition::Property(PropertyClass::Class)),
+    ("NameProperty", Definition::Property(PropertyClass::Name)),
+    ("StrProperty", Definition::Property(PropertyClass::Str)),
+    ("StringProperty", Definition::Property(PropertyClass::String)),
+    ("ArrayProperty", Definition::Property(PropertyClass::Array)),
+    ("StructProperty", Definition::Property(PropertyClass::Struct)),
+    ("MapProperty", Definition::Property(PropertyClass::Map)),
+    ("FixedArrayProperty", Definition::Property(PropertyClass::FixedArray)),
+    ("DelegateProperty", Definition::Property(PropertyClass::Delegate)),
+];
+
 impl Definition {
     fn from_class_name(name: &str) -> Option<Self> {
-        Some(match name.to_ascii_lowercase().as_str() {
-            "class" => Self::Class,
-            "struct" => Self::Struct,
-            "state" => Self::State,
-            "function" => Self::Function,
-            "enum" => Self::Enum,
-            "const" => Self::Const,
-            "textbuffer" => Self::TextBuffer,
-            "byteproperty" => Self::Property(PropertyClass::Byte),
-            "intproperty" => Self::Property(PropertyClass::Int),
-            "boolproperty" => Self::Property(PropertyClass::Bool),
-            "floatproperty" => Self::Property(PropertyClass::Float),
-            "objectproperty" => Self::Property(PropertyClass::Object),
-            "classproperty" => Self::Property(PropertyClass::Class),
-            "nameproperty" => Self::Property(PropertyClass::Name),
-            "strproperty" => Self::Property(PropertyClass::Str),
-            "stringproperty" => Self::Property(PropertyClass::String),
-            "arrayproperty" => Self::Property(PropertyClass::Array),
-            "structproperty" => Self::Property(PropertyClass::Struct),
-            "mapproperty" => Self::Property(PropertyClass::Map),
-            "fixedarrayproperty" => Self::Property(PropertyClass::FixedArray),
-            "delegateproperty" => Self::Property(PropertyClass::Delegate),
-            _ => return None,
-        })
+        DEFINITIONS.iter().find(|(class, _)| class.eq_ignore_ascii_case(name)).map(|&(_, definition)| definition)
     }
 }
 

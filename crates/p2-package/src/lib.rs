@@ -1,5 +1,6 @@
 //! Package reader: layouts follow POSTAL 2 (package version 118, licensee 2).
 
+mod caseless;
 mod ini;
 mod object;
 mod reader;
@@ -9,7 +10,7 @@ pub use ini::Ini;
 pub use object::{ObjectData, Property, PropertyTag, TagValue, tag};
 pub use reader::Reader;
 pub use memmap2::Mmap;
-pub use resolve::{LoadedPackage, Loader, PackageId, ResolveError, Resolved, exports_by_name, import_path, map_file, search_paths};
+pub use resolve::{ExportsByName, LoadedPackage, Loader, PackageId, ResolveError, Resolved, import_path, map_file, search_paths};
 
 pub const PACKAGE_TAG: u32 = 0x9e2a_83c1;
 
@@ -116,10 +117,11 @@ impl Package {
         Some(self.name(name))
     }
 
-    pub fn export_in(&self, index: usize, outers: &[&str]) -> bool {
+    /// `outers` run from the outermost group inwards.
+    pub fn export_in<'a>(&self, index: usize, outers: impl DoubleEndedIterator<Item = &'a str>) -> bool {
         let Some(export) = self.exports.get(index) else { return false };
         let mut outer = export.package_index;
-        for expected in outers.iter().rev() {
+        for expected in outers.rev() {
             let parent = usize::try_from(outer).ok().and_then(|outer| outer.checked_sub(1)).and_then(|index| self.exports.get(index));
             match parent {
                 Some(export) if self.name(export.object_name).eq_ignore_ascii_case(expected) => {
@@ -132,16 +134,25 @@ impl Package {
     }
 
     pub fn export_by_path(&self, path: &str) -> Option<usize> {
-        let parts: Vec<&str> = path.split('.').collect();
-        let (name, outers) = parts.split_last()?;
+        let (outers, name) = split_path(path);
         let named = |i: &usize| self.name(self.exports[*i].object_name).eq_ignore_ascii_case(name);
         self.export_among((0..self.exports.len()).filter(named), outers)
     }
 
-    pub(crate) fn export_among(&self, candidates: impl Iterator<Item = usize> + Clone, outers: &[&str]) -> Option<usize> {
-        let exact = candidates.clone().find(|&index| self.export_in(index, outers));
-        exact.or_else(|| if outers.is_empty() { candidates.clone().next() } else { None })
+    pub(crate) fn export_among<'a>(
+        &self,
+        candidates: impl Iterator<Item = usize> + Clone,
+        outers: impl DoubleEndedIterator<Item = &'a str> + Clone,
+    ) -> Option<usize> {
+        let exact = candidates.clone().find(|&index| self.export_in(index, outers.clone()));
+        exact.or_else(|| if outers.clone().next().is_none() { candidates.clone().next() } else { None })
     }
+}
+
+/// `Group.Sub.Name` into its outers (outermost first) and the object name.
+pub(crate) fn split_path(path: &str) -> (impl DoubleEndedIterator<Item = &str> + Clone, &str) {
+    let (outers, name) = path.rsplit_once('.').map_or((None, path), |(outers, name)| (Some(outers), name));
+    (outers.into_iter().flat_map(|outers| outers.split('.')), name)
 }
 
 impl Summary {

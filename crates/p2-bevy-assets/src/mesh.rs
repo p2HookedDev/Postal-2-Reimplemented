@@ -42,6 +42,7 @@ pub struct MeshBatch {
     uvs: Vec<[f32; 2]>,
     colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
+    remap: Vec<u32>,
 }
 
 impl MeshBatch {
@@ -58,7 +59,9 @@ impl MeshBatch {
         let Some(indices) = mesh.indices() else { return };
         let matrix = transform.to_matrix();
         let first = self.indices.len();
-        let mut remap = vec![u32::MAX; positions.len()];
+        let remap = &mut self.remap;
+        remap.clear();
+        remap.resize(positions.len(), u32::MAX);
         for index in indices.iter() {
             let Some(&position) = positions.get(index) else { continue };
             if remap[index] == u32::MAX {

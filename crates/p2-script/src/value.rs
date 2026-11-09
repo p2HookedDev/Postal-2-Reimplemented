@@ -9,9 +9,6 @@ use p2_package::{Package, PropertyTag, Reader};
 use crate::Error;
 use crate::layout::{FieldLayout, StructLayout, Type};
 
-/// Structs serialized as raw fields instead of tagged properties (version >= 118).
-const BINARY_STRUCTS: [&str; 3] = ["Vector", "Rotator", "Color"];
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Properties {
     pub values: Vec<PropertyValue>,
@@ -151,7 +148,7 @@ fn read_item(pkg: &Package, r: &mut Reader, ty: &Type) -> Result<StoredValue, Er
             check_elements(inner, i64::from(*count), r.pos())?;
             StoredValue::Array((0..*count).map(|_| read_item(pkg, r, inner)).collect::<Result<_, _>>()?)
         }
-        Type::Struct(layout) if is_binary(layout) => {
+        Type::Struct(layout) if layout.binary => {
             StoredValue::Struct(read_binary(pkg, r, layout)?)
         }
         Type::Struct(layout) => StoredValue::Struct(read_properties(pkg, r, layout)?),
@@ -172,10 +169,6 @@ fn read_binary(pkg: &Package, r: &mut Reader, layout: &StructLayout) -> Result<P
     Ok(Properties { values, skipped: Vec::new() })
 }
 
-fn is_binary(layout: &StructLayout) -> bool {
-    BINARY_STRUCTS.iter().any(|s| s.eq_ignore_ascii_case(&layout.name))
-}
-
 /// Rejects `count` elements of `inner` when an element takes no bytes: nothing but the declaration would then limit
 /// how many values a few damaged bytes ask for.
 fn check_elements(inner: &Type, count: i64, offset: usize) -> Result<(), Error> {
@@ -189,7 +182,7 @@ fn reads_nothing(ty: &Type) -> bool {
     match ty {
         Type::Map => true,
         Type::FixedArray(inner, count) => *count == 0 || reads_nothing(inner),
-        Type::Struct(layout) if is_binary(layout) => {
+        Type::Struct(layout) if layout.binary => {
             layout.properties.iter().filter(|f| f.is_serialized()).all(|f| f.array_dim == 0 || reads_nothing(&f.ty))
         }
         _ => false,

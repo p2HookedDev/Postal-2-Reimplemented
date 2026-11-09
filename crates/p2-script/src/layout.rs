@@ -1,13 +1,16 @@
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use p2_package::{Loader, Package, import_path, tag};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::{Error, PropertyKind, ScriptObject, read_child, read_export};
 
 /// Struct and array nesting limit; deeper means a reference cycle.
 const MAX_DEPTH: usize = 64;
+
+/// Structs serialized as raw fields instead of tagged properties (version >= 118).
+const BINARY_STRUCTS: [&str; 3] = ["Vector", "Rotator", "Color"];
 
 const CPF_NATIVE: u32 = 0x1000;
 const CPF_TRANSIENT: u32 = 0x2000;
@@ -42,7 +45,8 @@ pub struct StructLayout {
     /// The struct or class it extends, an object reference of its package; 0 = none.
     pub super_field: i32,
     pub defaults_offset: Option<usize>,
-    first_by_name: HashMap<u64, u32>,
+    pub(crate) binary: bool,
+    first_by_name: FxHashMap<u64, u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,11 +105,12 @@ impl FieldLayout {
 
 impl StructLayout {
     pub fn new(name: String, properties: Vec<FieldLayout>, super_field: i32, defaults_offset: Option<usize>) -> Self {
-        let mut first_by_name = HashMap::with_capacity(properties.len());
+        let mut first_by_name = FxHashMap::with_capacity_and_hasher(properties.len(), FxBuildHasher);
         for (index, property) in properties.iter().enumerate() {
             first_by_name.entry(name_hash(&property.name)).or_insert(index as u32);
         }
-        Self { name, properties, super_field, defaults_offset, first_by_name }
+        let binary = BINARY_STRUCTS.iter().any(|s| s.eq_ignore_ascii_case(&name));
+        Self { name, properties, super_field, defaults_offset, binary, first_by_name }
     }
 
     /// First property named `name` (case-insensitive). Equal names have equal hashes, so no entry means no
@@ -124,9 +129,18 @@ fn name_hash(name: &str) -> u64 {
     name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3))
 }
 
+/// Layouts built so far, keyed by package address: reuse it only with a resolver whose packages all stay loaded
+/// while the cache lives, or a new package at a freed address would find another's layouts.
+#[derive(Default, Clone)]
+pub struct LayoutCache(FxHashMap<(usize, usize), Arc<StructLayout>>);
+
+pub(crate) fn layout_key(package: &Package, export: usize) -> (usize, usize) {
+    (std::ptr::from_ref(package) as usize, export)
+}
+
 pub struct Layouts<D> {
     resolver: D,
-    cache: HashMap<(usize, usize), Arc<StructLayout>>,
+    pub(crate) cache: LayoutCache,
     depth: usize,
 }
 
@@ -136,7 +150,11 @@ where
     D::Target: Resolve,
 {
     pub fn new(resolver: D) -> Self {
-        Self { resolver, cache: HashMap::new(), depth: 0 }
+        Self::with_cache(resolver, LayoutCache::default())
+    }
+
+    pub fn with_cache(resolver: D, cache: LayoutCache) -> Self {
+        Self { resolver, cache, depth: 0 }
     }
 
     pub fn layout(&mut self, src: Source<'_>, export: usize) -> Result<Arc<StructLayout>, Error> {
@@ -152,15 +170,15 @@ where
     }
 
     fn layout_in<'s>(&mut self, resolver: &'s D::Target, src: Source<'s>, export: usize) -> Result<Arc<StructLayout>, Error> {
-        let key = (std::ptr::from_ref(src.package) as usize, export);
-        if let Some(layout) = self.cache.get(&key) {
+        let key = layout_key(src.package, export);
+        if let Some(layout) = self.cache.0.get(&key) {
             return Ok(Arc::clone(layout));
         }
         self.enter(src, export)?;
         let layout = self.build(resolver, src, export);
         self.depth -= 1;
         let layout = Arc::new(layout?);
-        self.cache.insert(key, Arc::clone(&layout));
+        self.cache.0.insert(key, Arc::clone(&layout));
         Ok(layout)
     }
 

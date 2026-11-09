@@ -125,14 +125,14 @@ impl Package {
     }
 
     pub fn read_tag(&self, r: &mut Reader) -> Result<Option<PropertyTag>, Error> {
-        let name = name_ref(r, self.names.len())?;
+        let name = self.read_name(r)?;
         if self.name(name).eq_ignore_ascii_case("None") {
             return Ok(None);
         }
         // Bits 0-3 type, 4-6 size code, 7 array index follows (for bools: the value).
         let info = r.u8()?;
         let kind = info & 0x0f;
-        let struct_name = if kind == STRUCT { Some(name_ref(r, self.names.len())?) } else { None };
+        let struct_name = if kind == STRUCT { Some(self.read_name(r)?) } else { None };
         let size = match (info >> 4) & 0x07 {
             0 => 1,
             1 => 2,
@@ -166,7 +166,7 @@ impl Package {
             tag::INT => TagValue::Int(v.i32()?),
             tag::FLOAT => TagValue::Float(v.f32()?),
             tag::OBJECT | tag::CLASS => TagValue::Object(v.compact()?),
-            tag::NAME => TagValue::Name(name_ref(&mut v, self.names.len())?),
+            tag::NAME => TagValue::Name(self.read_name(&mut v)?),
             tag::STR => TagValue::Str(v.fstring()?),
             STRUCT => TagValue::Struct { name: struct_name.unwrap_or_default(), data: v.rest().to_vec() },
             _ => TagValue::Other { kind, data: v.rest().to_vec() },

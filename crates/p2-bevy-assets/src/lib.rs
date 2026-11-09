@@ -11,8 +11,8 @@ pub use lighting::{MODULATE_2X, lighting_colors, modulate_2x, set_vertex_colors}
 pub use mesh::{MeshBatch, mirrors, model_polygons_to_mesh, static_mesh_to_meshes};
 pub use quality::{TextureQuality, set_texture_quality, texture_quality};
 pub use skin::{
-    bone_matrices, scaled_bone_matrices, scaled_bone_matrices_into, skeletal_mesh_to_meshes, skin_bind_transforms,
-    skin_inverse_bindposes, skin_points,
+    bone_matrices, scaled_bone_matrices, scaled_bone_matrices_into, skeletal_mesh_to_meshes, skin_bind,
+    skin_points,
 };
 pub use terrain::{SectorVertices, alpha_map_image, terrain_layer_mesh, terrain_sector_vertices, terrain_vertex_color};
 pub use texture::{

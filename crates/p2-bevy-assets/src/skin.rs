@@ -29,12 +29,10 @@ pub fn scaled_bone_matrices_into(parents: &[usize], local: &[([f32; 4], [f32; 3]
     }
 }
 
-pub fn skin_inverse_bindposes(mesh: &SkeletalMesh) -> Vec<Mat4> {
-    skin_bind_matrices(mesh).iter().map(|bind| AXIS_SWAP * bind.inverse() * AXIS_SWAP).collect()
-}
-
-pub fn skin_bind_transforms(mesh: &SkeletalMesh) -> Vec<Transform> {
-    skin_bind_matrices(mesh).into_iter().map(unreal_to_bevy).collect()
+/// The inverse bind poses and the bind transforms, in bone order.
+pub fn skin_bind(mesh: &SkeletalMesh) -> (Vec<Mat4>, Vec<Transform>) {
+    let binds = skin_bind_matrices(mesh);
+    (binds.iter().map(|bind| AXIS_SWAP * bind.inverse() * AXIS_SWAP).collect(), binds.into_iter().map(unreal_to_bevy).collect())
 }
 
 fn skin_bind_matrices(mesh: &SkeletalMesh) -> Vec<Mat4> {
@@ -64,8 +62,7 @@ pub fn skeletal_mesh_to_meshes(mesh: &SkeletalMesh, gpu_skin: bool) -> Vec<(Mesh
     let position = |point: u32| mesh.positions.get(point as usize).copied().unwrap_or_default();
     let mut point_normals = vec![Vec3::ZERO; mesh.positions.len()];
     for face in mesh.indices.as_chunks::<3>().0 {
-        let points: Vec<u32> = face.iter().filter_map(|&w| mesh.wedges.get(usize::from(w))).map(|w| w.point).collect();
-        if let [a, b, c] = points[..] {
+        if let [Some(a), Some(b), Some(c)] = face.map(|w| mesh.wedges.get(usize::from(w)).map(|w| w.point)) {
             let [pa, pb, pc] = [a, b, c].map(|p| Vec3::from(to_bevy(position(p))));
             let normal = (pb - pa).cross(pc - pa);
             for p in [a, b, c] {
@@ -83,14 +80,15 @@ pub fn skeletal_mesh_to_meshes(mesh: &SkeletalMesh, gpu_skin: bool) -> Vec<(Mesh
         .collect();
     let uvs: Vec<[f32; 2]> = mesh.wedges.iter().map(|w| w.uv).collect();
     let (joints, weights): (Vec<[u16; 4]>, Vec<[f32; 4]>) = if gpu_skin {
-        mesh
-            .wedges
-            .iter()
-            .map(|w| {
-                let mut influences = mesh.influences_of(w.point as usize).to_vec();
-                influences.sort_by(|a, b| b.weight.total_cmp(&a.weight));
+        let mut sorted = Vec::new();
+        let per_point: Vec<([u16; 4], [f32; 4])> = mesh
+            .point_influences()
+            .map(|influences| {
+                sorted.clear();
+                sorted.extend_from_slice(influences);
+                sorted.sort_by(|a, b| b.weight.total_cmp(&a.weight));
                 let (mut joints, mut weights) = ([0u16; 4], [0f32; 4]);
-                for (i, influence) in influences.iter().take(4).enumerate() {
+                for (i, influence) in sorted.iter().take(4).enumerate() {
                     (joints[i], weights[i]) = (influence.bone, influence.weight);
                 }
                 let total: f32 = weights.iter().sum();
@@ -101,7 +99,9 @@ pub fn skeletal_mesh_to_meshes(mesh: &SkeletalMesh, gpu_skin: bool) -> Vec<(Mesh
                 }
                 (joints, weights)
             })
-            .unzip()
+            .collect();
+        let unweighted = ([0u16; 4], [1.0, 0.0, 0.0, 0.0]);
+        mesh.wedges.iter().map(|w| per_point.get(w.point as usize).copied().unwrap_or(unweighted)).unzip()
     } else {
         (Vec::new(), Vec::new())
     };
@@ -167,7 +167,7 @@ mod tests {
         let pose = bone_matrices(&parents, &posed);
         let bind = bone_matrices(&parents, &mesh.bones.iter().map(|b| (b.orientation, b.position)).collect::<Vec<_>>());
         let cpu = Vec3::from(to_bevy(skin_points(&mesh, &bind.iter().map(Mat4::inverse).collect::<Vec<_>>(), &pose)[0]));
-        let inverse = skin_inverse_bindposes(&mesh);
+        let (inverse, transforms) = skin_bind(&mesh);
         let vertex = Vec3::from(to_bevy(mesh.positions[0]));
         let gpu: Vec3 = mesh
             .influences_of(0)
@@ -175,7 +175,7 @@ mod tests {
             .map(|i| (unreal_to_bevy(pose[usize::from(i.bone)]).to_matrix() * inverse[usize::from(i.bone)]).transform_point3(vertex) * i.weight)
             .sum();
         assert!(cpu.distance(gpu) < 1e-3, "cpu {cpu} gpu {gpu}");
-        for (at, inverse) in skin_bind_transforms(&mesh).iter().zip(&inverse) {
+        for (at, inverse) in transforms.iter().zip(&inverse) {
             let moved = (at.to_matrix() * *inverse).transform_point3(vertex);
             assert!(moved.distance(vertex) < 1e-3, "{moved} vs {vertex}");
         }
