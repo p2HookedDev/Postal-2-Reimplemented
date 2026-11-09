@@ -19,7 +19,8 @@ mod rig;
 mod rig_tests;
 use rig::scale_frames;
 
-const MAX_SPEED: f32 = 1000.0;
+/// Retail's cap for every ragdoll part: 20 Karma units a second.
+const MAX_SPEED: f32 = 20.0 * p2_physics::UNITS_PER_METER;
 /// Replaces `KFriction`. The tuned feel is 0.3 under a square-root friction combine; our pairs multiply, so sqrt(0.3).
 const CORPSE_FRICTION: f32 = 0.55;
 /// Corpses sprawl rather than fold ...
@@ -57,6 +58,10 @@ pub(crate) struct Ragdolls {
 impl Ragdolls {
     pub(crate) fn for_next_level(&mut self) -> Self {
         Self { assets: self.assets.take(), ..Default::default() }
+    }
+
+    pub(crate) fn bodies(&self) -> impl Iterator<Item = (ObjectId, BodyId)> + '_ {
+        self.live.iter().flat_map(|(&actor, ragdoll)| ragdoll.all.iter().map(move |&id| (actor, id)))
     }
 
     pub(crate) fn is_empty(&self) -> bool {

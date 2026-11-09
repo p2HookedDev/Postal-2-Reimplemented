@@ -393,6 +393,14 @@ impl World {
         }
     }
 
+    pub fn set_gravity_scale(&mut self, id: BodyId, scale: f32) {
+        if self.bodies.get(id.0).is_some_and(|body| body.gravity_scale() != scale)
+            && let Some(body) = self.bodies.get_mut(id.0)
+        {
+            body.set_gravity_scale(scale, false);
+        }
+    }
+
     pub fn set_stay_upright(&mut self, id: BodyId, upright: bool, allow_yaw: bool) {
         if let Some(body) = self.bodies.get_mut(id.0) {
             body.set_enabled_rotations(!upright, !upright, !upright || allow_yaw, true);

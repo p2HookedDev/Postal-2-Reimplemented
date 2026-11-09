@@ -341,3 +341,30 @@ fn a_ball_dropped_into_an_open_cabin_mover_lands_inside() {
     let z = world.pose(ball).unwrap().0[2];
     assert!((5.0..20.0).contains(&z), "the ball rests at {z}, not on the cabin floor");
 }
+
+#[test]
+fn a_body_with_half_gravity_falls_half_as_far() {
+    let mut world = World::new(GRAVITY.into());
+    let ball = |world: &mut World, x: f32| {
+        world.add_body(&BodyParams {
+            shapes: vec![Shape::Sphere([0.0; 3].into(), 10.0)],
+            location: [x, 0.0, 0.0].into(),
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            friction: 0.0,
+            restitution: 0.0,
+            asleep: false,
+            stay_upright: false,
+            allow_yaw: false,
+        })
+    };
+    let (full, half) = (ball(&mut world, 0.0), ball(&mut world, 100.0));
+    world.set_gravity_scale(half, 0.5);
+    for _ in 0..30 {
+        world.step(STEP);
+    }
+    let drop = |id: BodyId| -world.pose(id).unwrap().0[2];
+    assert!((drop(half) / drop(full) - 0.5).abs() < 0.02, "{} {}", drop(full), drop(half));
+}

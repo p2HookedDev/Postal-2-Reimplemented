@@ -16,7 +16,6 @@ use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::interp::float;
 use crate::natives::{bool_arg, float_arg, vec3};
-use crate::physics::DEFAULT_GRAVITY;
 use crate::profiling::Work;
 use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop};
 
@@ -113,6 +112,7 @@ impl<L: LoaderRef> Vm<L> {
         self.ragdoll_leftover_hits();
         let mut errors = self.limbs_before_step(flying, delta.min(MAX_KARMA_TICK));
         self.karma_movers_tick();
+        self.karma_gravity();
         let Some(world) = &mut self.karma.world else { return errors };
         if self.karma.bodies.is_empty() && self.karma.ragdolls.is_empty() && self.karma.limbs.is_empty() {
             return errors;
@@ -226,14 +226,13 @@ impl<L: LoaderRef> Vm<L> {
         Some(id)
     }
 
-    /// One gravity for all bodies: this actor's physics volume's. Retail applies each actor's own.
+    /// The world's gravity is this actor's physics volume's; props and ragdolls scale theirs to their own volume's.
     pub(crate) fn karma_world(&mut self, actor: ObjectId) {
         if self.karma.world.is_some() {
             return;
         }
         let phase = self.profile_start();
-        let gravity = self.store.object_of(actor, Prop::PhysicsVolume).map_or(DEFAULT_GRAVITY, |v| self.store.vector(v, Prop::Gravity));
-        let mut world = World::new(gravity);
+        let mut world = World::new(self.gravity_of(actor));
         for crate::world::LevelMesh { vertices, triangles } in self.level_meshes() {
             if let Err(e) = world.add_static_mesh(&vertices, triangles) {
                 self.diagnostics.log.push(format!("Karma level geometry: {e}"));
@@ -252,6 +251,17 @@ impl<L: LoaderRef> Vm<L> {
         self.karma.world = Some(world);
         self.karma.movers = self.actors().filter(|&a| self.store.is_a(a, crate::Kind::Mover) && !self.store.is_deleted(a)).map(|a| (a, None)).collect();
         self.profile_phase("load: karma world", phase);
+    }
+
+    /// As retail, gravity per body from its actor's physics volume; only the vertical part is used (P2's volumes pull down).
+    fn karma_gravity(&mut self) {
+        let Some(base) = self.karma.world.as_ref().map(|world| world.gravity().z).filter(|&z| z != 0.0) else { return };
+        let props = self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id));
+        let scales: Vec<(BodyId, f32)> = props.chain(self.karma.ragdolls.bodies()).map(|(actor, id)| (id, self.gravity_of(actor).z / base)).collect();
+        let Some(world) = &mut self.karma.world else { return };
+        for (id, scale) in scales {
+            world.set_gravity_scale(id, scale);
+        }
     }
 
     /// Unlike retail, every mover that blocks actors blocks Karma bodies, not only those with `bBlockKarma`.
