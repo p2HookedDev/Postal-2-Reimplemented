@@ -102,7 +102,7 @@ pub(super) fn zone_visibility(
     let caster = RenderLayers::layer(CASTER_LAYER);
     for (root, zone, mut visibility, children) in &mut culled {
         let forced = forced_shown(zone.only_from.as_deref(), view_zone);
-        let seen = forced && zone.zones.iter().any(|&z| seen.sees(z, zone.min.into(), zone.max.into()));
+        let seen = forced && zone.zones.iter().any(|&z| Some(z) == shown.sky_zone || seen.sees(z, zone.min.into(), zone.max.into()));
         let drawn = seen
             || (forced
                 && sun.is_some_and(|(eye, reach)| sun_reaches(eye, reach, zone))
@@ -112,6 +112,53 @@ pub(super) fn zone_visibility(
         }
         visibility.set_if_neq(if drawn { Visibility::Inherited } else { Visibility::Hidden });
     }
+}
+
+/// Sets the draws under a moving actor, a particle actor or a corona to the sky camera's layer, the view's or both,
+/// when its zones change or a draw joins it (a particle pool grows).
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
+pub(super) fn layers_by_zone(
+    mut commands: Commands,
+    shown: Res<ShownScene>,
+    changed: Query<Entity, (Or<(With<ActorModel>, With<LayeredByZone>)>, Changed<ZoneCulled>)>,
+    joined: Query<Entity, bevy::ecs::query::Added<ChildOf>>,
+    parents: Query<&ChildOf>,
+    roots: Query<&ZoneCulled, Or<(With<ActorModel>, With<LayeredByZone>)>>,
+    children: Query<&Children>,
+    layers: Query<Option<&RenderLayers>>,
+) {
+    let joined = joined.iter().flat_map(|entity| parents.iter_ancestors(entity)).filter(|&root| roots.contains(root));
+    let dirty: EntityHashSet = changed.iter().chain(joined).collect();
+    let scene = RenderLayers::layer(0).with(SKY_LAYER);
+    for root in dirty {
+        let Ok(zone) = roots.get(root) else { continue };
+        let (in_sky, in_world) = sky_and_world(&zone.zones, shown.sky_zone);
+        for draw in children.iter_descendants(root) {
+            let Ok(now) = layers.get(draw) else { continue };
+            let now = now.cloned().unwrap_or_default();
+            // Draws on other layers only (an overlay's) are not the level's to move.
+            if !now.intersects(&scene) {
+                continue;
+            }
+            let mut next = now.clone().without(0).without(SKY_LAYER);
+            if in_sky {
+                next = next.with(SKY_LAYER);
+            }
+            if in_world {
+                next = next.with(0);
+            }
+            if next != now {
+                commands.entity(draw).insert(next);
+            }
+        }
+    }
+}
+
+/// The engine draws an actor in every zone its box touches: by the sky camera for the sky zone, by the view for any
+/// other (and when it touches no zone at all).
+pub(crate) fn sky_and_world(zones: &[u8], sky_zone: Option<u8>) -> (bool, bool) {
+    let in_sky = sky_zone.is_some_and(|sky| zones.contains(&sky));
+    (in_sky, zones.is_empty() || zones.iter().any(|&zone| Some(zone) != sky_zone))
 }
 
 pub(super) fn forced_shown(only_from: Option<&[u8]>, view_zone: Option<u8>) -> bool {

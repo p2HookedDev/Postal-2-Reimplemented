@@ -7,7 +7,7 @@ use p2_package::TagValue;
 
 use super::*;
 use super::projectors::{ALPHA_TEST_TAG, PROJECTOR_TAG, TAGGED_TAG};
-use super::static_meshes::holds_eye;
+use super::static_meshes::box_zones;
 use crate::render::actor_light::mesh_sphere;
 
 fn mesh_placement(loader: &Loader, actor: &MeshActor) -> ((PackageId, i32), MeshPlacement) {
@@ -511,11 +511,22 @@ fn projector_tag_takes_the_innermost_final_blend() {
 }
 
 #[test]
-fn a_sky_mesh_holds_the_eye_only_inside_its_placed_box() {
-    let mesh = StaticMesh { positions: vec![[-100.0, -50.0, -20.0], [100.0, 50.0, 20.0]], ..Default::default() };
-    assert!(holds_eye(&mesh, &Transform::IDENTITY, Vec3::ZERO));
-    assert!(!holds_eye(&mesh, &Transform::IDENTITY, Vec3::new(0.0, 0.0, 500.0)));
-    let moved = Transform::from_xyz(1000.0, 0.0, 0.0);
-    assert!(holds_eye(&mesh, &moved, Vec3::new(1050.0, 0.0, 0.0)));
-    assert!(!holds_eye(&mesh, &moved, Vec3::ZERO));
+fn textureless_invisible_shader_hides_its_section() {
+    let Some(root) = std::env::var_os("P2_GAME_DIR").map(PathBuf::from) else { return };
+    let mut library = Library::default();
+    let map = Path::new("Maps").join("Suburbs-3.fuk").display().to_string();
+    let (game, _) = library.open(&root, &map).unwrap();
+    let (package, export) = game.export_by_path("P2R_Tex_D.Weapons.fake").expect("protest sign's invisible shader");
+    let drawn = game.material_texture(package, export_reference(export)).expect("invisible section");
+    assert_eq!(drawn.state.blending, Some(Blending::Invisible));
+}
+
+#[test]
+fn a_mesh_is_in_the_zones_its_vertices_reach_not_its_pivots() {
+    let model = crate::mesh_view::tests::two_zones();
+    let mesh = StaticMesh { positions: vec![[0.0, 0.0, 110.0], [10.0, 10.0, 120.0]], ..Default::default() };
+    let local = bounds(mesh.positions.iter().map(|&p| to_bevy(p)));
+    let pivot_below = Transform::from_translation(Vec3::from(to_bevy([0.0, 0.0, -100.0])));
+    assert_eq!(box_zones(&model, local, &pivot_below), [2]);
+    assert_eq!(box_zones(&model, None, &pivot_below), []);
 }

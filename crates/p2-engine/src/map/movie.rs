@@ -96,7 +96,8 @@ impl Movies {
             keep
         });
         let started: Vec<&(String, ObjectId, MovieState)> = movies.iter().filter(|(_, movie, s)| s.playing && !self.playing.contains_key(movie)).collect();
-        for (_, movie, s) in started {
+        for (texture, movie, s) in started {
+            bevy::log::info!("Movie {} starting on {texture}, sound {}, looping {}", s.file, s.use_sound, s.looping);
             let (path, use_sound) = (root.join("Movies").join(&s.file), s.use_sound);
             let task = AsyncComputeTaskPool::get().spawn(async move { open(&path, use_sound) });
             self.playing.insert(*movie, Slot::Opening(s.plays, task));
@@ -110,6 +111,7 @@ impl Movies {
                     *slot = match block_on(task) {
                         Some(opened) => {
                             let (width, height) = (opened.decoder.width(), opened.decoder.height());
+                            bevy::log::info!("Movie {} opened: {width}x{height} at {} fps", s.file, opened.decoder.frame_rate());
                             reports.push(crate::play::MovieStatus { movie, width: width as i32, height: height as i32, playing: true });
                             let shown = show(opened, movie, s.looping, texture, contexts, t, hud_textures);
                             self.images.insert(texture.clone(), shown.image.clone());

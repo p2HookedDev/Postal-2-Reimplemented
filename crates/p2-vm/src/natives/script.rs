@@ -123,7 +123,8 @@ pub(super) fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this:
                 }
             } else if path.contains('.') {
                 // An object of a loaded package exists or not (then None, like a failed load); one in a package not
-                // loaded is assumed to exist, as the requested class.
+                // in the install is assumed to exist, as the requested class.
+                vm.load_package(path.split('.').next().unwrap_or_default());
                 match vm.export_class(&path, &class_name) {
                     Some(Some(class)) => Value::Object(Some(vm.stub(&path, &class))),
                     Some(None) => {

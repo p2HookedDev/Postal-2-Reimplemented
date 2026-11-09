@@ -48,7 +48,8 @@ pub struct RagdollParams {
 
 /// Karma's limit. Piles tremble just under it.
 const SLEEP_SPEED: f32 = 7.07;
-const SLEEP_ANGULAR_SPEED: f32 = 1.0;
+/// In rad/s, as the original engine: a limb a joint limit still pulls back keeps the corpse awake.
+const SLEEP_ANGULAR_SPEED: f32 = 0.032;
 const SLEEP_TIME: f32 = 1.0;
 /// Rapier's iterative solver lets parts of very different mass drift apart.
 const MASS_RATIO: [f32; 2] = [0.8, 1.2];

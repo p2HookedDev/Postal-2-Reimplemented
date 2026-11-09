@@ -9,6 +9,9 @@ menu helpers, so it looks like the retail pages.
 
 - `ModernMenuOptions` extends retail `Shell.MenuOptions`: the stock page, its last row (Back) relabelled
   "Modern Graphics", a fresh Back below it. The host swaps it in for `Shell.MenuOptions`.
+- `ModernMenuMain` extends retail `Shell.MenuMain`: adds the POSTAL 4 banner, or the Paradise Lost one when POSTAL 4
+  is owned, without retail's Steam build check. The host answers `SteamOwnsGame` / `SteamOwnsDLC` from Steam's
+  installed apps.
 - `ModernMenuGraphics` extends `Shell.ShellMenuCW`: one checkbox per render device key. Each reads with
   `get ini:Engine.Engine.RenderDevice <Key>` on open and writes `set ini:Engine.Engine.RenderDevice <Key> True|False`
   on change. Keys: `ModernGraphics` (master), `ModernShadows`, `ModernContactShadows`, `ModernAO`, `ModernRelief`,

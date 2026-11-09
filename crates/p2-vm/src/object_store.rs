@@ -226,6 +226,10 @@ impl ObjectStore {
         Some(self.memory.read_field(&field, &self.class(class).defaults))
     }
 
+    pub fn default_flag(&self, class: ClassId, property: impl PropertyName) -> bool {
+        matches!(self.default_value(class, property), Some(Value::Bool(true)))
+    }
+
     pub fn float_of(&self, object: ObjectId, property: impl PropertyName) -> f32 {
         match self.word(object, property) {
             Some((word, memory::Shape::Float)) => f32::from_bits(word),

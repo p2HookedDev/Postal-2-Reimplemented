@@ -25,6 +25,15 @@ pub fn segment_cylinder(start: Vector, end: Vector, center: Vector, radius: f32,
     let a = d[0] * d[0] + d[1] * d[1];
     let b = 2.0 * (s[0] * d[0] + s[1] * d[1]);
     let c = s[0] * s[0] + s[1] * s[1] - radius * radius;
+    // A line starting inside hits only when it heads inward, so a trace out of a pawn's own centre passes through.
+    if c < 1.0 && s[2].abs() < height {
+        if d[0] * s[0] + d[1] * s[1] >= -0.1 {
+            return None;
+        }
+        let length = s[0].hypot(s[1]);
+        let normal = if length > 1e-6 { Vector::new(s[0] / length, s[1] / length, 0.0) } else { Vector::ZERO };
+        return Some(Hit { time: 0.0, location: start, normal });
+    }
     let (circle_in, circle_out) = if a < 1e-6 {
         if c > 0.0 {
             return None;
@@ -83,6 +92,14 @@ mod tests {
         let hit = segment_cylinder(Vector::new(0.0, 0.0, 100.0), Vector::new(0.0, 0.0, -100.0), Vector::ZERO, 10.0, 20.0).unwrap();
         assert!((hit.location.z - 20.0).abs() < 1e-4 && hit.normal == Vector::new(0.0, 0.0, 1.0));
         assert!(segment_cylinder(Vector::new(-100.0, 50.0, 0.0), Vector::new(100.0, 50.0, 0.0), Vector::ZERO, 10.0, 20.0).is_none());
+    }
+
+    #[test]
+    fn line_from_inside_hits_only_heading_inward() {
+        assert!(segment_cylinder(Vector::ZERO, Vector::new(300.0, 0.0, 0.0), Vector::ZERO, 10.0, 20.0).is_none());
+        assert!(segment_cylinder(Vector::new(5.0, 0.0, 0.0), Vector::new(300.0, 0.0, 0.0), Vector::ZERO, 10.0, 20.0).is_none());
+        let hit = segment_cylinder(Vector::new(5.0, 0.0, 0.0), Vector::new(-300.0, 0.0, 0.0), Vector::ZERO, 10.0, 20.0).unwrap();
+        assert!(hit.time == 0.0 && hit.location == Vector::new(5.0, 0.0, 0.0) && hit.normal == Vector::new(1.0, 0.0, 0.0));
     }
 
     #[test]

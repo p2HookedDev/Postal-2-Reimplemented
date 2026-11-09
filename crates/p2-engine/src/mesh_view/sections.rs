@@ -18,7 +18,6 @@ pub struct SectionView {
     pub alpha_mode: AlphaMode,
     pub no_scene_lights: bool,
     pub fullbright: bool,
-    pub depth_bias: f32,
     pub lightmap: Option<Handle<Image>>,
     pub two_sided: bool,
     pub uv: Vec<UvModifier>,
@@ -27,6 +26,10 @@ pub struct SectionView {
     pub alpha_map: Option<Handle<Image>>,
     pub terrain: Vec<TerrainPassLayer>,
     pub chunks: Option<Arc<[crate::render::world_pass::Chunk]>>,
+    /// The BSP node whose surfaces a translucent section holds, for the engine's back-to-front list.
+    pub bsp_node: Option<usize>,
+    /// A blended terrain layer's index: the engine draws terrain with the world, before the translucent list.
+    pub terrain_layer: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -35,22 +38,26 @@ pub struct Skin {
     pub bind: Arc<[Transform]>,
 }
 
+pub fn alpha_mode(state: &RenderState) -> AlphaMode {
+    let blending = match state.blending.unwrap_or(Blending::Opaque) {
+        Blending::Opaque | Blending::Masked if state.color_blend => Blending::Alpha,
+        blending => blending,
+    };
+    match blending {
+        Blending::Opaque => AlphaMode::Opaque,
+        // Texels pass above the reference: half a step over it keeps an alpha equal to it out.
+        Blending::Masked => AlphaMode::Mask((f32::from(state.alpha_ref.unwrap_or(127)) + 0.5) / 255.0),
+        Blending::Alpha => AlphaMode::Blend,
+        Blending::Additive => AlphaMode::Add,
+        Blending::Modulate => AlphaMode::Multiply,
+        Blending::Invisible => AlphaMode::Mask(2.0),
+    }
+}
+
 impl SectionView {
     pub fn textured(mesh: Handle<Mesh>, found: Option<MaterialImages>) -> Self {
         let state = found.as_ref().map(|found| found.state.clone()).unwrap_or_default();
-        let blending = match state.blending.unwrap_or(Blending::Opaque) {
-            Blending::Opaque | Blending::Masked if state.color_blend => Blending::Alpha,
-            blending => blending,
-        };
-        let alpha_mode = match blending {
-            Blending::Opaque => AlphaMode::Opaque,
-            // Texels pass above the reference: half a step over it keeps an alpha equal to it out.
-            Blending::Masked => AlphaMode::Mask((f32::from(state.alpha_ref.unwrap_or(127)) + 0.5) / 255.0),
-            Blending::Alpha => AlphaMode::Blend,
-            Blending::Additive => AlphaMode::Add,
-            Blending::Modulate => AlphaMode::Multiply,
-            Blending::Invisible => AlphaMode::Mask(2.0),
-        };
+        let alpha_mode = alpha_mode(&state);
         Self {
             mesh,
             glow: found.as_ref().and_then(|found| found.glow.clone()),
@@ -65,7 +72,6 @@ impl SectionView {
             alpha_mode,
             no_scene_lights: state.unlit,
             fullbright: state.unlit,
-            depth_bias: 0.0,
             lightmap: None,
             two_sided: state.two_sided,
             uv: state.uv,
@@ -74,6 +80,8 @@ impl SectionView {
             alpha_map: None,
             terrain: Vec::new(),
             chunks: None,
+            bsp_node: None,
+            terrain_layer: None,
         }
     }
 
@@ -83,13 +91,12 @@ impl SectionView {
 
     pub fn material_key(&self) -> String {
         format!(
-            "{:?} {:?} {} {:?} {} {} {:?} {} {:?} {:?} {:?} {:?}",
+            "{:?} {:?} {} {:?} {} {:?} {} {:?} {:?} {:?} {:?}",
             self.texture.as_ref().map(Handle::id),
             self.glow.as_ref().map(Handle::id),
             self.layers.key(),
             self.alpha_mode,
             self.no_scene_lights,
-            self.depth_bias,
             self.lightmap.is_some(),
             self.two_sided,
             self.uv,

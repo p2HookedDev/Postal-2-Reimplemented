@@ -175,7 +175,13 @@ impl Simulation {
             .take_commands(|command| {
                 matches!(
                     command,
-                    HostCommand::Projector(_) | HostCommand::Particle(_) | HostCommand::Window(_) | HostCommand::Quit | HostCommand::SetMouse(_) | HostCommand::SaveGame { .. }
+                    HostCommand::Projector(_)
+                        | HostCommand::Particle(_)
+                        | HostCommand::Window(_)
+                        | HostCommand::Quit
+                        | HostCommand::SetMouse(_)
+                        | HostCommand::SaveGame { .. }
+                        | HostCommand::OpenUrl(_)
                 )
             })
             .collect();
@@ -193,6 +199,7 @@ impl Simulation {
                 HostCommand::Quit => self.quit = true,
                 HostCommand::SetMouse([x, y]) => frame.set_mouse = Some([x as f32, y as f32]),
                 HostCommand::SaveGame { slot, save } => crate::saves::write(slot, save),
+                HostCommand::OpenUrl(url) => open_url(&url),
                 _ => {}
             }
         }
@@ -260,6 +267,14 @@ fn in_view_cone(offset: Vector, forward: Vector, reach: f32) -> bool {
 fn track(list: &mut Vec<ObjectId>, new: &[ObjectId], joins: impl Fn(ObjectId) -> bool, gone: impl Fn(ObjectId) -> bool) {
     list.extend(new.iter().copied().filter(|&actor| joins(actor)));
     list.retain(|&actor| !gone(actor));
+}
+
+/// Explorer hands a web or `steam://` link to its registered program without blocking.
+fn open_url(url: &str) {
+    let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
+    if let Err(error) = std::process::Command::new(opener).arg(url).spawn() {
+        bevy::log::warn!("opening {url}: {error}");
+    }
 }
 
 #[cfg(test)]

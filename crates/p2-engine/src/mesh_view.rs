@@ -18,6 +18,7 @@ use bevy::camera::{
 };
 use bevy_egui::{EguiContext, EguiContextSettings, EguiPostUpdateSet};
 use bevy::math::Rect;
+use crate::render::translucent_order::{SortedBspNode, TranslucentDraw};
 use crate::render::world_pass::{WorldPlacement, WorldSeenZones, WorldTargets};
 use bevy::pbr::{DistanceFog, FogFalloff, Lightmap, ScreenSpaceAmbientOcclusion};
 use bevy::render::camera::MipBias;
@@ -67,7 +68,7 @@ mod animated_materials;
 mod restyle;
 mod fog;
 mod zone_culling;
-pub use sections::{MaterialImages, SectionView, Skin, SkinJoint, spawn_actor_sections};
+pub use sections::{MaterialImages, SectionView, Skin, SkinJoint, alpha_mode, spawn_actor_sections};
 use materials::{SectionMaterials, scene_section_material};
 pub use materials::{ActorMaterialKey, SectionMaterial, follower_material, section_material, vertex_lit};
 pub(crate) use materials::{SceneLights, actor_standard, alpha_key, cached_actor_material, cull_for, image_size};
@@ -78,8 +79,8 @@ use animated_materials::{AnimatedMaterials, MovingUv, animate_materials};
 pub(crate) use animated_materials::{set_specular_uv, set_uv_transform};
 pub use restyle::{SwitchedLook, restyle_switched};
 use fog::zone_fog;
-use zone_culling::{follower_zones, zone_visibility};
-pub(crate) use zone_culling::{bounds, merged_box};
+use zone_culling::{follower_zones, layers_by_zone, zone_visibility};
+pub(crate) use zone_culling::{bounds, merged_box, sky_and_world};
 
 pub struct MeshViewPlugin;
 
@@ -95,6 +96,7 @@ impl Plugin for MeshViewPlugin {
         app.add_plugins((
             crate::render::particle_material::ParticlePlugin,
             crate::render::blended::BlendedPlugin,
+            crate::render::translucent_order::TranslucentOrderPlugin,
             crate::render::lightmapped::LightmappedPlugin,
             crate::render::actor_light::ActorLightPlugin,
             crate::render::mesh_light::MeshLightPlugin,
@@ -115,7 +117,7 @@ impl Plugin for MeshViewPlugin {
             .configure_sets(Update, crate::render::modern::ModernGraphicsSystems::Apply.after(MeshViewSystems::Camera))
             .add_systems(Startup, (setup, steady_decal_order))
             .add_systems(Update, (apply_change, animate_materials, animate_actor_speculars, follow_msaa).chain().in_set(MeshViewSystems::Apply))
-            .add_systems(Update, (place_camera, zone_fog, follower_zones, zone_visibility, light_actors::<crate::play::Play>, crate::render::terrain_light::light_terrain, crate::render::bsp_light::dynamic_lights).chain().in_set(MeshViewSystems::Camera))
+            .add_systems(Update, (place_camera, zone_fog, follower_zones, layers_by_zone, zone_visibility, light_actors::<crate::play::Play>, crate::render::terrain_light::light_terrain, crate::render::bsp_light::dynamic_lights).chain().in_set(MeshViewSystems::Camera))
             // After the HUD paint (egui's pass), so a layer shows in the frame it was painted.
             .add_systems(PostUpdate, show_canvas_layers.after(EguiPostUpdateSet::EndPass))
             .add_systems(PostUpdate, place_overlay_cameras.after(crate::play::PlaySystems::Present).before(CameraUpdateSystems).before(bevy::transform::TransformSystems::Propagate));
@@ -174,6 +176,11 @@ pub struct ModelView {
     pub zone: Option<ZoneCulled>,
 }
 
+/// Things placed while the game runs (particles, coronas): their draws join the sky camera, the view or both by the
+/// zones in their [`ZoneCulled`], like a moving actor's.
+#[derive(Component)]
+pub struct LayeredByZone;
+
 #[derive(Component, Clone)]
 pub struct ZoneCulled {
     pub zones: Vec<u8>,
@@ -211,6 +218,7 @@ pub struct Scene {
 /// From the `SkyZoneInfo`'s location, turned by its rotation and then the view's; only what lies in
 /// that zone (unverified).
 pub struct Sky {
+    pub zone: u8,
     pub position: Vec3,
     pub rotation: Quat,
     pub models: Vec<ModelView>,
@@ -377,6 +385,7 @@ fn apply_change(
         return;
     };
     let Scene { models, center, radius, sky, start, collision, fogs, decals, actors, attachments, lighting, antiportals, light_maps } = *scene;
+    let sky_zone = sky.as_ref().map(|sky| sky.zone);
     let (sky, sky_models) = sky.map_or((None, Vec::new()), |sky| (Some((sky.position - center, sky.rotation)), sky.models));
     for mut sky_camera in &mut skies {
         sky_camera.position = sky;
@@ -384,7 +393,7 @@ fn apply_change(
     let portals = collision.as_ref().map(|collision| Arc::new(ZonePortals::new(&collision.model, antiportals)));
     let start = start.map(|(position, yaw)| (position - center, yaw));
     *level = LevelCollision(collision.map(Arc::new));
-    *shown = ShownScene { fogs, origin: -center, portals, lighting, radius, start, light_maps };
+    *shown = ShownScene { fogs, origin: -center, portals, lighting, radius, start, light_maps, sky_zone };
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }
@@ -420,11 +429,13 @@ fn apply_change(
                         bicubic_sampling: false,
                     });
                     let world_chunks = section.chunks.filter(|_| !in_sky && world_supported && model.zone.as_ref().is_none_or(|zone| zone.only_from.is_none()) && matches!(section.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)));
-                    (section.mesh, material, lightmap, world_chunks)
+                    let sort_node = section.bsp_node.and_then(|node| level.model()?.nodes.get(node).map(|bsp| SortedBspNode::new(node, bsp.plane, center)));
+                    let terrain_layer = section.terrain_layer.map(TranslucentDraw::Terrain);
+                    (section.mesh, material, lightmap, world_chunks, sort_node, terrain_layer)
                 })
                 .collect();
             for instance in model.instances {
-                for (mesh, material, lightmap, world_chunks) in &sections {
+                for (mesh, material, lightmap, world_chunks, sort_node, terrain_layer) in &sections {
                     if let Some(chunks) = world_chunks {
                         let placement = WorldPlacement {
                             world_from_local: Transform::from_translation(-center).compute_affine() * instance.compute_affine(),
@@ -442,6 +453,12 @@ fn apply_change(
                     if in_sky {
                         entity.insert(RenderLayers::layer(SKY_LAYER));
                     }
+                    if let Some(sort_node) = sort_node {
+                        entity.insert(*sort_node);
+                    }
+                    if let Some(terrain_layer) = terrain_layer {
+                        entity.insert(*terrain_layer);
+                    }
                     if let Some(zone) = &model.zone {
                         entity.insert(zone.clone());
                     }
@@ -453,4 +470,4 @@ fn apply_change(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

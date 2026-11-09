@@ -169,6 +169,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn init_ragdoll(&mut self, actor: ObjectId, pose: Option<Vec<Frame>>) {
+        // A corpse made a ragdoll again starts from where it lay, not from its animation.
+        let pose = pose.or_else(|| self.karma.ragdolls.kept.get(&actor).map(|(_, frames)| frames.to_vec()));
         let params = self.store.object_of(actor, Prop::KParams).filter(|&k| self.store.is_a(k, Kind::KarmaParamsSkel));
         let Some(params) = params else {
             self.diagnostics.log.push("(Karma): KInitSkeletonKarma: No KParams, or KParams is not a KarmaParamsSkel.".to_owned());

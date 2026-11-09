@@ -109,7 +109,6 @@ fn padded_emitter_meshes_sort_by_the_actors_centre() {
         assert_eq!(mesh.count_vertices(), 6);
         assert!(mesh.indices().expect("indices").iter().all(|i| i < 4), "the padding is drawn");
     }
-    assert!(emitter_sort_bias(1) > emitter_sort_bias(0));
 }
 
 #[test]

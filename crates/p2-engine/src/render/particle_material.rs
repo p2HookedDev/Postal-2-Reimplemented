@@ -65,7 +65,6 @@ pub struct ParticleMaterial {
     #[storage(4, read_only)]
     pub sprites: Handle<ShaderBuffer>,
     pub style: DrawStyle,
-    pub sort_bias: f32,
     pub no_depth: bool,
 }
 
@@ -79,7 +78,7 @@ impl ParticleMaterial {
             blend_frames: u32::from(blend),
             fogged: u32::from(!props.disable_fogging),
         };
-        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, sort_bias: 0.0, no_depth: false }
+        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, no_depth: false }
     }
 
     /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene (unverified
@@ -93,7 +92,7 @@ impl ParticleMaterial {
             SpriteBlend::Modulated => (DrawStyle::Modulated, 0.0, 0),
         };
         let params = ParticleParams { style: style as u32, alpha_ref, alpha_test, blend_frames: 0, fogged: 1 };
-        Self { texture, params, sprites: PARTICLE_SPRITES, style, sort_bias: 0.0, no_depth: false }
+        Self { texture, params, sprites: PARTICLE_SPRITES, style, no_depth: false }
     }
 
     pub fn corona(texture: Handle<Image>) -> Self {
@@ -153,10 +152,6 @@ impl Material for ParticleMaterial {
 
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Blend
-    }
-
-    fn depth_bias(&self) -> f32 {
-        self.sort_bias
     }
 
     fn enable_prepass() -> bool {

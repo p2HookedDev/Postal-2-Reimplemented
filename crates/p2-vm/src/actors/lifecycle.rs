@@ -59,12 +59,11 @@ impl<L: LoaderRef> Vm<L> {
         // Before the actor is constructed, `FindSpot` may move it, else the spawn fails with no object made.
         // A spawn without a location (the host's own) has none to fit.
         if let Some(value) = &placement[0] {
-            let default_flag = |vm: &Self, name: Prop| matches!(vm.store.default_value(class, name), Some(Value::Bool(true)));
             let default_float = |vm: &Self, name: Prop| match vm.store.default_value(class, name) {
                 Some(Value::Float(value)) => value,
                 _ => 0.0,
             };
-            if default_flag(self, Prop::bCollideWorld) || default_flag(self, Prop::bCollideWhenPlacing) {
+            if self.store.default_flag(class, Prop::bCollideWorld) || self.store.default_flag(class, Prop::bCollideWhenPlacing) {
                 let (radius, height) = (default_float(self, Prop::CollisionRadius), default_float(self, Prop::CollisionHeight));
                 let mut location = crate::natives::vec3(Some(value));
                 if !crate::find_spot::find_spot(self, Vector::new(radius, radius, height), &mut location) {

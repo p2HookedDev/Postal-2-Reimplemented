@@ -21,7 +21,7 @@ pub(super) struct MapActors {
     pub(super) fluids: Vec<fluids::FluidActor>,
 }
 
-pub(super) fn read_map_actors(started: StartedVm, model: &Model, sky_zone: Option<u8>) -> MapActors {
+pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
     let mut terrain_infos = Vec::new();
     let mut start = None;
     let mut mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>> = HashMap::new();
@@ -105,17 +105,16 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model, sky_zone: Optio
         let instance = (!actor.lighting.unlit).then_some((actor.instance, lighting));
         // Movers are not level collision: retail particles trace only the level and its static geometry.
         let placement = (actor.blocks && !actor.movable).then_some(Placement { location: actor.location, rotation: actor.rotation, scale: actor.scale, pre_pivot: actor.pre_pivot });
-        let in_sky = sky_zone == Some(zone);
         // Merged sections take every untagged projector and no tagged one: a model of its own carries the actor's own answer
         // (`Session::update_projections`).
         let aimed_at = matches!(vm.store.get(actor.object, "Tag"), Some(p2_vm::Value::Name(tag)) if project_tags.contains(&tag));
-        let own_model = (!actor.accepts_projectors || aimed_at) && !in_sky && actor.forced_zone_tag.is_none();
+        let own_model = (!actor.accepts_projectors || aimed_at) && actor.forced_zone_tag.is_none();
         let follow =
             (actor.movable || own_model).then_some(FollowActor { actor: actor.object, scale: actor.scale, pre_pivot: actor.pre_pivot, skeletal: None });
         let only_from = actor.forced_zone_tag.as_ref().map(|tag| {
             (0..=u8::MAX).filter(|&zone| zone_tags.get(usize::from(zone)).is_some_and(|zone_tag| zone_tag.as_ref() == Some(tag))).collect::<Vec<_>>()
         });
-        mesh_paths.entry((actor.static_mesh, actor.skins)).or_default().push(MeshPlacing { transform, instance, placement, follow, in_sky, only_from });
+        mesh_paths.entry((actor.static_mesh, actor.skins)).or_default().push(MeshPlacing { transform, instance, placement, follow, movable: actor.movable, only_from });
     }
     for &object in &zone_actors {
         zone_fogs.push(object.and_then(|object| zone_fog(&vm, object)));

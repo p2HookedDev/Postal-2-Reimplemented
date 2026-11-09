@@ -1,7 +1,7 @@
 use super::*;
 
-/// Two vertices no triangle uses: the mesh's bounds, and the centre Bevy sorts it by, become the actor's bounds
-/// ([`emitter_sort_bias`]). Bevy coordinates.
+/// Two vertices no triangle uses: the mesh's bounds, and the centre it is sorted by, become the actor's bounds.
+/// Bevy coordinates.
 pub fn pad_bounds(mesh: &mut Mesh, min: Vec3, max: Vec3) {
     use bevy::mesh::VertexAttributeValues::{Float32x2, Float32x3, Float32x4};
     if let Some(Float32x3(positions)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
@@ -70,6 +70,6 @@ pub(super) fn apply_bounds(writes: &mut MeshWrites, p: &mut ParticleActor, chang
         let (min, max) = (min.min(here), max.max(here));
         let margin = Vec3::splat(OCCLUSION_MARGIN);
         let (min, max) = (to_bevy((min - margin).to_array()), to_bevy((max + margin).to_array()));
-        writes.commands.entity(p.parent).insert(ZoneCulled { zones: p2_collision::box_zones(model, min.into(), max.into()), min, max, only_from: None });
+        writes.commands.entity(p.parent).insert((ZoneCulled { zones: p2_collision::box_zones(model, min.into(), max.into()), min, max, only_from: None }, LayeredByZone));
     }
 }

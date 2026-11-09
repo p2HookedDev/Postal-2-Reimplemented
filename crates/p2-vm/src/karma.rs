@@ -204,9 +204,8 @@ impl<L: LoaderRef> Vm<L> {
             location,
             rotation: rotator_to_quat(rotation),
             mass: params.mass,
-            // Karma damps with a force, −damping × velocity (unverified); Rapier's damping is per mass.
-            linear_damping: params.linear_damping / params.mass,
-            angular_damping: params.angular_damping / params.mass,
+            linear_damping: params.linear_damping,
+            angular_damping: params.angular_damping,
             friction: params.friction,
             restitution: params.restitution,
             asleep: !params.start_enabled,
@@ -262,8 +261,8 @@ impl<L: LoaderRef> Vm<L> {
         let or = |name: Prop, default: f32| self.store.get(k, name).as_ref().map_or(default, float);
         Some(Params {
             mass: or(Prop::KMass, 1.0).max(1e-3),
-            linear_damping: or(Prop::KLinearDamping, 0.0),
-            angular_damping: or(Prop::KAngularDamping, 0.0),
+            linear_damping: or(Prop::KLinearDamping, 0.2),
+            angular_damping: or(Prop::KAngularDamping, 0.2),
             start_enabled: self.store.flag_of(k, Prop::KStartEnabled),
             stay_upright: self.store.flag_of(k, Prop::bKStayUpright),
             allow_rotate: self.store.flag_of(k, Prop::bKAllowRotate),
@@ -410,8 +409,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Native::KSetDampingProps => {
                 let (linear, angular) = (float_arg(args, 0), float_arg(args, 1));
-                let mass = param(self, Prop::KMass).max(1e-3);
-                change_body(&mut self.karma.world, body, move |w, id| w.set_damping(id, linear / mass, angular / mass));
+                change_body(&mut self.karma.world, body, move |w, id| w.set_damping(id, linear, angular));
                 set_param(self, Prop::KLinearDamping, Value::Float(linear));
                 set_param(self, Prop::KAngularDamping, Value::Float(angular));
                 None

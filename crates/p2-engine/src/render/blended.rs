@@ -22,40 +22,11 @@ crate::render::shader_layers::layered_extension!(
     OpaqueDecals
 );
 
-/// The engine draws terrain with the world, before any translucent actor, but Bevy sorted blended layers among the
-/// particles by their meshes' centres, so a layer covered fire behind it (particles write no depth). Bevy also takes
-/// `depth_bias` as the pipeline's constant depth bias; [`OpaqueDecals::specialize`] takes this offset back out of it.
-pub const TERRAIN_LAYER_SORT: f32 = -1_000_000.0;
-
-/// Retail draws a translucent actor in the eye's leaf last; Bevy's box-centre sort flips it as the view turns.
-pub const AROUND_EYE_SORT: f32 = 1_000_000.0;
-
 const BLENDED_SHADER: Handle<Shader> = uuid_handle!("3b8e51a4-7c2d-4f69-b0e8-91d5a6c4f207");
 
 impl MaterialExtension for OpaqueDecals {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(BLENDED_SHADER)
-    }
-
-    fn specialize(
-        _pipeline: &MaterialExtensionPipeline,
-        descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialExtensionKey<Self>,
-    ) -> Result<(), SpecializedMeshPipelineError> {
-        without_sort_offset(descriptor);
-        Ok(())
-    }
-}
-
-pub(crate) fn without_sort_offset(descriptor: &mut RenderPipelineDescriptor) {
-    let offset = AROUND_EYE_SORT as i32;
-    if let Some(depth) = descriptor.depth_stencil.as_mut() {
-        if depth.bias.constant <= -offset / 2 {
-            depth.bias.constant += offset;
-        } else if depth.bias.constant >= offset / 2 {
-            depth.bias.constant -= offset;
-        }
     }
 }
 
@@ -108,7 +79,6 @@ impl MaterialExtension for TerrainLayer {
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        without_sort_offset(descriptor);
         if let Some(fragment) = descriptor.fragment.as_mut() {
             fragment.shader_defs.push("TERRAIN_LAYER".into());
         }

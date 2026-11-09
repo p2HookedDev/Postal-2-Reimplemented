@@ -269,7 +269,7 @@ impl PreparedScene {
             sprites,
             coronas,
             fluids,
-        } = read_map_actors(started, &model, sky_zone);
+        } = read_map_actors(started, &model);
         let emitter_textures = emitters.iter().flat_map(|(_, emitter)| &emitter.emitters).filter(|(p, _)| p.kind != p2_particles::EmitterKind::Mesh).filter_map(|(_, texture)| texture.as_deref());
         let mut actor_textures = FxHashMap::default();
         for path in emitter_textures.chain(sprites.iter().map(|sprite| sprite.texture.as_str())).chain(coronas.iter().map(|corona| corona.texture.as_str())) {
@@ -297,8 +297,7 @@ impl PreparedScene {
         let actors: usize = placements.values().map(Vec::len).sum();
         let meshes = placements.keys().map(|(mesh, _)| mesh).collect::<HashSet<_>>().len();
         let environment = Arc::new(LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).with_terrain(terrain_sectors));
-        let sky_eye = sky_info.map(|(location, _)| Vec3::from(to_bevy(location)));
-        let level = StaticLevel { pkg, file, model: &model, environment: &environment, sky_eye };
+        let level = StaticLevel { pkg, file, model: &model, environment: &environment, sky_zone };
         let (parts, static_missing, static_batches) = static_models(game, t, &mut texture, &level, placements);
         missing += static_missing;
         let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lit_actors, .. } = parts;
@@ -323,7 +322,8 @@ impl PreparedScene {
             polygons.len(),
             decals.len(),
         );
-        let sky = sky_info.map(|(location, rotation)| Sky {
+        let sky = sky_info.zip(sky_zone).map(|((location, rotation), zone)| Sky {
+            zone,
             position: Vec3::from(to_bevy(location)),
             rotation: unreal_to_bevy(rotator_matrix(rotation)).rotation,
             models: sky_models,

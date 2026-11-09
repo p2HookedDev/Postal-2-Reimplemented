@@ -82,7 +82,7 @@ fn dump_code(pkg: &Package, data: &[u8], natives: &HashMap<u16, NativeName>, out
 
 fn dump_properties(pkg: &Package, data: &[u8], out: &mut impl Write) -> std::io::Result<()> {
     for (i, exp) in pkg.exports.iter().enumerate().filter(|(_, e)| e.serial_size > 0) {
-        write!(out, "{:6} {} {}", i + 1, class_name(pkg, exp.class_index), pkg.name(exp.object_name))?;
+        write!(out, "{:6} {} {}", i + 1, p2_script::class_name(pkg, exp), pkg.name(exp.object_name))?;
         let object = match pkg.read_object(data, exp) {
             Ok(object) => object,
             Err(e) => {
@@ -223,10 +223,6 @@ fn chain(pkg: &Package, data: &[u8], mut index: i32) -> String {
     if classes.is_empty() { "-".to_owned() } else { classes.join(">") }
 }
 
-fn class_name(pkg: &Package, class_index: i32) -> &str {
-    if class_index == 0 { "Class" } else { object_name(pkg, class_index) }
-}
-
 fn object_name(pkg: &Package, index: i32) -> &str {
     match index {
         0 => "None",
@@ -267,7 +263,7 @@ fn dump(pkg: &Package, out: &mut impl Write) -> std::io::Result<()> {
             out,
             "{:6} {} {} super {} outer {} flags {:#010x} data {:#x}+{:#x}",
             i + 1,
-            class_name(pkg, exp.class_index),
+            p2_script::class_name(pkg, exp),
             pkg.name(exp.object_name),
             object_name(pkg, exp.super_index),
             object_name(pkg, exp.package_index),

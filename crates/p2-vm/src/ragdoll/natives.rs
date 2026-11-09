@@ -2,7 +2,7 @@ use p2_physics::{Hit, Throw};
 use crate::native_id::Native;
 use crate::karma::IMPULSE_SCALE;
 use crate::{Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop};
-use super::{Corpse, HIT_TICKS, SeenHit, THROWS};
+use super::{AIR_THROW, Corpse, HIT_TICKS, MELEE_THROW, SHOT_THROW, SeenHit};
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn ragdoll_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Option<Result<Option<Value>, Error>> {
@@ -82,17 +82,13 @@ impl<L: LoaderRef> Vm<L> {
             _ => None,
         };
         let (at, momentum) = (crate::natives::vec3(args.get(2)), crate::natives::vec3(args.get(3)));
+        let length = momentum.size();
         let throw = match args.get(4) {
-            Some(&Value::Object(Some(class))) => self.throw_of(class),
+            Some(&Value::Object(Some(class))) if length > 0.0 => self.throw_of(class, instigator),
             _ => None,
         };
-        let range = instigator.map(|by| {
-            let from = self.store.vector(by, Prop::Location);
-            (0..3).map(|i| (from[i] - at[i]).powi(2)).sum::<f32>().sqrt()
-        });
-        let length = momentum.size();
         let dir = if length > 0.0 { momentum.map(|c| c / length) } else { [0.0; 3].into() };
-        let hit = Hit { impulse: [0.0; 3].into(), body: None, damage, throw, range, at, dir };
+        let hit = Hit { impulse: [0.0; 3].into(), body: None, damage, throw, at, dir };
         let ragdolls = &mut self.karma.ragdolls;
         let tick = ragdolls.tick;
         ragdolls.hits.retain(|h| tick - h.tick <= HIT_TICKS);
@@ -106,14 +102,15 @@ impl<L: LoaderRef> Vm<L> {
         Some(ragdolls.hits.remove(index).hit)
     }
 
-    fn throw_of(&mut self, class: ObjectId) -> Option<Throw> {
-        let class = self.class_of_object(class).ok().flatten()?;
-        if let Some(&throw) = self.karma.ragdolls.throws.get(&class) {
-            return throw;
+    /// From flags the game's scripts already read, so a mod's damage types that set them get the same throw.
+    fn throw_of(&mut self, damage_type: ObjectId, instigator: Option<ObjectId>) -> Option<Throw> {
+        let class = self.class_of_object(damage_type).ok().flatten()?;
+        if self.store.default_flag(class, Prop::bAllowZThrow) {
+            return Some(AIR_THROW);
         }
-        let throw = THROWS.iter().find(|(name, _)| self.class_is_a(class, *name)).map(|(_, throw)| *throw);
-        self.karma.ragdolls.throws.insert(class, throw);
-        throw
+        let by = instigator?;
+        let melee_weapon = self.store.object_of(by, Prop::Weapon).is_some_and(|weapon| self.store.flag_of(weapon, Prop::bMeleeWeapon));
+        Some(if self.store.default_flag(class, Prop::bMeleeDamage) || melee_weapon { MELEE_THROW } else { SHOT_THROW })
     }
 
     pub(crate) fn ragdoll_leftover_hits(&mut self) {

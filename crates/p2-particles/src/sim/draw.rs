@@ -4,11 +4,19 @@ use crate::props::{CoordinateSystem, DirectionUsage, DrawStyle, EmitterPropertie
 use crate::props::RotationSource;
 
 impl ParticleEmitter {
+    /// A `Relative` emitter's particles live in its owner's space.
+    pub(super) fn to_world(&self, owner: Owner) -> impl Fn(Vector) -> Vector + Copy {
+        let relative = self.props.coordinate_system == CoordinateSystem::Relative;
+        let axes = owner.rotation.axes();
+        move |at| if relative { rotate_by(&axes, at) + owner.location } else { at }
+    }
+
     pub fn sprites(&self, owner: Owner, view: View) -> impl Iterator<Item = SpriteParticle> + '_ {
         let props = &self.props;
         let relative = props.coordinate_system == CoordinateSystem::Relative;
         let axes = owner.rotation.axes();
         let direction_to_world = move |v: Vector| if relative { rotate_by(&axes, v) } else { v };
+        let to_world = self.to_world(owner);
         // Retail reads the cached `RealProjectionNormal` here, not `ProjectionNormal`.
         let normal = props.real_projection_normal;
         let rotated_normal = if props.use_rotation_from == RotationSource::Actor { rotate_by(&axes, normal) } else { normal };
@@ -17,7 +25,7 @@ impl ParticleEmitter {
         let (screen_right, screen_down) = (view.right, view.up * -1.0);
         let front = screen_right.cross(screen_down);
         self.live().filter(move |_| !props.disabled).map(move |(_, p)| {
-            let location = if relative { rotate_by(&axes, p.location) + owner.location } else { p.location };
+            let location = to_world(p.location);
             let moved = || direction_to_world((p.location - p.old_location).safe_normal());
             let [size_x, size_y] = [p.size.x, p.size.y];
             let (mut up, mut right, axis) = match props.use_direction_as {
@@ -49,9 +57,9 @@ impl ParticleEmitter {
         let props = &self.props;
         let relative = props.coordinate_system == CoordinateSystem::Relative;
         let frame = if relative { owner.rotation } else { Rotator::ZERO };
-        let axes = owner.rotation.axes();
+        let to_world = self.to_world(owner);
         self.live().filter(move |_| !props.disabled).map(move |(_, p)| {
-            let location = if relative { rotate_by(&axes, p.location) + owner.location } else { p.location };
+            let location = to_world(p.location);
             let spin = if props.spin_particles { mesh_spin(p) } else { Rotator::ZERO };
             MeshParticle { location, spin, frame, size: p.size, color: p.color }
         })

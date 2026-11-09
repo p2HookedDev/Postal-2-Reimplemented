@@ -18,4 +18,5 @@ pub struct ShownScene {
     pub radius: f32,
     pub start: Option<(Vec3, i32)>,
     pub light_maps: Vec<Option<Handle<Image>>>,
+    pub sky_zone: Option<u8>,
 }

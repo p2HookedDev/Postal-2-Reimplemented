@@ -8,6 +8,7 @@ pub mod modern;
 pub mod particle_material;
 pub(crate) mod sampler_refresh;
 pub mod shader_layers;
+pub mod translucent_order;
 pub mod world_pass;
 pub(crate) mod shaders;
 pub(crate) mod sun_mask;

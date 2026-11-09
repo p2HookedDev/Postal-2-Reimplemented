@@ -1,7 +1,7 @@
 use super::Emitter;
 use crate::Rng;
-use crate::math::{Vector, rotate_by, vrand};
-use crate::props::{CoordinateSystem, EmitterKind, EmitterProperties, ShapeExtend, StartLocationShape};
+use crate::math::{Vector, vrand};
+use crate::props::{EmitterKind, EmitterProperties, ShapeExtend, StartLocationShape};
 
 /// The full turn of the circle start shape: 6.28, as retail.
 #[expect(clippy::approx_constant, reason = "BaseFX.dll multiplies by 6.28, not 2 pi")]
@@ -90,9 +90,7 @@ impl Emitter {
     pub fn strip_into(&self, index: usize, order: &mut Vec<usize>, out: &mut Vec<StripPoint>) {
         out.clear();
         let Some(e) = self.emitters.get(index).filter(|e| !e.props.disabled) else { return };
-        let owner = self.owner;
-        let relative = e.props.coordinate_system == CoordinateSystem::Relative;
-        let axes = owner.rotation.axes();
+        let to_world = e.to_world(self.owner);
         let used = &e.particles[..e.active_particles];
         order.clear();
         order.extend(0..used.len());
@@ -100,7 +98,7 @@ impl Emitter {
         out.extend(order.iter().map(|&slot| {
             let p = &used[slot];
             StripPoint {
-                location: if relative { rotate_by(&axes, p.location) + owner.location } else { p.location },
+                location: to_world(p.location),
                 size: p.size[0],
                 color: p.color,
             }
@@ -109,10 +107,7 @@ impl Emitter {
 
     pub fn bounds(&self, index: usize, reach: f32) -> Option<(Vector, Vector)> {
         let e = self.emitters.get(index).filter(|e| !e.props.disabled)?;
-        let owner = self.owner;
-        let relative = e.props.coordinate_system == CoordinateSystem::Relative;
-        let axes = owner.rotation.axes();
-        let world = |at: Vector| if relative { rotate_by(&axes, at) + owner.location } else { at };
+        let world = e.to_world(self.owner);
         let (strip, beam) = (e.props.kind == EmitterKind::Strip, e.props.kind == EmitterKind::Beam);
         let mut bounds = None;
         for (slot, p) in e.particles[..e.active_particles].iter().enumerate().filter(|(_, p)| strip || p.active) {

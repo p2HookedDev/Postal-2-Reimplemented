@@ -629,6 +629,8 @@ impl Game {
                 BaseTexture::Texture(export) => return walk(Some((id, usize::try_from(export - 1).ok()?)), None),
                 BaseTexture::Color => return walk(None, None),
                 BaseTexture::Cubemap(export) => return walk(None, Some((id, usize::try_from(export - 1).ok()?))),
+                // An invisible shader often has no texture at all; it still must hide the mesh's own material.
+                BaseTexture::None if state.blending == Some(Blending::Invisible) => return walk(None, None),
                 BaseTexture::None => return None,
                 BaseTexture::Import(import) => {
                     (id, material) = self.export_of(id, import).map(|(id, e)| (id, e as i32 + 1))?;

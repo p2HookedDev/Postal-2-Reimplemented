@@ -294,8 +294,7 @@ impl<L: LoaderRef> Vm<L> {
                 let wanted = if wanted.get(at..).is_some_and(|end| end.eq_ignore_ascii_case(".fuk")) { &wanted[..at] } else { wanted.as_str() };
                 Value::Bool(self.map_stems().iter().any(|stem| stem.eq_ignore_ascii_case(wanted)))
             }
-            // A stub on purpose: retail only opens one of three web pages; "" claims success and opens nothing.
-            Native::GetAddressURL | Native::GetNetworkNumber | Native::LaunchSocialNetwork => Value::Str(String::new()),
+            Native::GetAddressURL | Native::GetNetworkNumber => Value::Str(String::new()),
             Native::GetPlayerNetworkAddress => Value::Str("127.0.0.1".to_owned()),
             // The default URL's options come from `[URL]` (unverified).
             Native::GetDefaultURL => Value::Str(self.config_value("URL", &text_arg(args, 0)).unwrap_or_default()),
@@ -323,11 +322,11 @@ impl<L: LoaderRef> Vm<L> {
             Native::ParseKillMessage => Value::Str(parse_kill_message(&text_arg(args, 0), &text_arg(args, 1), &text_arg(args, 2))),
             Native::DeleteSave => Value::Bool(self.delete_save(args.first().map_or(0, int))),
             // Retail's `LaunchDLC` answers false without a local client, taking `MenuDLCLaunch`'s failure path.
-            Native::IsSteamDeck | Native::IsWorkshopBuild | Native::SteamGetAchievement | Native::SteamOwnsGame | Native::LaunchDLC => Value::Bool(false),
+            Native::IsSteamDeck | Native::IsWorkshopBuild | Native::SteamGetAchievement | Native::LaunchDLC => Value::Bool(false),
             Native::SteamGetStatFloat => Value::Float(0.0),
             Native::SteamGetStatInt => Value::Int(0),
             Native::SteamUnlockAchievement | Native::SteamLockAchievement | Native::SteamRequestStats | Native::SteamSetStatInt | Native::SteamSetStatFloat
-            | Native::SteamResetStats | Native::SteamIndicateAchievementProgress | Native::SteamPurgeWorkshop | Native::SteamViewStorePage | Native::ResetKeyboard => {
+            | Native::SteamResetStats | Native::SteamIndicateAchievementProgress | Native::SteamPurgeWorkshop | Native::ResetKeyboard => {
                 return Ok(None);
             }
             Native::CopyToClipboard => {

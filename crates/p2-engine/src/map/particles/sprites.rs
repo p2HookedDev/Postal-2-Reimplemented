@@ -8,12 +8,6 @@ pub(super) struct SpriteGrid {
 
 pub(super) const MIN_QUADS: u32 = 16;
 
-/// Retail draws a translucent actor's emitters in array order, actors back to front by box centre.
-/// Bevy sorts per mesh, so all meshes get the actor's bounds and later emitters this extra bias.
-pub fn emitter_sort_bias(index: usize) -> f32 {
-    index as f32 * 0.01
-}
-
 pub(super) fn standard_alpha(style: DrawStyle) -> AlphaMode {
     match style {
         DrawStyle::AlphaBlend => AlphaMode::Blend,

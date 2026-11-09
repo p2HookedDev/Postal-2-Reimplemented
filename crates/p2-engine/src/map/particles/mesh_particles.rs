@@ -53,7 +53,7 @@ pub(super) fn mesh_box(particle: &MeshParticle, reach: f32) -> (Vec3, Vec3) {
 
 pub(super) fn place_mesh_particles(commands: &mut Commands, view: &mut ParticleView, p: &mut ParticleActor, meshes: &[(Vec<MeshParticle>, f32)], in_view: bool) {
     let (overlay, parent) = (p.overlay, p.parent);
-    for (draw, (particles, _)) in p.draws.iter_mut().zip(meshes) {
+    for (order, (draw, (particles, _))) in p.draws.iter_mut().zip(meshes).enumerate() {
         let Some(pool) = &mut draw.pool else { continue };
         let shown = if in_view { particles.len() } else { 0 };
         while pool.slots.len() < shown {
@@ -62,7 +62,7 @@ pub(super) fn place_mesh_particles(commands: &mut Commands, view: &mut ParticleV
             let slot: Vec<Entity> = (pool.sections.iter())
                 .map(|(mesh, material)| {
                     let section = (Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), placed, Visibility::Hidden, PoolSlot);
-                    commands.spawn((section, layer.clone(), ChildOf(parent))).id()
+                    commands.spawn((section, layer.clone(), TranslucentDraw::Part { actor: parent, order: order as u32 }, ChildOf(parent))).id()
                 })
                 .collect();
             pool.slots.push(slot);

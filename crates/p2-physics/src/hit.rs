@@ -10,16 +10,12 @@ const KICK_PER_DAMAGE: f32 = 17.5;
 const KICK: [f32; 2] = [150.0, 500.0];
 const KICK_ROOM: f32 = 700.0;
 const RAY_HALF: f32 = 20.0;
-const NEAR: f32 = 128.0;
-const FAR: f32 = 1024.0;
-const FAR_SHARE: f32 = 0.25;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Throw {
     pub per_damage: f32,
     pub ceiling: f32,
     pub lift: f32,
-    pub falloff: bool,
     pub tumble: bool,
 }
 
@@ -35,7 +31,6 @@ pub struct Hit {
     pub body: Option<BodyId>,
     pub damage: f32,
     pub throw: Option<Throw>,
-    pub range: Option<f32>,
     pub at: p2_math::Vector,
     pub dir: p2_math::Vector,
 }
@@ -147,11 +142,7 @@ impl World {
 }
 
 fn hit_size(hit: &Hit, throw: &Throw) -> f32 {
-    let share = match hit.range {
-        Some(range) if throw.falloff && range > NEAR => 1.0 - (1.0 - FAR_SHARE) * ((range - NEAR) / (FAR - NEAR)).min(1.0),
-        _ => 1.0,
-    };
-    (throw.per_damage * hit.damage * share).max(0.0)
+    (throw.per_damage * hit.damage).max(0.0)
 }
 
 #[cfg(test)]
@@ -209,16 +200,15 @@ mod tests {
     }
 
     #[test]
-    fn a_shotgun_throw_reaches_its_speed_and_kicks_the_entry() {
+    fn a_throw_reaches_its_speed_and_kicks_the_entry() {
         let mut world = World::new([0.0; 3].into());
         let bodies = corpse(&mut world);
-        let shotgun = Throw { per_damage: 11.0, ceiling: 650.0, lift: 0.3, falloff: true, tumble: false };
+        let shotgun = Throw { per_damage: 11.0, ceiling: 650.0, lift: 0.3, tumble: false };
         let hit = Hit {
             impulse: [0.0; 3].into(),
             body: None,
             damage: 30.0,
             throw: Some(shotgun),
-            range: Some(100.0),
             at: [60.0, 0.0, 0.0].into(),
             dir: [0.0, 1.0, 0.0].into(),
         };
@@ -234,8 +224,8 @@ mod tests {
     fn the_throw_stops_at_its_ceiling_and_the_script_wins_when_stronger() {
         let mut world = World::new([0.0; 3].into());
         let bodies = corpse(&mut world);
-        let bullet = Throw { per_damage: 6.0, ceiling: 260.0, lift: 0.0, falloff: false, tumble: true };
-        let hit = Hit { impulse: [0.0; 3].into(), body: None, damage: 100.0, throw: Some(bullet), range: None, at: [60.0, 0.0, 0.0].into(), dir: [1.0, 0.0, 0.0].into() };
+        let bullet = Throw { per_damage: 6.0, ceiling: 260.0, lift: 0.0, tumble: true };
+        let hit = Hit { impulse: [0.0; 3].into(), body: None, damage: 100.0, throw: Some(bullet), at: [60.0, 0.0, 0.0].into(), dir: [1.0, 0.0, 0.0].into() };
         world.ragdoll_hit(&bodies, &hit);
         assert!((world.velocity(bodies[0]).unwrap()[0] - 260.0).abs() < 1.0);
         let mut world = World::new([0.0; 3].into());

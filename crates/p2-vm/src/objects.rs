@@ -142,6 +142,21 @@ impl<L: LoaderRef> Vm<L> {
         id
     }
 
+    /// Retail loads a package when script names one of its objects; the map may not have.
+    pub(crate) fn load_package(&mut self, package: &str) {
+        if self.loader.loaded_id(package).is_some() || self.loader.find(package).is_none() {
+            return;
+        }
+        match self.loader.with_package(package) {
+            Some(Ok(loader)) => {
+                self.loader = loader;
+                self.diagnostics.log.push(format!("Loaded package {package} for script"));
+            }
+            Some(Err(error)) => self.diagnostics.log.push(format!("Could not load package {package}: {error}")),
+            None => {}
+        }
+    }
+
     /// Assets stay stubs until a script uses them. A failed load leaves the stub (calls return zero, property reads read
     /// zero).
     pub(crate) fn load_stub(&mut self, object: ObjectId) {
@@ -176,5 +191,31 @@ impl<L: LoaderRef> Vm<L> {
         object.mem = properties;
         self.set_header(id, class);
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use p2_package::Loader;
+    use p2_test_package::PackageBuilder;
+
+    use crate::{Value, Vm};
+
+    #[test]
+    fn dynamic_load_object_loads_a_package_the_map_did_not() {
+        let mut assets = PackageBuilder::new("LateAssets");
+        assets.class("Thing", None);
+        let dir = assets.write_to_temp("late-package").unwrap();
+        PackageBuilder::new("EarlyScripts").write_to_temp("late-package").unwrap();
+        let mut loader = Loader::new(&dir, &["*.u".into()]).unwrap();
+        loader.load("EarlyScripts").unwrap();
+        let mut vm = Vm::new(Arc::new(loader));
+        assert!(vm.loader().loaded_id("LateAssets").is_none());
+        let found = vm.call_native("DynamicLoadObject", None, &mut [Value::Str("LateAssets.Thing".into()), Value::Object(None)]).unwrap();
+        assert!(vm.loader().loaded_id("LateAssets").is_some());
+        assert!(matches!(found, Some(Value::Object(Some(_)))), "{found:?}");
+        assert!(vm.loader().loaded_id("EarlyScripts").is_some());
     }
 }

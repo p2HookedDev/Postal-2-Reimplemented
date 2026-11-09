@@ -18,6 +18,7 @@ properties!(
     Year, Month, DayOfWeek, Day, Hour, Minute, Second, Millisecond,
     bDeleteMe, bCollideActors, bCollideWorld, bBlockActors, bBlockPlayers, bBlockNonZeroExtentTraces,
     bBlockZeroExtentTraces, bIgnoreOutOfWorld, bWorldGeometry, bStatic, bNoDelete, bUseCylinderCollision, bOnlyAffectPawns, bProjTarget,
+    bAllowZThrow, bMeleeDamage, bMeleeWeapon,
     bAlwaysTick, CollisionRadius, CollisionHeight, Touching, Owner, Base, bCollideWhenPlacing, bSkipEncroachmentCheck,
     Location, Rotation, Velocity, Acceleration, OldAcceleration, Physics, Brush, Mesh, StaticMesh, DrawType, DrawScale,
     DrawScale3D, PrePivot, LastRenderTime,

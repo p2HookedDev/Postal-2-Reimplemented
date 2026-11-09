@@ -98,7 +98,7 @@ fn view_rotation_matches_yaw_pitch_and_rolls_about_the_view() {
     assert!((level * Vec3::Y).dot(rolled * Vec3::Y) < 0.75, "roll tilts up");
 }
 
-fn two_zones() -> Model {
+pub(crate) fn two_zones() -> Model {
     let node = p2_assets::BspNode {
         plane: [0.0, 0.0, 1.0, 0.0],
         node_flags: 0,
@@ -163,19 +163,51 @@ fn a_moving_actor_is_in_the_zones_where_it_is() {
     let model = two_zones();
     let collision = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: Vec::new(), meshes: Vec::new(), mesh_set: p2_collision::MeshSet::default() };
     app.insert_resource(LevelCollision(Some(Arc::new(collision))));
-    app.add_systems(Update, follower_zones);
+    app.insert_resource(ShownScene { sky_zone: Some(2), ..Default::default() });
+    app.add_systems(Update, (follower_zones, layers_by_zone).chain());
     let follow = FollowActor { actor: ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };
     let root = app.world_mut().spawn(ActorModel(follow.actor)).id();
     let aabb = Aabb::from_min_max(Vec3::splat(-10.0), Vec3::splat(10.0));
     let section = app.world_mut().spawn((follow, Transform::from_xyz(0.0, 50.0, 0.0), aabb, ChildOf(root))).id();
     let zones = |app: &App| app.world().get::<ZoneCulled>(root).map(|zone| zone.zones.clone());
+    let layers = |app: &App| app.world().get::<RenderLayers>(section).cloned().unwrap_or_default();
     app.update();
     assert_eq!(zones(&app), Some(vec![2]));
-    for (y, expected) in [(5.0, vec![1, 2]), (-50.0, vec![1])] {
+    assert_eq!(layers(&app), RenderLayers::layer(SKY_LAYER), "only in the sky zone: the sky camera's");
+    for (y, expected, drawn) in [(5.0, vec![1, 2], RenderLayers::layer(0).with(SKY_LAYER)), (-50.0, vec![1], RenderLayers::layer(0))] {
         if let Some(mut transform) = app.world_mut().get_mut::<Transform>(section) {
             transform.translation.y = y;
         }
         app.update();
         assert_eq!(zones(&app), Some(expected));
+        assert_eq!(layers(&app), drawn);
     }
+}
+
+#[test]
+fn an_actor_is_drawn_by_each_camera_whose_zones_its_box_touches() {
+    assert_eq!(sky_and_world(&[54], Some(54)), (true, false));
+    assert_eq!(sky_and_world(&[1, 54], Some(54)), (true, true));
+    assert_eq!(sky_and_world(&[1], Some(54)), (false, true));
+    assert_eq!(sky_and_world(&[], Some(54)), (false, true));
+    assert_eq!(sky_and_world(&[1], None), (false, true));
+}
+
+#[test]
+fn draws_under_a_zone_layered_root_follow_its_zones_also_when_they_join_later() {
+    let mut app = App::new();
+    app.insert_resource(ShownScene { sky_zone: Some(2), ..Default::default() });
+    app.add_systems(Update, layers_by_zone);
+    let zone = ZoneCulled { zones: vec![2], min: [0.0; 3], max: [0.0; 3], only_from: None };
+    let root = app.world_mut().spawn((zone, LayeredByZone)).id();
+    let middle = app.world_mut().spawn(ChildOf(root)).id();
+    let first = app.world_mut().spawn(ChildOf(middle)).id();
+    app.update();
+    let later = app.world_mut().spawn(ChildOf(middle)).id();
+    let overlay = app.world_mut().spawn((ChildOf(middle), RenderLayers::layer(7))).id();
+    app.update();
+    let layers = |app: &App, entity| app.world().get::<RenderLayers>(entity).cloned().unwrap_or_default();
+    assert_eq!(layers(&app, first), RenderLayers::layer(SKY_LAYER));
+    assert_eq!(layers(&app, later), RenderLayers::layer(SKY_LAYER));
+    assert_eq!(layers(&app, overlay), RenderLayers::layer(7), "an overlay draw is left alone");
 }

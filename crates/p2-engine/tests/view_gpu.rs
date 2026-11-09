@@ -674,12 +674,14 @@ fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {
             p2_engine::map::pad_bounds(mesh, min, max);
         }
     }
+    let actor = world.spawn_empty().id();
     for (index, mesh) in meshes.into_iter().enumerate() {
-        let sort_bias = if actor_order { p2_engine::map::emitter_sort_bias(index) } else { 0.0 };
-        let material = ParticleMaterial { sort_bias, ..ParticleMaterial::new(texture.clone(), &props) };
-        let material = world.resource_mut::<Assets<ParticleMaterial>>().add(material);
+        let material = world.resource_mut::<Assets<ParticleMaterial>>().add(ParticleMaterial::new(texture.clone(), &props));
         let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
-        world.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default(), NoFrustumCulling));
+        let mut drawn = world.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default(), NoFrustumCulling));
+        if actor_order {
+            drawn.insert(p2_engine::render::translucent_order::TranslucentDraw::Part { actor, order: index as u32 });
+        }
     }
     let pixel = || frames.lock().expect("lock").last().map(|f| [0, 1, 2].map(|c| f[((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize + c]));
     let (mut last, mut same) = (None, 0);

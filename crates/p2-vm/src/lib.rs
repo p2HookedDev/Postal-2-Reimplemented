@@ -185,9 +185,23 @@ impl Class {
     }
 }
 
-pub trait LoaderRef: Deref<Target = Loader> + Clone + Send + Sync {}
+pub trait LoaderRef: Deref<Target = Loader> + Clone + Send + Sync {
+    /// This loader with package `name` and its imports added; existing ids stay valid. `None` where it cannot grow.
+    fn with_package(&self, name: &str) -> Option<Result<Self, p2_package::ResolveError>>;
+}
 
-impl<L: Deref<Target = Loader> + Clone + Send + Sync> LoaderRef for L {}
+impl LoaderRef for Arc<Loader> {
+    fn with_package(&self, name: &str) -> Option<Result<Self, p2_package::ResolveError>> {
+        let mut loader = Loader::clone(self);
+        Some(loader.load(name).and_then(|id| loader.load_imports(id)).map(|()| Self::new(loader)))
+    }
+}
+
+impl LoaderRef for &Loader {
+    fn with_package(&self, _: &str) -> Option<Result<Self, p2_package::ResolveError>> {
+        None
+    }
+}
 
 #[derive(Default)]
 pub struct Diagnostics {
@@ -203,6 +217,7 @@ pub struct Diagnostics {
 pub struct VmOptions {
     pub player_physics: bool,
     pub data_dir: Option<std::path::PathBuf>,
+    pub steam_apps: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -278,6 +293,7 @@ pub enum HostCommand {
     Quit,
     SetMouse([i32; 2]),
     SaveGame { slot: i32, save: Box<SaveGame> },
+    OpenUrl(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

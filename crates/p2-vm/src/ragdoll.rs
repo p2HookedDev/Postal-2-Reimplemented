@@ -10,7 +10,7 @@ use p2_physics::{BodyId, Hit, JointParams, PartParams, Parts, Throw};
 use p2_math::Vector;
 use crate::enums::EPhysics;
 use crate::bones::PosedMesh;
-use crate::{ClassId, LoaderRef, NameId, ObjectId, Vm, Prop};
+use crate::{LoaderRef, NameId, ObjectId, Vm, Prop};
 
 mod step;
 mod natives;
@@ -20,25 +20,18 @@ mod rig_tests;
 use rig::scale_frames;
 
 const MAX_SPEED: f32 = 1000.0;
-/// In place of `KFriction` (0.7 on a pawn): Karma corpses slide 200-500 units to rest (unverified).
-const CORPSE_FRICTION: f32 = 0.3;
+/// Replaces `KFriction`. The tuned feel is 0.3 under a square-root friction combine; our pairs multiply, so sqrt(0.3).
+const CORPSE_FRICTION: f32 = 0.55;
 /// Corpses sprawl rather than fold ...
 const CONE_SCALE: f32 = 1.3;
 /// ... but wider cones let limbs wrap around the body.
 const MAX_CONE: f32 = 1.55;
 /// A fixed twist held at exactly 0 fights the cone and makes limbs flip.
 const MIN_TWIST: f32 = 0.1;
-const THROWS: [(&str, Throw); 9] = [
-    ("ShotGunDamage", Throw { per_damage: 11.0, ceiling: 650.0, lift: 0.3, falloff: true, tumble: false }),
-    ("SuperShotgunDamage", Throw { per_damage: 11.0, ceiling: 650.0, lift: 0.3, falloff: true, tumble: false }),
-    ("RifleDamage", Throw { per_damage: 14.0, ceiling: 520.0, lift: 0.2, falloff: false, tumble: false }),
-    ("MachineGunDamage", Throw { per_damage: 10.0, ceiling: 350.0, lift: 0.1, falloff: false, tumble: false }),
-    ("BulletDamage", Throw { per_damage: 6.0, ceiling: 260.0, lift: 0.1, falloff: false, tumble: false }),
-    ("ExplodedDamage", Throw { per_damage: 5.0, ceiling: 700.0, lift: 0.6, falloff: false, tumble: true }),
-    ("SmashDamage", Throw { per_damage: 6.0, ceiling: 700.0, lift: 0.5, falloff: false, tumble: true }),
-    ("CuttingDamage", Throw { per_damage: 3.0, ceiling: 400.0, lift: 0.1, falloff: false, tumble: false }),
-    ("BludgeonDamage", Throw { per_damage: 10.0, ceiling: 550.0, lift: 0.25, falloff: false, tumble: false }),
-];
+/// Picked by what a hit is, never by its damage class's name, so a mod's own damage types get the same feel.
+const AIR_THROW: Throw = Throw { per_damage: 5.0, ceiling: 700.0, lift: 0.6, tumble: true };
+const MELEE_THROW: Throw = Throw { per_damage: 10.0, ceiling: 550.0, lift: 0.25, tumble: false };
+const SHOT_THROW: Throw = Throw { per_damage: 10.0, ceiling: 600.0, lift: 0.15, tumble: false };
 const HIT_TICKS: u64 = 2;
 /// Scripts cut with 0 or 1/1000; a 0.2 stump keeps its body.
 const CUT_SCALE: f32 = 0.01;
@@ -57,7 +50,6 @@ pub(crate) struct Ragdolls {
     kept: FxHashMap<ObjectId, (Arc<PosedMesh>, Arc<[Frame]>)>,
     frozen: FxHashSet<ObjectId>,
     failed: FxHashSet<ObjectId>,
-    throws: FxHashMap<ClassId, Option<Throw>>,
     tick: u64,
     hits: Vec<SeenHit>,
 }

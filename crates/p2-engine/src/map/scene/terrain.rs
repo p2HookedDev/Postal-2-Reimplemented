@@ -100,7 +100,6 @@ fn sector_sections(
             alpha_mode: AlphaMode::Opaque,
             no_scene_lights: true,
             fullbright: false,
-            depth_bias: 0.0,
             glow: None,
             layers: Default::default(),
             lightmap: None,
@@ -111,6 +110,8 @@ fn sector_sections(
             alpha_map: None,
             terrain: terrain_layers,
             chunks,
+            bsp_node: None,
+            terrain_layer: None,
         }]
     } else {
         let mut first = true;
@@ -132,7 +133,6 @@ fn sector_sections(
                     alpha_mode: if opaque { AlphaMode::Opaque } else { AlphaMode::Blend },
                     no_scene_lights: true,
                     fullbright: false,
-                    depth_bias: if opaque { 0.0 } else { crate::render::blended::TERRAIN_LAYER_SORT + layer.index as f32 },
                     glow: layer.glow.clone(),
                     layers: layer.shader_layers.clone(),
                     lightmap: None,
@@ -143,6 +143,8 @@ fn sector_sections(
                     alpha_map: Some(layer.alpha_map.clone()),
                     terrain: Vec::new(),
                     chunks,
+                    bsp_node: None,
+                    terrain_layer: (!opaque).then_some(layer.index as u32),
                 }
             })
             .collect()

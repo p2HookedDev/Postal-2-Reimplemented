@@ -4,8 +4,8 @@
 use super::draw::key_span;
 use super::{Collide, Emitter, ParticleEmitter};
 use crate::Rng;
-use crate::math::{Vector, fractional, rotate_by};
-use crate::props::{BeamEnd, BeamEndPoint, BeamScale, CoordinateSystem, EmitterKind, EmitterProperties, RangeVector};
+use crate::math::{Vector, fractional};
+use crate::props::{BeamEnd, BeamEndPoint, BeamScale, EmitterKind, EmitterProperties, RangeVector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BeamPoint {
@@ -176,10 +176,7 @@ impl Emitter {
     pub fn beams_into(&self, index: usize, out: &mut Vec<Beam>) {
         let mut count = 0;
         if let Some(e) = self.emitters.get(index).filter(|e| !e.props.disabled && e.props.kind == EmitterKind::Beam) {
-            let owner = self.owner;
-            let relative = e.props.coordinate_system == CoordinateSystem::Relative;
-            let axes = owner.rotation.axes();
-            let world = |at: Vector| if relative { rotate_by(&axes, at) + owner.location } else { at };
+            let world = e.to_world(self.owner);
             for (slot, p) in e.live() {
                 if count == out.len() {
                     out.push(Beam { points: Vec::new(), size: 0.0, color: [0; 4] });

@@ -11,8 +11,6 @@ use p2_math::{Rotator, Vector};
 use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_square_scale, size_factor, within_light_radius};
 use p2_vm::{LoaderRef, Prop, Value};
 
-const CORONA_SORT: f32 = 1.0e6;
-
 const CORONA_SIZE: f32 = 1024.0;
 
 pub struct CoronaActor {
@@ -85,7 +83,7 @@ impl Session {
             let textures = &mut self.actor_textures;
             let material = self.corona_materials.entry(corona.texture.clone()).or_insert_with_key(|path| {
                 let texture = textures.entry(path.clone()).or_insert_with(|| ActorTexture::read(game, path, |image| images.add(image))).as_ref()?;
-                let material = ParticleMaterial { sort_bias: CORONA_SORT, ..ParticleMaterial::corona(texture.image.clone()) };
+                let material = ParticleMaterial::corona(texture.image.clone());
                 Some(particle_materials.add(material))
             });
             let Some(material) = material.clone() else {
@@ -100,6 +98,7 @@ impl Session {
                 Visibility::Hidden,
                 NoFrustumCulling,
                 CoronaQuad { corona, origin, color: [1.0; 3] },
+                TranslucentDraw::AfterScene,
                 ChildOf(parent),
             ));
         }
@@ -135,7 +134,7 @@ pub fn draw_coronas(
             && zones.get(parent.parent()).is_err()
         {
             let at: [f32; 3] = quad.corona.location.into();
-            commands.entity(parent.parent()).insert(ZoneCulled { zones: p2_collision::box_zones(model, at.into(), at.into()), min: at, max: at, only_from: None });
+            commands.entity(parent.parent()).insert((ZoneCulled { zones: p2_collision::box_zones(model, at.into(), at.into()), min: at, max: at, only_from: None }, LayeredByZone));
         }
     }
     let in_reach = |quad: &CoronaQuad| {

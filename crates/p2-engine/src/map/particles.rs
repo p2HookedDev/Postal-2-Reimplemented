@@ -22,7 +22,6 @@ use sprites::{
     MIN_QUADS, SpriteGrid, fill_draw_buffers, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
     upload_sprites, write_sprite_records,
 };
-pub use sprites::emitter_sort_bias;
 use bounds::{apply_bounds, particles_box};
 pub use bounds::{occlusion_aabb, pad_bounds};
 
@@ -141,11 +140,12 @@ impl Session {
                     // Hidden until it has particles; the mesh changes every frame, so it is never frustum culled by stale
                     // bounds. Its `Aabb` (the actor's, set with the mesh each frame) is for GPU occlusion culling.
                     let model = (Mesh3d(mesh.clone()), Transform::default(), Visibility::Hidden, NoFrustumCulling, ChildOf(parent));
-                    let mut material = ParticleMaterial { sort_bias: emitter_sort_bias(index), ..ParticleMaterial::new(image, &p) };
+                    let mut material = ParticleMaterial::new(image, &p);
                     if fogless {
                         material.params.fogged = 0;
                     }
-                    let entity = t.commands.spawn((model, MeshMaterial3d(t.assets.particle_materials.add(material)))).id();
+                    let part = TranslucentDraw::Part { actor: parent, order: index as u32 };
+                    let entity = t.commands.spawn((model, MeshMaterial3d(t.assets.particle_materials.add(material)), part)).id();
                     EmitterMesh { entity, mesh, shown: false }
                 });
                 draws.push(EmitterDraw { mesh: emitter_mesh, grid, disabled: p.disabled, pool, pending_model, name: emitter_name });

@@ -152,7 +152,6 @@ pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores
         alpha_mode: section.alpha_mode,
         perceptual_roughness: 0.8,
         unlit: section.no_scene_lights && section.lightmap.is_none(),
-        depth_bias: section.depth_bias,
         reflectance: if section.lightmap.is_some() { 0.0 } else { 0.5 },
         lightmap_exposure: MODULATE_2X / Exposure::default().exposure(),
         cull_mode: cull_for(section.two_sided),

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use bevy::app::{App, AppExit, First, Last, Plugin, PostUpdate, Update};
+use bevy::app::{App, AppExit, First, Last, Plugin, PostUpdate, Startup, Update};
 use bevy::asset::{AssetEventSystems, Assets, Handle};
 use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink, SpatialListener,
@@ -56,7 +56,7 @@ pub use vm_thread::*;
 pub use world::*;
 use sound::{
     pause_movie_sound, fade_sounds, sound_limits, pitch_factor, heard_volume, stop_old_songs, play_music,
-    play_world_sounds, ambient_gain,
+    play_world_sounds, ambient_gain, watch_audio, watch_output_device,
 };
 pub(crate) use sound::{MovieSound, sound_listener};
 
@@ -113,6 +113,8 @@ impl Plugin for PlayPlugin {
             .init_resource::<PlayerInput>()
             .configure_sets(Update, (PlaySystems::Input, PlaySystems::Tick).chain())
             .add_systems(First, end_frame)
+            .add_systems(Startup, watch_output_device)
+            .add_systems(Update, watch_audio)
             .add_systems(Last, finish_saves_on_exit)
             .add_systems(Update, (stop_old_songs, tick_play, publish_frame_lights, follow_actors, crate::map::face_sprites, crate::map::draw_coronas, heard_volume, sound_limits, fade_sounds, pause_movie_sound).chain().in_set(PlaySystems::Tick))
             // The renderer copies a changed asset only in the frame its change event is sent; unordered, that ran

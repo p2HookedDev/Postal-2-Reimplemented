@@ -2,10 +2,28 @@ use crate::native_id::Native;
 use crate::{Error, HostCommand, LoaderRef, ObjectId, Prop, Value, Vm};
 use super::{bool_arg, int_arg, milliseconds_since_2000, str_arg};
 
+/// Indexed by `ESocialNetwork`.
+const SOCIAL_URLS: [&str; 3] = ["https://www.facebook.com/rwsstudiosllc", "https://twitter.com/RWSstudios", "http://www.runningwithscissors.com/"];
+
 pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
     let value = match native {
-        Native::ConsoleCommand => console_command(vm, str_arg(args, 0))?,
-        Native::IsDemoBuild | Native::PlatformIsSteamDeck | Native::PlatformIsMacOS | Native::PlatformIsUnix | Native::IsSteamBuild | Native::SteamOwnsDLC => Value::Bool(false),
+        Native::ConsoleCommand => {
+            let (answer, handled) = console_command(vm, str_arg(args, 0))?;
+            if this.is_some_and(|this| vm.store.is_a(this, "Interaction")) { Value::Bool(handled) } else { Value::Str(answer) }
+        }
+        Native::IsDemoBuild | Native::PlatformIsSteamDeck | Native::PlatformIsMacOS | Native::PlatformIsUnix | Native::IsSteamBuild => Value::Bool(false),
+        Native::SteamOwnsDLC | Native::SteamOwnsGame => Value::Bool(u32::try_from(int_arg(args, 0)).is_ok_and(|app| vm.options.steam_apps.contains(&app))),
+        // Retail opens the store page in the Steam overlay; ours asks Steam to open it.
+        Native::SteamViewStorePage => {
+            vm.host.commands.push(HostCommand::OpenUrl(format!("steam://store/{}", int_arg(args, 0))));
+            return Ok(None);
+        }
+        Native::LaunchSocialNetwork => {
+            if let Some(url) = usize::try_from(int_arg(args, 0)).ok().and_then(|n| SOCIAL_URLS.get(n)) {
+                vm.host.commands.push(HostCommand::OpenUrl((*url).to_owned()));
+            }
+            Value::Str(String::new())
+        }
         Native::PlatformIsWindows => Value::Bool(true),
         Native::SteamGetWorkshopStatus | Native::GetBuildDate => Value::Str(String::new()),
         // The install's country, `[Shell.ShellRootWindow] InstalledCountry` (unverified).
@@ -52,11 +70,11 @@ pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this
     Ok(Some(value))
 }
 
-fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<Value, Error> {
+fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<(String, bool), Error> {
     if let Some(answer) = vm.input_command(command) {
-        return Ok(Value::Str(answer));
+        return Ok((answer, true));
     }
-    Ok(Value::Str(match command.to_ascii_lowercase().as_str() {
+    let answer = match command.to_ascii_lowercase().as_str() {
         "getping" | "getcurrentdisplaynumber" | "getrenderdeviceogl" => "0".to_owned(),
         "getcurrentres" => {
             let size = |property, default| match vm.media.canvas.object.and_then(|canvas| vm.store.get(canvas, property)) {
@@ -156,8 +174,40 @@ fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<Value,
         _ => {
             if !vm.player_console_exec(command)? {
                 vm.diagnostics.log.push(format!("ConsoleCommand: {command}"));
+                return Ok((String::new(), false));
             }
             String::new()
         }
-    }))
+    };
+    Ok((answer, true))
+}
+
+#[cfg(test)]
+mod tests {
+    use p2_package::Loader;
+
+    use crate::{HostCommand, Value, Vm};
+
+    #[test]
+    fn console_command_says_whether_it_ran() {
+        let loader = Loader::new(&std::env::temp_dir(), &[]).unwrap();
+        let mut vm = Vm::new(&loader);
+        assert_eq!(super::console_command(&mut vm, "flush").unwrap(), (String::new(), true));
+        assert_eq!(super::console_command(&mut vm, "nosuchcommand").unwrap(), (String::new(), false));
+    }
+
+    #[test]
+    fn steam_apps_answer_ownership_and_links_go_to_the_host() {
+        let loader = Loader::new(&std::env::temp_dir(), &[]).unwrap();
+        let mut vm = Vm::new(&loader);
+        vm.options.steam_apps = vec![707030];
+        let mut owns = |native: &str, app: i32| vm.call_native(native, None, &mut [Value::Int(app)]).unwrap();
+        assert_eq!(owns("SteamOwnsGame", 707030), Some(Value::Bool(true)));
+        assert_eq!(owns("SteamOwnsDLC", 360960), Some(Value::Bool(false)));
+        assert_eq!(owns("SteamOwnsDLC", -1), Some(Value::Bool(false)));
+        assert_eq!(vm.call_native("LaunchSocialNetwork", None, &mut [Value::Byte(1)]).unwrap(), Some(Value::Str(String::new())));
+        vm.call_native("SteamViewStorePage", None, &mut [Value::Int(707030)]).unwrap();
+        let urls: Vec<_> = vm.take_commands(|_| true).collect();
+        assert_eq!(urls, [HostCommand::OpenUrl("https://twitter.com/RWSstudios".to_owned()), HostCommand::OpenUrl("steam://store/707030".to_owned())]);
+    }
 }

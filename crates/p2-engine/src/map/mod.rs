@@ -40,9 +40,10 @@ use crate::actors::{
 use crate::animation::{Animated, AnimatedMesh, FollowBone};
 use crate::library::{Game, Library, LoadError, LoadProgress, PlayLoaderTask};
 use crate::loading::ProgressBar;
+use crate::render::translucent_order::TranslucentDraw;
 use crate::mesh_view::{
     ActorModel, CanvasDrawn, FollowActor, MaterialImages, MeshView, ModelView, MapModel, MovingModel, Scene, SectionMaterial, SectionView, Sky, SceneView, Skin,
-    ZoneCulled, OVERLAY_LAYERS, bounds, merged_box, spawn_actor_sections,
+    LayeredByZone, ZoneCulled, OVERLAY_LAYERS, bounds, merged_box, spawn_actor_sections,
 };
 use crate::render::mesh_light::MeshLitMaterial;
 use crate::render::particle_material::ParticleMaterial;
@@ -62,7 +63,7 @@ use hud::{HudAssets, HudFont, paint_canvas, paint_hud, paint_overlay};
 use movie::Movies;
 use particles::ParticleActor;
 pub use particles::ParticleReport;
-pub use particles::{emitter_sort_bias, pad_bounds};
+pub use particles::pad_bounds;
 pub use sprites::{SpriteQuad, face_sprites};
 pub use coronas::{CoronaActor, corona_actor, draw_coronas, is_corona};
 pub use spawned::material_images;
@@ -292,11 +293,14 @@ fn start_vm(
             for (name, ini) in configs {
                 vm.add_config(name, ini);
             }
-            if vm.redirect_class(("Shell", "MenuOptions"), ("P2Modern", "ModernMenuOptions")) {
-                bevy::log::info!("modern menu: P2Modern.ModernMenuOptions found, Options page swapped");
-            } else {
-                bevy::log::info!("modern menu: P2Modern.ModernMenuOptions not found, retail Options");
+            for (retail, ours) in [("MenuOptions", "ModernMenuOptions"), ("MenuMain", "ModernMenuMain")] {
+                if vm.redirect_class(("Shell", retail), ("P2Modern", ours)) {
+                    bevy::log::info!("modern menu: P2Modern.{ours} found, {retail} swapped");
+                } else {
+                    bevy::log::info!("modern menu: P2Modern.{ours} not found, retail {retail}");
+                }
             }
+            vm.options.steam_apps = crate::install::steam_installed_apps();
             vm
         }
     };

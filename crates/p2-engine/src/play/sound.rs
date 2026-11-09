@@ -347,6 +347,74 @@ fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, camera: Option<Ve
     }
 }
 
+#[derive(Default)]
+pub(crate) struct AudioWatch {
+    seconds: f32,
+    since_count: f32,
+    sample: Option<(Entity, Duration)>,
+    stalled: bool,
+}
+
+/// Bevy opens the output device once and never reopens it, and rodio reports a dead stream only on stderr:
+/// a sound that stops advancing is how a lost device shows in the log.
+pub(super) fn watch_audio(
+    time: Res<Time<bevy::time::Real>>,
+    play: Res<Play>,
+    sinks: Query<(Entity, &AudioSink)>,
+    spatial_sinks: Query<(Entity, &SpatialAudioSink)>,
+    channels: Query<(), With<Channel>>,
+    mut watch: Local<AudioWatch>,
+) {
+    watch.seconds += time.delta_secs();
+    if watch.seconds < 1.0 {
+        return;
+    }
+    watch.since_count += watch.seconds;
+    watch.seconds = 0.0;
+    let all = || sinks.iter().map(|(entity, sink)| (entity, sink as &dyn AudioSinkPlayback)).chain(spatial_sinks.iter().map(|(entity, sink)| (entity, sink as &dyn AudioSinkPlayback)));
+    let advancing = |sink: &dyn AudioSinkPlayback| !sink.is_paused() && !sink.empty();
+    let limit = play.world.as_ref().map_or(0, |world| world.frame.audio_channels);
+    let counts = format!("{} channels playing (limit {limit}), {} sinks", channels.iter().count(), all().count());
+    if let Some((entity, position)) = watch.sample
+        && let Some((_, sink)) = all().find(|(playing, _)| *playing == entity)
+        && advancing(sink)
+    {
+        let stalled = sink.position() == position;
+        if stalled && !watch.stalled {
+            bevy::log::warn!("audio output stalled: a playing sound did not advance for a second; {counts}");
+        } else if !stalled && watch.stalled {
+            bevy::log::info!("audio output advancing again; {counts}");
+        }
+        watch.stalled = stalled;
+    }
+    watch.sample = all().find(|(_, sink)| advancing(*sink)).map(|(entity, sink)| (entity, sink.position()));
+    if watch.since_count >= 60.0 {
+        watch.since_count = 0.0;
+        bevy::log::info!("audio: {counts}");
+    }
+}
+
+pub(super) fn watch_output_device() {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let watching = std::thread::Builder::new().name("audio device watch".into()).spawn(|| {
+        let host = rodio::cpal::default_host();
+        let default_device = || host.default_output_device().map(|device| (device.id().map(|id| id.to_string()).ok(), device.description().map(|description| description.to_string()).ok()));
+        let mut last = default_device();
+        bevy::log::info!("audio output device at start: {last:?}");
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = default_device();
+            if now.as_ref().map(|device| &device.0) != last.as_ref().map(|device| &device.0) {
+                bevy::log::warn!("default audio output device changed from {last:?} to {now:?}; sound stays on the device opened at start");
+                last = now;
+            }
+        }
+    });
+    if let Err(error) = watching {
+        bevy::log::warn!("audio device watch did not start: {error}");
+    }
+}
+
 const ROLLOFF: f32 = 0.9;
 
 /// Gain of a sound of `radius` heard at `distance`: OpenAL's inverse-distance-clamped model

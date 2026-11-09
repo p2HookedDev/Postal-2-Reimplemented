@@ -11,14 +11,20 @@ pub(super) struct MeshPlacing<I> {
     pub(super) instance: Option<(I, MeshLighting)>,
     pub(super) placement: Option<Placement>,
     pub(super) follow: Option<FollowActor>,
-    pub(super) in_sky: bool,
+    pub(super) movable: bool,
     pub(super) only_from: Option<Vec<u8>>,
 }
 
-pub(super) fn holds_eye(mesh: &StaticMesh, transform: &Transform, eye: Vec3) -> bool {
-    let Some((min, max)) = bounds(mesh.positions.iter().map(|&p| to_bevy(p))) else { return false };
-    let local = transform.compute_affine().inverse().transform_point3(eye);
-    local.cmpge(Vec3::from(min)).all() && local.cmple(Vec3::from(max)).all()
+/// The zones of the BSP leaves the placed mesh's box touches: the engine files an actor under each of them, wherever
+/// its pivot is.
+pub(super) fn box_zones(model: &Model, local: Option<([f32; 3], [f32; 3])>, transform: &Transform) -> Vec<u8> {
+    let Some((min, max)) = local else { return Vec::new() };
+    let affine = transform.compute_affine();
+    let corners = (0..8).map(|i: usize| {
+        let pick = |axis: usize| if i >> axis & 1 == 0 { min[axis] } else { max[axis] };
+        to_bevy(affine.transform_point3(Vec3::new(pick(0), pick(1), pick(2))).to_array())
+    });
+    bounds(corners).map_or_else(Vec::new, |(min, max)| p2_collision::box_zones(model, min.into(), max.into()))
 }
 
 pub(super) struct StaticLevel<'a> {
@@ -26,7 +32,7 @@ pub(super) struct StaticLevel<'a> {
     pub(super) file: &'a [u8],
     pub(super) model: &'a Model,
     pub(super) environment: &'a LightEnvironment,
-    pub(super) sky_eye: Option<Vec3>,
+    pub(super) sky_zone: Option<u8>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -97,9 +103,10 @@ fn static_mesh_models(
             })
             .collect()
     };
+    let local_box = bounds(mesh.positions.iter().map(|&p| to_bevy(p)));
     let mut unlit: [Vec<(Transform, Option<ZoneCulled>)>; 2] = Default::default();
     let mut shared: Option<Arc<StaticMesh>> = None;
-    for MeshPlacing { transform, instance, placement, follow, in_sky, only_from } in placements {
+    for MeshPlacing { transform, instance, placement, follow, movable, only_from } in placements {
         let collision = placement.map(|Placement { location, rotation, scale, pre_pivot }| MeshCollision::new(&mesh, location, rotation, scale, pre_pivot));
         let bounds = collision.as_ref().map(MeshCollision::bounds);
         parts.collisions.extend(collision);
@@ -111,6 +118,13 @@ fn static_mesh_models(
             (level.environment.mesh_colors(level.model, &mesh, sphere, instance.as_ref(), &lighting), fits, lighting)
         });
         let (lighting, relit): (Option<_>, Option<_>) = lit.map(|(colors, fits, lighting)| (colors, (fits, lighting))).unzip();
+        let (in_sky, in_world) = crate::mesh_view::sky_and_world(&box_zones(level.model, local_box, &transform), level.sky_zone);
+        if !movable && in_sky {
+            parts.sky_models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone: None });
+            if !in_world {
+                continue;
+            }
+        }
         if let Some(follow) = follow {
             // Without baked lighting the engine lights it by hardware lights where it is: relit as it moves
             // (movers with an instance keep it, as the engine does).
@@ -121,16 +135,6 @@ fn static_mesh_models(
                     .lit_at(lighting.placement.location, lighting.placement.rotation)
             });
             parts.followers.push(MovingModel { sections: sections(t, lighting.as_deref(), relight.is_some(), mirrored, &|_| true), transform, follow, lit: relight });
-            continue;
-        }
-        if in_sky {
-            let mut sky_sections = sections(t, lighting.as_deref(), false, mirrored, &|_| true);
-            if level.sky_eye.is_some_and(|eye| holds_eye(&mesh, &transform, eye)) {
-                // Only materials whose pipeline takes the offset back out: vertex-lit, and blended without UV motion.
-                let sorted = sky_sections.iter_mut().filter(|s| s.alpha_mode == AlphaMode::Blend && (crate::mesh_view::vertex_lit(s) || s.uv.is_empty()));
-                sorted.for_each(|s| s.depth_bias = crate::render::blended::AROUND_EYE_SORT);
-            }
-            parts.sky_models.push(ModelView { sections: sky_sections, instances: vec![transform], zone: None });
             continue;
         }
         parts.lit_actors += usize::from(lighting.is_some());
@@ -181,12 +185,12 @@ pub(super) fn resolve_mesh_paths(
         let skins = skins.iter().map(|skin| skin.as_deref().and_then(&mut export).unwrap_or((id, 0))).collect();
         let actors = actors
             .into_iter()
-            .map(|MeshPlacing { transform, instance, placement, follow, in_sky, only_from }| {
+            .map(|MeshPlacing { transform, instance, placement, follow, movable, only_from }| {
                 let instance = instance.map(|(path, lighting)| {
                     let reference = path.and_then(|path| export(&path)).filter(|&(p, _)| p == id).map(|(_, reference)| reference);
                     (reference, lighting)
                 });
-                MeshPlacing { transform, instance, placement, follow, in_sky, only_from }
+                MeshPlacing { transform, instance, placement, follow, movable, only_from }
             })
             .collect::<Vec<_>>();
         placements.entry((mesh, skins)).or_default().extend(actors);
