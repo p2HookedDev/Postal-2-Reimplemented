@@ -15,11 +15,18 @@ pub(super) struct MeshPlacing<I> {
     pub(super) only_from: Option<Vec<u8>>,
 }
 
+pub(super) fn holds_eye(mesh: &StaticMesh, transform: &Transform, eye: Vec3) -> bool {
+    let Some((min, max)) = bounds(mesh.positions.iter().map(|&p| to_bevy(p))) else { return false };
+    let local = transform.compute_affine().inverse().transform_point3(eye);
+    local.cmpge(Vec3::from(min)).all() && local.cmple(Vec3::from(max)).all()
+}
+
 pub(super) struct StaticLevel<'a> {
     pub(super) pkg: &'a Package,
     pub(super) file: &'a [u8],
     pub(super) model: &'a Model,
     pub(super) environment: &'a LightEnvironment,
+    pub(super) sky_eye: Option<Vec3>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -116,7 +123,13 @@ fn static_mesh_models(
             continue;
         }
         if in_sky {
-            parts.sky_models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone: None });
+            let mut sky_sections = sections(t, lighting.as_deref(), false, mirrored, &|_| true);
+            if level.sky_eye.is_some_and(|eye| holds_eye(&mesh, &transform, eye)) {
+                // Only materials whose pipeline takes the offset back out: vertex-lit, and blended without UV motion.
+                let sorted = sky_sections.iter_mut().filter(|s| s.alpha_mode == AlphaMode::Blend && (crate::mesh_view::vertex_lit(s) || s.uv.is_empty()));
+                sorted.for_each(|s| s.depth_bias = crate::render::blended::AROUND_EYE_SORT);
+            }
+            parts.sky_models.push(ModelView { sections: sky_sections, instances: vec![transform], zone: None });
             continue;
         }
         parts.lit_actors += usize::from(lighting.is_some());

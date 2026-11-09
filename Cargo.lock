@@ -4055,6 +4055,7 @@ name = "p2-package"
 version = "0.2.0"
 dependencies = [
  "memmap2",
+ "rustc-hash 2.1.3",
  "thiserror 2.0.21",
 ]
 
@@ -4095,6 +4096,7 @@ name = "p2-script"
 version = "0.2.0"
 dependencies = [
  "p2-package",
+ "rustc-hash 2.1.3",
  "thiserror 2.0.21",
 ]
 

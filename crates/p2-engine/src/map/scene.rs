@@ -297,7 +297,8 @@ impl PreparedScene {
         let actors: usize = placements.values().map(Vec::len).sum();
         let meshes = placements.keys().map(|(mesh, _)| mesh).collect::<HashSet<_>>().len();
         let environment = Arc::new(LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).with_terrain(terrain_sectors));
-        let level = StaticLevel { pkg, file, model: &model, environment: &environment };
+        let sky_eye = sky_info.map(|(location, _)| Vec3::from(to_bevy(location)));
+        let level = StaticLevel { pkg, file, model: &model, environment: &environment, sky_eye };
         let (parts, static_missing, static_batches) = static_models(game, t, &mut texture, &level, placements);
         missing += static_missing;
         let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lit_actors, .. } = parts;

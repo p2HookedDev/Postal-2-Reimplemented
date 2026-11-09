@@ -7,6 +7,7 @@ use p2_package::TagValue;
 
 use super::*;
 use super::projectors::{ALPHA_TEST_TAG, PROJECTOR_TAG, TAGGED_TAG};
+use super::static_meshes::holds_eye;
 
 fn mesh_placement(loader: &Loader, actor: &MeshActor) -> ((PackageId, i32), MeshPlacement) {
     let mesh = (loader.id_of(actor.mesh_package).unwrap(), actor.static_mesh);
@@ -506,4 +507,14 @@ fn projector_tag_takes_the_innermost_final_blend() {
     assert_eq!(projector_tag(&projector(ProjectorBlending::Modulate), splat), PROJECTOR_TAG | 1 << 8 | 4);
     assert_eq!(projector_tag(&projector(ProjectorBlending::None), None), PROJECTOR_TAG | 4);
     assert_eq!(projector_tag(&ProjectorActor { tagged: true, ..projector(ProjectorBlending::None) }, None), PROJECTOR_TAG | TAGGED_TAG | 4);
+}
+
+#[test]
+fn a_sky_mesh_holds_the_eye_only_inside_its_placed_box() {
+    let mesh = StaticMesh { positions: vec![[-100.0, -50.0, -20.0], [100.0, 50.0, 20.0]], ..Default::default() };
+    assert!(holds_eye(&mesh, &Transform::IDENTITY, Vec3::ZERO));
+    assert!(!holds_eye(&mesh, &Transform::IDENTITY, Vec3::new(0.0, 0.0, 500.0)));
+    let moved = Transform::from_xyz(1000.0, 0.0, 0.0);
+    assert!(holds_eye(&mesh, &moved, Vec3::new(1050.0, 0.0, 0.0)));
+    assert!(!holds_eye(&mesh, &moved, Vec3::ZERO));
 }
