@@ -376,7 +376,7 @@ impl<L: LoaderRef> Vm<L> {
     /// A brush is one hull of its corners, so a concave brush is filled in.
     fn karma_placed_shapes(&mut self, actor: ObjectId, without_props: WithoutProps) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
         let placement = self.drawn_placement(actor);
-        let place = |p: &[f32; 3]| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i]);
+        let place = |p: &[f32; 3]| placement.in_body(*p);
         let shapes = if self.draw_type_of(actor) == Some(crate::enums::EDrawType::StaticMesh) {
             let mesh = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh))?;
             match (mesh.use_simple_collision, &mesh.props) {

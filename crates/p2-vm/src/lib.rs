@@ -34,6 +34,7 @@ pub mod projector;
 mod props;
 mod ragdoll;
 mod save;
+mod script_hooks;
 mod senses;
 mod side_packages;
 mod find_spot;

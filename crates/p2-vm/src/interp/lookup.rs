@@ -105,8 +105,7 @@ impl<L: LoaderRef> Vm<L> {
         let object_name = pkg.name(pkg.exports[export].object_name).to_owned();
         let native_id = if is_native_declaration(native, flags) { crate::native_id::Native::from_name(&object_name) } else { None };
         let mem = self.store.memory.of(&layout);
-        let take_damage = object_name.eq_ignore_ascii_case("TakeDamage") && params.len() >= 5;
-        let trace_hit = object_name.eq_ignore_ascii_case("ProcessTraceHit") && params.len() >= 4;
+        let hook = crate::script_hooks::ScriptHook::of(&object_name, params.len());
         let mut labels = FxHashMap::default();
         for statement in &statements {
             if let Expr::LabelTable(table) = &statement.expr {
@@ -117,7 +116,6 @@ impl<L: LoaderRef> Vm<L> {
                 }
             }
         }
-        let bolton = crate::bolton::BoltonHook::of(&object_name);
         let function = Arc::new(Function {
             object_name,
             package,
@@ -131,9 +129,7 @@ impl<L: LoaderRef> Vm<L> {
             return_value,
             native_id,
             fast: native_id.filter(|native| native.is_fast()),
-            take_damage,
-            trace_hit,
-            bolton,
+            hook,
             links: (0..links).map(|_| AtomicU64::new(UNLINKED)).collect(),
             index: u32::try_from(self.script.lookups.function_table.len()).unwrap_or(u32::MAX),
             labels,

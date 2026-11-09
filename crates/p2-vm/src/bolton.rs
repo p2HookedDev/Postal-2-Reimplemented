@@ -28,19 +28,6 @@ pub(crate) enum BoltonHook {
     PinataStyleExplodeEffects,
 }
 
-const HOOKS: [(&str, BoltonHook); 4] = [
-    ("DropBoltons", BoltonHook::DropBoltons),
-    ("DestroyHeadBoltons", BoltonHook::DestroyHeadBoltons),
-    ("PopOffHead", BoltonHook::PopOffHead),
-    ("PinataStyleExplodeEffects", BoltonHook::PinataStyleExplodeEffects),
-];
-
-impl BoltonHook {
-    pub(crate) fn of(function: &str) -> Option<Self> {
-        HOOKS.iter().find(|(name, _)| name.eq_ignore_ascii_case(function)).map(|&(_, hook)| hook)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 enum Throw {
     HeadVelocity,
@@ -264,12 +251,5 @@ mod tests {
     fn hull_size_about_origin() {
         assert_eq!(hull_size(&[[3.0, 4.0, -2.0], [-1.0, 0.0, 6.0]]), [5.0, 6.0]);
         assert_eq!(hull_size(&[]), [0.0, 0.0]);
-    }
-
-    #[test]
-    fn hooks_by_name() {
-        assert_eq!(BoltonHook::of("dropboltons"), Some(BoltonHook::DropBoltons));
-        assert_eq!(BoltonHook::of("PinataStyleExplodeEffects"), Some(BoltonHook::PinataStyleExplodeEffects));
-        assert_eq!(BoltonHook::of("TakeDamage"), None);
     }
 }

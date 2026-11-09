@@ -37,9 +37,7 @@ pub struct Function {
     pub return_value: Option<usize>,
     pub(crate) fast: Option<crate::native_id::Native>,
     pub(crate) native_id: Option<crate::native_id::Native>,
-    pub(crate) take_damage: bool,
-    pub(crate) trace_hit: bool,
-    pub(crate) bolton: Option<crate::bolton::BoltonHook>,
+    pub(crate) hook: Option<crate::script_hooks::ScriptHook>,
     /// What each `Expr::Linked` reference of `statements` resolved to, filled on its first run ([`UNLINKED`] until then): a
     /// local's slot, a member index, a `NameId`, or a packed `member_link`, `site_key` or `cast_link`. Links name this VM's
     /// classes and function table: a `Function` belongs to the VM that decoded it.

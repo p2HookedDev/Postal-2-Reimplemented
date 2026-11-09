@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use crate::memory::{LayoutId, Mem};
+use crate::script_hooks::ScriptHook;
 use crate::{ClassId, Error, ObjectId, LoaderRef, Value, Vm, natives, zero_slot};
 use p2_script::flags::{CPF_OUT_PARM, FUNC_LATENT, FUNC_SINGULAR};
 use super::{
@@ -111,12 +112,15 @@ impl<L: LoaderRef> Vm<L> {
             });
             return Ok((value, args));
         }
-        let bolton = function.bolton.zip(this);
+        let bolton = match function.hook {
+            Some(ScriptHook::Bolton(hook)) => this.map(|object| (hook, object)),
+            _ => None,
+        };
         if let Some((hook, object)) = bolton {
             let momentum = function.params.get(1).map(|&index| hit_arg(&*self, &args, 1, index));
             self.bolton_before(hook, object, momentum)?;
         }
-        if function.take_damage && let Some(victim) = this {
+        if function.hook == Some(ScriptHook::TakeDamage) && let Some(victim) = this {
             let mut values = [Value::Map, Value::Map, Value::Map, Value::Map, Value::Map];
             let mut count = 0;
             for (k, &index) in function.params.iter().take(5).enumerate() {
@@ -126,7 +130,7 @@ impl<L: LoaderRef> Vm<L> {
             self.hit_seen(victim, &values[..count]);
             self.bolton_struck(victim, &values[..count])?;
         }
-        if function.trace_hit {
+        if function.hook == Some(ScriptHook::ProcessTraceHit) {
             let hit = std::array::from_fn(|k| hit_arg(&*self, &args, k, function.params[k]));
             self.bullet_hole(function, hit)?;
         }
