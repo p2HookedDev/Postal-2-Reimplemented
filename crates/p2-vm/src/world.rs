@@ -6,7 +6,7 @@ use p2_assets::{
 };
 use p2_collision::{
     Hit, MeshCollision, box_check, line_check, line_check_node, mesh_box_check, mesh_line_check, mesh_line_check_at, pull_back, pull_back_units,
-    segment_cylinder, terrain_box_check, terrain_line_check,
+    segment_cylinder, terrain_box_check, terrain_front_line_check,
 };
 use p2_math::{Rotator, Vector};
 use p2_package::PackageId;
@@ -307,7 +307,7 @@ impl<L: LoaderRef> Vm<L> {
         let world = &self.world;
         let length = (end - start).size();
         let bsp = world.model.as_ref().and_then(|model| line_check(model, start, end)).map(|hit| pull_back(start, end, hit, 0.5));
-        let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end)).map(|hit| pull_back(start, end, hit, 0.5));
+        let terrain = world.terrains.iter().filter_map(|t| terrain_front_line_check(t, start, end)).map(|hit| pull_back(start, end, hit, 0.5));
         let mesh = self
             .with_near_lines(start, end, |near| mesh_line_check(near.iter().map(|&i| &*world.lines[i].shape), start, end))
             .map(|hit| pull_back(start, end, hit, pull_back_units(false, length)));
@@ -344,7 +344,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn trace_lines(&self, start: Vector, end: Vector) -> Option<Hit> {
         let world = &self.world;
-        let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end));
+        let terrain = world.terrains.iter().filter_map(|t| terrain_front_line_check(t, start, end));
         let mesh = self.with_near_lines(start, end, |near| mesh_line_check(near.iter().map(|&i| &*world.lines[i].shape), start, end));
         terrain.chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
     }

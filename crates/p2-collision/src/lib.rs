@@ -140,11 +140,28 @@ fn terrain_ready(terrain: &Terrain) -> bool {
 /// `terrain.vertices` must be filled (rebuilt from the heightmap if the saved ones were stale). Of hits at the same time,
 /// the quad first in heightmap order (row, then column, then triangle) wins.
 pub fn terrain_line_check(terrain: &Terrain, start: Vector, end: Vector) -> Option<Hit> {
+    terrain_segment_check(terrain, start, end, false)
+}
+
+pub fn terrain_front_line_check(terrain: &Terrain, start: Vector, end: Vector) -> Option<Hit> {
+    terrain_segment_check(terrain, start, end, true)
+}
+
+fn terrain_segment_check(terrain: &Terrain, start: Vector, end: Vector, front_only: bool) -> Option<Hit> {
     terrain_first_hit(terrain, start, end, [0.0; 2], TIE_SLACK, |triangle| {
         let [a, b, c] = triangle.map(|i| Vector::from(terrain.vertices[i]));
+        if front_only && !terrain_front(terrain, [a, b, c], end - start) {
+            return None;
+        }
         let t = segment_triangle(start, end, a, b, c)?;
         Some((t, facing(triangle_normal(a, b, c), start, end)))
     })
+}
+
+pub(crate) fn terrain_front(terrain: &Terrain, [a, b, c]: [Vector; 3], delta: Vector) -> bool {
+    let up = triangle_normal(a, c, b);
+    let front = if terrain.inverted { -up } else { up };
+    front.dot(delta) < -1e-4
 }
 
 fn terrain_first_hit(terrain: &Terrain, start: Vector, end: Vector, extent: [f32; 2], row_slack: f32, hit: impl Fn([usize; 3]) -> Option<(f32, Vector)>) -> Option<Hit> {

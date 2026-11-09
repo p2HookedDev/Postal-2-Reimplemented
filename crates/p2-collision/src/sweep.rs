@@ -120,7 +120,8 @@ pub fn terrain_box_check(terrain: &Terrain, start: Vector, end: Vector, extent: 
     let delta = end - start;
     crate::terrain_first_hit(terrain, start, end, [extent.x, extent.y], 0.0, |triangle| {
         let tri = triangle.map(|i| terrain.vertices[i]);
-        if overlaps(min, max, &tri) { box_triangle(start, delta, extent, tri) } else { None }
+        let front = crate::terrain_front(terrain, tri.map(Vector::from), delta);
+        if front && overlaps(min, max, &tri) { box_triangle(start, delta, extent, tri) } else { None }
     })
 }
 
@@ -231,7 +232,8 @@ mod tests {
             for x in cells(0, width) {
                 for triangle in terrain.quad_triangles(x, y) {
                     let tri = triangle.map(|i| terrain.vertices[i]);
-                    if overlaps(min, max, &tri)
+                    if crate::terrain_front(terrain, tri.map(Vector::from), delta)
+                        && overlaps(min, max, &tri)
                         && let Some(hit) = box_triangle(start, delta, extent, tri)
                     {
                         hits.push(hit);
@@ -260,6 +262,21 @@ mod tests {
         let (start, end) = (crate::tests::at(-0.5, 2.5, 300.0), crate::tests::at(-0.5, 2.5, -300.0));
         assert!(terrain_box_check(&terrain, start, end, v(40.0, 10.0, 10.0)).is_some());
         assert!(terrain_box_check(&terrain, start, end, v(20.0, 10.0, 10.0)).is_none());
+    }
+
+    #[test]
+    fn terrain_blocks_only_moves_into_its_front() {
+        let mut terrain = crate::tests::test_terrain();
+        let (above, below) = (crate::tests::at(2.5, 1.5, 400.0), crate::tests::at(2.5, 1.5, -400.0));
+        let extent = v(20.0, 20.0, 40.0);
+        assert!(terrain_box_check(&terrain, above, below, extent).is_some());
+        assert!(terrain_box_check(&terrain, below, above, extent).is_none());
+        assert!(crate::terrain_front_line_check(&terrain, above, below).is_some());
+        assert!(crate::terrain_front_line_check(&terrain, below, above).is_none());
+        assert!(crate::terrain_line_check(&terrain, below, above).is_some());
+        terrain.inverted = true;
+        assert!(terrain_box_check(&terrain, below, above, extent).is_some());
+        assert!(terrain_box_check(&terrain, above, below, extent).is_none());
     }
 
     #[test]
