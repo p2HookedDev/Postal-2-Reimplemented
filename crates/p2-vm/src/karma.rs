@@ -226,7 +226,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(id)
     }
 
-    /// The world's gravity is this actor's physics volume's; props and ragdolls scale theirs to their own volume's.
     pub(crate) fn karma_world(&mut self, actor: ObjectId) {
         if self.karma.world.is_some() {
             return;

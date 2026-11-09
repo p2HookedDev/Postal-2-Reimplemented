@@ -139,7 +139,6 @@ impl MoverDecal {
     }
 }
 
-/// Rigid: the mover's scale does not reach its decals.
 fn mover_pose(origin: Vec3, location: p2_math::Vector, rotation: p2_math::Rotator) -> Transform {
     Transform::from_translation(origin) * unreal_transform(location, rotation, p2_math::Vector::new(1.0, 1.0, 1.0), p2_math::Vector::ZERO)
 }

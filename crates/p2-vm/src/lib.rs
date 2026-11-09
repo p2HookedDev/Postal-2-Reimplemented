@@ -338,7 +338,6 @@ pub(crate) struct Lookups {
     pub(crate) names: FxHashMap<(PackageId, usize), NameId>,
     pub(crate) object_consts: FxHashMap<(PackageId, i32), ObjectId>,
     pub(crate) class_objects: FxHashMap<ObjectId, Option<ClassId>>,
-    /// By function index.
     pub(crate) hole_splats: FxHashMap<u32, Option<ClassId>>,
     pub(crate) casts: FxHashMap<(ClassId, PackageId, i32, bool), bool>,
     /// Ancestry is then tested by `NameId`: interning is case-insensitive, so this is `UnrealScript`'s by-name test without

@@ -186,7 +186,6 @@ pub struct World {
     forced: Vec<RigidBodyHandle>,
     level: Vec<ColliderHandle>,
     started: Vec<Started>,
-    /// Where each mover must be at the end of the next step.
     moving: FxHashMap<RigidBodyHandle, Pose>,
     cones: Vec<ragdoll::Cone>,
 }
@@ -298,7 +297,6 @@ impl World {
         Ok(BodyId(handle))
     }
 
-    /// The mover travels there over the next step, so what it touches gets its speed.
     pub fn move_mover(&mut self, id: BodyId, location: p2_math::Vector, rotation: [f32; 4]) {
         if self.hooks.movers.contains(&id.0) {
             self.moving.insert(id.0, pose(location, rotation));

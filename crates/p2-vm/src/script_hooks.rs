@@ -10,7 +10,6 @@ pub(crate) enum ScriptHook {
     Bolton(BoltonHook),
 }
 
-/// Every script function the engine runs code around: its name, fewest parameters and hook.
 const HOOKS: [(&str, usize, ScriptHook); 6] = [
     ("TakeDamage", 5, ScriptHook::TakeDamage),
     ("ProcessTraceHit", 4, ScriptHook::ProcessTraceHit),

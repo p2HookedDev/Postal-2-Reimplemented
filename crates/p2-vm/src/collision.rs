@@ -27,7 +27,6 @@ pub(crate) struct Placement {
 }
 
 impl Placement {
-    /// A point of the mesh in the actor's own frame: pre-pivot and scale applied, not yet turned or moved.
     pub(crate) fn in_body(&self, p: [f32; 3]) -> [f32; 3] {
         [0, 1, 2].map(|i| (p[i] - self.pre_pivot[i]) * self.scale[i])
     }
