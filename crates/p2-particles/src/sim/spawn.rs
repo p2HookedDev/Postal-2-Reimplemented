@@ -1,7 +1,7 @@
 use super::{
     CollisionHit, FirstUpdate, MAX_SPAWN_PASSES, Others, Owner, Particle, ParticleEmitter, SpawnContext, basefx,
 };
-use crate::math::Vector;
+use crate::math::{Rotator, Vector};
 use crate::math::vrand;
 use crate::props::{CoordinateSystem, EmitterKind, EmitterProperties};
 use crate::props::{RangeVector, RotationSource, StartLocationShape, VelocityDirection};
@@ -10,8 +10,7 @@ use crate::Rng;
 impl ParticleEmitter {
     fn spawn_on_surface(&mut self, hit: CollisionHit, dt: f32, velocity_scale: Option<RangeVector>, context: SpawnContext) {
         let SpawnContext { owner, rng, others } = context;
-        let max = self.particles.len();
-        if max == 0 {
+        if self.particles.is_empty() {
             return;
         }
         let index = self.particle_index;
@@ -21,8 +20,13 @@ impl ParticleEmitter {
             let p = &mut self.particles[index];
             p.velocity += add_velocity;
         }
-        self.active_particles = self.active_particles.max(index + 1);
-        self.particle_index = (index + 1) % max;
+        self.advance_slot();
+    }
+
+    pub(super) fn advance_slot(&mut self) {
+        let next = self.particle_index + 1;
+        self.active_particles = self.active_particles.max(next);
+        self.particle_index = next % self.particles.len();
     }
 
     pub(super) fn spawn_particles(&mut self, fraction: f32, pps: f32, dt: f32, owner: &Owner, rng: &mut Rng, others: &Others) -> f32 {
@@ -37,9 +41,7 @@ impl ParticleEmitter {
         let count = (whole.max(0.0) as usize).min(max);
         for k in 0..count {
             self.spawn_particle(self.particle_index, first - k as f32 * interval, FirstUpdate::Skip, None, SpawnContext { owner, rng: &mut *rng, others });
-            let next = self.particle_index + 1;
-            self.active_particles = self.active_particles.max(next);
-            self.particle_index = next % max;
+            self.advance_slot();
         }
         total - whole
     }
@@ -97,12 +99,13 @@ impl ParticleEmitter {
         if let Some(other) = other_particle(props.add_location_from_other_emitter) {
             location += other.location - owner.location;
         }
+        let normal_rotation = if props.use_rotation_from == RotationSource::Normal { props.rotation_normal.rotation() } else { Rotator::ZERO };
         let rotation = |v: Vector, normal_axis: bool| match props.use_rotation_from {
             RotationSource::None => v,
             RotationSource::Actor => props.rotation_offset.rotate(owner.rotation.rotate(v)),
             RotationSource::Offset => props.rotation_offset.rotate(v),
             RotationSource::Normal => {
-                let mut r = props.rotation_normal.rotation();
+                let mut r = normal_rotation;
                 if normal_axis && props.effect_axis_positive_z {
                     r[0] -= 0x4000;
                 }
@@ -229,11 +232,13 @@ fn random_subdivision(props: &EmitterProperties, rng: &mut Rng) -> i32 {
     }
 }
 
-pub(super) fn spawn_hits(emitters: &mut [ParticleEmitter], target: usize, hits: Vec<(CollisionHit, f32)>, scale: Option<RangeVector>, owner: &Owner, rng: &mut Rng) {
+pub(super) fn spawn_hits(emitters: &mut [ParticleEmitter], target: usize, hits: &[(CollisionHit, f32, usize)], scale: Option<RangeVector>, owner: &Owner, rng: &mut Rng) {
     let (before, rest) = emitters.split_at_mut(target);
     let Some((other, after)) = rest.split_first_mut() else { return };
     let others = Others { before, after };
-    for (hit, step) in hits {
-        other.spawn_on_surface(hit, step, scale, SpawnContext { owner, rng: &mut *rng, others: &others });
+    for &(hit, step, count) in hits {
+        for _ in 0..count {
+            other.spawn_on_surface(hit, step, scale, SpawnContext { owner, rng: &mut *rng, others: &others });
+        }
     }
 }

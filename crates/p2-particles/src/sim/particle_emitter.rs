@@ -18,7 +18,7 @@ impl ParticleEmitter {
             return;
         }
         let speed = force.velocity.size();
-        for p in self.particles[..self.active_particles].iter_mut().filter(|p| p.active && p.mass != 0.0) {
+        for p in self.live_mut().filter(|p| p.mass != 0.0) {
             let offset = force.location - p.location;
             let distance2 = offset.size_squared();
             if distance2 >= radius2 {
@@ -69,8 +69,16 @@ impl ParticleEmitter {
         self.props.disabled = disabled;
     }
 
+    pub(super) fn live(&self) -> impl Iterator<Item = &Particle> {
+        self.particles[..self.active_particles].iter().filter(|p| p.active)
+    }
+
+    pub(super) fn live_mut(&mut self) -> impl Iterator<Item = &mut Particle> {
+        self.particles[..self.active_particles].iter_mut().filter(|p| p.active)
+    }
+
     pub fn live_particles(&self) -> usize {
-        self.particles[..self.active_particles].iter().filter(|p| p.active).count()
+        self.live().count()
     }
 
     pub fn inactive_for(&self) -> f32 {
@@ -91,9 +99,9 @@ impl ParticleEmitter {
         self.time_till_reset = self.props.auto_reset_time_range.rand(rng);
     }
 
-    /// No collision planes, sounds or actor forces. Returns where particles hit the level, for
-    /// `SpawnFromOtherEmitter` (one entry per particle to spawn there).
-    pub(super) fn update(&mut self, dt: f32, owner: &Owner, rng: &mut Rng, others: &Others, collide: &mut Collide) -> Vec<CollisionHit> {
+    /// No collision planes, sounds or actor forces. Adds to `hits` where particles hit the level, for
+    /// `SpawnFromOtherEmitter`: the hit, this step and how many particles to spawn there.
+    pub(super) fn update(&mut self, dt: f32, owner: &Owner, rng: &mut Rng, others: &Others, collide: &mut Collide, hits: &mut Vec<(CollisionHit, f32, usize)>) {
         let max = self.particles.len();
         let pps = if self.active_particles < max {
             if self.props.automatic_initial_spawning {
@@ -108,7 +116,6 @@ impl ParticleEmitter {
             self.pps_fraction = self.spawn_particles(self.pps_fraction, pps, dt, owner, rng, others);
         }
         let relative = self.props.coordinate_system == CoordinateSystem::Relative;
-        let mut spawns = Vec::new();
         let mut dead = 0;
         for index in 0..self.active_particles {
             let p = &mut self.particles[index];
@@ -145,7 +152,7 @@ impl ParticleEmitter {
                 None
             };
             if let Some(hit) = hit
-                && !self.survives_hit(index, hit, dt, &mut spawns, SpawnContext { owner, rng: &mut *rng, others })
+                && !self.survives_hit(index, hit, dt, hits, SpawnContext { owner, rng: &mut *rng, others })
             {
                 dead += 1;
                 continue;
@@ -170,14 +177,13 @@ impl ParticleEmitter {
         self.trace_beams(collide, rng);
         self.all_particles_dead =
             (dead >= max || (self.active_particles == dead && pps == 0.0)) && !self.props.respawn_dead_particles;
-        spawns
     }
 
-    fn survives_hit(&mut self, index: usize, hit: CollisionHit, dt: f32, spawns: &mut Vec<CollisionHit>, context: SpawnContext) -> bool {
+    fn survives_hit(&mut self, index: usize, hit: CollisionHit, dt: f32, hits: &mut Vec<(CollisionHit, f32, usize)>, context: SpawnContext) -> bool {
         if self.props.spawn_from_other_emitter.is_some() && dt != 0.0 {
             let on_surface = hit.location + hit.normal * SURFACE_OFFSET;
             let count = usize::try_from(self.props.spawn_amount).unwrap_or(0);
-            spawns.extend(std::iter::repeat_n(CollisionHit { location: on_surface, normal: hit.normal }, count));
+            hits.push((CollisionHit { location: on_surface, normal: hit.normal }, dt, count));
         }
         let last = self.props.use_max_collisions
             && self.particles[index].hit_count + 1 >= self.props.max_collisions.rand(&mut *context.rng).floor() as i32;

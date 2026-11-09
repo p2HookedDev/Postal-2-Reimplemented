@@ -1,21 +1,19 @@
 use p2_math::{Rng, Vector};
-use super::{FluidSettings, FluidToucher, FluidSurface, ROW, MAX_CATCH_UP_STEPS, MAX_WARM_UP_SECONDS, MAX_NOISE_PER_STEP, VISCOSITY, MAX_SMOOTHING, MAX_WAVE_NUMBER, MAX_HEIGHT, bit_set, ring_difference};
+use super::{FluidSettings, FluidToucher, FluidSurface, MAX_CATCH_UP_STEPS, MAX_WARM_UP_SECONDS, MAX_NOISE_PER_STEP, VISCOSITY, MAX_SMOOTHING, MAX_WAVE_NUMBER, MAX_HEIGHT, bit_set, ring_difference};
 
 impl FluidSurface {
     pub fn new(mut settings: FluidSettings, location: Vector, clamp_bitmap: Vec<i32>, seed: u32) -> Self {
         settings.x_size = settings.x_size.clamp(0, 256);
         settings.y_size = settings.y_size.clamp(0, 256);
         let half_x = (settings.x_size - 1) as f32 * 0.5 * settings.spacing;
-        let mut half_y = (settings.y_size - 1) as f32 * 0.5 * settings.spacing;
-        if settings.hexagonal {
-            half_y *= ROW;
-        }
+        let half_y = (settings.y_size - 1) as f32 * 0.5 * settings.spacing * settings.row_spacing();
         let count = (settings.x_size * settings.y_size) as usize;
         let height_limit = MAX_HEIGHT * settings.spacing / settings.height_scale.abs();
         Self {
             origin: Vector::new(location.x - half_x, location.y - half_y, location.z),
             verts: [vec![0.0; count], vec![0.0; count]],
             scratch: vec![0.0; count],
+            drawn: vec![0.0; count],
             latest: 1,
             alpha: vec![0; count],
             clamped: clamp_bitmap,

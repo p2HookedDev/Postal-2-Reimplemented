@@ -13,7 +13,7 @@ impl Emitter {
         let emitters = emitters.into_iter().map(|props| ParticleEmitter::new(props, &mut rng)).collect();
         let global_offset = settings.global_offset_range.rand(&mut rng);
         let time_till_reset = settings.time_till_reset_range.rand(&mut rng);
-        Self { settings, emitters, rng, global_offset, time_till_reset, destroyed: false, owner: Owner::default(), forces: std::sync::Arc::default() }
+        Self { settings, emitters, rng, global_offset, time_till_reset, destroyed: false, owner: Owner::default(), forces: std::sync::Arc::default(), hits: Vec::new() }
     }
 
     pub fn emitters(&self) -> &[ParticleEmitter] {
@@ -84,12 +84,12 @@ impl Emitter {
             }
             e.global_offset = self.global_offset;
             let (ticks_per_second, warmup) = (e.props.warmup_ticks_per_second, e.props.relative_warmup_time);
-            let mut hits = Vec::new();
+            self.hits.clear();
             if !e.warmed_up && ticks_per_second != 0.0 && warmup != 0.0 {
                 let ticks = (e.props.lifetime_range.center() * warmup * ticks_per_second) as i32;
+                let step = 1.0 / ticks_per_second;
                 for _ in 0..ticks {
-                    let step = 1.0 / ticks_per_second;
-                    hits.extend(e.update(step, &owner, &mut self.rng, &others, collide).into_iter().map(|hit| (hit, step)));
+                    e.update(step, &owner, &mut self.rng, &others, collide, &mut self.hits);
                 }
                 e.warmed_up = true;
             }
@@ -97,7 +97,7 @@ impl Emitter {
                 e.inactive_time = if e.inactive { e.inactive_time + dt } else { 0.0 };
                 let limit = e.props.seconds_before_inactive;
                 if limit == 0.0 || e.inactive_time <= limit {
-                    hits.extend(e.update(dt, &owner, &mut self.rng, &others, collide).into_iter().map(|hit| (hit, dt)));
+                    e.update(dt, &owner, &mut self.rng, &others, collide, &mut self.hits);
                 }
                 e.inactive = true;
                 all_dead = false;
@@ -106,10 +106,10 @@ impl Emitter {
                         e.handle_actor_force(force, dt);
                     }
                 }
-                if !hits.is_empty() {
+                if !self.hits.is_empty() {
                     let scale = e.props.use_spawned_velocity_scale.then_some(e.props.spawned_velocity_scale_range);
                     let target = e.props.spawn_from_other_emitter.unwrap_or(0).min(count - 1);
-                    spawn_hits(&mut self.emitters, target, hits, scale, &owner, &mut self.rng);
+                    spawn_hits(&mut self.emitters, target, &self.hits, scale, &owner, &mut self.rng);
                 }
             } else if e.props.auto_reset && !self.settings.auto_reset {
                 if e.time_till_reset - dt <= 0.0 {
@@ -159,9 +159,7 @@ impl Emitter {
         }
         e.props.start_location_offset = offset;
         e.spawn_particle(e.particle_index, 0.0, FirstUpdate::Skip, None, SpawnContext { owner: &owner, rng: &mut self.rng, others: &Others { before, after } });
-        let next = e.particle_index + 1;
-        e.active_particles = e.active_particles.max(next);
-        e.particle_index = next % max;
+        e.advance_slot();
         e.all_particles_dead = false;
     }
 
@@ -173,8 +171,7 @@ impl Emitter {
 
     pub fn cap_time(&mut self, index: usize, time: f32) {
         let Some(e) = self.emitters.get_mut(index) else { return };
-        let active = e.active_particles;
-        for p in e.particles[..active].iter_mut().filter(|p| p.active && p.time > time) {
+        for p in e.live_mut().filter(|p| p.time > time) {
             p.time = time;
         }
     }

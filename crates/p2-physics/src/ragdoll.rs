@@ -1,8 +1,9 @@
 //! Retail drops contacts between ragdolls and with props; ours keeps them so corpses stack and push props.
 
 use rapier3d::prelude::*;
+use rustc_hash::FxHashSet;
 
-use crate::{BodyId, Shape, World, body_collider, body_pair, collider, to_rapier};
+use crate::{BodyId, Shape, World, body_collider, body_pair, collider, pose, to_rapier};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartParams {
@@ -121,10 +122,9 @@ impl World {
     }
 
     fn ragdoll_body(&mut self, part: &PartParams, mass: f32, inertia: p2_math::Vector, params: &RagdollParams, activation: RigidBodyActivation) -> BodyId {
-        let pose = Pose::from_parts(to_rapier(part.location), Rotation::from_array(part.rotation).normalize());
         let mass = MassProperties::new(to_rapier(part.center_of_mass), mass, to_rapier(inertia));
         let body = RigidBodyBuilder::dynamic()
-            .pose(pose)
+            .pose(pose(part.location, part.rotation))
             .linvel(to_rapier(part.velocity))
             .additional_mass_properties(mass)
             .linear_damping(params.linear_damping)
@@ -183,22 +183,17 @@ impl World {
     /// nearly every pair, is not used.
     fn filter_self_collision(&mut self, joints: &[JointParams], bodies: &[BodyId]) {
         let n = bodies.len();
-        let mut near = vec![vec![false; n]; n];
+        let mut jointed = vec![false; n * n];
         for joint in joints {
             if joint.child < n && joint.parent < n {
-                near[joint.child][joint.parent] = true;
-                near[joint.parent][joint.child] = true;
+                jointed[joint.child * n + joint.parent] = true;
+                jointed[joint.parent * n + joint.child] = true;
             }
         }
-        let jointed = near.clone();
-        for (i, row) in near.iter_mut().enumerate() {
-            for j in 0..n {
-                row[j] = row[j] || (0..n).any(|k| jointed[i][k] && jointed[k][j]);
-            }
-        }
+        let two_hops = |i: usize, j: usize| (0..n).any(|k| jointed[i * n + k] && jointed[k * n + j]);
         for (i, a) in bodies.iter().enumerate() {
             for (j, b) in bodies.iter().enumerate().skip(i + 1) {
-                if jointed[i][j] || (near[i][j] && self.overlapping(*a, *b)) {
+                if jointed[i * n + j] || (two_hops(i, j) && self.overlapping(*a, *b)) {
                     self.hooks.disabled.insert(body_pair(a.0, b.0));
                 }
             }
@@ -206,7 +201,8 @@ impl World {
     }
 
     pub fn remove_ragdoll(&mut self, bodies: &[BodyId]) {
-        self.hooks.disabled.retain(|&(a, b)| !bodies.contains(&BodyId(a)) && !bodies.contains(&BodyId(b)));
+        let removed: FxHashSet<RigidBodyHandle> = bodies.iter().map(|id| id.0).collect();
+        self.hooks.disabled.retain(|(a, b)| !removed.contains(a) && !removed.contains(b));
         for &id in bodies {
             self.take_out_body(id);
         }
@@ -221,7 +217,7 @@ impl World {
     }
 
     fn overlapping(&self, a: BodyId, b: BodyId) -> bool {
-        let colliders = |id: BodyId| self.bodies.get(id.0).map(|body| body.colliders().to_vec()).unwrap_or_default();
+        let colliders = |id: BodyId| self.bodies.get(id.0).map_or(&[][..], RigidBody::colliders);
         let (first, second) = (colliders(a), colliders(b));
         first.iter().filter_map(|&h| self.colliders.get(h)).any(|c1| {
             second.iter().filter_map(|&h| self.colliders.get(h)).any(|c2| {

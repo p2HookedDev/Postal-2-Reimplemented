@@ -4,7 +4,7 @@
 
 use rapier3d::prelude::*;
 
-use crate::{BodyId, World, from_rapier, to_rapier};
+use crate::{BodyId, World, to_rapier};
 
 const KICK_PER_DAMAGE: f32 = 17.5;
 const KICK: [f32; 2] = [150.0, 500.0];
@@ -43,16 +43,19 @@ pub struct Hit {
 impl World {
     pub fn ragdoll_impulse(&mut self, bodies: &[BodyId], impulse: p2_math::Vector, at_body: Option<BodyId>) {
         let parts = self.masses(bodies);
+        self.whole_impulse(&parts, to_rapier(impulse), at_body);
+    }
+
+    fn whole_impulse(&mut self, parts: &[PartMass], j: Vector, at_body: Option<BodyId>) {
         let total: f32 = parts.iter().map(|p| p.mass).sum();
         if total <= 0.0 {
             return;
         }
         let centre = parts.iter().map(|p| p.center * p.mass).sum::<Vector>() / total;
         let inertia: f32 = parts.iter().map(|p| p.mass * (p.center - centre).length_squared()).sum();
-        let j = to_rapier(impulse);
         let lever = at_body.and_then(|b| parts.iter().find(|p| p.id == b)).map_or(Vector::ZERO, |p| p.center - centre);
         let spin = if inertia > 1e-6 { lever.cross(j) / inertia } else { Vector::ZERO };
-        for p in &parts {
+        for p in parts {
             self.push(p.id, (j / total + spin.cross(p.center - centre)) * p.mass, None);
         }
     }
@@ -71,7 +74,7 @@ impl World {
             _ => j / total,
         };
         if hit.throw.is_some_and(|t| t.tumble) {
-            self.ragdoll_impulse(bodies, from_rapier(whole * total), hit.body);
+            self.whole_impulse(&parts, whole * total, hit.body);
             return;
         }
         let dir = to_rapier(hit.dir);

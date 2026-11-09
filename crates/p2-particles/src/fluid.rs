@@ -85,6 +85,12 @@ impl Default for FluidSettings {
     }
 }
 
+impl FluidSettings {
+    pub fn row_spacing(&self) -> f32 {
+        if self.hexagonal { ROW } else { 1.0 }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FluidOscillator {
     pub location: Vector,
@@ -118,6 +124,7 @@ pub struct FluidSurface {
     origin: Vector,
     verts: [Vec<f32>; 2],
     scratch: Vec<f32>,
+    drawn: Vec<f32>,
     latest: usize,
     alpha: Vec<u8>,
     clamped: Vec<i32>,

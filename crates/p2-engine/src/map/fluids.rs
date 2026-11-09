@@ -1,6 +1,6 @@
 use super::*;
 use p2_math::Vector;
-use p2_particles::{Beam, FluidOscillator, FluidSettings, FluidSurface, StripPoint, View};
+use p2_particles::{Beam, FluidOscillator, FluidSettings, FluidSurface, FluidVertex, StripPoint, View};
 use p2_assets::{UvModifier, uv_matrix};
 use crate::mesh_view::{MaterialImages, SceneLights, SectionMaterial, SectionView, actor_standard, section_material, set_uv_transform};
 
@@ -107,7 +107,7 @@ pub(super) fn fill_beams(mesh: &mut Mesh, beams: &[Beam], [u_scale, v_scale]: [f
 
 /// The vertex colour is the light, 1 being neutral. No water skin reads the simulation's height alpha; retail's use of it is
 /// (unverified).
-pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
+pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &mut FluidSurface) {
     let vertices = surface.vertices();
     let mut indices = surface.indices();
     let (positions, normals, colors, uvs): (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>, Vec<[f32; 2]>) = if vertices.is_empty() || indices.is_empty() {
@@ -129,25 +129,23 @@ pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
     mesh.insert_indices(Indices::U32(indices));
 }
 
-fn refill_fluid(mesh: &mut Mesh, surface: &FluidSurface) {
+fn refill_fluid(mesh: &mut Mesh, surface: &mut FluidSurface, vertices: &mut Vec<FluidVertex>) {
     use bevy::mesh::VertexAttributeValues::Float32x3;
-    let vertices = surface.vertices();
+    surface.vertices_into(vertices);
     if vertices.is_empty() || mesh.count_vertices() != vertices.len() {
         return;
     }
     if let Some(Float32x3(positions)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
-        for (position, v) in positions.iter_mut().zip(&vertices) {
+        for (position, v) in positions.iter_mut().zip(vertices.iter()) {
             *position = to_bevy(v.position);
         }
     }
     if let Some(Float32x3(normals)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
-        for (normal, v) in normals.iter_mut().zip(&vertices) {
+        for (normal, v) in normals.iter_mut().zip(vertices.iter()) {
             *normal = bevy_vector(v.normal).normalize_or_zero().to_array();
         }
     }
 }
-
-const HEX_ROW_SPACING: f32 = 0.866_025;
 
 pub(super) struct FluidActor {
     object: ObjectId,
@@ -229,14 +227,14 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
         })
         .collect();
     let s = &surface.settings;
-    let row = if s.hexagonal { HEX_ROW_SPACING } else { 1.0 };
-    let half = Vector::new((s.x_size - 1).max(0) as f32 * 0.5 * s.spacing, (s.y_size - 1).max(0) as f32 * 0.5 * s.spacing * row, s.spacing);
+    let half = Vector::new((s.x_size - 1).max(0) as f32 * 0.5 * s.spacing, (s.y_size - 1).max(0) as f32 * 0.5 * s.spacing * s.row_spacing(), s.spacing);
     Some(FluidActor { object: actor, bounds: (location - half, location + half), skin, hidden: vm.store.flag_of(actor, "bHidden"), surface })
 }
 
 pub(super) struct FluidShown {
     object: ObjectId,
     surface: FluidSurface,
+    vertices: Vec<FluidVertex>,
     mesh: Handle<Mesh>,
     entity: Entity,
     bounds: (Vector, Vector),
@@ -254,7 +252,7 @@ impl Session {
             return;
         }
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
-        for fluid in fluids {
+        for mut fluid in fluids {
             let Some((package, export)) = fluid.skin.as_deref().and_then(|skin| game.export_by_path(skin)) else { continue };
             let Some(texture) = game.fluid_texture(package, export_reference(export)) else {
                 bevy::log::warn!("fluid surface not drawn, no material from skin {:?}", fluid.skin);
@@ -269,7 +267,7 @@ impl Session {
                 state: texture.state,
             };
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-            fill_fluid(&mut mesh, &fluid.surface);
+            fill_fluid(&mut mesh, &mut fluid.surface);
             let mesh = t.assets.meshes.add(mesh);
             let mut section = SectionView::textured(mesh.clone(), Some(found));
             section.no_scene_lights = true;
@@ -283,6 +281,7 @@ impl Session {
             self.fluids.push(FluidShown {
                 object: fluid.object,
                 surface: fluid.surface,
+                vertices: Vec::new(),
                 mesh,
                 entity,
                 bounds: fluid.bounds,
@@ -330,7 +329,7 @@ impl Session {
             let touchers = world.fluid_touchers(fluid.object);
             fluid.surface.tick(step, fluid.since_drawn <= 1.0, touchers);
             if drawn && let Some(mut mesh) = t.assets.meshes.get_mut(&fluid.mesh) {
-                refill_fluid(&mut mesh, &fluid.surface);
+                refill_fluid(&mut mesh, &mut fluid.surface, &mut fluid.vertices);
             }
             fluid.seconds += step;
             if drawn && !fluid.uv.is_empty() {

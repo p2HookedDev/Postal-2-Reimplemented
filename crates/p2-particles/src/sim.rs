@@ -167,4 +167,5 @@ pub struct Emitter {
     destroyed: bool,
     owner: Owner,
     forces: std::sync::Arc<[ActorForce]>,
+    hits: Vec<(CollisionHit, f32, usize)>,
 }

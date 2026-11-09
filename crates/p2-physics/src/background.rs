@@ -7,7 +7,7 @@ use crate::{Impact, World};
 type Change = Box<dyn FnOnce(&mut World) + Send + Sync>;
 
 struct Worker {
-    steps: Sender<(World, f32)>,
+    steps: Sender<(World, f32, Vec<Impact>)>,
     done: Mutex<Receiver<(World, Vec<Impact>)>>,
 }
 
@@ -32,17 +32,18 @@ impl Background {
             self.worker = spawn();
         }
         match &self.worker {
-            Some(worker) => match worker.steps.send((world, dt)) {
+            Some(worker) => match worker.steps.send((world, dt, std::mem::take(&mut self.impacts))) {
                 Ok(()) => self.stepping = true,
                 Err(returned) => {
                     self.worker = None;
-                    let (mut world, dt) = returned.0;
-                    self.impacts.extend(world.step(dt));
+                    let (mut world, dt, impacts) = returned.0;
+                    self.impacts = impacts;
+                    world.step_into(dt, &mut self.impacts);
                     self.world = Some(world);
                 }
             },
             None => {
-                self.impacts.extend(world.step(dt));
+                world.step_into(dt, &mut self.impacts);
                 self.world = Some(world);
             }
         }
@@ -87,7 +88,7 @@ impl Background {
             match result {
                 Some((world, impacts)) => {
                     self.world = Some(world);
-                    self.impacts.extend(impacts);
+                    self.impacts = impacts;
                 }
                 None => self.worker = None,
             }
@@ -103,11 +104,11 @@ impl Background {
 }
 
 fn spawn() -> Option<Worker> {
-    let (steps, jobs) = channel::<(World, f32)>();
+    let (steps, jobs) = channel::<(World, f32, Vec<Impact>)>();
     let (results, done) = channel();
     let thread = std::thread::Builder::new().name("physics".to_owned()).spawn(move || {
-        for (mut world, dt) in jobs {
-            let impacts = world.step(dt);
+        for (mut world, dt, mut impacts) in jobs {
+            world.step_into(dt, &mut impacts);
             if results.send((world, impacts)).is_err() {
                 break;
             }

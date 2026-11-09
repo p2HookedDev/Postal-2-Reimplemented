@@ -1,30 +1,40 @@
 use p2_math::Vector;
-use super::{FluidVertex, FluidSurface, ROW};
+use super::{FluidVertex, FluidSurface};
 
 impl FluidSurface {
     /// Heights between the last two steps, so the water moves at any frame rate, one step behind the simulation.
-    pub(super) fn drawn_heights(&self) -> impl Fn(i32, i32) -> f32 + '_ {
+    pub(super) fn lerp_drawn(&mut self) {
         let (old, new) = (&self.verts[1 - self.latest], &self.verts[self.latest]);
         let t = (self.rollover * self.settings.update_rate).clamp(0.0, 1.0);
-        let nx = self.settings.x_size;
-        move |x, y| {
-            let i = (y * nx + x) as usize;
-            old[i] + (new[i] - old[i]) * t
+        for ((drawn, &old), &new) in self.drawn.iter_mut().zip(old).zip(new) {
+            *drawn = old + (new - old) * t;
         }
     }
 
-    pub fn vertices(&self) -> Vec<FluidVertex> {
+    fn drawn_at(&self) -> impl Fn(i32, i32) -> f32 + '_ {
+        let nx = self.settings.x_size;
+        move |x, y| self.drawn[(y * nx + x) as usize]
+    }
+
+    pub fn vertices(&mut self) -> Vec<FluidVertex> {
+        let mut out = Vec::new();
+        self.vertices_into(&mut out);
+        out
+    }
+
+    pub fn vertices_into(&mut self, out: &mut Vec<FluidVertex>) {
+        out.clear();
         let (nx, ny) = (self.settings.x_size, self.settings.y_size);
         if nx < 1 || ny < 1 {
-            return Vec::new();
+            return;
         }
-        let mut out = Vec::with_capacity((nx * ny) as usize);
+        out.reserve((nx * ny) as usize);
+        self.lerp_drawn();
         if self.settings.hexagonal {
-            self.hexagonal_vertices(&mut out);
+            self.hexagonal_vertices(out);
         } else {
-            self.square_vertices(&mut out);
+            self.square_vertices(out);
         }
-        out
     }
 
     fn edge_vertex(&self, x: f32, y: f32, uv: [f32; 2]) -> FluidVertex {
@@ -35,10 +45,10 @@ impl FluidSurface {
         let s = &self.settings;
         let (nx, ny) = (s.x_size, s.y_size);
         let o = self.origin;
-        let at = self.drawn_heights();
+        let at = self.drawn_at();
         let hs = s.height_scale;
         let per_u = 1.0 / (nx as f32 - 0.5);
-        let row_spacing = s.spacing * ROW;
+        let row_spacing = s.spacing * s.row_spacing();
         let nz = row_spacing * 4.0 * s.spacing;
         let column = |x: f32| (s.u_tiles * x) * per_u + s.u_offset;
         for x in 0..nx {
@@ -46,7 +56,7 @@ impl FluidSurface {
         }
         for y in 1..ny - 1 {
             let v = (s.v_tiles * y as f32) / (ny - 1) as f32 + s.v_offset;
-            let vy = y as f32 * ROW * s.spacing + o.y;
+            let vy = y as f32 * s.row_spacing() * s.spacing + o.y;
             let odd = y & 1 != 0;
             let shift = if odd { 0.5 } else { 0.0 };
             out.push(self.edge_vertex(shift * s.spacing + o.x, vy, [if odd { column(0.5) } else { s.u_offset }, v]));
@@ -73,7 +83,7 @@ impl FluidSurface {
             out.push(self.edge_vertex(last.0 * s.spacing + o.x, vy, [last.1, v]));
         }
         let shift = if (ny - 1) & 1 == 0 { 0.0 } else { 0.5 };
-        let vy = (ny - 1) as f32 * ROW * s.spacing + o.y;
+        let vy = (ny - 1) as f32 * s.row_spacing() * s.spacing + o.y;
         for x in 0..nx {
             let fx = x as f32 + shift;
             out.push(self.edge_vertex(fx * s.spacing + o.x, vy, [column(fx), s.v_offset + s.v_tiles]));
@@ -84,7 +94,7 @@ impl FluidSurface {
         let s = &self.settings;
         let (nx, ny) = (s.x_size, s.y_size);
         let o = self.origin;
-        let at = self.drawn_heights();
+        let at = self.drawn_at();
         let hs = s.height_scale;
         let per_u = 1.0 / (nx as f32 - 1.0);
         // Retail's z is negative, which points the normal under the water.
@@ -117,7 +127,7 @@ impl FluidSurface {
 
     pub fn indices(&self) -> Vec<u32> {
         let (nx, ny) = (self.settings.x_size, self.settings.y_size);
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(((nx - 1).max(0) * (ny - 1).max(0) * 6) as usize);
         for y in 0..ny - 1 {
             for x in 0..nx - 1 {
                 let a = (y * nx + x) as u32;

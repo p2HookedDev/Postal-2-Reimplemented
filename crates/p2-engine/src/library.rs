@@ -142,6 +142,30 @@ pub struct SectionTexture {
     pub state: RenderState,
 }
 
+pub struct SourceLayers {
+    pub image: Image,
+    pub glow: Option<Image>,
+    pub wet: Option<WetSource>,
+}
+
+pub fn specular_params(source: TextureSource) -> Option<SpecularParams> {
+    let specular = source.specular?;
+    let (mode, constant) = match specular.mask {
+        SpecularMask::None => (SpecularMode::Add, 1.0),
+        SpecularMask::BaseAlpha | SpecularMask::Texture(_) if source.opacity.is_some() => (SpecularMode::GlowAlpha, 1.0),
+        SpecularMask::BaseAlpha | SpecularMask::Texture(_) => (SpecularMode::BaseAlpha, 1.0),
+        SpecularMask::Constant(alpha) => (SpecularMode::Constant, f32::from(alpha) / 255.0),
+    };
+    // Without a `TexEnvMap` a cube is looked up as a camera-space env map (unverified); a 2D texture reads the UV
+    // stream with the base modifiers (unverified).
+    let coords = match (specular.cube, specular.env_map) {
+        (true, _) => SpecularCoords::Cube,
+        (false, Some(_)) => SpecularCoords::EnvMap,
+        (false, None) => SpecularCoords::BaseUv,
+    };
+    Some(SpecularParams { mode, world: specular.env_map == Some(0), constant, coords })
+}
+
 impl Library {
     pub(crate) fn system_of(root: &Path, package: &str) -> PathBuf {
         let pl_system = root.join("Paradise Lost").join("System");
@@ -342,11 +366,7 @@ impl Game {
     }
 
     fn section_texture(&mut self, source: TextureSource, state: RenderState, decode: TextureDecode) -> Option<SectionTexture> {
-        let (mut image, glow) = match self.glow_bake(source) {
-            Some((image, glow)) if source.opacity.is_none() => (image, Some(glow)),
-            Some((_, glow)) => (self.source_image(source, decode)?, Some(glow)),
-            None => (self.source_image(source, decode)?, self.glow_image(source)),
-        };
+        let SourceLayers { mut image, glow, .. } = self.source_layers(source, decode)?;
         if state.darken {
             invert_color(&mut image);
         }
@@ -404,8 +424,13 @@ impl Game {
 
     pub fn specular_layer(&mut self, source: TextureSource) -> Option<(Image, SpecularParams)> {
         let specular = source.specular?;
+        Some((self.specular_image(specular)?, specular_params(source)?))
+    }
+
+    /// Reads only `image`, `combine`, `cube` and `tint`: sources that differ elsewhere share the image.
+    pub fn specular_image(&mut self, specular: SpecularSource) -> Option<Image> {
         let (id, export) = specular.image;
-        let image = if specular.cube {
+        Some(if specular.cube {
             let faces = {
                 let (package, data) = self.data(id);
                 read_cubemap_faces(&mut Objects::new(&self.loader), Source { package, data }, export).ok()?
@@ -426,21 +451,7 @@ impl Game {
         } else {
             let (texture, palette) = self.texture_at(id, export)?;
             texture_to_image(&texture, palette.as_deref())?
-        };
-        let (mode, constant) = match specular.mask {
-            SpecularMask::None => (SpecularMode::Add, 1.0),
-            SpecularMask::BaseAlpha | SpecularMask::Texture(_) if source.opacity.is_some() => (SpecularMode::GlowAlpha, 1.0),
-            SpecularMask::BaseAlpha | SpecularMask::Texture(_) => (SpecularMode::BaseAlpha, 1.0),
-            SpecularMask::Constant(alpha) => (SpecularMode::Constant, f32::from(alpha) / 255.0),
-        };
-        // Without a `TexEnvMap` a cube is looked up as a camera-space env map (unverified); a 2D texture reads the UV
-        // stream with the base modifiers (unverified).
-        let coords = match (specular.cube, specular.env_map) {
-            (true, _) => SpecularCoords::Cube,
-            (false, Some(_)) => SpecularCoords::EnvMap,
-            (false, None) => SpecularCoords::BaseUv,
-        };
-        Some((image, SpecularParams { mode, world: specular.env_map == Some(0), constant, coords }))
+        })
     }
 
     pub fn detail_image(&mut self, source: TextureSource) -> Option<Image> {
@@ -448,10 +459,7 @@ impl Game {
         texture_to_image(&texture, palette.as_deref())
     }
 
-    pub fn glow_image(&mut self, source: TextureSource) -> Option<Image> {
-        if let Some((_, glow)) = self.glow_bake(source) {
-            return Some(glow);
-        }
+    fn alpha_glow(&mut self, source: TextureSource) -> Option<Image> {
         source.opacity?;
         let (id, export) = match source.specular?.mask {
             SpecularMask::BaseAlpha => source.texture?,
@@ -524,29 +532,33 @@ impl Game {
         Some(WetSource { sim, texture: Texture { mips, ..texture }, palette })
     }
 
-    pub fn source_image(&mut self, source: TextureSource, decode: TextureDecode) -> Option<Image> {
-        if source.opacity.is_none()
-            && let Some((image, _)) = self.glow_bake(source)
-        {
-            return Some(image);
-        }
+    pub fn source_layers(&mut self, source: TextureSource, decode: TextureDecode) -> Option<SourceLayers> {
+        let (baked, glow) = self.glow_bake(source).unzip();
+        let (image, wet) = match baked.filter(|_| source.opacity.is_none()) {
+            Some(image) => (image, None),
+            None => self.unbaked_image(source, decode)?,
+        };
+        let glow = glow.or_else(|| self.alpha_glow(source));
+        Some(SourceLayers { image, glow, wet })
+    }
+
+    fn unbaked_image(&mut self, source: TextureSource, decode: TextureDecode) -> Option<(Image, Option<WetSource>)> {
+        let wet = if source.opacity.is_none() { self.wet_source(source) } else { None };
         if let Some(combine) = source.combine
             && let Some(image) = self.combined_image(combine)
         {
-            return Some(image);
+            return Some((image, wet));
         }
-        if source.opacity.is_none()
-            && let Some(wet) = self.wet_source(source)
-        {
+        if let Some(wet) = wet {
             // The animation rewrites the pixels every step (`wet.rs`): the main world keeps them.
             let mut image = texture_image(&wet.texture, Some(wet.palette.as_slice()), Compression::Off)?;
             image.asset_usage = bevy::asset::RenderAssetUsages::all();
-            return Some(image);
+            return Some((image, Some(wet)));
         }
-        let Some((id, export)) = source.texture else { return Some(white_image()) };
+        let Some((id, export)) = source.texture else { return Some((white_image(), None)) };
         let (texture, palette) = self.texture_at(id, export)?;
         let mask = match (source.opacity, source.specular) {
-            (Some(Opacity::Constant(alpha)), _) => return texture_with_constant_alpha(&texture, palette.as_deref(), alpha),
+            (Some(Opacity::Constant(alpha)), _) => return texture_with_constant_alpha(&texture, palette.as_deref(), alpha).map(|image| (image, None)),
             (Some(Opacity::Texture(texture)), _) | (None, Some(SpecularSource { mask: SpecularMask::Texture(texture), .. })) => Some(texture),
             (None, _) => None,
         };
@@ -558,7 +570,7 @@ impl Game {
         let convert = |texture: &Texture, palette: Option<&[[u8; 4]]>| {
             if decode == TextureDecode::Rgba { texture_image(texture, palette, Compression::Off) } else { texture_to_image(texture, palette) }
         };
-        image.or_else(|| convert(&texture, palette.as_deref()))
+        image.or_else(|| convert(&texture, palette.as_deref())).map(|image| (image, None))
     }
 
     pub fn ui_texture(&mut self, id: PackageId, material: i32) -> Option<SectionTexture> {

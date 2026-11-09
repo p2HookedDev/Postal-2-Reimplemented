@@ -16,9 +16,9 @@ pub(crate) fn non_parallel(v: Vector) -> Vector {
     }
 }
 
-pub(crate) fn rotate_about(v: Vector, units: i32, axis: Vector) -> Vector {
+pub(crate) fn rotate_about(vs: [Vector; 2], units: i32, axis: Vector) -> [Vector; 2] {
     let (s, c) = turn(units).sin_cos();
-    ((v * c) + (axis.cross(v) * s)) + (axis * (axis.dot(v) * (1.0 - c)))
+    vs.map(|v| ((v * c) + (axis.cross(v) * s)) + (axis * (axis.dot(v) * (1.0 - c))))
 }
 
 pub(crate) fn rotate_by(axes: &[Vector; 3], v: Vector) -> Vector {

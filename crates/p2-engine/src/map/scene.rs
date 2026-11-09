@@ -1,6 +1,6 @@
 use crate::actors::ProjectorBlending;
 use super::*;
-use crate::library::{LoadError, TextureDecode, TextureSource};
+use crate::library::{LoadError, SourceLayers, SpecularMask, SpecularSource, TextureDecode, TextureSource, specular_params};
 use bevy::asset::{AssetHandleProvider, AssetId};
 use p2_assets::FinalBlend;
 use p2_math::{Rotator, Vector};
@@ -97,6 +97,7 @@ impl Session {
         let (game, _) = self.library.open(&self.root, &package)?;
         game.adopt(&built);
         self.switch_images.clear();
+        self.switch_targets.clear();
         for ((id, export), drawn) in switches {
             if let Some(id) = game.same_package(&built, id) {
                 self.switch_images.entry((id, export)).or_default().push(drawn);
@@ -131,22 +132,8 @@ impl Session {
             let Some(key) = game.export_by_path(&switch) else { continue };
             let Some(surfaces) = self.switch_images.get_mut(&key) else { continue };
             let Some((package, export)) = material.and_then(|path| game.export_by_path(&path)) else { continue };
-            let Some((source, state)) = game.material_source(package, export_reference(export)) else { continue };
-            let Some(mut image) = game.source_image(source, TextureDecode::Keep) else { continue };
-            // Uploaded as a new texture with all its mips: Bevy rewrites a texture of the same descriptor with
-            // `COPY_DST` in place, mip 0 only, so the smaller mips kept the old picture past some distance from the
-            // camera. Without `COPY_DST` the descriptor differs; wgpu adds it for the upload itself.
-            image.texture_descriptor.usage.remove(bevy::render::render_resource::TextureUsages::COPY_DST);
-            let image_size = |image: &Image| image.size().as_vec2().to_array();
-            let (size, specular) = (image_size(&image), game.specular_layer(source));
-            let specular_size = specular.as_ref().map_or([1.0; 2], |(specular, _)| image_size(specular));
-            let now = MaterialImages {
-                image: Handle::default(),
-                glow: game.glow_image(source).map(|glow| t.assets.images.add(glow)),
-                detail: game.detail_image(source).map(|detail| t.assets.images.add(detail)),
-                specular: specular.map(|(specular, params)| (t.assets.images.add(specular), params)),
-                state,
-            };
+            let target = self.switch_targets.entry((package, export)).or_insert_with(|| switch_target(game, &mut t.assets.images, package, export));
+            let Some(SwitchTarget { image, now, size, specular_size }) = target else { continue };
             for surface in surfaces {
                 let Some(mut drawn) = t.assets.images.get_mut(surface.image) else { continue };
                 *drawn = image.clone();
@@ -154,7 +141,7 @@ impl Session {
                 if surface.whole {
                     let was = MaterialImages { state: std::mem::replace(&mut surface.shown, now.state.clone()), ..now.clone() };
                     let (was, now) = (SectionView::textured(Handle::default(), Some(was)), SectionView::textured(Handle::default(), Some(now.clone())));
-                    looks.insert(surface.image, crate::mesh_view::SwitchedLook { was, now, size, specular_size });
+                    looks.insert(surface.image, crate::mesh_view::SwitchedLook { was, now, size: *size, specular_size: *specular_size });
                 }
             }
         }
@@ -219,20 +206,28 @@ impl PreparedScene {
         phase("map file");
         let mut cache: HashMap<(PackageId, i32), Option<MaterialImages>> = HashMap::new();
         let mut images: HashMap<TextureSource, Option<MaterialImages>> = HashMap::new();
+        let mut details: FxHashMap<(PackageId, usize), Option<Handle<Image>>> = FxHashMap::default();
+        let mut speculars: FxHashMap<SpecularSource, Option<Handle<Image>>> = FxHashMap::default();
         let mut texture = |game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32| {
             cache
                 .entry((package, material))
                 .or_insert_with(|| {
                     let (source, state) = game.material_source(package, material)?;
                     let image = images.entry(source).or_insert_with(|| {
-                        let handle = t.add_image(game.source_image(source, TextureDecode::Keep)?);
-                        let glow = game.glow_image(source).map(|glow| t.add_image(glow));
-                        let detail = game.detail_image(source).map(|detail| t.add_image(detail));
-                        let specular = game.specular_layer(source).map(|(cube, params)| (t.add_image(cube), params));
-                        if source.opacity.is_none()
-                            && let Some(wet) = game.wet_source(source) {
-                                t.wet.push((handle.id(), wet));
-                            }
+                        let SourceLayers { image, glow, wet } = game.source_layers(source, TextureDecode::Keep)?;
+                        let handle = t.add_image(image);
+                        let glow = glow.map(|glow| t.add_image(glow));
+                        let detail = source.detail.and_then(|key| {
+                            details.entry(key).or_insert_with(|| game.detail_image(source).map(|detail| t.add_image(detail))).clone()
+                        });
+                        let specular = source.specular.and_then(|specular| {
+                            let key = SpecularSource { mask: SpecularMask::None, env_map: None, ..specular };
+                            let cube = speculars.entry(key).or_insert_with(|| game.specular_image(specular).map(|cube| t.add_image(cube))).clone()?;
+                            Some((cube, specular_params(source)?))
+                        });
+                        if let Some(wet) = wet {
+                            t.wet.push((handle.id(), wet));
+                        }
                         Some(MaterialImages { image: handle, glow, detail, specular, state: RenderState::default() })
                     });
                     Some(MaterialImages { state, ..image.clone()? })
@@ -362,19 +357,49 @@ pub(super) struct SwitchImage {
     shown: RenderState,
 }
 
+pub(super) struct SwitchTarget {
+    image: Image,
+    now: MaterialImages,
+    size: [f32; 2],
+    specular_size: [f32; 2],
+}
+
+fn switch_target(game: &mut Game, images: &mut Assets<Image>, package: PackageId, export: usize) -> Option<SwitchTarget> {
+    let (source, state) = game.material_source(package, export_reference(export))?;
+    let SourceLayers { mut image, glow, .. } = game.source_layers(source, TextureDecode::Keep)?;
+    // Uploaded as a new texture with all its mips: Bevy rewrites a texture of the same descriptor with
+    // `COPY_DST` in place, mip 0 only, so the smaller mips kept the old picture past some distance from the
+    // camera. Without `COPY_DST` the descriptor differs; wgpu adds it for the upload itself.
+    image.texture_descriptor.usage.remove(bevy::render::render_resource::TextureUsages::COPY_DST);
+    let image_size = |image: &Image| image.size().as_vec2().to_array();
+    let (size, specular) = (image_size(&image), game.specular_layer(source));
+    let specular_size = specular.as_ref().map_or([1.0; 2], |(specular, _)| image_size(specular));
+    let now = MaterialImages {
+        image: Handle::default(),
+        glow: glow.map(|glow| images.add(glow)),
+        detail: game.detail_image(source).map(|detail| images.add(detail)),
+        specular: specular.map(|(specular, params)| (images.add(specular), params)),
+        state,
+    };
+    Some(SwitchTarget { image, now, size, specular_size })
+}
+
 fn switched_images(
     game: &mut Game,
     images: &HashMap<TextureSource, Option<MaterialImages>>,
     cache: &HashMap<(PackageId, i32), Option<MaterialImages>>,
 ) -> Vec<((PackageId, usize), SwitchImage)> {
+    let mut users_of: FxHashMap<AssetId<Image>, Vec<(PackageId, i32, &MaterialImages)>> = FxHashMap::default();
+    for (&(package, material), used) in cache {
+        if let Some(used) = used {
+            users_of.entry(used.image.id()).or_default().push((package, material, used));
+        }
+    }
     let mut switched = Vec::new();
     for (source, found) in images.iter().filter(|(source, _)| source.wet.is_none()) {
         let (Some(switch), Some(found)) = (source.switch, found) else { continue };
         let image = found.image.id();
-        let users: Vec<_> = cache
-            .iter()
-            .filter_map(|(&(package, material), used)| Some((package, material, used.as_ref().filter(|used| used.image.id() == image)?)))
-            .collect();
+        let users = users_of.get(&image).map_or(&[][..], Vec::as_slice);
         let whole = !users.is_empty() && users.iter().all(|&(package, material, _)| game.export_of(package, material) == Some(switch));
         if whole || (source.combine.is_none() && source.opacity.is_none() && source.glow.is_none()) {
             let shown = users.first().map_or_else(RenderState::default, |(_, _, used)| used.state.clone());

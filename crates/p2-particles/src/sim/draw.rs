@@ -16,8 +16,7 @@ impl ParticleEmitter {
         // The engine's camera "up" axis points down the screen (the texture's v0 edge is at -up).
         let (screen_right, screen_down) = (view.right, view.up * -1.0);
         let front = screen_right.cross(screen_down);
-        let live: &[Particle] = if props.disabled { &[] } else { &self.particles[..self.active_particles] };
-        live.iter().filter(|p| p.active).map(move |p| {
+        self.live().filter(move |_| !props.disabled).map(move |p| {
             let location = if relative { rotate_by(&axes, p.location) + owner.location } else { p.location };
             let moved = || direction_to_world((p.location - p.old_location).safe_normal());
             let [size_x, size_y] = [p.size.x, p.size.y];
@@ -39,8 +38,7 @@ impl ParticleEmitter {
                 }
             };
             if props.spin_particles {
-                let angle = spin_units(p);
-                (up, right) = (rotate_about(up, angle, axis), rotate_about(right, angle, axis));
+                [up, right] = rotate_about([up, right], spin_units(p), axis);
             }
             let (uv, blend) = subdivision(props, p);
             SpriteParticle { location, size: [size_x, size_y], up, right, color: p.color, uv, blend }
@@ -52,8 +50,7 @@ impl ParticleEmitter {
         let relative = props.coordinate_system == CoordinateSystem::Relative;
         let frame = if relative { owner.rotation } else { Rotator::ZERO };
         let axes = owner.rotation.axes();
-        let live: &[Particle] = if props.disabled { &[] } else { &self.particles[..self.active_particles] };
-        live.iter().filter(|p| p.active).map(move |p| {
+        self.live().filter(move |_| !props.disabled).map(move |p| {
             let location = if relative { rotate_by(&axes, p.location) + owner.location } else { p.location };
             let spin = if props.spin_particles { mesh_spin(p) } else { Rotator::ZERO };
             MeshParticle { location, spin, frame, size: p.size, color: p.color }

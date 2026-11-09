@@ -29,6 +29,7 @@ pub(super) struct BeamPoints {
     high: usize,
     points: Vec<BeamPoint>,
     traces: Vec<usize>,
+    lows: Vec<Vector>,
 }
 
 impl BeamPoints {
@@ -38,7 +39,7 @@ impl BeamPoints {
         }
         let count = |n: i32| usize::try_from(n).unwrap_or(0).clamp(1, MAX_BEAM_POINTS);
         let (low, high) = (count(props.beam.low_points), count(props.beam.high_points));
-        Self { low, high, points: vec![BeamPoint::default(); slots * high], traces: Vec::new() }
+        Self { low, high, points: vec![BeamPoint::default(); slots * high], traces: Vec::new(), lows: Vec::with_capacity(low) }
     }
 
     pub(super) fn of_slot(&self, slot: usize) -> &[BeamPoint] {
@@ -92,9 +93,12 @@ impl ParticleEmitter {
     }
 
     pub(super) fn trace_beams(&mut self, collide: &mut Collide, rng: &mut Rng) {
-        for index in std::mem::take(&mut self.beam_points.traces) {
+        let mut traces = std::mem::take(&mut self.beam_points.traces);
+        for &index in &traces {
             self.fill_beam(index, Some(&mut *collide), rng);
         }
+        traces.clear();
+        self.beam_points.traces = traces;
     }
 
     fn fill_beam(&mut self, index: usize, collide: Option<&mut Collide>, rng: &mut Rng) {
@@ -125,7 +129,8 @@ impl ParticleEmitter {
         let pin = pin.filter(|_| !beam.noise_determines_end_point);
 
         let low_step = 1.0 / (low - 1) as f32;
-        let mut lows = Vec::with_capacity(low);
+        let lows = &mut self.beam_points.lows;
+        lows.clear();
         lows.push(location);
         let mut noise = Vector::ZERO;
         for i in 1..low {

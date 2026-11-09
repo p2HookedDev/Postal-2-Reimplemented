@@ -108,7 +108,7 @@ fn simulation_waits_until_drawn_after_warm_up() {
 #[test]
 fn buffers_hold_one_vertex_per_grid_point_and_two_triangles_per_cell() {
     for hexagonal in [false, true] {
-        let surface = FluidSurface::new(FluidSettings { hexagonal, x_size: 4, y_size: 5, ..FluidSettings::default() }, Vector::ZERO, Vec::new(), 1);
+        let mut surface = FluidSurface::new(FluidSettings { hexagonal, x_size: 4, y_size: 5, ..FluidSettings::default() }, Vector::ZERO, Vec::new(), 1);
         assert_eq!(surface.vertices().len(), 20);
         assert_eq!(surface.indices().len(), 3 * (2 * 4 - 2) * 4);
     }
@@ -116,7 +116,7 @@ fn buffers_hold_one_vertex_per_grid_point_and_two_triangles_per_cell() {
 
 #[test]
 fn hexagonal_odd_rows_shift_half_a_spacing() {
-    let surface = FluidSurface::new(FluidSettings { x_size: 3, y_size: 3, ..FluidSettings::default() }, Vector::ZERO, Vec::new(), 1);
+    let mut surface = FluidSurface::new(FluidSettings { x_size: 3, y_size: 3, ..FluidSettings::default() }, Vector::ZERO, Vec::new(), 1);
     let vertices = surface.vertices();
     assert_eq!(vertices[3].position.x - vertices[0].position.x, 16.0);
     assert_eq!(vertices[5].uv[0], 1.0);
@@ -151,7 +151,8 @@ fn drawn_heights_move_between_the_last_two_steps() {
     surface.pling_vertex(12, 12, 300.0);
     surface.tick(1.5 / 30.0, true, &[]);
     let (old, new) = (surface.verts[1 - surface.latest][surface.index(12, 12)], surface.height(12, 12));
-    let drawn = surface.drawn_heights()(12, 12);
+    surface.lerp_drawn();
+    let drawn = surface.drawn[surface.index(12, 12)];
     assert!(old != new && (drawn - (old + new) / 2.0).abs() < 1e-3, "{old} {new} {drawn}");
 }
 

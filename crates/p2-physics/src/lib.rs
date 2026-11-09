@@ -38,6 +38,14 @@ fn from_rapier(v: Vector) -> p2_math::Vector {
     v.to_array().into()
 }
 
+fn pose(location: p2_math::Vector, rotation: [f32; 4]) -> Pose {
+    Pose::from_parts(to_rapier(location), Rotation::from_array(rotation).normalize())
+}
+
+fn vectors(points: &[[f32; 3]]) -> Vec<Vector> {
+    points.iter().copied().map(Vector::from_array).collect()
+}
+
 fn body_pair(a: RigidBodyHandle, b: RigidBodyHandle) -> (RigidBodyHandle, RigidBodyHandle) {
     if a.into_raw_parts() <= b.into_raw_parts() { (a, b) } else { (b, a) }
 }
@@ -166,6 +174,7 @@ pub struct World {
     dormant: FxHashSet<RigidBodyHandle>,
     forced: Vec<RigidBodyHandle>,
     level: Vec<ColliderHandle>,
+    started: Vec<Started>,
 }
 
 impl World {
@@ -191,39 +200,41 @@ impl World {
             dormant: FxHashSet::default(),
             forced: Vec::new(),
             level: Vec::new(),
+            started: Vec::new(),
         }
+    }
+
+    fn add_level(&mut self, collider: ColliderBuilder) {
+        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
     }
 
     /// A triangle's front is the side its corners run counter-clockwise from.
     pub fn add_static_mesh(&mut self, vertices: &[[f32; 3]], triangles: Vec<[u32; 3]>) -> Result<(), Error> {
-        let vertices = vertices.iter().copied().map(Vector::from_array).collect();
         let flags = TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;
-        let collider = ColliderBuilder::trimesh_with_flags(vertices, triangles, flags)
+        let collider = ColliderBuilder::trimesh_with_flags(vectors(vertices), triangles, flags)
             .map_err(|e| Error::Mesh(e.to_string()))?
             .user_data(level_contact::ONE_SIDED)
             .active_hooks(ActiveHooks::MODIFY_SOLVER_CONTACTS);
-        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
+        self.add_level(collider);
         Ok(())
     }
 
     pub fn add_static_hull(&mut self, points: &[[f32; 3]]) -> Result<(), Error> {
-        let points: Vec<Vector> = points.iter().copied().map(Vector::from_array).collect();
+        let points = vectors(points);
         let collider = ColliderBuilder::convex_hull(&points).ok_or_else(|| Error::Mesh(format!("no convex hull of {} points", points.len())))?;
-        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
+        self.add_level(collider);
         Ok(())
     }
 
     pub fn add_static_shape(&mut self, shape: &Shape, location: p2_math::Vector, rotation: [f32; 4]) -> Result<(), Error> {
         let Some(collider) = collider(shape) else { return Err(Error::Mesh("no convex hull".to_owned())) };
-        let pose = Pose::from_parts(to_rapier(location), Rotation::from_array(rotation).normalize());
-        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION).position(pose)));
+        self.add_level(collider.position(pose(location, rotation)));
         Ok(())
     }
 
     pub fn add_body(&mut self, params: &BodyParams) -> BodyId {
-        let pose = Pose::from_parts(to_rapier(params.location), Rotation::from_array(params.rotation).normalize());
         let mut body = RigidBodyBuilder::dynamic()
-            .pose(pose)
+            .pose(pose(params.location, params.rotation))
             .linear_damping(params.linear_damping)
             .angular_damping(params.angular_damping)
             .ccd_enabled(true)
@@ -392,12 +403,17 @@ impl World {
     }
 
     pub fn step(&mut self, dt: f32) -> Vec<Impact> {
+        let mut impacts = Vec::new();
+        self.step_into(dt, &mut impacts);
+        impacts
+    }
+
+    pub fn step_into(&mut self, dt: f32, impacts: &mut Vec<Impact>) {
         if dt <= 0.0 {
-            return Vec::new();
+            return;
         }
         let (steps, step) = substeps(dt);
         self.parameters.dt = step;
-        let mut impacts = Vec::new();
         for _ in 0..steps {
             self.pipeline.step(
                 self.gravity,
@@ -414,8 +430,11 @@ impl World {
                 &self.hooks,
                 &self.hooks,
             );
-            let started = self.hooks.started.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default();
-            for s in started {
+            let mut started = std::mem::take(&mut self.started);
+            if let Ok(mut events) = self.hooks.started.lock() {
+                std::mem::swap(&mut *events, &mut started);
+            }
+            for s in started.drain(..) {
                 let bodies = s.colliders.map(|c| self.colliders.get(c).and_then(Collider::parent));
                 for (this, other) in [(0, 1), (1, 0)] {
                     let awake = bodies[other].and_then(|h| self.bodies.get(h)).is_some_and(|b| b.is_dynamic() && !b.is_sleeping());
@@ -434,6 +453,7 @@ impl World {
                     });
                 }
             }
+            self.started = started;
         }
         for handle in self.forced.drain(..) {
             if let Some(body) = self.bodies.get_mut(handle) {
@@ -441,7 +461,6 @@ impl World {
                 body.reset_torques(false);
             }
         }
-        impacts
     }
 
     pub fn pose(&self, id: BodyId) -> Option<(p2_math::Vector, [f32; 4])> {
@@ -547,10 +566,7 @@ fn collider(shape: &Shape) -> Option<ColliderBuilder> {
         Shape::Box(p2_math::Vector { x, y, z }) => Some(ColliderBuilder::cuboid(*x, *y, *z)),
         Shape::Sphere(center, radius) => Some(ColliderBuilder::ball(*radius).translation(to_rapier(*center))),
         Shape::Capsule(a, b, radius) => Some(ColliderBuilder::capsule_from_endpoints(to_rapier(*a), to_rapier(*b), *radius)),
-        Shape::Hull(points) => {
-            let points: Vec<Vector> = points.iter().copied().map(Vector::from_array).collect();
-            ColliderBuilder::convex_hull(&points)
-        }
+        Shape::Hull(points) => ColliderBuilder::convex_hull(&vectors(points)),
     }
 }
 

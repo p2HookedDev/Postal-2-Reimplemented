@@ -1,5 +1,5 @@
 use p2_math::Vector;
-use super::{FluidSurface, ROW, MIN_PLING_RADIUS};
+use super::{FluidSurface, MIN_PLING_RADIUS};
 
 impl FluidSurface {
     pub fn pling_vertex(&mut self, x: i32, y: i32, strength: f32) {
@@ -59,7 +59,7 @@ impl FluidSurface {
 
     fn nearest_index(&self, x: f32, y: f32) -> (i32, i32) {
         let s = &self.settings;
-        let row = if s.hexagonal { s.spacing * ROW } else { s.spacing };
+        let row = s.spacing * s.row_spacing();
         let ix = ((x - self.origin.x) / s.spacing).round_ties_even() as i32;
         let iy = ((y - self.origin.y) / row).round_ties_even() as i32;
         let hold = |v: i32, count: i32| if v < 0 { 0 } else { v.min(count - 1) };
@@ -68,11 +68,7 @@ impl FluidSurface {
 
     pub(super) fn vertex_xy(&self, x: i32, y: i32) -> (f32, f32) {
         let s = &self.settings;
-        if s.hexagonal {
-            let shift = if y & 1 != 0 { 0.5 } else { 0.0 };
-            ((x as f32 + shift) * s.spacing + self.origin.x, y as f32 * ROW * s.spacing + self.origin.y)
-        } else {
-            (x as f32 * s.spacing + self.origin.x, y as f32 * s.spacing + self.origin.y)
-        }
+        let shift = if s.hexagonal && y & 1 != 0 { 0.5 } else { 0.0 };
+        ((x as f32 + shift) * s.spacing + self.origin.x, y as f32 * s.row_spacing() * s.spacing + self.origin.y)
     }
 }
