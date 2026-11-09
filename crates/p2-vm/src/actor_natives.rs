@@ -88,7 +88,7 @@ pub struct ActorFx {
 }
 
 impl ActorFx {
-    pub(crate) fn forget(&mut self, gone: &std::collections::HashSet<ObjectId>) {
+    pub(crate) fn forget(&mut self, gone: &FxHashSet<ObjectId>) {
         self.controls.retain(|id, _| !gone.contains(id));
         self.directions.retain(|id, _| !gone.contains(id));
         self.projected.retain(|(projector, actor)| !gone.contains(projector) && !gone.contains(actor));

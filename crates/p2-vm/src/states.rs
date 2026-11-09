@@ -155,7 +155,7 @@ impl States {
         }
     }
 
-    pub(crate) fn forget(&mut self, gone: &std::collections::HashSet<ObjectId>) {
+    pub(crate) fn forget(&mut self, gone: &FxHashSet<ObjectId>) {
         for &object in gone {
             self.leave(object);
         }

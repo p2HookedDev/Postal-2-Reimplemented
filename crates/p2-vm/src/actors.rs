@@ -7,7 +7,7 @@ mod lifecycle;
 mod tick;
 mod touch;
 
-fn add_time(profile: &mut std::collections::HashMap<String, std::time::Duration>, name: &str, time: std::time::Duration) {
+fn add_time(profile: &mut rustc_hash::FxHashMap<String, std::time::Duration>, name: &str, time: std::time::Duration) {
     match profile.get_mut(name) {
         Some(total) => *total += time,
         None => {

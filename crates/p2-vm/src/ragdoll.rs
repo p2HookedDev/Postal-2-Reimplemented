@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use p2_assets::pose::Frame;
 use p2_assets::{KarmaAsset, read_karma_assets};
@@ -52,11 +52,11 @@ const MAX_JOINT_ERROR: f32 = 50.0;
 
 #[derive(Default)]
 pub(crate) struct Ragdolls {
-    assets: Option<HashMap<String, Arc<KarmaAsset>>>,
+    assets: Option<FxHashMap<String, Arc<KarmaAsset>>>,
     live: BTreeMap<ObjectId, Ragdoll>,
     kept: FxHashMap<ObjectId, (Arc<PosedMesh>, Arc<[Frame]>)>,
-    frozen: HashSet<ObjectId>,
-    failed: HashSet<ObjectId>,
+    frozen: FxHashSet<ObjectId>,
+    failed: FxHashSet<ObjectId>,
     throws: FxHashMap<ClassId, Option<Throw>>,
     tick: u64,
     hits: Vec<SeenHit>,
@@ -178,7 +178,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     /// In file name order, as retail: `Avg_Fem.ka` wins over `Avg_Fem_Skel.ka`.
-    pub(crate) fn karma_assets(&mut self) -> &HashMap<String, Arc<KarmaAsset>> {
+    pub(crate) fn karma_assets(&mut self) -> &FxHashMap<String, Arc<KarmaAsset>> {
         if self.karma.ragdolls.assets.is_none() {
             let phase = self.profile_start();
             let mut files: Vec<std::path::PathBuf> = self
@@ -189,7 +189,7 @@ impl<L: LoaderRef> Vm<L> {
                 .map(std::path::Path::to_path_buf)
                 .collect();
             files.sort_by_key(|path| path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()));
-            let mut assets = HashMap::new();
+            let mut assets = FxHashMap::default();
             for path in files {
                 let read = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|text| read_karma_assets(&text).map_err(|e| e.to_string()));
                 match read {

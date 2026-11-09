@@ -47,7 +47,7 @@ pub struct VmFrame {
     pub(super) settings: Option<crate::display::Settings>,
     pub(super) set_mouse: Option<[f32; 2]>,
     pub(super) times: Vec<(&'static str, Duration)>,
-    pub(super) profile: HashMap<String, Duration>,
+    pub(super) profile: FxHashMap<String, Duration>,
     pub(super) job_buffers: JobBuffers,
 }
 
@@ -171,7 +171,7 @@ pub(super) struct Simulation {
     pub(super) work_since: Option<(Instant, u32)>,
     pub(super) work_second: WorkSecond,
     pub(super) unmeshed: FxHashSet<ObjectId>,
-    pub(super) emitterless: HashSet<String>,
+    pub(super) emitterless: FxHashSet<String>,
     pub(super) quit: bool,
 }
 

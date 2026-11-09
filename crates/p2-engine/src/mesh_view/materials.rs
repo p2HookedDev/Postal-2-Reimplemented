@@ -15,7 +15,7 @@ pub(crate) fn actor_standard(section: &SectionView, lights: SceneLights) -> Stan
         emissive_texture: section.glow.clone(),
         alpha_mode: section.alpha_mode,
         unlit: lights == SceneLights::Ignored,
-        cull_mode: if section.two_sided { None } else { Some(Face::Back) },
+        cull_mode: cull_for(section.two_sided),
         double_sided: section.two_sided,
         ..Default::default()
     }
@@ -23,6 +23,14 @@ pub(crate) fn actor_standard(section: &SectionView, lights: SceneLights) -> Stan
 
 pub(crate) fn alpha_key(mode: AlphaMode) -> (std::mem::Discriminant<AlphaMode>, u32) {
     (std::mem::discriminant(&mode), if let AlphaMode::Mask(cutoff) = mode { cutoff.to_bits() } else { 0 })
+}
+
+pub(crate) fn cull_for(two_sided: bool) -> Option<Face> {
+    if two_sided { None } else { Some(Face::Back) }
+}
+
+pub(crate) fn image_size(images: &Assets<Image>, image: impl Into<bevy::asset::AssetId<Image>>) -> [f32; 2] {
+    images.get(image).map_or([1.0, 1.0], |image| image.size().as_vec2().to_array())
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -37,7 +45,7 @@ pub struct ActorMaterialKey {
 }
 
 pub(crate) fn cached_actor_material(
-    cache: &mut HashMap<ActorMaterialKey, SectionMaterial>,
+    cache: &mut FxHashMap<ActorMaterialKey, SectionMaterial>,
     section: &SectionView,
     materials: &mut Assets<StandardMaterial>,
     mesh_lit: &mut Assets<MeshLitMaterial>,
@@ -59,7 +67,7 @@ pub fn follower_material(
     section: &SectionView,
     materials: &mut Assets<StandardMaterial>,
     mesh_lit: &mut Assets<MeshLitMaterial>,
-    cache: &mut HashMap<ActorMaterialKey, SectionMaterial>,
+    cache: &mut FxHashMap<ActorMaterialKey, SectionMaterial>,
 ) -> SectionMaterial {
     cached_actor_material(cache, section, materials, mesh_lit, || StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, if section.no_scene_lights { SceneLights::Ignored } else { SceneLights::Used }) })
 }
@@ -128,7 +136,7 @@ pub(super) struct SectionMaterials<'w> {
     pub(super) animated: ResMut<'w, AnimatedMaterials>,
 }
 
-pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores: &mut SectionMaterials, cache: &mut HashMap<(bool, String), SectionMaterial>) -> SectionMaterial {
+pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores: &mut SectionMaterials, cache: &mut FxHashMap<(bool, String), SectionMaterial>) -> SectionMaterial {
     let Some(texture) = &section.texture else { return SectionMaterial::Standard(stores.grey.0.clone()) };
     let vertex_lit = vertex_lit(section);
     let key = (vertex_lit, section.material_key());
@@ -147,7 +155,7 @@ pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores
         depth_bias: section.depth_bias,
         reflectance: if section.lightmap.is_some() { 0.0 } else { 0.5 },
         lightmap_exposure: MODULATE_2X / Exposure::default().exposure(),
-        cull_mode: if section.two_sided { None } else { Some(Face::Back) },
+        cull_mode: cull_for(section.two_sided),
         double_sided: section.two_sided,
         ..Default::default()
     };
@@ -166,7 +174,7 @@ pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores
     } else {
         SectionMaterial::Standard(stores.materials.add(standard))
     };
-    let size = |image: &Handle<Image>| stores.images.get(image).map_or([1.0, 1.0], |image| image.size().as_vec2().to_array());
+    let size = |image: &Handle<Image>| image_size(&stores.images, image);
     if !section.uv.is_empty() {
         let moving = MovingUv { material: material.clone(), modifiers: section.uv.clone(), size: size(texture) };
         stores.animated.textures.push(moving);

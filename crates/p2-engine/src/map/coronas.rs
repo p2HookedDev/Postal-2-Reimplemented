@@ -119,7 +119,7 @@ pub fn draw_coronas(
     zones: Query<&Visibility, (With<ZoneCulled>, Without<CoronaQuad>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut coronas: bevy::ecs::system::Local<Coronas<Entity>>,
-    mut lit: bevy::ecs::system::Local<HashMap<Entity, f32>>,
+    mut lit: bevy::ecs::system::Local<bevy::ecs::entity::EntityHashMap<f32>>,
 ) {
     let Some(view) = views.iter().next() else { return };
     let world = play.world();

@@ -501,15 +501,11 @@ fn decodable(data: &[u8]) -> bool {
     if data.starts_with(b"OggS") {
         return true;
     }
-    if data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WAVE") {
-        return false;
-    }
-    let (mut format_ok, mut at) = (false, 12);
-    while let Some(header) = data.get(at..at + 8) {
-        let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-        match &header[..4] {
+    let mut format_ok = false;
+    for (id, body) in p2_assets::riff_chunks(data) {
+        match &id {
             b"fmt " => {
-                let Some(fmt) = data.get(at + 8..at + 16) else { return false };
+                let Some(fmt) = data.get(body.start..body.start + 8) else { return false };
                 let (tag, channels) = (u16::from_le_bytes([fmt[0], fmt[1]]), u16::from_le_bytes([fmt[2], fmt[3]]));
                 let rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
                 format_ok = matches!(tag, 1 | 3 | 0xFFFE) && channels > 0 && rate > 0;
@@ -517,8 +513,6 @@ fn decodable(data: &[u8]) -> bool {
             b"data" => return format_ok,
             _ => {}
         }
-        // Chunks are padded to even sizes.
-        at += 8 + length + (length & 1);
     }
     false
 }

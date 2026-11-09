@@ -38,7 +38,8 @@ pub(crate) struct TriangleTree {
 }
 
 impl TriangleTree {
-    pub(crate) fn new(triangles: &[[[f32; 3]; 3]]) -> Self {
+    /// Each shape is given by its corners: a triangle's three, or a box's minimum and maximum.
+    pub(crate) fn new<const CORNERS: usize>(triangles: &[[[f32; 3]; CORNERS]]) -> Self {
         let mut tree = Self { nodes: Vec::new(), order: (0..triangles.len() as u32).collect() };
         if !triangles.is_empty() {
             tree.build(triangles, 0, triangles.len());
@@ -46,7 +47,11 @@ impl TriangleTree {
         tree
     }
 
-    fn build(&mut self, triangles: &[[[f32; 3]; 3]], first: usize, count: usize) {
+    pub(crate) fn root_box(&self) -> Option<([f32; 3], [f32; 3])> {
+        self.nodes.first().map(|root| (root.min, root.max))
+    }
+
+    fn build<const CORNERS: usize>(&mut self, triangles: &[[[f32; 3]; CORNERS]], first: usize, count: usize) {
         let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for &triangle in &self.order[first..first + count] {
             for corner in &triangles[triangle as usize] {
@@ -173,7 +178,7 @@ mod tests {
         assert!(visits(&tree, Vector::new(-50.0, -50.0, 50.0), Vector::new(-50.0, -50.0, -50.0), 1.0).is_empty());
         assert!(visits(&tree, Vector::new(100.0, 100.0, 2.0), Vector::new(200.0, 100.0, 2.0), 1.0).is_empty());
         assert!(!visits(&tree, Vector::new(150.0, 150.0, 0.0), Vector::new(250.0, 150.0, 0.0), 1.0).is_empty());
-        assert!(TriangleTree::new(&[]).nodes.is_empty());
-        assert!(visits(&TriangleTree::new(&[]), Vector::ZERO, Vector::new(1.0, 1.0, 1.0), 1.0).is_empty());
+        assert!(TriangleTree::new::<3>(&[]).nodes.is_empty());
+        assert!(visits(&TriangleTree::new::<3>(&[]), Vector::ZERO, Vector::new(1.0, 1.0, 1.0), 1.0).is_empty());
     }
 }

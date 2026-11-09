@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use p2_package::Ini;
+use rustc_hash::FxHashMap;
 use p2_script::flags::{CLASS_CONFIG, CPF_CONFIG, CPF_GLOBAL_CONFIG};
 use p2_script::{StructLayout, Type};
 
@@ -27,7 +28,7 @@ pub(crate) struct Configs {
     files: BTreeMap<String, Ini>,
     changed: bool,
     audio: AudioSettings,
-    enums: HashMap<String, Arc<[String]>>,
+    enums: FxHashMap<String, Arc<[String]>>,
 }
 
 struct AudioSettings {

@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn the_sun_reaches_everywhere_without_collision() {
         let sun = MeshLight { effect: LE_SUNLIGHT, rotation: p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 }, ..MeshLight::default() };
-        let empty = StaticCollision { model: p2_assets::Model::default(), hulls: p2_collision::BspHulls::default(), terrains: Vec::new(), meshes: Vec::new() };
+        let empty = StaticCollision { model: p2_assets::Model::default(), hulls: p2_collision::BspHulls::default(), terrains: Vec::new(), meshes: Vec::new(), mesh_set: p2_collision::MeshSet::default() };
         let scene = p2_bake::Scene::new(&empty.model, &empty.terrains, &empty.meshes);
         assert!(scene.sun_clear(Vector::default() + Vector::new(0.0, 0.0, 1.0) * TRACE_LIFT, -sun.rotation.vector()));
     }

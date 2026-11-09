@@ -1,5 +1,6 @@
 use bevy::app::{Last, TaskPoolPlugin};
 use bevy::asset::{AssetApp, AssetEvent, AssetPlugin, RenderAssetUsages};
+use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::prelude::{MessageReader, World};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 
@@ -32,12 +33,12 @@ fn only_the_cameras_draw_never_the_sun_alone() {
     let (mut camera, overlay) = ([e(1), e(3), e(5)], [e(7)]);
     camera.sort_unstable();
     let seen: [&[Entity]; 2] = [&camera, &overlay];
-    let shadow_only = HashSet::from([e(20)]);
+    let shadow_only = EntityHashSet::from_iter([e(20)]);
     assert!(camera_drew(&seen, &shadow_only, e(3), Some(e(10))));
     assert!(camera_drew(&seen, &shadow_only, e(7), None));
     assert!(!camera_drew(&seen, &shadow_only, e(4), Some(e(10))));
     assert!(!camera_drew(&seen, &shadow_only, e(5), Some(e(20))));
-    assert!(!camera_drew(&[], &HashSet::new(), e(1), None));
+    assert!(!camera_drew(&[], &EntityHashSet::default(), e(1), None));
 }
 
 #[derive(Resource, Default)]

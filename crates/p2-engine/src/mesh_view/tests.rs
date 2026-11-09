@@ -144,7 +144,7 @@ fn the_walk_keeps_a_portal_nearer_than_the_near_plane() {
     let projection = Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() });
     let view = walk_view(&transform, &projection, origin);
     assert_eq!(view.len(), 5);
-    let ahead = from_bevy(Vec3::new(0.0, 0.0, -1.0));
+    let ahead = to_bevy(Vec3::new(0.0, 0.0, -1.0));
     assert!(view.iter().all(|plane| plane.normal.dot(ahead.into()) >= plane.d));
 }
 
@@ -161,7 +161,7 @@ fn a_forced_zone_tag_shows_only_from_its_zones() {
 fn a_moving_actor_is_in_the_zones_where_it_is() {
     let mut app = App::new();
     let model = two_zones();
-    let collision = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: Vec::new(), meshes: Vec::new() };
+    let collision = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: Vec::new(), meshes: Vec::new(), mesh_set: p2_collision::MeshSet::default() };
     app.insert_resource(LevelCollision(Some(Arc::new(collision))));
     app.add_systems(Update, follower_zones);
     let follow = FollowActor { actor: ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };

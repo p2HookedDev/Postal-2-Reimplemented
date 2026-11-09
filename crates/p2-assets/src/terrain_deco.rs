@@ -130,8 +130,8 @@ impl Terrain {
                     if !layer.show_on_invisible_terrain && !self.quad_visible(gx, gy) {
                         continue;
                     }
+                    let alpha = maps.density.map_or(0, |map| sample(map, gx, gy, hx, hy)) as f32 / 255.0;
                     for _ in 0..layer.max_per_quad {
-                        let alpha = maps.density.map_or(0, |map| sample(map, gx, gy, hx, hy)) as f32 / 255.0;
                         let r = placing.rng.next();
                         let density = (placing.rng.range(layer.density_multiplier) * f64::from(alpha)) as f32;
                         if density <= r {

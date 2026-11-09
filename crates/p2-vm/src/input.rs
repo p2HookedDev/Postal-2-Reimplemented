@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use p2_package::Ini;
+use rustc_hash::FxHashMap;
 use p2_script::Type;
 use p2_script::flags::{CPF_INPUT, CPF_OPTIONAL_PARM, FUNC_EXEC};
 
@@ -77,7 +77,7 @@ impl BoundCommands {
 
 #[derive(Debug, Default)]
 pub(crate) struct Input {
-    keys: HashMap<String, Arc<BoundCommands>>,
+    keys: FxHashMap<String, Arc<BoundCommands>>,
     aliases: Vec<(String, Arc<BoundCommands>)>,
     player: Option<ObjectId>,
     held: Vec<Arc<str>>,

@@ -1,7 +1,7 @@
 use p2_package::{Export, Package, Reader};
 
 use crate::Error;
-use crate::read::{array, invalid, vec3};
+use crate::read::{array, f32s, invalid, vec3};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KMeshProps {
@@ -49,10 +49,7 @@ pub struct ConvexElem {
 pub fn read_kmesh_props(pkg: &Package, file: &[u8], export: &Export) -> Result<KMeshProps, Error> {
     let mut r = pkg.native_reader(file, export)?;
     let r = &mut r;
-    let mut inertia_tensor = [0.0; 6];
-    for value in &mut inertia_tensor {
-        *value = r.f32()?;
-    }
+    let inertia_tensor = f32s(r)?;
     let com_nudge = vec3(r)?;
     let spheres = array(r, |r| Ok(SphereElem { tm: matrix(r)?, radius: r.f32()? }))?;
     let boxes = array(r, |r| Ok(BoxElem { tm: matrix(r)?, size: vec3(r)? }))?;
@@ -65,9 +62,5 @@ pub fn read_kmesh_props(pkg: &Package, file: &[u8], export: &Export) -> Result<K
 }
 
 fn matrix(r: &mut Reader) -> Result<ElemTm, Error> {
-    let mut m = [[0.0; 4]; 4];
-    for value in m.iter_mut().flatten() {
-        *value = r.f32()?;
-    }
-    Ok(m)
+    Ok([f32s(r)?, f32s(r)?, f32s(r)?, f32s(r)?])
 }

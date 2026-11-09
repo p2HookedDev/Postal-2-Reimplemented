@@ -2,8 +2,11 @@ pub use crate::components::{CanvasDrawn, FollowActor, OVERLAY_LAYERS, SKY_LAYER}
 pub use crate::shown_scene::ShownScene;
 pub use crate::components::{ActorModel, SceneView};
 pub(crate) use crate::components::CanvasLayer;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use bevy::ecs::entity::EntityHashSet;
+use rustc_hash::FxHashMap;
 
 use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
 use bevy::asset::{Assets, Handle, UntypedAssetId};
@@ -67,7 +70,7 @@ mod zone_culling;
 pub use sections::{MaterialImages, SectionView, Skin, SkinJoint, spawn_actor_sections};
 use materials::{SectionMaterials, scene_section_material};
 pub use materials::{ActorMaterialKey, SectionMaterial, follower_material, section_material, vertex_lit};
-pub(crate) use materials::{SceneLights, actor_standard, alpha_key, cached_actor_material};
+pub(crate) use materials::{SceneLights, actor_standard, alpha_key, cached_actor_material, cull_for, image_size};
 use camera::{SceneCameras, place_camera, place_overlay_cameras, plain_output, show_canvas_layers};
 pub use camera::view_rotation;
 pub use p2_vm::NEAR_CLIPPING_PLANE;
@@ -77,10 +80,6 @@ pub use restyle::{SwitchedLook, restyle_switched};
 use fog::zone_fog;
 use zone_culling::{follower_zones, zone_visibility};
 pub(crate) use zone_culling::{bounds, merged_box};
-
-fn from_bevy(v: Vec3) -> [f32; 3] {
-    to_bevy([v.x, v.y, v.z])
-}
 
 pub struct MeshViewPlugin;
 
@@ -184,7 +183,7 @@ pub struct ZoneCulled {
 }
 
 #[derive(Resource, Default)]
-pub struct ShadowOnly(pub HashSet<Entity>);
+pub struct ShadowOnly(pub EntityHashSet);
 
 pub struct MovingModel<F> {
     pub sections: Vec<SectionView>,
@@ -223,7 +222,7 @@ impl ShownScene {
         // turned by its yaw, so its yaw is −θ − 90°.
         self.start.map(|(position, yaw)| SceneView {
             position,
-            rotation: Quat::from_rotation_y(-(yaw as f32) * std::f32::consts::TAU / 65536.0 - std::f32::consts::FRAC_PI_2),
+            rotation: Quat::from_rotation_y(-p2_math::radians(yaw) - std::f32::consts::FRAC_PI_2),
         })
     }
 }
@@ -389,12 +388,12 @@ fn apply_change(
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }
-    let mut cache = HashMap::new();
+    let mut cache = FxHashMap::default();
     // What does not move under one root, what moves under others: Bevy's transform propagation skips a tree none of
     // whose transforms changed, so the static scene costs nothing while actors move.
     let root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
     let attachments_root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
-    let mut followers = HashMap::new();
+    let mut followers = FxHashMap::default();
     for MovingModel { sections, transform, follow, lit } in attachments {
         let material = |s: &SectionView| follower_material(s, &mut section_materials.materials, &mut section_materials.mesh_lit, &mut followers);
         spawn_actor_sections(&mut commands, attachments_root, sections, transform, (follow.actor, follow), material, lit, ());

@@ -42,7 +42,7 @@ pub(crate) struct PreparedScene {
     emitters: Vec<(ObjectId, EmitterActor)>,
     sprites: Vec<SpriteActor>,
     coronas: Vec<CoronaActor>,
-    actor_textures: HashMap<String, Option<ActorTexture>>,
+    actor_textures: FxHashMap<String, Option<ActorTexture>>,
     fluids: Vec<fluids::FluidActor>,
     status: String,
     hud: HudAssets,
@@ -271,7 +271,7 @@ impl PreparedScene {
             fluids,
         } = read_map_actors(started, &model, sky_zone);
         let emitter_textures = emitters.iter().flat_map(|(_, emitter)| &emitter.emitters).filter(|(p, _)| p.kind != p2_particles::EmitterKind::Mesh).filter_map(|(_, texture)| texture.as_deref());
-        let mut actor_textures = HashMap::new();
+        let mut actor_textures = FxHashMap::default();
         for path in emitter_textures.chain(sprites.iter().map(|sprite| sprite.texture.as_str())).chain(coronas.iter().map(|corona| corona.texture.as_str())) {
             actor_textures.entry(path.to_owned()).or_insert_with(|| ActorTexture::read(game, path, |image| t.add_image(image)));
         }
@@ -334,7 +334,7 @@ impl PreparedScene {
             radius: ((max - min).length() / 2.0).max(1.0),
             sky,
             start: start.map(|(location, rotation)| (Vec3::from(to_bevy(location)), rotation.yaw)),
-            collision: Some(StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: static_terrains, meshes: collisions }),
+            collision: Some(StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: static_terrains, mesh_set: p2_collision::MeshSet::new(&collisions), meshes: collisions }),
             fogs: zone_fogs,
             decals,
             actors: followers,

@@ -2,13 +2,13 @@
 
 mod shapes;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use p2_assets::{KMeshProps, read_kmesh_props, read_static_mesh};
 use p2_package::Package;
 use p2_physics::{Background, BodyId, BodyParams, Shape};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use p2_math::{Rotator, Vector, quat_to_rotator, rotator_to_quat};
 use p2_math::matrix_to_quat;
@@ -36,7 +36,7 @@ pub(crate) struct Karma {
     pub(crate) actors: FxHashMap<BodyId, ObjectId>,
     pub(crate) ragdolls: crate::ragdoll::Ragdolls,
     pub(crate) limbs: crate::limbs::Limbs,
-    failed: HashSet<ObjectId>,
+    failed: FxHashSet<ObjectId>,
     meshes: FxHashMap<ObjectId, Option<Arc<MeshShape>>>,
 }
 

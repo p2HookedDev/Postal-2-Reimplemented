@@ -281,8 +281,6 @@ pub struct MeshCollision {
     triangles: Vec<[[f32; 3]; 3]>,
     tree: tree::TriangleTree,
     slots: std::sync::Arc<[u32]>,
-    min: Vector,
-    max: Vector,
 }
 
 impl MeshCollision {
@@ -321,27 +319,48 @@ impl MeshCollision {
             [0, 1, 2].map(|c| location[c] + local[0] * axes[0][c] + local[1] * axes[1][c] + local[2] * axes[2][c])
         };
         let triangles: Vec<[[f32; 3]; 3]> = local.as_ref().iter().map(|t| t.map(world)).collect();
-        let (mut min, mut max) = (Vector::new(f32::MAX, f32::MAX, f32::MAX), Vector::new(f32::MIN, f32::MIN, f32::MIN));
-        for p in triangles.iter().flatten() {
-            for i in 0..3 {
-                min[i] = min[i].min(p[i]);
-                max[i] = max[i].max(p[i]);
-            }
-        }
         let tree = tree::TriangleTree::new(&triangles);
-        Self { triangles, tree, slots: std::sync::Arc::default(), min, max }
+        Self { triangles, tree, slots: std::sync::Arc::default() }
     }
 
     pub fn triangles(&self) -> &[[[f32; 3]; 3]] {
         &self.triangles
     }
 
+    /// An empty mesh's box runs from `f32::MAX` to `f32::MIN`, so it touches nothing.
     pub fn bounds(&self) -> (Vector, Vector) {
-        (self.min, self.max)
+        self.tree.root_box().map_or((Vector::new(f32::MAX, f32::MAX, f32::MAX), Vector::new(f32::MIN, f32::MIN, f32::MIN)), |(min, max)| (min.into(), max.into()))
     }
 
     fn touches(&self, min: Vector, max: Vector) -> bool {
-        (0..3).all(|i| self.min[i] <= max[i] && self.max[i] >= min[i])
+        let (low, high) = self.bounds();
+        (0..3).all(|i| low[i] <= max[i] && high[i] >= min[i])
+    }
+}
+
+/// A tree over the boxes of a mesh list, for line checks that skip the meshes a segment does not come near.
+#[derive(Debug, Clone, Default)]
+pub struct MeshSet {
+    tree: tree::TriangleTree,
+}
+
+impl MeshSet {
+    pub fn new(meshes: &[MeshCollision]) -> Self {
+        let boxes: Vec<[[f32; 3]; 2]> = meshes
+            .iter()
+            .map(|mesh| {
+                let (min, max) = mesh.bounds();
+                [min.into(), max.into()]
+            })
+            .collect();
+        Self { tree: tree::TriangleTree::new(&boxes) }
+    }
+
+    /// The same answer as [`mesh_line_check_at`] over `meshes`, which must be the list the set was built from.
+    pub fn line_check_at(&self, meshes: &[MeshCollision], start: Vector, end: Vector) -> Option<(Hit, usize, usize)> {
+        let mut best = None;
+        self.tree.along(start, end, 1.0, |index| earliest_in(&meshes[index], index, start, end, &mut best));
+        found(best, start, end)
     }
 }
 
@@ -351,18 +370,29 @@ pub fn mesh_line_check<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>, 
 
 /// Of hits at the same time, the first mesh's and in it the lowest triangle's wins.
 pub fn mesh_line_check_at<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>, start: Vector, end: Vector) -> Option<(Hit, usize, usize)> {
-    let mut best: Option<(f32, usize, usize, Vector)> = None;
+    let mut best = None;
     for (index, mesh) in meshes.into_iter().enumerate() {
-        mesh.tree.along(start, end, best.map_or(1.0, |(time, ..)| time), |triangle| {
-            let [a, b, c] = mesh.triangles[triangle].map(Vector::from);
-            if let Some(t) = segment_triangle(start, end, a, b, c)
-                && best.is_none_or(|(time, first_mesh, first, _)| (t, index, triangle) < (time, first_mesh, first))
-            {
-                best = Some((t, index, triangle, facing(triangle_normal(a, b, c), start, end)));
-            }
-            best.map_or(1.0, |(time, ..)| time)
-        });
+        earliest_in(mesh, index, start, end, &mut best);
     }
+    found(best, start, end)
+}
+
+/// Keeps in `best` the smallest (time, mesh, triangle) among its hit and `mesh`'s, so the visiting order of meshes
+/// does not matter; returns the time limit for the next mesh.
+fn earliest_in(mesh: &MeshCollision, index: usize, start: Vector, end: Vector, best: &mut Option<(f32, usize, usize, Vector)>) -> f32 {
+    mesh.tree.along(start, end, best.map_or(1.0, |(time, ..)| time), |triangle| {
+        let [a, b, c] = mesh.triangles[triangle].map(Vector::from);
+        if let Some(t) = segment_triangle(start, end, a, b, c)
+            && best.is_none_or(|(time, first_mesh, first, _)| (t, index, triangle) < (time, first_mesh, first))
+        {
+            *best = Some((t, index, triangle, facing(triangle_normal(a, b, c), start, end)));
+        }
+        best.map_or(1.0, |(time, ..)| time)
+    });
+    best.map_or(1.0, |(time, ..)| time)
+}
+
+fn found(best: Option<(f32, usize, usize, Vector)>, start: Vector, end: Vector) -> Option<(Hit, usize, usize)> {
     best.map(|(time, index, triangle, normal)| (Hit { time, location: start.lerp(end, time), normal }, index, triangle))
 }
 
@@ -499,6 +529,28 @@ pub(crate) mod tests {
             }
         }
         assert!(hits > 100, "{hits} hits");
+    }
+
+    #[test]
+    fn a_mesh_set_finds_the_hit_of_the_mesh_list() {
+        let one = Vector::new(1.0, 1.0, 1.0);
+        let local = test_mesh_triangles();
+        let mut meshes: Vec<MeshCollision> = local.chunks(37).map(|chunk| MeshCollision::placed(chunk, Vector::ZERO, Rotator::ZERO, one, Vector::ZERO)).collect();
+        meshes.push(MeshCollision::placed(Vec::<[[f32; 3]; 3]>::new(), Vector::ZERO, Rotator::ZERO, one, Vector::ZERO));
+        meshes.push(MeshCollision::placed(&local, Vector::new(30.0, -20.0, 10.0), Rotator::new(1500, 6000, -900), one, Vector::ZERO));
+        meshes.extend_from_within(..);
+        meshes.rotate_left(5);
+        let set = MeshSet::new(&meshes);
+        let (mut hits, mut late_twins) = (0, 0);
+        for (start, end) in test_segments(4000) {
+            let list = mesh_line_check_at(&meshes, start, end);
+            assert_eq!(set.line_check_at(&meshes, start, end), list, "{start:?} -> {end:?}");
+            if let Some((hit, index, _)) = list {
+                hits += 1;
+                late_twins += usize::from(mesh_line_check_at(&meshes[index + 1..], start, end).is_some_and(|(later, ..)| later.time == hit.time));
+            }
+        }
+        assert!(hits > 100 && late_twins > 100, "{hits} hits, {late_twins} ties");
     }
 
     #[test]

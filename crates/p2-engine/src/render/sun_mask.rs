@@ -39,8 +39,7 @@ fn trace(collision: &StaticCollision, sun: Vector) -> Traced {
     let start = Instant::now();
     let model = &collision.model;
     let scene = p2_bake::Scene::new(model, &collision.terrains, &collision.meshes);
-    let mut atlases: Vec<_> =
-        model.light_map_textures.iter().map(|atlas| atlas.texture().and_then(|texture| p2_assets::texture_rgba(&texture, None))).collect();
+    let mut atlases = model.light_map_atlases();
     for (_, _, texels) in atlases.iter_mut().flatten() {
         for texel in texels.iter_mut() {
             *texel = masked(*texel, false);

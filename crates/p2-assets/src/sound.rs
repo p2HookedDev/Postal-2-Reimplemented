@@ -21,51 +21,62 @@ impl Sound {
     /// Whether a RIFF WAVE file loops: a `smpl` chunk with at least one sample loop (`cSampleLoops`,
     /// 28 bytes into the chunk). Retail plays such a sound looping.
     pub fn loops(&self) -> bool {
-        let data = &self.data;
-        if data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WAVE") {
-            return false;
+        riff_chunks(&self.data)
+            .find(|(id, _)| id == b"smpl")
+            .is_some_and(|(_, body)| self.data.get(body.start + 28..body.start + 32).is_some_and(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) > 0))
+    }
+}
+
+fn read_slice(data: &[u8]) -> impl FnMut(usize, &mut [u8]) + '_ {
+    |at, buf| {
+        if let Some(bytes) = data.get(at..at + buf.len()) {
+            buf.copy_from_slice(bytes);
         }
-        let mut at = 12;
-        while let Some(header) = data.get(at..at + 8) {
-            let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-            if &header[..4] == b"smpl" {
-                return data.get(at + 36..at + 40).is_some_and(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) > 0);
-            }
-            at += 8 + length + (length & 1);
-        }
-        false
     }
 }
 
 fn wave_duration(data: &[u8]) -> Option<f32> {
-    wave_duration_by(data.len(), |at, buf| {
-        if let Some(bytes) = data.get(at..at + buf.len()) {
-            buf.copy_from_slice(bytes);
-        }
+    wave_duration_by(data.len(), read_slice(data))
+}
+
+/// The chunks of a RIFF WAVE file: id and body range, walked by each declared size padded to even. A truncated last
+/// chunk's range runs past the data. Nothing for a file that is not RIFF WAVE.
+pub fn riff_chunks(data: &[u8]) -> impl Iterator<Item = ([u8; 4], Range<usize>)> + '_ {
+    riff_chunks_by(data.len(), read_slice(data))
+}
+
+/// [`riff_chunks`] of a file of `file_len` bytes read through `read(offset, buffer)`, which only ever gets ranges inside it.
+fn riff_chunks_by(file_len: usize, mut read: impl FnMut(usize, &mut [u8])) -> impl Iterator<Item = ([u8; 4], Range<usize>)> {
+    let mut get = move |at: usize, buf: &mut [u8]| (at + buf.len() <= file_len).then(|| read(at, buf));
+    let mut riff = [0u8; 12];
+    let riff_wave = get(0, &mut riff).is_some() && &riff[0..4] == b"RIFF" && &riff[8..12] == b"WAVE";
+    let mut at = 12;
+    std::iter::from_fn(move || {
+        let mut header = [0u8; 8];
+        riff_wave.then_some(())?;
+        get(at, &mut header)?;
+        let [a, b, c, d, length @ ..] = header;
+        let length = u32::from_le_bytes(length) as usize;
+        let body = at + 8..at + 8 + length;
+        at = body.end + (length & 1);
+        Some(([a, b, c, d], body))
     })
 }
 
 pub fn wave_duration_by(file_len: usize, mut read: impl FnMut(usize, &mut [u8])) -> Option<f32> {
-    let mut get = |at: usize, buf: &mut [u8]| (at + buf.len() <= file_len).then(|| read(at, buf));
-    let mut riff = [0u8; 12];
-    get(0, &mut riff)?;
-    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
-        return None;
-    }
-    let (mut byte_rate, mut size, mut at) = (None, None, 12);
-    let mut header = [0u8; 8];
-    while get(at, &mut header).is_some() {
-        let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-        match &header[..4] {
-            b"fmt " => {
-                let mut rate = [0u8; 4];
-                byte_rate = get(at + 16, &mut rate).map(|()| u32::from_le_bytes(rate));
-            }
-            b"data" => size = Some(length),
+    let (mut fmt, mut size) = (None, None);
+    for (id, body) in riff_chunks_by(file_len, &mut read) {
+        match &id {
+            b"fmt " => fmt = Some(body.start),
+            b"data" => size = Some(body.len()),
             _ => {}
         }
-        at += 8 + length + (length & 1);
     }
+    let mut rate = [0u8; 4];
+    let byte_rate = fmt.filter(|&at| at + 12 <= file_len).map(|at| {
+        read(at + 8, &mut rate);
+        u32::from_le_bytes(rate)
+    });
     let byte_rate = byte_rate.filter(|&rate| rate > 0)?;
     Some(size? as f32 / byte_rate as f32)
 }

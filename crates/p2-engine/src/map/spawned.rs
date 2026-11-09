@@ -41,7 +41,7 @@ impl TextureBuild {
     }
 }
 
-pub(super) fn actor_image(cache: &HashMap<String, Option<ActorTexture>>, builds: &mut Vec<TextureBuild>, game: &Game, t: &SceneTargets, path: &str) -> Option<Handle<Image>> {
+pub(super) fn actor_image(cache: &FxHashMap<String, Option<ActorTexture>>, builds: &mut Vec<TextureBuild>, game: &Game, t: &SceneTargets, path: &str) -> Option<Handle<Image>> {
     if let Some(found) = cache.get(path) {
         return found.as_ref().map(|texture| texture.image.clone());
     }
@@ -202,7 +202,7 @@ fn static_actor_sections(t: &mut SceneTargets, mesh: &Arc<StaticMesh>, sections:
     (sections, lit)
 }
 
-fn spawn_actor_model(model: &SpawnModel, spawned: SpawnedActor, origin: Vec3, shared: &mut HashMap<ActorMaterialKey, SectionMaterial>, t: &mut SceneTargets) {
+fn spawn_actor_model(model: &SpawnModel, spawned: SpawnedActor, origin: Vec3, shared: &mut FxHashMap<ActorMaterialKey, SectionMaterial>, t: &mut SceneTargets) {
     let SpawnedActor { actor, draw, .. } = spawned;
     let (sections, follow, lit) = match (model, draw) {
         (SpawnModel::Static { mesh, sections }, SpawnedDraw::Static(a)) => {
@@ -232,7 +232,7 @@ fn spawn_actor_model(model: &SpawnModel, spawned: SpawnedActor, origin: Vec3, sh
 }
 
 fn spawned_material(
-    shared: &mut HashMap<ActorMaterialKey, SectionMaterial>,
+    shared: &mut FxHashMap<ActorMaterialKey, SectionMaterial>,
     materials: &mut Assets<StandardMaterial>,
     mesh_lit: &mut Assets<MeshLitMaterial>,
     section: &SectionView,
@@ -252,9 +252,9 @@ impl Session {
         // Restyled actors: retail draws whatever the actor holds each frame. The old model goes, scene-built or spawned; the new
         // one is built below like a spawned actor's (its pose and ragdoll come from the actor's frames, so they carry over). A
         // HUD-drawn model is made again from its current mesh when next drawn.
-        let restyled: HashSet<ObjectId> = spawned.iter().filter(|s| s.restyled).map(|s| s.actor).collect();
+        let restyled: FxHashSet<ObjectId> = spawned.iter().filter(|s| s.restyled).map(|s| s.actor).collect();
         if !restyled.is_empty() {
-            let roots: HashSet<Entity> = t.models.actor_models.iter().filter(|(_, model, _)| restyled.contains(&model.0)).map(|(entity, _, _)| entity).collect();
+            let roots: bevy::ecs::entity::EntityHashSet = t.models.actor_models.iter().filter(|(_, model, _)| restyled.contains(&model.0)).map(|(entity, _, _)| entity).collect();
             for &entity in &roots {
                 t.commands.entity(entity).despawn();
             }
@@ -488,7 +488,7 @@ impl Session {
         // Retail draws a skeletal actor's attachments in its own scene node, so they go on the overlay layer
         // of its first call. With the base no longer HUD-drawn (dropped, detached), they return to the world.
         let Some(world) = t.play.world() else { return };
-        let moves: HashMap<ObjectId, Mat4> = t.canvas.canvas_models.iter()
+        let moves: FxHashMap<ObjectId, Mat4> = t.canvas.canvas_models.iter()
             .filter(|(_, drawn, _)| drawn.0 == 0)
             .filter_map(|(follow, _, _)| {
                 let Some(&(_, _, _, &CanvasItem::Actor { location, rotation, scale, .. })) = call_of(follow.actor, 0) else { return None };

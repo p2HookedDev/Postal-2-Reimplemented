@@ -126,7 +126,7 @@ mod tests {
             .find(|&i| pkg.object_name(pkg.exports[i].class_index) == Some("PlayerStart"))
             .map(|i| <[f32; 3]>::from(read_actor_location(&mut Objects::new(&loader), Source { package: pkg, data }, i).unwrap()))
             .unwrap();
-        let world = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains, meshes: Vec::new() };
+        let world = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains, meshes: Vec::new(), mesh_set: p2_collision::MeshSet::default() };
 
         let mut body = Body { center: start.into(), ..Body::default() };
         for _ in 0..60 {

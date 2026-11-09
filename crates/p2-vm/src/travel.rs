@@ -1,9 +1,8 @@
 //! Host order: [`Vm::leave_level`], [`Vm::set_loader`] (a clone of this one, so package ids stay the
 //! same), [`Vm::begin_play`], [`Vm::login`].
 
-use std::collections::{HashMap, HashSet};
-
 use p2_script::flags::CPF_TRAVEL;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::Prop;
 use crate::{ClassId, Error, HostCommand, Kind, LoaderRef, ObjectId, Value, Vm};
@@ -126,11 +125,11 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.travel_items = false;
         let map_prefix = format!("{}.", self.map_name.to_ascii_lowercase());
-        let gone: HashSet<ObjectId> = self
+        let gone: FxHashSet<ObjectId> = self
             .object_ids()
             .filter(|&o| self.store.is_a(o, Kind::Actor) || self.store.object(o).path.to_ascii_lowercase().starts_with(&map_prefix))
             .collect();
-        let actors: HashSet<ObjectId> = gone.iter().copied().filter(|&o| self.store.is_a(o, Kind::Actor)).collect();
+        let actors: FxHashSet<ObjectId> = gone.iter().copied().filter(|&o| self.store.is_a(o, Kind::Actor)).collect();
         for &actor in &actors {
             self.store.set(actor, Prop::bDeleteMe, Value::Bool(true));
         }
@@ -190,7 +189,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn arrive(&mut self, pawn: ObjectId) -> Result<Vec<ObjectId>, Error> {
         let travelling = std::mem::take(&mut self.travelling);
         let Some((first, items)) = travelling.split_first() else { return Ok(Vec::new()) };
-        let mut map: HashMap<ObjectId, ObjectId> = HashMap::from([(first.old, pawn)]);
+        let mut map: FxHashMap<ObjectId, ObjectId> = FxHashMap::from_iter([(first.old, pawn)]);
         let mut targets = vec![(pawn, first)];
         let placement = [self.store.get(pawn, Prop::Location), self.store.get(pawn, Prop::Rotation)];
         for item in items {
@@ -211,7 +210,7 @@ impl<L: LoaderRef> Vm<L> {
         Ok(targets[1..].iter().map(|&(actor, _)| actor).collect())
     }
 
-    fn remap(&self, value: &Value, map: &HashMap<ObjectId, ObjectId>) -> Value {
+    fn remap(&self, value: &Value, map: &FxHashMap<ObjectId, ObjectId>) -> Value {
         match value {
             &Value::Object(Some(old)) => match map.get(&old) {
                 Some(&new) => Value::Object(Some(new)),

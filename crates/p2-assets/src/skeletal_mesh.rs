@@ -2,7 +2,7 @@ use p2_math::{Rotator, Vector};
 use p2_package::{Export, Package, Reader};
 
 use crate::Error;
-use crate::read::{BOX_SIZE, array, invalid, skip_array, skip_lazy_array, skip_primitive, vec3, vec4};
+use crate::read::{array, invalid, skip_array, skip_box, skip_lazy_array, skip_primitive, unsigned, vec3, vec4};
 
 #[derive(Debug, Clone)]
 pub struct SkeletalMesh {
@@ -100,7 +100,7 @@ impl LodModel {
 /// native data starts with the bounding box (25 bytes), then the sphere.
 pub fn read_primitive_sphere(pkg: &Package, file: &[u8], export: &Export) -> Result<[f32; 4], Error> {
     let mut r = pkg.native_reader(file, export)?;
-    r.bytes(BOX_SIZE)?;
+    skip_box(&mut r)?;
     vec4(&mut r)
 }
 
@@ -185,8 +185,7 @@ fn read_bone(pkg: &Package, r: &mut Reader) -> Result<Bone, Error> {
     let position = vec3(r)?;
     r.bytes(16)?;
     let num_children = r.i32()?;
-    let parent_offset = r.pos();
-    let parent = usize::try_from(r.i32()?).map_err(|_| invalid("bone parent index", parent_offset))?;
+    let parent = unsigned(r, "bone parent index")?;
     Ok(Bone { name, parent, num_children, orientation, position })
 }
 

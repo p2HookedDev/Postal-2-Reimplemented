@@ -1,7 +1,8 @@
 use p2_math::Vector;
 use p2_package::{Export, Package, Reader};
 
-use crate::read::{array, count, invalid, lazy_bytes, skip_primitive, vec3, vec4};
+use crate::read::{array, count, f32s, invalid, lazy_bytes, skip_primitive, unsigned, vec3, vec4};
+use crate::texture::rgba_pixels;
 use crate::{Error, Mip, Texture, TextureFormat};
 
 const MIN_VERSION: u16 = 116;
@@ -245,8 +246,7 @@ pub fn read_polys(pkg: &Package, file: &[u8], export: &Export) -> Result<Vec<Pol
     check_version(pkg)?;
     let mut r = pkg.native_reader(file, export)?;
     let r = &mut r;
-    let offset = r.pos();
-    let num = usize::try_from(r.i32()?).map_err(|_| invalid("polys count", offset))?;
+    let num = unsigned(r, "polys count")?;
     r.i32()?;
     let polys = (0..num).map(|_| read_poly(r, pkg)).collect::<Result<_, _>>()?;
     if !r.at_end() {
@@ -267,11 +267,7 @@ impl LightMapTexture {
     /// The atlas as a texture: format and size as saved, `data` as mips 0 and 1 (DXT1 512² in every lit map).
     /// Unlit levels store no data and meaningless format / size values: `None`.
     pub fn texture(&self) -> Option<Texture> {
-        let (width, height) = (u32::try_from(self.width).ok()?, u32::try_from(self.height).ok()?);
-        if self.data[0].is_empty() || width == 0 || height == 0 {
-            return None;
-        }
-        let format = TextureFormat::from_byte(self.format).ok()?;
+        let (format, width, height) = self.header()?;
         let mips = self
             .data
             .iter()
@@ -281,9 +277,28 @@ impl LightMapTexture {
             .collect();
         Some(Texture { format, palette: None, mips, masked: false, clamp: [false; 2], lod_set: crate::texture::LOD_SET_LIGHT_MAP })
     }
+
+    fn header(&self) -> Option<(TextureFormat, u32, u32)> {
+        let (width, height) = (u32::try_from(self.width).ok()?, u32::try_from(self.height).ok()?);
+        if self.data[0].is_empty() || width == 0 || height == 0 {
+            return None;
+        }
+        Some((TextureFormat::from_byte(self.format).ok()?, width, height))
+    }
 }
 
 impl Model {
+    /// Mip 0 of each light map atlas as RGBA, decoded from the saved bytes without copying them into a [`Texture`].
+    pub fn light_map_atlases(&self) -> Vec<Option<(u32, u32, Vec<[u8; 4]>)>> {
+        self.light_map_textures
+            .iter()
+            .map(|atlas| {
+                let (format, width, height) = atlas.header()?;
+                rgba_pixels(format, width, height, &atlas.data[0], None)
+            })
+            .collect()
+    }
+
     /// Light map atlas index and per-vertex atlas UVs (0..1) of a polygon; `None` if its node has no light map or its
     /// section is [`poly_flags::UNLIT`].
     /// Light map texel = (x, y, z, 1) · `world_to_light_map` (columns 0 and 1), then offset into the atlas.
@@ -466,10 +481,7 @@ fn read_light_map(r: &mut Reader) -> Result<LightMap, Error> {
     let zone = r.compact()?;
     let offset = [r.compact()?, r.compact()?];
     let size = [r.compact()?, r.compact()?];
-    let mut world_to_light_map = [0.0; 16];
-    for v in &mut world_to_light_map {
-        *v = r.f32()?;
-    }
+    let world_to_light_map = f32s(r)?;
     let base = vec3(r)?;
     let axis_x = vec3(r)?;
     let axis_y = vec3(r)?;
@@ -537,8 +549,7 @@ fn skip_zone_set(r: &mut Reader, licensee: u16) -> Result<(), Error> {
     if licensee == 0 {
         r.bytes(8)?;
     } else {
-        let offset = r.pos();
-        let n = usize::try_from(r.i32()?).map_err(|_| invalid("zone set size", offset))?;
+        let n = unsigned(r, "zone set size")?;
         r.bytes(n)?;
     }
     Ok(())

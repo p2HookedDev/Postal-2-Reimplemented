@@ -41,7 +41,7 @@ impl FrameTimes {
         add_part(&mut self.current.main, name, time);
     }
 
-    pub(super) fn add_vm(&mut self, parts: &mut Vec<(&'static str, Duration)>, profile: &mut HashMap<String, Duration>) {
+    pub(super) fn add_vm(&mut self, parts: &mut Vec<(&'static str, Duration)>, profile: &mut FxHashMap<String, Duration>) {
         for (name, time) in parts.drain(..) {
             *self.vm_totals.entry(name).or_default() += time;
             add_part(&mut self.current.vm, name, time);

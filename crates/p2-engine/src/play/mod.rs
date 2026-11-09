@@ -236,7 +236,7 @@ struct DrawnActors<'w, 's> {
 
 /// Not `ViewVisibility`, which the sun's shadow cascades set too: retail draws no such shadows, so the modern graphics
 /// must not change what the game sees (`LastRenderTime`). `seen`: each sorted as Bevy keeps them.
-fn camera_drew(seen: &[&[Entity]], shadow_only: &HashSet<Entity>, entity: Entity, root: Option<Entity>) -> bool {
+fn camera_drew(seen: &[&[Entity]], shadow_only: &bevy::ecs::entity::EntityHashSet, entity: Entity, root: Option<Entity>) -> bool {
     !root.is_some_and(|root| shadow_only.contains(&root)) && seen.iter().any(|meshes| meshes.binary_search(&entity).is_ok())
 }
 

@@ -1,7 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use p2_assets::pose::LocalBone;
 use p2_package::PackageId;
@@ -92,14 +91,14 @@ impl Instance {
 pub(crate) struct Anims {
     instances: FxHashMap<ObjectId, Instance>,
     sequences: FxHashMap<ObjectId, Option<Arc<[Sequence]>>>,
-    default_anims: HashMap<ObjectId, Option<ObjectId>>,
+    default_anims: FxHashMap<ObjectId, Option<ObjectId>>,
     probe_masks: FxHashMap<(PackageId, usize), (u64, u64)>,
-    notify_objects: HashMap<(PackageId, usize), Option<ObjectId>>,
+    notify_objects: FxHashMap<(PackageId, usize), Option<ObjectId>>,
     skeletal_meshes: FxHashMap<ObjectId, bool>,
 }
 
 impl Anims {
-    pub(crate) fn forget(&mut self, actors: &std::collections::HashSet<ObjectId>) {
+    pub(crate) fn forget(&mut self, actors: &FxHashSet<ObjectId>) {
         self.instances.retain(|actor, _| !actors.contains(actor));
     }
 

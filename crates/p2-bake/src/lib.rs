@@ -433,7 +433,7 @@ fn bake_all(input: &BakeInput) -> Baked {
     let surfaces = surfaces(input.model);
     let lit: Vec<Option<Direct>> = surfaces.par_iter().map(|surface| direct(&scene, input, surface.as_ref()?)).collect();
     let around: Vec<_> = surfaces.par_iter().map(|surface| indirect(&scene, surface.as_ref()?, &lit)).collect();
-    let retail: Vec<_> = input.model.light_map_textures.iter().map(|atlas| atlas.texture().and_then(|texture| p2_assets::texture_rgba(&texture, None))).collect();
+    let retail = input.model.light_map_atlases();
     let mut atlases: Vec<Option<Atlas>> = retail
         .iter()
         .map(|atlas| {

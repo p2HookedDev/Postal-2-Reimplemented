@@ -1,7 +1,6 @@
 //! The file is a magic, a version, then the [`SaveGame`] in `postcard`; references are indices/paths.
 
-use std::collections::{HashMap, HashSet};
-
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::ai_move::LatentMove;
@@ -174,7 +173,7 @@ impl<L: LoaderRef> Vm<L> {
         self.store.objects[object.0 as usize].mem = mem;
     }
 
-    fn kept_transient(&mut self) -> HashSet<ObjectId> {
+    fn kept_transient(&mut self) -> FxHashSet<ObjectId> {
         let roots = [self.host.client.master, self.host.client.viewport, self.media.canvas.object];
         let mut stack: Vec<ObjectId> = roots.into_iter().flatten().collect();
         for class in 0..self.store.classes.len() {
@@ -189,7 +188,7 @@ impl<L: LoaderRef> Vm<L> {
             });
             self.store.classes[class].defaults = defaults;
         }
-        let mut kept = HashSet::new();
+        let mut kept = FxHashSet::default();
         while let Some(object) = stack.pop() {
             if self.is_transient_object(object) && kept.insert(object) {
                 self.object_refs(object, &mut stack);
@@ -211,7 +210,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
             })
             .collect();
-        let mut index: HashMap<ObjectId, u32> = saved.iter().enumerate().map(|(i, &o)| (o, i as u32)).collect();
+        let mut index: FxHashMap<ObjectId, u32> = saved.iter().enumerate().map(|(i, &o)| (o, i as u32)).collect();
         let kept = self.kept_transient();
         let mut next = 0;
         let mut refs = Vec::new();
@@ -227,9 +226,9 @@ impl<L: LoaderRef> Vm<L> {
             next += 1;
         }
         let mut names: Vec<String> = Vec::new();
-        let mut name_index: HashMap<NameId, u32> = HashMap::new();
+        let mut name_index: FxHashMap<NameId, u32> = FxHashMap::default();
         let mut externals: Vec<(String, String)> = Vec::new();
-        let mut external_index: HashMap<ObjectId, u32> = HashMap::new();
+        let mut external_index: FxHashMap<ObjectId, u32> = FxHashMap::default();
         let count = saved.len() as u32;
         let mut name_of = |vm: &Self, name: NameId| {
             *name_index.entry(name).or_insert_with(|| {
@@ -349,7 +348,7 @@ impl<L: LoaderRef> Vm<L> {
                 self.script.states.probes_disabled.insert(id, saved.probes_disabled);
             }
         }
-        let restored: HashSet<ObjectId> = ids.iter().flatten().copied().collect();
+        let restored: FxHashSet<ObjectId> = ids.iter().flatten().copied().collect();
         for actor in map_actors {
             if !restored.contains(&actor) {
                 self.store.set(actor, Prop::bDeleteMe, Value::Bool(true));

@@ -35,7 +35,7 @@ pub use skeletal_mesh::{AttachAlias, Bone, Influence, SkelMeshSection, SkeletalM
 pub use static_mesh::{
     MeshSection, StaticMesh, StaticMeshInstance, StaticMeshLight, read_static_mesh, read_static_mesh_instance, read_static_mesh_materials,
 };
-pub use sound::{Sound, read_sound, read_sound_duration, sound_file_span, wave_duration_by};
+pub use sound::{Sound, read_sound, read_sound_duration, riff_chunks, sound_file_span, wave_duration_by};
 pub use terrain::{Terrain, TerrainLayer, read_terrain};
 pub use terrain_deco::{DecoLayer, DecoMaps, Decoration, TexelMap};
 pub use texture::{LOD_SET_LIGHT_MAP, Mip, Texture, TextureFormat, read_palette, read_texture, mip_rgba, texture_alpha, texture_bgra, texture_heights, texture_rgba};

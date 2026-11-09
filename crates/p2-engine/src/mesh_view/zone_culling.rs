@@ -17,7 +17,7 @@ pub(super) fn follower_zones(
 ) {
     let model = collision.model();
     let Some(model) = model.filter(|model| !model.leaves.is_empty()) else { return };
-    let dirty: HashSet<Entity> = moved.iter().map(ChildOf::parent).collect();
+    let dirty: EntityHashSet = moved.iter().map(ChildOf::parent).collect();
     for root in dirty {
         let Ok((children, culled)) = roots.get_mut(root) else { continue };
         let corners = children.iter().filter_map(|&child| sections.get(child).ok()).flat_map(|(transform, aabb, sprite)| {
@@ -25,7 +25,7 @@ pub(super) fn follower_zones(
             let any_facing = (half * transform.scale).length();
             (0..8).map(move |i| {
                 let sign = Vec3::new([-1.0, 1.0][i & 1], [-1.0, 1.0][(i >> 1) & 1], [-1.0, 1.0][i >> 2]);
-                from_bevy(if sprite { transform.translation + sign * any_facing } else { transform.transform_point(center + sign * half) })
+                to_bevy(if sprite { transform.translation + sign * any_facing } else { transform.transform_point(center + sign * half) })
             })
         });
         let Some((min, max)) = bounds(corners) else { continue };
@@ -50,7 +50,7 @@ pub(super) fn walk_view(transform: &Transform, projection: &Projection, origin: 
         .map(|(_, half)| {
             // Bevy half-spaces (inside: n · p + d > 0) moved to Unreal space (p = swap(u) + origin).
             let normal = Vec3::from(half.normal());
-            let [x, y, z] = from_bevy(normal);
+            let [x, y, z] = to_bevy(normal);
             Plane::from([x, y, z, -(half.d() + normal.dot(origin))])
         })
         .collect()
@@ -74,13 +74,13 @@ pub(super) fn zone_visibility(
     shadow_only.0.clear();
     let model = collision.model();
     let view_zone = model.as_ref().zip(cameras.iter().next()).map(|(model, (transform, _))| {
-        p2_collision::point_zone(model, from_bevy(transform.translation - shown.origin).into())
+        p2_collision::point_zone(model, to_bevy(transform.translation - shown.origin).into())
     });
     let mut eye_seen = None;
     let all = VisibleZones::default();
     let seen = match (&shown.portals, cameras.iter().next(), view_zone) {
         (Some(portals), Some((transform, projection)), Some(zone)) => {
-            let eye = from_bevy(transform.translation - shown.origin);
+            let eye = to_bevy(transform.translation - shown.origin);
             let view = walk_view(transform, projection, shown.origin);
             eye_seen = Some(eye);
             portals.visible(eye.into(), zone, &view, &mut walk);

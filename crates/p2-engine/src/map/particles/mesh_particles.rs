@@ -29,7 +29,7 @@ impl MeshPool {
                         alpha_mode,
                         unlit: true,
                         double_sided: two_sided,
-                        cull_mode: if two_sided { None } else { Some(Face::Back) },
+                        cull_mode: crate::mesh_view::cull_for(two_sided),
                         ..Default::default()
                     })
                 });

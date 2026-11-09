@@ -81,7 +81,7 @@ fn restyle<M: bevy::asset::Asset>(
         let drawn = base_mut(material);
         drawn.alpha_mode = surface_alpha_mode(drawn.alpha_mode, look.was.alpha_mode, look.now.alpha_mode);
         drawn.double_sided = surface_two_sided(drawn.double_sided, look.was.two_sided, look.now.two_sided);
-        drawn.cull_mode = if drawn.double_sided { None } else { Some(Face::Back) };
+        drawn.cull_mode = cull_for(drawn.double_sided);
         let [r, g, b, a] = look.now.tint;
         drawn.base_color = Color::linear_rgba(r, g, b, a);
         drawn.emissive = look.now.emissive();

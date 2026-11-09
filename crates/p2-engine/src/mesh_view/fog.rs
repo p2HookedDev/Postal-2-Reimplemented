@@ -10,7 +10,7 @@ pub(super) fn zone_fog(
     let t = settle_step(time.delta_secs(), FOG_BLEND_SECONDS);
     for (view, mut fog) in &mut cameras {
         let zone = model.and_then(|model| {
-            let position = from_bevy(view.position - shown.origin);
+            let position = to_bevy(view.position - shown.origin);
             shown.fogs.get(usize::from(p2_collision::point_zone(model, position.into()))).copied().flatten()
         });
         let target = zone.map(|zone| {

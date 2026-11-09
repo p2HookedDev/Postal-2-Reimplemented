@@ -4,7 +4,7 @@ use p2_package::{Export, Package, Reader};
 use p2_script::{FieldLayout, StoredValue, StructLayout, Type, read_properties};
 
 use crate::Error;
-use crate::read::{BOX_SIZE, array, count, invalid, skip_array, skip_lazy_array, skip_primitive, vec3};
+use crate::read::{array, count, invalid, skip_array, skip_box, skip_lazy_array, skip_primitive, vec3};
 use crate::terrain::member;
 
 /// These properties are declared in C++, not in script, so no layout can be read from a package.
@@ -73,7 +73,12 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
     let sections = array(r, read_section)?;
     skip_box(r)?;
 
-    let vertices = array(r, |r| Ok((vec3(r)?, vec3(r)?)))?;
+    let (mut positions, mut normals) = (Vec::new(), Vec::new());
+    array(r, |r| {
+        positions.push(vec3(r)?);
+        normals.push(vec3(r)?);
+        Ok(())
+    })?;
     r.i32()?;
     let colors = array(r, |r| Ok(r.array::<4>()?))?;
     r.i32()?;
@@ -111,7 +116,6 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
     if !r.at_end() {
         return Err(invalid("static mesh end", r.pos()));
     }
-    let (positions, normals) = vertices.into_iter().unzip();
     Ok(StaticMesh {
         sections,
         positions,
@@ -194,9 +198,4 @@ fn read_section(r: &mut Reader) -> Result<MeshSection, Error> {
         num_triangles: r.u16()?,
         num_primitives: r.u16()?,
     })
-}
-
-fn skip_box(r: &mut Reader) -> Result<(), Error> {
-    r.bytes(BOX_SIZE)?;
-    Ok(())
 }

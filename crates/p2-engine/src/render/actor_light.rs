@@ -521,7 +521,7 @@ pub(crate) fn animate_actor_speculars(
         if lit.layers.specular_uv.is_empty() {
             continue;
         }
-        let size = images.get(specular).map_or([1.0, 1.0], |image| image.size().as_vec2().to_array());
+        let size = crate::mesh_view::image_size(&images, specular);
         let [[a, b, c], [d, e, f]] = uv_matrix(&lit.layers.specular_uv, seconds, size);
         let uv = (Vec4::new(a, b, c, 0.0), Vec4::new(d, e, f, 0.0));
         set_specular_uv(&mut lit_materials, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers);

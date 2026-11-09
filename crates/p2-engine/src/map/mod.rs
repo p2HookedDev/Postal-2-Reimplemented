@@ -13,7 +13,6 @@ use bevy::math::{Mat4, UVec2, Vec2, Vec3, Vec4};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Indices, Mesh, Mesh3d, MeshTag, PrimitiveTopology};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-use bevy::render::render_resource::Face;
 use bevy::transform::components::Transform;
 use bevy::camera::{Camera, Camera2d, CameraOutputMode, ClearColorConfig, Projection};
 use bevy::color::Color;
@@ -178,17 +177,17 @@ pub struct Session {
     movies: Movies,
     hud_assets: HudAssets,
     canvas_actors: Vec<CanvasActor>,
-    failed_canvas_meshes: HashSet<String>,
+    failed_canvas_meshes: FxHashSet<String>,
     /// Kept drawn after a load until the new map's first frame replaces the load screen, as the engine's frame buffer keeps
     /// them.
     left_canvas_actors: Vec<Entity>,
     dynamic_decals: FxHashMap<ObjectId, Entity>,
     projector_actors: FxHashSet<ObjectId>,
-    decal_images: HashMap<String, Option<(Handle<Image>, Vec2, Option<p2_assets::FinalBlend>)>>,
+    decal_images: FxHashMap<String, Option<(Handle<Image>, Vec2, Option<p2_assets::FinalBlend>)>>,
     switch_images: HashMap<(PackageId, usize), Vec<scene::SwitchImage>>,
     switch_targets: FxHashMap<(PackageId, usize), Option<scene::SwitchTarget>>,
     spawn_models: HashMap<spawned::ModelKey, Option<spawned::SpawnModel>>,
-    spawn_materials: HashMap<crate::mesh_view::ActorMaterialKey, SectionMaterial>,
+    spawn_materials: FxHashMap<crate::mesh_view::ActorMaterialKey, SectionMaterial>,
     spawn_builds: Vec<spawned::ModelBuild>,
     texture_builds: Vec<spawned::TextureBuild>,
     waiting_sprites: Vec<SpriteActor>,
@@ -196,10 +195,10 @@ pub struct Session {
     spawn_waiting: Vec<spawned::SpawnedActor>,
     particles: Vec<ParticleActor>,
     particle_emitters: FxHashMap<ObjectId, (usize, usize)>,
-    actor_textures: HashMap<String, Option<ActorTexture>>,
+    actor_textures: FxHashMap<String, Option<ActorTexture>>,
     pool_materials: HashMap<particles::PoolMaterialKey, Handle<StandardMaterial>>,
     particle_records: Vec<[u32; crate::render::particle_material::RECORD_WORDS]>,
-    corona_materials: HashMap<String, Option<Handle<ParticleMaterial>>>,
+    corona_materials: FxHashMap<String, Option<Handle<ParticleMaterial>>>,
     fluids: Vec<fluids::FluidShown>,
     pending: Option<PendingLoad>,
     /// Loading frames show it again: the engine does not clear the screen.
@@ -396,15 +395,15 @@ impl Session {
             movies: Movies::default(),
             hud_assets: HudAssets::default(),
             canvas_actors: Vec::new(),
-            failed_canvas_meshes: HashSet::new(),
+            failed_canvas_meshes: FxHashSet::default(),
             left_canvas_actors: Vec::new(),
             dynamic_decals: FxHashMap::default(),
             projector_actors: FxHashSet::default(),
-            decal_images: HashMap::new(),
+            decal_images: FxHashMap::default(),
             switch_images: HashMap::new(),
             switch_targets: FxHashMap::default(),
             spawn_models: HashMap::new(),
-            spawn_materials: HashMap::new(),
+            spawn_materials: FxHashMap::default(),
             spawn_builds: Vec::new(),
             texture_builds: Vec::new(),
             waiting_sprites: Vec::new(),
@@ -412,10 +411,10 @@ impl Session {
             spawn_waiting: Vec::new(),
             particles: Vec::new(),
             particle_emitters: FxHashMap::default(),
-            actor_textures: HashMap::new(),
+            actor_textures: FxHashMap::default(),
             pool_materials: HashMap::new(),
             particle_records: Vec::new(),
-            corona_materials: HashMap::new(),
+            corona_materials: FxHashMap::default(),
             fluids: Vec::new(),
             pending: None,
             last_hud: Arc::default(),

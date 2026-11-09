@@ -46,7 +46,6 @@ mod class_load;
 mod host_api;
 mod objects;
 
-use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -194,7 +193,7 @@ pub struct Diagnostics {
     pub log: Vec<String>,
     pub missing_natives: std::collections::BTreeMap<String, usize>,
     pub trace: Option<Vec<String>>,
-    pub tick_profile: Option<HashMap<String, std::time::Duration>>,
+    pub tick_profile: Option<FxHashMap<String, std::time::Duration>>,
     pub count_work: bool,
     pub(crate) function_profile: Option<profiling::FunctionProfile>,
 }
@@ -225,7 +224,7 @@ pub(crate) struct HostIo {
     pub(crate) fullscreen: Option<bool>,
     pub(crate) music_handle: i32,
     pub(crate) save_dir: Option<std::path::PathBuf>,
-    pub(crate) saved_slots: HashSet<i32>,
+    pub(crate) saved_slots: FxHashSet<i32>,
 }
 
 #[derive(Default)]
@@ -255,7 +254,7 @@ pub struct Vm<L> {
     map_name: String,
     url_options: Vec<String>,
     pub actor_fx: ActorFx,
-    side_packages: HashMap<String, Option<Arc<side_packages::SidePackage>>>,
+    side_packages: FxHashMap<String, Option<Arc<side_packages::SidePackage>>>,
     world: world::World,
     karma: karma::Karma,
     compiled: Vec<Option<Arc<interp::compile::Code<L>>>>,
@@ -403,7 +402,7 @@ impl<L: LoaderRef> Vm<L> {
             world: world::World::default(),
             karma: karma::Karma::default(),
             compiled: Vec::new(),
-            side_packages: HashMap::new(),
+            side_packages: FxHashMap::default(),
             diagnostics: Diagnostics::default(),
             options: VmOptions::default(),
             media: Media::default(),

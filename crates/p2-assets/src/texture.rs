@@ -2,7 +2,7 @@ use p2_package::{Export, Package, Reader};
 use p2_script::{Objects, Resolve, Source};
 
 use crate::Error;
-use crate::read::{count, invalid, lazy_bytes};
+use crate::read::{count, lazy_bytes, unsigned};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
@@ -116,21 +116,33 @@ pub fn texture_rgba(texture: &Texture, palette: Option<&[[u8; 4]]>) -> Option<(u
 
 pub fn mip_rgba(texture: &Texture, level: usize, palette: Option<&[[u8; 4]]>) -> Option<(u32, u32, Vec<[u8; 4]>)> {
     let mip = texture.mips.get(level).filter(|mip| !mip.data.is_empty())?;
-    let (width, height) = (mip.width, mip.height);
+    let palette = palette.map(|palette| {
+        let mut table: [[u8; 4]; 256] = std::array::from_fn(|i| palette.get(i).copied().unwrap_or_default());
+        if texture.masked {
+            table[0] = [0; 4];
+        }
+        table
+    });
+    rgba_pixels(texture.format, mip.width, mip.height, &mip.data, palette.as_ref())
+}
+
+pub(crate) fn rgba_pixels(
+    format: TextureFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    palette: Option<&[[u8; 4]; 256]>,
+) -> Option<(u32, u32, Vec<[u8; 4]>)> {
     let texels = (width as usize).checked_mul(height as usize)?;
-    let data = &mip.data;
-    let pixels = match texture.format {
+    let pixels = match format {
         TextureFormat::P8 => {
             let palette = palette?;
-            data.iter()
-                .take(texels)
-                .map(|&i| if i == 0 && texture.masked { [0; 4] } else { palette.get(usize::from(i)).copied().unwrap_or_default() })
-                .collect()
+            data.iter().take(texels).map(|&i| palette[usize::from(i)]).collect()
         }
         TextureFormat::Rgba8 => data.as_chunks::<4>().0.iter().take(texels).map(|&[b, g, r, a]| [r, g, b, a]).collect(),
         TextureFormat::L8 => data.iter().take(texels).map(|&v| [v, v, v, 255]).collect(),
         TextureFormat::G16 => data.as_chunks::<2>().0.iter().take(texels).map(|&[_, v]| [v, v, v, 255]).collect(),
-        TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5 => decode_dxt(texture.format, width, height, data)?,
+        TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5 => decode_dxt(format, width, height, data)?,
         _ => return None,
     };
     (pixels.len() == texels).then_some((width, height, pixels))
@@ -150,16 +162,19 @@ fn decode_dxt(format: TextureFormat, width: u32, height: u32, data: &[u8]) -> Op
             let block = data.get(start..start + block_size)?;
             let (alpha, color) = block.split_at(block_size - 8);
             let texels = color_block(color, format == TextureFormat::Dxt1);
+            let alphas: Option<[u8; 16]> = match format {
+                TextureFormat::Dxt3 => Some(std::array::from_fn(|i| ((alpha[i / 2] >> (4 * (i % 2))) & 0xf) * 17)),
+                TextureFormat::Dxt5 => Some(dxt5_alphas(alpha)),
+                _ => None,
+            };
             for i in 0..16 {
                 let (x, y) = (bx * 4 + i % 4, by * 4 + i / 4);
                 if x >= w || y >= h {
                     continue;
                 }
                 let mut texel = texels[i];
-                match format {
-                    TextureFormat::Dxt3 => texel[3] = ((alpha[i / 2] >> (4 * (i % 2))) & 0xf) * 17,
-                    TextureFormat::Dxt5 => texel[3] = dxt5_alpha(alpha, i),
-                    _ => {}
+                if let Some(alphas) = alphas {
+                    texel[3] = alphas[i];
                 }
                 out[y * w + x] = texel;
             }
@@ -191,19 +206,22 @@ fn color_block(block: &[u8], one_bit_alpha: bool) -> [[u8; 4]; 16] {
     std::array::from_fn(|i| palette[((indices >> (2 * i)) & 3) as usize])
 }
 
-fn dxt5_alpha(block: &[u8], i: usize) -> u8 {
+fn dxt5_alphas(block: &[u8]) -> [u8; 16] {
     let (a0, a1) = (u32::from(block[0]), u32::from(block[1]));
+    let palette: [u8; 8] = std::array::from_fn(|index| {
+        let index = index as u32;
+        let value = match index {
+            0 => a0,
+            1 => a1,
+            _ if a0 > a1 => (a0 * (8 - index) + a1 * (index - 1)) / 7,
+            6 => 0,
+            7 => 255,
+            _ => (a0 * (6 - index) + a1 * (index - 1)) / 5,
+        };
+        value as u8
+    });
     let bits = block[2..8].iter().rev().fold(0u64, |acc, &b| (acc << 8) | u64::from(b));
-    let index = ((bits >> (3 * i)) & 7) as u32;
-    let value = match index {
-        0 => a0,
-        1 => a1,
-        _ if a0 > a1 => (a0 * (8 - index) + a1 * (index - 1)) / 7,
-        6 => 0,
-        7 => 255,
-        _ => (a0 * (6 - index) + a1 * (index - 1)) / 5,
-    };
-    value as u8
+    std::array::from_fn(|i| palette[((bits >> (3 * i)) & 7) as usize])
 }
 
 pub fn read_palette(pkg: &Package, file: &[u8], export: &Export) -> Result<Vec<[u8; 4]>, Error> {
@@ -214,17 +232,12 @@ pub fn read_palette(pkg: &Package, file: &[u8], export: &Export) -> Result<Vec<[
 
 fn read_mip(r: &mut Reader) -> Result<Mip, Error> {
     let data = lazy_bytes(r)?.to_vec();
-    let width = dimension(r)?;
-    let height = dimension(r)?;
+    let width = unsigned(r, "mip size")? as u32;
+    let height = unsigned(r, "mip size")? as u32;
     r.bytes(2)?;
     Ok(Mip { width, height, data })
 }
 
-
-fn dimension(r: &mut Reader) -> Result<u32, Error> {
-    let offset = r.pos();
-    u32::try_from(r.i32()?).map_err(|_| invalid("mip size", offset))
-}
 
 #[cfg(test)]
 mod dxt_tests {

@@ -73,24 +73,35 @@ impl<'a> Scene<'a> {
         at
     }
 
-    fn mesh_time(&self, start: Vector, end: Vector, wanted: MeshHit) -> Option<f32> {
+    /// Meshes whose box the segment enters only after `limit` are skipped.
+    fn mesh_time(&self, start: Vector, end: Vector, limit: f32, wanted: MeshHit) -> Option<f32> {
+        let entry = |index: u32, limit: f32| {
+            let node = &self.tree[index as usize];
+            box_entry(start, end, node.min, node.max, limit).map(|near| (index, near))
+        };
         if self.tree.is_empty() {
             return None;
         }
+        let root = entry(0, limit)?;
         let mut best: Option<f32> = None;
-        let mut stack = [0u32; MAX_TREE_DEPTH];
+        let mut stack = [root; MAX_TREE_DEPTH];
         let mut depth = 1;
         while depth > 0 {
             depth -= 1;
-            let node = &self.tree[stack[depth] as usize];
-            if !crosses_box(start, end, node.min, node.max, best.unwrap_or(1.0)) {
+            let (index, near) = stack[depth];
+            let bound = best.unwrap_or(limit);
+            if near > bound {
                 continue;
             }
+            let node = &self.tree[index as usize];
             match node.children {
                 Some([left, right]) if depth + 2 <= MAX_TREE_DEPTH => {
-                    stack[depth] = left;
-                    stack[depth + 1] = right;
-                    depth += 2;
+                    let (a, b) = (entry(left, bound), entry(right, bound));
+                    let [near, far] = if b.is_some_and(|b| a.is_none_or(|a| b.1 < a.1)) { [b, a] } else { [a, b] };
+                    for child in [far, near].into_iter().flatten() {
+                        stack[depth] = child;
+                        depth += 1;
+                    }
                 }
                 Some(_) => {}
                 None => {
@@ -109,7 +120,7 @@ impl<'a> Scene<'a> {
     }
 
     fn other_blocks(&self, start: Vector, end: Vector) -> bool {
-        self.mesh_time(start, end, MeshHit::Any).is_some() || self.terrains.iter().any(|terrain| terrain_line_check(terrain, start, end, Sides::Both).is_some())
+        self.mesh_time(start, end, 1.0, MeshHit::Any).is_some() || self.terrains.iter().any(|terrain| terrain_line_check(terrain, start, end, Sides::Both).is_some())
     }
 
     pub(crate) fn blocked(&self, start: Vector, end: Vector) -> bool {
@@ -136,7 +147,7 @@ impl<'a> Scene<'a> {
             .terrains
             .iter()
             .filter_map(|terrain| terrain_line_check(terrain, start, end, Sides::Both).map(|hit| hit.time))
-            .chain(self.mesh_time(start, end, MeshHit::Earliest))
+            .chain(self.mesh_time(start, end, stop, MeshHit::Earliest))
             .fold(f32::MAX, f32::min);
         if other < stop {
             return Seen::Other { time: other };
@@ -154,13 +165,13 @@ pub fn is_sky(model: &Model, node: usize) -> bool {
     model.nodes.get(node).and_then(|node| model.surfaces.get(node.surface)).is_some_and(|surface| surface.poly_flags & poly_flags::FAKE_BACKDROP != 0)
 }
 
-fn crosses_box(start: Vector, end: Vector, min: Vector, max: Vector, limit: f32) -> bool {
+fn box_entry(start: Vector, end: Vector, min: Vector, max: Vector, limit: f32) -> Option<f32> {
     let (mut near, mut far) = (0.0f32, limit);
     for axis in 0..3 {
         let delta = end[axis] - start[axis];
         if delta.abs() < 1e-6 {
             if start[axis] < min[axis] || start[axis] > max[axis] {
-                return false;
+                return None;
             }
             continue;
         }
@@ -168,10 +179,10 @@ fn crosses_box(start: Vector, end: Vector, min: Vector, max: Vector, limit: f32)
         near = near.max(a.min(b));
         far = far.min(a.max(b));
         if near > far {
-            return false;
+            return None;
         }
     }
-    true
+    Some(near)
 }
 
 #[cfg(test)]
@@ -192,7 +203,7 @@ mod tests {
         let scene = Scene::new(&model, &[], &meshes);
         let (start, end) = (Vector::new(-16.0, 1.0, 1.0), Vector::new(2000.0, 1.0, 1.0));
         let full = mesh_line_check(&meshes, start, end).map(|hit| hit.time);
-        assert_eq!(scene.mesh_time(start, end, MeshHit::Earliest), full);
+        assert_eq!(scene.mesh_time(start, end, 1.0, MeshHit::Earliest), full);
         assert!(scene.blocked(start, end));
         assert!(!scene.blocked(Vector::new(-16.0, 50.0, 1.0), Vector::new(2000.0, 50.0, 1.0)));
         assert!(!scene.blocked(Vector::new(-16.0, 1.0, 1.0), Vector::new(-8.0, 1.0, 1.0)));

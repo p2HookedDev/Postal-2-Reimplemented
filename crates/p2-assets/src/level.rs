@@ -1,7 +1,7 @@
 use p2_package::{Export, Package, Reader};
 
 use crate::Error;
-use crate::read::{array, invalid};
+use crate::read::{array, invalid, unsigned};
 
 #[derive(Debug, Clone)]
 pub struct Level {
@@ -30,8 +30,7 @@ pub fn read_level(pkg: &Package, file: &[u8], export: &Export) -> Result<Level, 
     let mut r = pkg.native_reader(file, export)?;
     let r = &mut r;
 
-    let offset = r.pos();
-    let num = usize::try_from(r.i32()?).map_err(|_| invalid("actor count", offset))?;
+    let num = unsigned(r, "actor count")?;
     r.i32()?;
     let actors = (0..num).map(|_| r.compact()).collect::<Result<_, _>>()?;
     let url = Url {
