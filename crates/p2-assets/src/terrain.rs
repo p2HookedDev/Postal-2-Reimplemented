@@ -69,17 +69,14 @@ impl Terrain {
         self.triangles().into_iter().map(|[a, b, c]| [a, c, b]).collect()
     }
 
-    pub fn quad_triangles(&self, x: usize, y: usize) -> Vec<[usize; 3]> {
+    pub fn quad_triangles(&self, x: usize, y: usize) -> std::iter::Take<std::array::IntoIter<[usize; 3], 2>> {
         let quad = y * self.width + x;
         if x + 1 >= self.width || y + 1 >= self.height || !self.quad_visible(x, y) {
-            return Vec::new();
+            return [[0; 3]; 2].into_iter().take(0);
         }
         let (v00, v10, v01, v11) = (quad, quad + 1, quad + self.width, quad + self.width + 1);
-        if bit(&self.edge_turn, quad) {
-            vec![[v00, v01, v10], [v01, v11, v10]]
-        } else {
-            vec![[v00, v01, v11], [v00, v11, v10]]
-        }
+        let triangles = if bit(&self.edge_turn, quad) { [[v00, v01, v10], [v01, v11, v10]] } else { [[v00, v01, v11], [v00, v11, v10]] };
+        triangles.into_iter().take(2)
     }
 
     pub fn quad_visible(&self, x: usize, y: usize) -> bool {

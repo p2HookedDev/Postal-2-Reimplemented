@@ -186,7 +186,7 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         if self.is_probing(target, EProbe::AnimEnd as u32)? {
-            self.event(target, "AnimEnd", [Value::Int(channel as i32)])?;
+            self.event(target, crate::states::Event::AnimEnd, [Value::Int(channel as i32)])?;
         }
         Ok(())
     }

@@ -133,7 +133,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             let other = impact.other.and_then(|other| self.karma.actors.get(&other).copied());
             let args = vec![Value::Object(other), Value::Vector(impact.position), Value::Vector(impact.velocity), Value::Vector(impact.normal)];
-            if let Err(e) = self.event(actor, "KImpact", args) {
+            if let Err(e) = self.event(actor, crate::states::Event::KImpact, args) {
                 errors.push((self.store.object(actor).path.clone(), e));
             }
         }

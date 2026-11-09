@@ -331,6 +331,7 @@ pub(crate) struct Lookups {
     pub(crate) class_states: FxHashMap<(ClassId, NameId), Option<(PackageId, usize)>>,
     pub(crate) auto_states: FxHashMap<ClassId, Option<((PackageId, usize), NameId)>>,
     pub(crate) event_names: FxHashMap<String, (NameId, Option<u32>)>,
+    pub(crate) events: Vec<(NameId, Option<u32>)>,
     pub(crate) native_declarations: FxHashMap<u16, (PackageId, usize)>,
     pub(crate) stub_calls: FxHashMap<(NameId, PackageId, usize), String>,
     pub(crate) tag_indices: FxHashMap<memory::LayoutId, Arc<FxHashMap<String, usize>>>,
@@ -412,6 +413,8 @@ impl<L: LoaderRef> Vm<L> {
         vm.intern("None");
         let class_names = ClassNames::new(|name| vm.intern(name));
         vm.script.lookups.class_names = class_names;
+        let events = states::EVENT_NAMES.iter().map(|name| (vm.intern(name), states::probe_bit(name))).collect();
+        vm.script.lookups.events = events;
         vm
     }
 

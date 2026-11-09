@@ -27,7 +27,7 @@ pub struct Body {
 fn sweep(world: &StaticCollision, start: Vector, end: Vector) -> Option<Hit> {
     let raise = Vector::new(0.0, 0.0, STEP / 2.0);
     let extent = Vector::new(RADIUS, RADIUS, HALF_HEIGHT - STEP / 2.0);
-    let bsp = box_check(&world.model, start + raise, end + raise, extent);
+    let bsp = box_check(&world.model, &world.hulls, start + raise, end + raise, extent);
     let knee = Vector::new(0.0, 0.0, STEP - HALF_HEIGHT);
     let (from, to) = (start + knee, end + knee);
     let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, from, to, Sides::Both));
@@ -126,7 +126,7 @@ mod tests {
             .find(|&i| pkg.object_name(pkg.exports[i].class_index) == Some("PlayerStart"))
             .map(|i| <[f32; 3]>::from(read_actor_location(&mut Objects::new(&loader), Source { package: pkg, data }, i).unwrap()))
             .unwrap();
-        let world = StaticCollision { model, terrains, meshes: Vec::new() };
+        let world = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains, meshes: Vec::new() };
 
         let mut body = Body { center: start.into(), ..Body::default() };
         for _ in 0..60 {

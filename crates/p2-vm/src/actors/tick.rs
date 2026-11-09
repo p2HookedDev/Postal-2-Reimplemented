@@ -32,7 +32,7 @@ impl<L: LoaderRef> Vm<L> {
         // A player controller gets no `Tick` event; the local player's reads input and gets `PlayerTick`.
         let phase = self.profile_start();
         if !self.store.is_a(actor, Kind::PlayerController) {
-            self.event(actor, "Tick", [Value::Float(delta)])?;
+            self.event(actor, crate::states::Event::Tick, [Value::Float(delta)])?;
         } else if self.player() == Some(actor) {
             self.player_tick(actor, delta)?;
         }
@@ -58,7 +58,7 @@ impl<L: LoaderRef> Vm<L> {
                     self.store.set(actor, Prop::TimerRate, Value::Float(0.0));
                     self.store.set(actor, Prop::TimerCounter, Value::Float(0.0));
                 }
-                self.event(actor, "Timer", Vec::new())?;
+                self.event(actor, crate::states::Event::Timer, Vec::new())?;
             } else {
                 self.store.set(actor, Prop::TimerCounter, Value::Float(counter));
             }
@@ -132,7 +132,7 @@ impl<L: LoaderRef> Vm<L> {
         {
             return Ok(false);
         }
-        if let Some(state) = self.script.states.objects.get(&actor)
+        if let Some(state) = self.script.states.of(actor)
             && (state.code.is_some()
                 || state.sleep > 0.0
                 || state.finish_anim.is_some()

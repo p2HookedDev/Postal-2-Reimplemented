@@ -140,6 +140,8 @@ pub struct AnimatedMesh {
     last_pose: Option<u64>,
     bone_indices: FxHashMap<Arc<str>, Option<usize>>,
     bone_scales: Vec<f32>,
+    local_scratch: Vec<LocalBone>,
+    channel_scratch: Vec<LocalBone>,
 }
 
 impl AnimatedMesh {
@@ -174,6 +176,8 @@ impl AnimatedMesh {
             last_pose: None,
             bone_indices: FxHashMap::default(),
             bone_scales: Vec::new(),
+            local_scratch: Vec::new(),
+            channel_scratch: Vec::new(),
         }
     }
 
@@ -198,17 +202,21 @@ impl AnimatedMesh {
     }
 
     fn pose_with(&self, animation: &MeshAnimation, sequence: usize, frame: f32, bone_map: &[Option<usize>]) -> Vec<Mat4> {
-        bone_matrices(&self.parents, &self.local_pose(animation, sequence, frame, bone_map))
+        let mut local = Vec::new();
+        self.local_pose(animation, sequence, frame, bone_map, &mut local);
+        bone_matrices(&self.parents, &local)
     }
 
-    fn local_pose(&self, animation: &MeshAnimation, sequence: usize, frame: f32, bone_map: &[Option<usize>]) -> Vec<LocalBone> {
+    fn local_pose(&self, animation: &MeshAnimation, sequence: usize, frame: f32, bone_map: &[Option<usize>], out: &mut Vec<LocalBone>) {
         let pose = animation.pose_at(sequence, frame);
-        self.mesh
-            .bones
-            .iter()
-            .zip(bone_map)
-            .map(|(bone, track)| track.and_then(|t| pose.get(t)).unwrap_or((bone.orientation, bone.position)))
-            .collect()
+        out.clear();
+        out.extend(
+            self.mesh
+                .bones
+                .iter()
+                .zip(bone_map)
+                .map(|(bone, track)| track.and_then(|t| pose.get(t)).unwrap_or((bone.orientation, bone.position))),
+        );
     }
 
     fn bone_index(&mut self, name: &Arc<str>) -> Option<usize> {
@@ -299,7 +307,7 @@ fn animate(
         if let Some(world) = world
             && let Some(bones) = world.ragdoll(actor)
         {
-            let mut key = std::hash::DefaultHasher::new();
+            let mut key = rustc_hash::FxHasher::default();
             bones.iter().for_each(|b| b.axes.iter().chain([&b.origin]).flatten().for_each(|c| c.to_bits().hash(&mut key)));
             let key = Some(key.finish());
             if key != item.last_pose {
@@ -327,20 +335,21 @@ fn animate(
                     continue;
                 }
                 item.last_pose = key;
-                let mut local = None;
-                for (channel, alpha, bone) in pose_channels(actor_pose) {
+                let mut local = std::mem::take(&mut item.local_scratch);
+                let mut channel_pose = std::mem::take(&mut item.channel_scratch);
+                local.clear();
+                for (index, (channel, alpha, bone)) in pose_channels(actor_pose).enumerate() {
                     let map = Arc::clone(item.vm_bone_maps.entry(Arc::clone(&channel.animation.path)).or_insert_with(|| map_bones(&item.bone_names, &channel.animation.bone_names).into()));
-                    let mut pose = item.local_pose(&channel.animation.animation, channel.sequence, channel.time, &map);
+                    let pose = if index == 0 { &mut local } else { &mut channel_pose };
+                    item.local_pose(&channel.animation.animation, channel.sequence, channel.time, &map, pose);
                     if let Some((from, weight)) = &channel.tween {
-                        tween_pose(from, &mut pose, *weight);
+                        tween_pose(from, pose, *weight);
                     }
-                    match &mut local {
-                        None => local = Some(pose),
-                        Some(base) => blend_local(base, &pose, alpha, &item.subtree(bone)),
+                    if index > 0 {
+                        blend_local(&mut local, &channel_pose, alpha, &item.subtree(bone));
                     }
                 }
                 item.scale_bones(scales);
-                let mut local = local.unwrap_or_default();
                 for (bone, turn) in turns {
                     if let Some(index) = item.bone_index(bone)
                         && let Some(posed) = local.get_mut(index)
@@ -351,6 +360,8 @@ fn animate(
                 let mut pose = poses.bones.get_mut(&actor).map(std::mem::take).unwrap_or_default();
                 let factors = &item.bone_scales;
                 scaled_bone_matrices_into(&item.parents, &local, |bone| factors.get(bone).copied().unwrap_or(1.0), &mut pose);
+                item.local_scratch = local;
+                item.channel_scratch = channel_pose;
                 pose
             }
             None => {
@@ -457,7 +468,7 @@ fn place_attached(
 ) {
     let Some(world) = play.world() else { return };
     let poses = &mut *poses;
-    let AttachedBuffers { generation, bone_bodies, bases, due_models } = &mut *buffers;
+    let AttachedBuffers { generation, bone_bodies, bases, due_models, emitters } = &mut *buffers;
     if *generation != play.generation() {
         *generation = play.generation();
         poses.slots.clear();
@@ -465,6 +476,7 @@ fn place_attached(
     bone_bodies.clear();
     bases.clear();
     due_models.clear();
+    emitters.clear();
     // Bases themselves on a bone (a map pawn's head, drawn as `FollowBone`): without these a bolt-on hat stayed at its spawn
     // point in the air.
     bone_bodies.extend(on_bones.iter().filter_map(|follow| {
@@ -483,24 +495,18 @@ fn place_attached(
     };
     // Emitters on a bone have no model but are placed the same way. The first-person muzzle flash is one:
     // left at the weapon's origin, its sprite filled the screen.
-    let emitters: Vec<_> = world
-        .watched()
-        .filter_map(|actor| {
-            let attachment = world.actor(actor)?.attachment.as_ref()?;
-            (world.changed(actor)
-                || world.changed(attachment.base)
-                || changed.contains(&attachment.base)
-                || bone_bodies.contains_key(&attachment.base))
-                .then_some((actor, attachment))
-        })
-        .collect();
+    emitters.extend(world.watched().filter_map(|actor| {
+        let attachment = world.actor(actor)?.attachment.as_ref()?;
+        (world.changed(actor) || world.changed(attachment.base) || changed.contains(&attachment.base) || bone_bodies.contains_key(&attachment.base))
+            .then_some((actor, attachment.base))
+    }));
     for (entity, follow, _) in &models {
         if let Some(attachment) = due(&follow, follow.is_added()) {
             due_models.push(entity);
             bases.insert(attachment.base, None);
         }
     }
-    bases.extend(emitters.iter().map(|(_, attachment)| (attachment.base, None)));
+    bases.extend(emitters.iter().map(|&(_, base)| (base, None)));
     if bases.is_empty() {
         return;
     }
@@ -524,8 +530,10 @@ fn place_attached(
         };
         Some(attachment_frame(body, bone, attachment.relative_location, attachment.relative_rotation))
     };
-    for &(actor, attachment) in &emitters {
-        if let Some(frame) = frame_of(attachment) {
+    for &(actor, _) in emitters.iter() {
+        if let Some(attachment) = world.actor(actor).and_then(|actor| actor.attachment.as_ref())
+            && let Some(frame) = frame_of(attachment)
+        {
             places.record(actor, attachment.base, frame);
         }
     }
@@ -544,6 +552,7 @@ struct AttachedBuffers {
     bone_bodies: FxHashMap<ObjectId, Mat4>,
     bases: FxHashMap<ObjectId, Option<FollowActor>>,
     due_models: Vec<Entity>,
+    emitters: Vec<(ObjectId, ObjectId)>,
 }
 
 fn bone_slot(

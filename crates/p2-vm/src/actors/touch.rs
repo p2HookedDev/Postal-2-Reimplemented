@@ -86,11 +86,11 @@ impl<L: LoaderRef> Vm<L> {
 
     fn end_touch(&mut self, actor: ObjectId, other: ObjectId) -> Result<(), Error> {
         if self.touches(actor, other) {
-            self.event(actor, "UnTouch", [Value::Object(Some(other))])?;
+            self.event(actor, crate::states::Event::UnTouch, [Value::Object(Some(other))])?;
         }
         self.drop_touching(actor, other);
         if self.touches(other, actor) {
-            self.event(other, "UnTouch", [Value::Object(Some(actor))])?;
+            self.event(other, crate::states::Event::UnTouch, [Value::Object(Some(actor))])?;
             self.drop_touching(other, actor);
         }
         Ok(())
@@ -125,7 +125,7 @@ impl<L: LoaderRef> Vm<L> {
         list.push(Value::Object(Some(other)));
         self.store.set(actor, Prop::Touching, Value::Array(list));
         self.link_static(actor);
-        self.event(actor, "Touch", [Value::Object(Some(other))])?;
+        self.event(actor, crate::states::Event::Touch, [Value::Object(Some(other))])?;
         Ok(!self.store.is_deleted(actor) && self.touches(actor, other))
     }
 

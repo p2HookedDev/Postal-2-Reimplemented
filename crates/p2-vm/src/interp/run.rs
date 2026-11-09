@@ -52,7 +52,7 @@ impl<L: LoaderRef> Vm<L> {
         mem
     }
 
-    pub(super) fn give_locals(&mut self, mem: Mem) {
+    pub(crate) fn give_locals(&mut self, mem: Mem) {
         if self.script.frame_pool.len() < FRAME_POOL {
             self.script.frame_pool.push(mem);
         }
@@ -227,7 +227,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn state_frame(&mut self, code: &Arc<Function>, object: ObjectId) -> Result<Frame, Error> {
         let class = self.store.object(object).class.ok_or(Error::Unsupported("state code of a stub".to_owned()))?;
-        let locals = self.store.memory.zero(code.mem);
+        let locals = self.take_locals(code.mem);
         Ok(Frame { function: Arc::clone(code), this: Some(object), class, locals, switch: None, iterators: Vec::new() })
     }
 }

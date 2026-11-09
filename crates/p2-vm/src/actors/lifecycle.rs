@@ -119,12 +119,12 @@ impl<L: LoaderRef> Vm<L> {
     /// No check that the owner changed, nor for a destroy between.
     pub(crate) fn set_owner(&mut self, actor: ObjectId, owner: Option<ObjectId>) -> Result<(), Error> {
         if let Some(old) = self.store.object_of(actor, Prop::Owner) {
-            self.event(old, "LostChild", [Value::Object(Some(actor))])?;
+            self.event(old, crate::states::Event::LostChild, [Value::Object(Some(actor))])?;
         }
         self.store.set(actor, Prop::Owner, Value::Object(owner));
         self.link_static(actor);
         if let Some(new) = owner {
-            self.event(new, "GainedChild", [Value::Object(Some(actor))])?;
+            self.event(new, crate::states::Event::GainedChild, [Value::Object(Some(actor))])?;
         }
         Ok(())
     }
@@ -155,11 +155,11 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) {
             return Ok(true);
         }
-        self.event(actor, "EndState", Vec::new())?;
+        self.event(actor, crate::states::Event::EndState, Vec::new())?;
         if self.store.is_deleted(actor) {
             return Ok(true);
         }
-        self.event(actor, "Destroyed", Vec::new())?;
+        self.event(actor, crate::states::Event::Destroyed, Vec::new())?;
         if self.store.object_of(actor, Prop::Base).is_some() {
             self.set_base(actor, None, [0.0, 0.0, 1.0].into())?;
             if self.store.is_deleted(actor) {
@@ -182,7 +182,7 @@ impl<L: LoaderRef> Vm<L> {
         while let Some(other) = self.next_destroy_walk_actor(at) {
             at = Some(other);
             if self.store.object_of(other, Prop::Owner) == Some(actor) {
-                self.event(actor, "LostChild", [Value::Object(Some(other))])?;
+                self.event(actor, crate::states::Event::LostChild, [Value::Object(Some(other))])?;
                 self.store.set(other, Prop::Owner, Value::Object(None));
                 if self.store.is_deleted(actor) {
                     return Ok(true);
@@ -190,7 +190,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             if self.touches(other, actor) {
                 self.drop_touching(actor, other);
-                self.event(other, "UnTouch", [Value::Object(Some(actor))])?;
+                self.event(other, crate::states::Event::UnTouch, [Value::Object(Some(actor))])?;
                 self.drop_touching(other, actor);
                 if self.store.is_deleted(actor) {
                     return Ok(true);
@@ -198,7 +198,7 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         if let Some(owner) = self.store.object_of(actor, Prop::Owner) {
-            self.event(owner, "LostChild", [Value::Object(Some(actor))])?;
+            self.event(owner, crate::states::Event::LostChild, [Value::Object(Some(actor))])?;
             if self.store.is_deleted(actor) {
                 return Ok(true);
             }

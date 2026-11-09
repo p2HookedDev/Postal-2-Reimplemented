@@ -136,7 +136,7 @@ impl<L: LoaderRef> Vm<L> {
             let half = 0.5 * (self.store.float_of(victim, Prop::CollisionHeight) + self.store.float_of(victim, Prop::CollisionRadius));
             let hit = at - (direction * half);
             let args = [Value::Int((damage as i32).max(1)), Value::Object(instigator), Value::Vector(hit), Value::Vector(push), damage_type.clone()];
-            self.event(victim, "TakeDamage", args)?;
+            self.event(victim, crate::states::Event::TakeDamage, args)?;
             matched |= class_matches;
         }
         Ok((live_pawns, matched))

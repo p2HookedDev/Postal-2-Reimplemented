@@ -30,6 +30,77 @@ pub(crate) fn probe_bit(name: &str) -> Option<u32> {
         .map(|bit| bit as u32)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Event {
+    Tick,
+    Timer,
+    PlayerTick,
+    Touch,
+    UnTouch,
+    Bump,
+    HitWall,
+    Landed,
+    Falling,
+    BeginState,
+    EndState,
+    BaseChange,
+    Attach,
+    Detach,
+    AnimEnd,
+    EndedRotation,
+    EncroachingOn,
+    EncroachedBy,
+    UpdateEyeHeight,
+    MayFall,
+    NotifyBump,
+    NotifyLanded,
+    NotifyHitWall,
+    Destroyed,
+    GainedChild,
+    LostChild,
+    HearNoise,
+    EnemyNotVisible,
+    BreathTimer,
+    ChangeAnimation,
+    PostRender,
+    KeyFrameReached,
+    PhysicsChangedFor,
+    TakeDamage,
+    KImpact,
+    Notify,
+}
+
+/// Script spellings of [`Event`], in the same order as its variants.
+pub(crate) const EVENT_NAMES: [&str; 36] = [
+    "Tick", "Timer", "PlayerTick", "Touch", "UnTouch", "Bump", "HitWall", "Landed", "Falling", "BeginState", "EndState",
+    "BaseChange", "Attach", "Detach", "AnimEnd", "EndedRotation", "EncroachingOn", "EncroachedBy", "UpdateEyeHeight",
+    "MayFall", "NotifyBump", "NotifyLanded", "NotifyHitWall", "Destroyed", "GainedChild", "LostChild", "HearNoise",
+    "EnemyNotVisible", "BreathTimer", "ChangeAnimation", "PostRender", "KeyFrameReached", "PhysicsChangedFor", "TakeDamage",
+    "KImpact", "Notify",
+];
+
+/// An event's name and probe bit: from its script spelling, or interned once for a fixed engine event.
+pub trait EventKey {
+    fn resolve<L: LoaderRef>(self, vm: &mut Vm<L>) -> (NameId, Option<u32>);
+}
+
+impl EventKey for &str {
+    fn resolve<L: LoaderRef>(self, vm: &mut Vm<L>) -> (NameId, Option<u32>) {
+        if let Some(&found) = vm.script.lookups.event_names.get(self) {
+            return found;
+        }
+        let found = (vm.intern(self), probe_bit(self));
+        vm.script.lookups.event_names.insert(self.to_owned(), found);
+        found
+    }
+}
+
+impl EventKey for Event {
+    fn resolve<L: LoaderRef>(self, vm: &mut Vm<L>) -> (NameId, Option<u32>) {
+        vm.script.lookups.events[self as usize]
+    }
+}
+
 const STATE_AUTO: u32 = 0x02;
 
 const MAX_STATEMENTS: usize = 10_000;
@@ -45,7 +116,7 @@ pub(crate) struct Latent {
 
 #[derive(Debug, Default)]
 pub(crate) struct States {
-    pub objects: FxHashMap<ObjectId, ObjectState>,
+    objects: Vec<Option<ObjectState>>,
     /// By object index, the [`ObjectState::key`] of its state (0: none, or past the end): what every virtual call reads.
     keys: Vec<u32>,
     pub probes_disabled: FxHashMap<ObjectId, u64>,
@@ -56,28 +127,38 @@ pub(crate) struct States {
 }
 
 impl States {
+    pub(crate) fn of(&self, object: ObjectId) -> Option<&ObjectState> {
+        self.objects.get(object.0 as usize)?.as_ref()
+    }
+
+    pub(crate) fn of_mut(&mut self, object: ObjectId) -> Option<&mut ObjectState> {
+        self.objects.get_mut(object.0 as usize)?.as_mut()
+    }
+
     pub(crate) fn enter(&mut self, object: ObjectId, entry: ObjectState) {
         let index = object.0 as usize;
         if self.keys.len() <= index {
             self.keys.resize(index + 1, 0);
         }
+        if self.objects.len() <= index {
+            self.objects.resize_with(index + 1, || None);
+        }
         self.keys[index] = entry.key;
-        self.objects.insert(object, entry);
+        self.objects[index] = Some(entry);
     }
 
     pub(crate) fn leave(&mut self, object: ObjectId) {
         if let Some(key) = self.keys.get_mut(object.0 as usize) {
             *key = 0;
         }
-        self.objects.remove(&object);
+        if let Some(entry) = self.objects.get_mut(object.0 as usize) {
+            *entry = None;
+        }
     }
 
     pub(crate) fn forget(&mut self, gone: &std::collections::HashSet<ObjectId>) {
-        self.objects.retain(|id, _| !gone.contains(id));
-        for object in gone {
-            if let Some(key) = self.keys.get_mut(object.0 as usize) {
-                *key = 0;
-            }
+        for &object in gone {
+            self.leave(object);
         }
         self.probes_disabled.retain(|id, _| !gone.contains(id));
         self.in_end_state.retain(|id| !gone.contains(id));
@@ -102,11 +183,11 @@ pub(crate) struct ObjectState {
 
 impl<L: LoaderRef> Vm<L> {
     pub fn state_name(&self, object: ObjectId) -> NameId {
-        self.script.states.objects.get(&object).map_or(NameId::NONE, |s| s.name)
+        self.script.states.of(object).map_or(NameId::NONE, |s| s.name)
     }
 
     pub(crate) fn is_in_state(&mut self, object: ObjectId, name: NameId) -> Result<bool, Error> {
-        let mut state = self.script.states.objects.get(&object).map(|s| s.state);
+        let mut state = self.script.states.of(object).map(|s| s.state);
         while let Some((package, export)) = state {
             let state_name = self.loader.package(package).package.exports.get(export).map(|e| e.object_name);
             if state_name.is_some_and(|state_name| self.package_name(package, state_name) == name) {
@@ -133,7 +214,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn find_object_function_id(&mut self, object: ObjectId, name: NameId) -> Result<Option<Arc<Function>>, Error> {
         let Some(class) = self.store.object(object).class else { return Ok(None) };
-        let start = self.script.states.objects.get(&object).map(|s| s.state);
+        let start = self.script.states.of(object).map(|s| s.state);
         if let Some(found) = self.script.lookups.functions.get(&(class, start, name)) {
             return Ok(found.clone());
         }
@@ -174,13 +255,13 @@ impl<L: LoaderRef> Vm<L> {
             }
             (found, state)
         };
-        let current = self.script.states.objects.get(&object).map(|s| s.state);
+        let current = self.script.states.of(object).map(|s| s.state);
         let changed = current != target;
         // A `GotoState` inside `EndState` skips `EndState`; if it entered a state, this one is preempted.
         if changed && current.is_some() && !self.script.states.in_end_state.contains(&object) {
             self.script.states.changed.remove(&object);
             self.script.states.in_end_state.insert(object);
-            let ended = self.event(object, "EndState", Vec::new());
+            let ended = self.event(object, Event::EndState, Vec::new());
             self.script.states.in_end_state.remove(&object);
             ended?;
             if self.script.states.changed.contains(&object) {
@@ -212,7 +293,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.script.states.probes_disabled.remove(&object);
         if changed && target.is_some() {
-            self.event(object, "BeginState", Vec::new())?;
+            self.event(object, Event::BeginState, Vec::new())?;
         }
         if target.is_some() {
             self.script.states.changed.insert(object);
@@ -222,11 +303,11 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn tick(&mut self, object: ObjectId, delta: f32) -> Result<(), Error> {
         let mut budget = MAX_STATEMENTS;
-        let waiting = self.script.states.objects.get(&object).is_some_and(|s| s.finish_anim.is_some() || s.finish_interpolation.is_some() || s.latent_move.is_some());
+        let waiting = self.script.states.of(object).is_some_and(|s| s.finish_anim.is_some() || s.finish_interpolation.is_some() || s.latent_move.is_some());
         if waiting && !self.poll_latents(object, delta)? {
             return Ok(());
         }
-        let Some(entry) = self.script.states.objects.get_mut(&object) else { return Ok(()) };
+        let Some(entry) = self.script.states.of_mut(object) else { return Ok(()) };
         if entry.sleep > 0.0 {
             entry.sleep -= delta;
             if entry.sleep > 0.0 {
@@ -241,7 +322,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(());
             }
             changes += 1;
-            let Some((start, code_state, generation)) = self.script.states.objects.get(&object).map(|s| (s.code, s.code_state, s.generation)) else { return Ok(()) };
+            let Some((start, code_state, generation)) = self.script.states.of(object).map(|s| (s.code, s.code_state, s.generation)) else { return Ok(()) };
             let Some(mut pc) = start else { return Ok(()) };
             let code = self.load_function(code_state.0, code_state.1)?;
             let mut frame = self.state_frame(&code, object)?;
@@ -251,7 +332,7 @@ impl<L: LoaderRef> Vm<L> {
                     break false;
                 }
                 let Some(left) = budget.checked_sub(1) else {
-                    if let Some(entry) = self.script.states.objects.get_mut(&object) {
+                    if let Some(entry) = self.script.states.of_mut(object) {
                         entry.code = None;
                     }
                     return Err(Error::Unsupported("state code never sleeps".to_owned()));
@@ -259,7 +340,7 @@ impl<L: LoaderRef> Vm<L> {
                 budget = left;
                 self.script.latent = Latent::default();
                 let flow = self.exec_statement(&mut frame, &compiled, pc)?;
-                if self.script.states.objects.get(&object).map(|s| s.generation) != Some(generation) {
+                if self.script.states.of(object).map(|s| s.generation) != Some(generation) {
                     break true;
                 }
                 match flow {
@@ -268,17 +349,19 @@ impl<L: LoaderRef> Vm<L> {
                     crate::interp::StepResult::End => break false,
                 }
                 if let Some(seconds) = self.script.latent.sleep.take() {
-                    if let Some(entry) = self.script.states.objects.get_mut(&object) {
+                    if let Some(entry) = self.script.states.of_mut(object) {
                         entry.code = Some(pc);
                         entry.sleep = seconds;
                         let latent = std::mem::take(&mut self.script.latent);
                         (entry.finish_anim, entry.finish_interpolation, entry.latent_move) = (latent.finish_anim, latent.interpolation, latent.movement);
                     }
+                    self.give_locals(frame.locals);
                     return Ok(());
                 }
             };
+            self.give_locals(frame.locals);
             if !replaced {
-                if let Some(entry) = self.script.states.objects.get_mut(&object) {
+                if let Some(entry) = self.script.states.of_mut(object) {
                     entry.code = None;
                 }
                 return Ok(());
@@ -287,32 +370,32 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn poll_latents(&mut self, object: ObjectId, delta: f32) -> Result<bool, Error> {
-        if let Some((actor, channel)) = self.script.states.objects.get(&object).and_then(|s| s.finish_anim) {
+        if let Some((actor, channel)) = self.script.states.of(object).and_then(|s| s.finish_anim) {
             if !self.anim_finished(actor, channel) {
                 return Ok(false);
             }
-            if let Some(entry) = self.script.states.objects.get_mut(&object) {
+            if let Some(entry) = self.script.states.of_mut(object) {
                 entry.finish_anim = None;
             }
         }
-        if let Some(actor) = self.script.states.objects.get(&object).and_then(|s| s.finish_interpolation) {
+        if let Some(actor) = self.script.states.of(object).and_then(|s| s.finish_interpolation) {
             if !self.interpolation_finished(actor) {
                 return Ok(false);
             }
-            if let Some(entry) = self.script.states.objects.get_mut(&object) {
+            if let Some(entry) = self.script.states.of_mut(object) {
                 entry.finish_interpolation = None;
             }
         }
-        if let Some(action) = self.script.states.objects.get(&object).and_then(|s| s.latent_move) {
-            let generation = self.script.states.objects.get(&object).map(|s| s.generation);
+        if let Some(action) = self.script.states.of(object).and_then(|s| s.latent_move) {
+            let generation = self.script.states.of(object).map(|s| s.generation);
             let done = self.poll_latent_move(object, action, delta)?;
-            if self.script.states.objects.get(&object).map(|s| s.generation) != generation {
+            if self.script.states.of(object).map(|s| s.generation) != generation {
                 return Ok(false);
             }
             if !done {
                 return Ok(false);
             }
-            if let Some(entry) = self.script.states.objects.get_mut(&object) {
+            if let Some(entry) = self.script.states.of_mut(object) {
                 entry.latent_move = None;
             }
         }
@@ -363,16 +446,9 @@ impl<L: LoaderRef> Vm<L> {
         Ok(found)
     }
 
-    pub fn event(&mut self, object: ObjectId, name: &str, args: impl IntoIterator<Item = Value>) -> Result<(), Error> {
+    pub fn event(&mut self, object: ObjectId, name: impl EventKey, args: impl IntoIterator<Item = Value>) -> Result<(), Error> {
         self.count(crate::profiling::Work::Event);
-        let (name, probe) = match self.script.lookups.event_names.get(name) {
-            Some(&found) => found,
-            None => {
-                let found = (self.intern(name), probe_bit(name));
-                self.script.lookups.event_names.insert(name.to_owned(), found);
-                found
-            }
-        };
+        let (name, probe) = name.resolve(self);
         if let Some(bit) = probe
             && !self.is_probing(object, bit)?
         {

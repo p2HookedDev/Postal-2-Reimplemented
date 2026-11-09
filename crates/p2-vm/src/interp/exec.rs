@@ -24,7 +24,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(super) fn exec(&mut self, frame: &mut Frame, expr: &Expr, pc: usize) -> Result<Flow, Error> {
         self.count(crate::profiling::Work::Statement);
         Ok(match expr {
-            Expr::Iterator { iterator, end } => self.exec_iterator(frame, iterator, *end, pc)?,
+            Expr::Iterator { iterator, end } => self.exec_iterator(frame, iterator, Flow::Jump(*end), pc)?,
             Expr::IteratorNext => match frame.iterators.pop() {
                 Some(mut iteration) => {
                     let body = Flow::Goto(iteration.body);
@@ -67,11 +67,11 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    fn exec_iterator(&mut self, frame: &mut Frame, iterator: &Expr, end: u16, pc: usize) -> Result<Flow, Error> {
+    pub(super) fn exec_iterator(&mut self, frame: &mut Frame, iterator: &Expr, end: Flow, pc: usize) -> Result<Flow, Error> {
         let (call, target) = match iterator {
             Expr::Context { object, member, .. } => match self.eval(frame, object, frame.this)? {
                 Value::Object(Some(object)) => (&**member, Some(object)),
-                _ => return Ok(Flow::Jump(end)),
+                _ => return Ok(end),
             },
             call => (call, frame.this),
         };
@@ -115,7 +115,7 @@ impl<L: LoaderRef> Vm<L> {
             ListWalk { name, target, args: values, first_new }
         });
         let mut iteration = Iteration { items, next: 0, statement: pc, outs, body: pc + 1, walk };
-        let flow = self.advance(frame, &mut iteration, Flow::Next, Flow::Jump(end))?;
+        let flow = self.advance(frame, &mut iteration, Flow::Next, end)?;
         frame.iterators.push(iteration);
         Ok(flow)
     }

@@ -5,7 +5,7 @@ mod extent;
 mod primitive;
 mod sweep;
 mod tree;
-pub use extent::{box_check, point_check};
+pub use extent::{BspHulls, box_check, point_check, point_solid};
 pub use primitive::{Primitive, pull_back, pull_back_units, segment_cylinder, world_to_local};
 pub use sweep::{box_overlaps_triangle, mesh_box_check, mesh_box_overlaps, terrain_box_check};
 /// `NF_NotCsg | NF_IsNew`: nodes with these flags do not divide solid from empty space.
@@ -172,7 +172,7 @@ fn terrain_first_hit(terrain: &Terrain, start: Vector, end: Vector, extent: [f32
             break;
         }
         for x in xs {
-            for (k, triangle) in terrain.quad_triangles(x, y).into_iter().enumerate() {
+            for (k, triangle) in terrain.quad_triangles(x, y).enumerate() {
                 if let Some((t, normal)) = hit(triangle)
                     && best.is_none_or(|(best, key, _)| t.total_cmp(&best).then((y, x, k).cmp(&key)).is_lt())
                 {

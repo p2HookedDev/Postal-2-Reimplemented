@@ -91,7 +91,7 @@ impl<L: LoaderRef> Vm<L> {
             remaining = 0.0;
             let hit = self.move_actor(actor, velocity * delta, Bases::Block)?;
             if hit.time < 1.0 && !self.store.is_deleted(actor) && !self.store.flag_of(actor, Prop::bJustTeleported) {
-                self.event(actor, "HitWall", [Value::Vector(hit.normal), Value::Object(hit.actor)])?;
+                self.event(actor, crate::states::Event::HitWall, [Value::Vector(hit.normal), Value::Object(hit.actor)])?;
                 if self.store.flag_of(actor, Prop::bBounce) {
                     if bounces < 2 {
                         remaining = (1.0 - hit.time) * tick;
@@ -132,7 +132,7 @@ impl<L: LoaderRef> Vm<L> {
             let Some(hit) = self.fall_step_move(actor, velocity, adjusted)? else { return Ok(()) };
             if hit.time < 1.0 {
                 if self.store.flag_of(actor, Prop::bBounce) {
-                    self.event(actor, "HitWall", [Value::Vector(hit.normal), Value::Object(hit.actor)])?;
+                    self.event(actor, crate::states::Event::HitWall, [Value::Vector(hit.normal), Value::Object(hit.actor)])?;
                     if self.store.is_deleted(actor) || self.store.physics_of(actor) == Some(EPhysics::None) {
                         return Ok(());
                     }
@@ -195,11 +195,11 @@ impl<L: LoaderRef> Vm<L> {
         if hit.actor.is_some_and(|wall| self.store.is_a(wall, Kind::Pawn)) {
             return Ok(());
         }
-        self.event(actor, "HitWall", [Value::Vector(hit.normal), Value::Object(hit.actor)])
+        self.event(actor, crate::states::Event::HitWall, [Value::Vector(hit.normal), Value::Object(hit.actor)])
     }
 
     fn actor_landed(&mut self, actor: ObjectId, hit: MoveHit) -> Result<(), Error> {
-        self.event(actor, "Landed", [Value::Vector(hit.normal)])?;
+        self.event(actor, crate::states::Event::Landed, [Value::Vector(hit.normal)])?;
         if !self.store.is_deleted(actor) && self.store.physics_of(actor) == Some(EPhysics::Falling) {
             self.set_physics(actor, EPhysics::None, Some((hit.actor, hit.normal)))?;
             self.set_vector(actor, Prop::Velocity, Vector::ZERO);

@@ -295,7 +295,7 @@ impl VolumePlace {
         {
             return false;
         }
-        inside_model(&self.model, local)
+        p2_collision::point_solid(&self.model, local)
     }
 
     fn line_time(&self, start: Vector, end: Vector) -> Option<f32> {
@@ -309,10 +309,6 @@ impl VolumePlace {
 /// Written so that a NaN coordinate is not rejected here, as it is not by the local bounds.
 fn box_holds(bounds: Option<(Vector, Vector)>, point: Vector) -> bool {
     bounds.is_none_or(|(min, max)| !(0..3).any(|i| point[i] < min[i] || point[i] > max[i]))
-}
-
-fn inside_model(model: &Model, local: Vector) -> bool {
-    p2_collision::point_check(model, local, [0.0; 3].into()).is_some()
 }
 
 /// World = location + Σₖ axes[k] · scale[k] · (local[k] − pre-pivot[k]), the inverse of

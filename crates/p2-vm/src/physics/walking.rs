@@ -48,7 +48,7 @@ impl<L: LoaderRef> Vm<L> {
                     if self.store.physics_of(pawn) == Some(EPhysics::Falling) {
                         let done = horizontal_size(self.store.vector(pawn, Prop::Location) - sub_location);
                         let left = (1.0 - (done / length).min(1.0)) * tick + remaining;
-                        self.event(pawn, "Falling", Vec::new())?;
+                        self.event(pawn, crate::states::Event::Falling, Vec::new())?;
                         return self.start_new_physics(pawn, left, iterations);
                     }
                 }
@@ -143,7 +143,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn ledge_stops(&mut self, pawn: ObjectId, controller: ObjectId, checked_fall: bool, start: WalkStart) -> Result<bool, Error> {
         if self.store.flag_of(pawn, Prop::bCanJump) && !checked_fall {
-            self.event(controller, "MayFall", Vec::new())?;
+            self.event(controller, crate::states::Event::MayFall, Vec::new())?;
         }
         let stops = !self.store.flag_of(pawn, Prop::bCanJump)
             || (!self.store.flag_of(pawn, Prop::bCanWalkOffLedges) && (self.store.flag_of(pawn, Prop::bIsWalking) || self.store.flag_of(pawn, Prop::bIsCrouched)));
@@ -167,7 +167,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut velocity = self.store.vector(pawn, Prop::Velocity);
         velocity[2] = 0.0;
         self.set_vector(pawn, Prop::Velocity, velocity);
-        self.event(pawn, "Falling", Vec::new())?;
+        self.event(pawn, crate::states::Event::Falling, Vec::new())?;
         if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
             self.set_physics(pawn, EPhysics::Falling, None)?;
         }
@@ -227,7 +227,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(super) fn process_hit_wall(&mut self, pawn: ObjectId, hit_normal: Vector, wall: Option<ObjectId>) -> Result<(), Error> {
         let Some(wall) = wall.filter(|&w| !self.store.is_a(w, Kind::Pawn)) else { return Ok(()) };
         let args = [Value::Vector(hit_normal), Value::Object(Some(wall))];
-        let Some(controller) = self.store.object_of(pawn, Prop::Controller) else { return self.event(pawn, "HitWall", args) };
+        let Some(controller) = self.store.object_of(pawn, Prop::Controller) else { return self.event(pawn, crate::states::Event::HitWall, args) };
         if self.store.vector(pawn, Prop::Acceleration) == Vector::ZERO {
             return Ok(());
         }
@@ -238,9 +238,9 @@ impl<L: LoaderRef> Vm<L> {
             facing[2] = 0.0;
         }
         if direction.dot(facing) <= self.store.float_of(controller, Prop::MinHitWall)
-            && !self.event_bool(controller, "NotifyHitWall", args.clone())?
+            && !self.event_bool(controller, crate::states::Event::NotifyHitWall, args.clone())?
         {
-            self.event(pawn, "HitWall", args)?;
+            self.event(pawn, crate::states::Event::HitWall, args)?;
         }
         Ok(())
     }

@@ -1,4 +1,5 @@
 use p2_assets::{fan_triangles, poly_flags, read_level, read_model, read_terrain, read_texture, texture_heights};
+use p2_collision::BspHulls;
 use p2_package::PackageId;
 use p2_script::{Objects, Source};
 use crate::{Kind, LoaderRef, ObjectId, Prop, Vm};
@@ -42,7 +43,8 @@ impl<L: LoaderRef> Vm<L> {
             .into_iter()
             .map(|reference: i32| reference.checked_sub(1).and_then(|export| usize::try_from(export).ok()).and_then(|export| self.load_object(map, export).ok()))
             .collect();
-        self.world = World { map: Some(map), model, zone_actors, terrains, ..World::default() };
+        let hulls = model.as_ref().map(BspHulls::new).unwrap_or_default();
+        self.world = World { map: Some(map), model, hulls, zone_actors, terrains, ..World::default() };
         self.hash = crate::hash::CollisionHash::default();
         let actors: Vec<_> = self.actors().collect();
         for actor in actors {

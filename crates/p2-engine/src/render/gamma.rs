@@ -20,15 +20,12 @@ use bevy::shader::{Shader, ShaderRef};
 use bevy::sprite_render::{Material2d, Material2dPlugin, MeshMaterial2d};
 use bevy::window::{PrimaryWindow, Window};
 
-use crate::display::Settings;
+use crate::display::{BRIGHTNESS, CONTRAST, GAMMA, Settings};
 use crate::components::CanvasLayer;
 use crate::render::shaders::add_shaders;
 
 const GAMMA_SHADER: Handle<Shader> = uuid_handle!("3b8e5a14-6c27-4f0d-9d52-71a4c0e8b6f3");
 const GAMMA_LAYER: usize = 3;
-const BRIGHTNESS: &str = "ini:Engine.Engine.ViewportManager Brightness";
-const CONTRAST: &str = "ini:Engine.Engine.ViewportManager Contrast";
-const GAMMA: &str = "ini:Engine.Engine.ViewportManager Gamma";
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GammaSystems {

@@ -26,6 +26,21 @@ pub(crate) fn set_uv_transform<M: bevy::asset::Asset>(
     }
 }
 
+pub(crate) fn set_specular_uv<M: bevy::asset::Asset>(
+    store: &mut Assets<M>,
+    handle: &Handle<M>,
+    uv: (Vec4, Vec4),
+    layers: impl Fn(&M) -> &ShaderLayers,
+    layers_mut: impl Fn(&mut M) -> &mut ShaderLayers,
+) {
+    if store.get(handle).is_some_and(|material| (layers(material).specular_u, layers(material).specular_v) != uv)
+        && let Some(mut material) = store.get_mut(handle)
+    {
+        let layers = layers_mut(&mut material);
+        (layers.specular_u, layers.specular_v) = uv;
+    }
+}
+
 pub(super) fn animate_materials(
     time: Res<Time>,
     animated: Res<AnimatedMaterials>,
@@ -49,13 +64,13 @@ pub(super) fn animate_materials(
     }
     for MovingUv { material, modifiers, size } in &animated.speculars {
         let [[a, b, c], [d, e, f]] = uv_matrix(modifiers, seconds, *size);
-        let (u, v) = (Vec4::new(a, b, c, 0.0), Vec4::new(d, e, f, 0.0));
+        let uv = (Vec4::new(a, b, c, 0.0), Vec4::new(d, e, f, 0.0));
         match material {
-            SectionMaterial::Lightmapped(handle) => lightmapped.get_mut(handle).map(|mut m| (m.extension.layers.specular_u, m.extension.layers.specular_v) = (u, v)),
-            SectionMaterial::MeshLit(handle) => mesh_lit.get_mut(handle).map(|mut m| (m.extension.layers.specular_u, m.extension.layers.specular_v) = (u, v)),
-            SectionMaterial::Blended(handle) => blended.get_mut(handle).map(|mut m| (m.extension.layers.specular_u, m.extension.layers.specular_v) = (u, v)),
-            SectionMaterial::Terrain(handle) => terrain_layers.get_mut(handle).map(|mut m| (m.extension.layers.specular_u, m.extension.layers.specular_v) = (u, v)),
-            SectionMaterial::Standard(_) | SectionMaterial::TerrainPass(_) => None,
-        };
+            SectionMaterial::Lightmapped(handle) => set_specular_uv(&mut lightmapped, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
+            SectionMaterial::MeshLit(handle) => set_specular_uv(&mut mesh_lit, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
+            SectionMaterial::Blended(handle) => set_specular_uv(&mut blended, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
+            SectionMaterial::Terrain(handle) => set_specular_uv(&mut terrain_layers, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
+            SectionMaterial::Standard(_) | SectionMaterial::TerrainPass(_) => {}
+        }
     }
 }

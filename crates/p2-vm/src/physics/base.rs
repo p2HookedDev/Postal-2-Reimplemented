@@ -33,7 +33,7 @@ impl<L: LoaderRef> Vm<L> {
             self.move_actor(other, motion, Bases::Ignore)?;
             if self.is_blocked_by(other, base)
                 && self.primitive_overlaps(base, other)
-                && self.event_bool(base, "EncroachingOn", [Value::Object(Some(other))])?
+                && self.event_bool(base, crate::states::Event::EncroachingOn, [Value::Object(Some(other))])?
             {
                 self.set_vector(base, Prop::Location, old_location);
                 self.store.set(base, Prop::Rotation, Value::Rotator(old_rotation));
@@ -97,7 +97,7 @@ impl<L: LoaderRef> Vm<L> {
                     let kept = attached.into_iter().filter(|a| *a != Value::Object(Some(actor))).collect();
                     self.store.set(old, Prop::Attached, Value::Array(kept));
                 }
-                self.event(old, "Detach", [Value::Object(Some(actor))])?;
+                self.event(old, crate::states::Event::Detach, [Value::Object(Some(actor))])?;
             }
             self.store.set(actor, Prop::Base, Value::Object(base));
             if let Some(new) = base
@@ -111,9 +111,9 @@ impl<L: LoaderRef> Vm<L> {
                     attached.push(Value::Object(Some(actor)));
                     self.store.set(new, Prop::Attached, Value::Array(attached));
                 }
-                self.event(new, "Attach", [Value::Object(Some(actor))])?;
+                self.event(new, crate::states::Event::Attach, [Value::Object(Some(actor))])?;
             }
-            self.event(actor, "BaseChange", Vec::new())?;
+            self.event(actor, crate::states::Event::BaseChange, Vec::new())?;
         }
         let base = self.store.object_of(actor, Prop::Base);
         if base.is_none_or(|b| world(self, b)) && self.on_bone(actor) {
@@ -157,7 +157,7 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(actor, Prop::Acceleration, Vector::ZERO);
         }
         if let Some(volume) = self.store.object_of(actor, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some()) {
-            self.event(volume, "PhysicsChangedFor", [Value::Object(Some(actor))])?;
+            self.event(volume, crate::states::Event::PhysicsChangedFor, [Value::Object(Some(actor))])?;
         }
         Ok(())
     }
@@ -176,10 +176,10 @@ impl<L: LoaderRef> Vm<L> {
     pub(super) fn notify_bump(&mut self, actor: ObjectId, other: ObjectId) -> Result<(), Error> {
         if self.store.is_a(actor, Kind::Pawn)
             && let Some(controller) = self.store.object_of(actor, Prop::Controller)
-            && self.event_bool(controller, "NotifyBump", [Value::Object(Some(other))])?
+            && self.event_bool(controller, crate::states::Event::NotifyBump, [Value::Object(Some(other))])?
         {
             return Ok(());
         }
-        self.event(actor, "Bump", [Value::Object(Some(other))])
+        self.event(actor, crate::states::Event::Bump, [Value::Object(Some(other))])
     }
 }

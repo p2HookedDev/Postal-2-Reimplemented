@@ -49,7 +49,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         if native == Native::InLatentExecution {
             let number = args.first().map_or(0, crate::interp::int);
-            let current = self.script.states.objects.get(&this).and_then(|s| s.latent_move);
+            let current = self.script.states.of(this).and_then(|s| s.latent_move);
             return Ok(Some(Value::Bool(current.is_some_and(|m| m.number() == number))));
         }
         let pawn = self.store.object_of(this, Prop::Pawn);

@@ -41,13 +41,13 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn trace_bsp(&self, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
-        self.world.model.as_ref().and_then(|model| box_check(model, start, end, extent))
+        self.world.model.as_ref().and_then(|model| box_check(model, &self.world.hulls, start, end, extent))
     }
 
     /// A blocking volume's inside alone does not count. Terrain has no point check here yet,
     /// so a box sunk in terrain is not found.
     pub(crate) fn world_encroached(&self, location: Vector, extent: Vector) -> bool {
-        let bsp = self.world.model.as_ref().is_some_and(|model| p2_collision::point_check(model, location, extent).is_some());
+        let bsp = self.world.model.as_ref().is_some_and(|model| p2_collision::point_check(model, &self.world.hulls, location, extent).is_some());
         bsp || self.with_near_boxes(location, location, extent, |near| {
             p2_collision::mesh_box_overlaps(near.iter().map(|&i| &*self.world.boxes[i].shape), location, extent)
         })

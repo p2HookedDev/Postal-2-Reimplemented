@@ -188,7 +188,7 @@ fn apply_display(
         display::apply_window(&mut window, &request, monitors.iter().nth(display), display);
     }
     let fullscreen = !matches!(window.mode, WindowMode::Windowed);
-    let mode = display::present_mode(settings.flag("ini:Engine.Engine.RenderDevice UseVSync"), fullscreen && settings.flag("ini:Engine.Engine.RenderDevice UseTripleBuffering"));
+    let mode = display::present_mode(settings.flag(display::USE_VSYNC), fullscreen && settings.flag(display::USE_TRIPLE_BUFFERING));
     if window.present_mode != mode {
         window.present_mode = mode;
     }

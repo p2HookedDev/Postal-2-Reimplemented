@@ -165,6 +165,13 @@ impl<L: LoaderRef> Code<L> {
                 })
             }
             Expr::Case { next, value } => self.case(JumpTo::new(statements, *next), value.as_deref()),
+            Expr::Iterator { iterator, end } => {
+                let (iterator, end) = (iterator.clone(), JumpTo::new(statements, *end));
+                stmt_fn(move |_, vm, frame| {
+                    vm.count(Work::Statement);
+                    vm.exec_iterator(frame, &iterator, end.flow(), pc)
+                })
+            }
             Expr::Return(_) | Expr::Stop => plain(|| Flow::Return(None)),
             Expr::Nothing | Expr::DebugInfo { .. } | Expr::LabelTable(_) => plain(|| Flow::Next),
             Expr::Call { .. } | Expr::Context { .. } | Expr::ClassContext { .. } | Expr::Linked { .. } => {

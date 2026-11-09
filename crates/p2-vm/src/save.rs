@@ -264,7 +264,7 @@ impl<L: LoaderRef> Vm<L> {
                 };
             });
             let package = |vm: &Self, (id, export): (p2_package::PackageId, usize)| (vm.loader.package(id).name.clone(), export as u32);
-            let state = self.script.states.objects.get(&o).map(|s| SavedState {
+            let state = self.script.states.of(o).map(|s| SavedState {
                 state: package(self, s.state),
                 name: name_of(self, s.name),
                 code_state: package(self, s.code_state),

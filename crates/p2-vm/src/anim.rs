@@ -151,7 +151,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn is_probing(&mut self, object: ObjectId, bit: u32) -> Result<bool, Error> {
         let Some(class) = self.store.object(object).class else { return Ok(false) };
         let class = (self.store.class(class).package, self.store.class(class).export);
-        let node = self.script.states.objects.get(&object).map_or(class, |s| s.state);
+        let node = self.script.states.of(object).map_or(class, |s| s.state);
         let (class_probe, _) = self.probe_masks(class)?;
         let (probe, ignore) = self.probe_masks(node)?;
         let disabled = self.script.states.probes_disabled.get(&object).copied().unwrap_or(0);

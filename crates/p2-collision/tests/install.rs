@@ -4,7 +4,8 @@ use p2_assets::{
     read_actor_location, read_level, read_mesh_actor, read_model, read_static_mesh, read_terrain, read_texture, texture_heights,
 };
 use p2_collision::{
-    MeshCollision, Sides, box_check, line_check, mesh_line_check, point_check, point_zone, terrain_line_check,
+    BspHulls, MeshCollision, Sides, box_check, line_check, mesh_line_check, point_check, point_solid, point_zone,
+    terrain_line_check,
 };
 use p2_math::Vector;
 use p2_package::{LoadedPackage, Loader, Package, Resolved};
@@ -46,14 +47,14 @@ fn player_starts_stand_on_floors() {
         };
         let level = read_level(&pkg, &data, level).unwrap();
         let model = read_model(&pkg, &data, &pkg.exports[level.model as usize - 1]).unwrap();
-        assert!(point_check(&model, Vector::new(1e6, 1e6, 1e6), Vector::ZERO).is_some(), "{name}");
+        assert!(point_solid(&model, Vector::new(1e6, 1e6, 1e6)), "{name}");
         let mut objects = Objects::new(&loader);
         for index in (0..pkg.exports.len()).filter(|&i| pkg.object_name(pkg.exports[i].class_index) == Some("PlayerStart")) {
             let start = read_actor_location(&mut objects, Source { package: &pkg, data: &data }, index).unwrap();
             if usize::from(point_zone(&model, start)) >= model.zones.len().max(1) {
                 failures.push(format!("{name}: start {start:?} in zone outside the zone list"));
             }
-            if point_check(&model, start, Vector::ZERO).is_some() {
+            if point_solid(&model, start) {
                 if !SOLID_START_MAPS.contains(&name.as_str()) {
                     failures.push(format!("{name}: start {start:?} in solid space"));
                 }
@@ -65,7 +66,7 @@ fn player_starts_stand_on_floors() {
                 continue;
             };
             let inside = Vector::new(start.x, start.y, hit.location.z - 1.0);
-            if point_check(&model, inside, Vector::ZERO).is_none() {
+            if !point_solid(&model, inside) {
                 failures.push(format!("{name}: empty below the hit under {start:?}"));
             }
             if hit.time * 100_000.0 < 300.0 && hit.normal.z > 0.7 {
@@ -119,11 +120,12 @@ fn tiny_box_matches_line_check() {
     ];
     let (mut hits, mut mismatches) = (0, Vec::new());
     for (name, model, starts) in maps_with_starts(&dir) {
-        for &start in starts.iter().filter(|&&s| point_check(&model, s, Vector::ZERO).is_none()) {
+        let hulls = BspHulls::new(&model);
+        for &start in starts.iter().filter(|&&s| !point_solid(&model, s)) {
             for d in directions {
                 let end = start + d * 3000.0;
                 let line = line_check(&model, start, end);
-                let boxed = box_check(&model, start, end, Vector::new(0.5, 0.5, 0.5));
+                let boxed = box_check(&model, &hulls, start, end, Vector::new(0.5, 0.5, 0.5));
                 match (line, boxed) {
                     (Some(line), Some(boxed)) => {
                         hits += 1;
@@ -150,12 +152,13 @@ fn pawn_box_lands_and_stops_at_walls() {
     let (mut landed, mut overlapping, mut stopped) = (0, 0, 0);
     let mut failures = Vec::new();
     for (name, model, starts) in maps_with_starts(&dir) {
+        let hulls = BspHulls::new(&model);
         for &start in &starts {
-            if point_check(&model, start, Vector::ZERO).is_some() {
+            if point_solid(&model, start) {
                 assert!(SOLID_START_MAPS.contains(&name.as_str()), "{name}");
                 continue;
             }
-            if point_check(&model, start, PAWN).is_some() {
+            if point_check(&model, &hulls, start, PAWN).is_some() {
                 overlapping += 1;
             }
             let below = start - Vector::new(0.0, 0.0, 2000.0);
@@ -163,7 +166,7 @@ fn pawn_box_lands_and_stops_at_walls() {
                 && floor.normal.z > 0.999
                 && floor.time * 2000.0 < 300.0
             {
-                let hit = box_check(&model, start, below, PAWN).expect("box lands");
+                let hit = box_check(&model, &hulls, start, below, PAWN).expect("box lands");
                 let (drop, expected) = (hit.time * 2000.0, floor.time * 2000.0 - PAWN.z - 4.0);
                 if (drop - expected).abs() < 0.5 && hit.normal.z > 0.999 {
                     landed += 1;
@@ -178,7 +181,7 @@ fn pawn_box_lands_and_stops_at_walls() {
                 if line.normal.z.abs() > 0.01 || !(100.0..3000.0).contains(&distance) {
                     continue;
                 }
-                match box_check(&model, start, end, PAWN) {
+                match box_check(&model, &hulls, start, end, PAWN) {
                     Some(hit) if hit.time * 3000.0 <= distance - 25.0 => stopped += 1,
                     hit => failures.push(format!("{name} {start:?} {d:?}: wall at {distance}, box {hit:?}")),
                 }

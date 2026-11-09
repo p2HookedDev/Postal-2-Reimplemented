@@ -190,7 +190,7 @@ impl<L: LoaderRef> Vm<L> {
             };
             self.count(Work::LimbImpact);
             self.set_vector(actor, Prop::Velocity, incoming);
-            self.event(actor, "HitWall", [Value::Vector(normal), Value::Object(None)])?;
+            self.event(actor, crate::states::Event::HitWall, [Value::Vector(normal), Value::Object(None)])?;
             if self.store.is_deleted(actor) {
                 return Ok(());
             }

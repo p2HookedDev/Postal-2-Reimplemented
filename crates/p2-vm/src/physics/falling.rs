@@ -138,11 +138,11 @@ impl<L: LoaderRef> Vm<L> {
         }
         let args = [Value::Vector(hit_normal)];
         let handled = match self.store.object_of(pawn, Prop::Controller) {
-            Some(controller) => self.event_bool(controller, "NotifyLanded", args.clone())?,
+            Some(controller) => self.event_bool(controller, crate::states::Event::NotifyLanded, args.clone())?,
             None => false,
         };
         if !handled {
-            self.event(pawn, "Landed", args)?;
+            self.event(pawn, crate::states::Event::Landed, args)?;
         }
         self.start_new_physics(pawn, left, iterations)
     }

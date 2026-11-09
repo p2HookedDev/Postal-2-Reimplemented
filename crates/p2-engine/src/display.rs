@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bevy::math::UVec2;
@@ -6,6 +5,7 @@ use bevy::window::{Monitor, MonitorSelection, PresentMode, VideoModeSelection, W
 use p2_bevy_assets::TextureQuality;
 use p2_package::Ini;
 use p2_vm::{WindowRequest, ini_truthy};
+use rustc_hash::FxHashMap;
 
 fn settings_file() -> Option<PathBuf> {
     Some(crate::game_dir::config_folder()?.join("Settings.ini"))
@@ -72,11 +72,11 @@ pub fn apply_window(window: &mut Window, request: &WindowRequest, monitor: Optio
 }
 
 pub const QUERIES: &[&str] = &[
-    "ini:Engine.Engine.RenderDevice UseVSync",
-    "ini:Engine.Engine.ViewportManager Brightness",
-    "ini:Engine.Engine.ViewportManager Contrast",
-    "ini:Engine.Engine.ViewportManager Gamma",
-    "ini:Engine.Engine.RenderDevice UseTripleBuffering",
+    USE_VSYNC,
+    BRIGHTNESS,
+    CONTRAST,
+    GAMMA,
+    USE_TRIPLE_BUFFERING,
     LEVEL_OF_ANISOTROPY,
     USE_TRILINEAR,
     DISPLAY_NUMBER,
@@ -113,6 +113,12 @@ const USE_TRILINEAR: &str = "ini:Engine.Engine.RenderDevice UseTrilinear";
 const DISPLAY_NUMBER: &str = "ini:Engine.Engine.RenderDevice DisplayNumber";
 const DETAIL_TEXTURES: &str = "ini:Engine.Engine.RenderDevice DetailTextures";
 
+pub const USE_VSYNC: &str = "ini:Engine.Engine.RenderDevice UseVSync";
+pub const USE_TRIPLE_BUFFERING: &str = "ini:Engine.Engine.RenderDevice UseTripleBuffering";
+pub const BRIGHTNESS: &str = "ini:Engine.Engine.ViewportManager Brightness";
+pub const CONTRAST: &str = "ini:Engine.Engine.ViewportManager Contrast";
+pub const GAMMA: &str = "ini:Engine.Engine.ViewportManager Gamma";
+
 pub const MSAA: &str = "ini:Engine.Engine.RenderDevice MSAA";
 
 pub const MODERN_GRAPHICS: &str = "ini:Engine.Engine.RenderDevice ModernGraphics";
@@ -129,7 +135,7 @@ const MODERN_OFF_BY_DEFAULT: [&str; 1] = [MODERN_AO];
 /// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
 /// changing.
 #[derive(Debug, Clone, Default, PartialEq, bevy::ecs::resource::Resource)]
-pub struct Settings(HashMap<&'static str, String>);
+pub struct Settings(FxHashMap<&'static str, String>);
 
 impl Settings {
     pub fn read(mut get: impl FnMut(&str) -> String) -> Self {
@@ -178,7 +184,8 @@ impl Settings {
 
     pub fn modern_effect(&self, query: &str) -> bool {
         let default = !MODERN_OFF_BY_DEFAULT.contains(&query);
-        self.modern_graphics() && if self.text(query).trim().is_empty() { default } else { self.flag(query) }
+        let text = self.text(query);
+        self.modern_graphics() && if text.trim().is_empty() { default } else { ini_truthy(text) }
     }
 }
 

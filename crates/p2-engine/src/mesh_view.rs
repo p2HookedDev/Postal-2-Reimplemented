@@ -51,7 +51,7 @@ use crate::render::blended::{BlendedMaterial, OpaqueDecals, TerrainLayer, Terrai
 use crate::render::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::render::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::render::modern::{CASTER_LAYER, SunShadow};
-use crate::render::shader_layers::Layers;
+use crate::render::shader_layers::{Layers, ShaderLayers};
 use crate::render::terrain_material::{TerrainLayers, TerrainMaterial, TerrainPassLayer};
 use crate::display::{MODERN_AO, Settings};
 use crate::level_collision::{LevelCollision, StaticCollision};
@@ -71,7 +71,7 @@ pub(crate) use materials::{SceneLights, actor_standard, alpha_key, cached_actor_
 use camera::{SceneCameras, place_camera, place_overlay_cameras, plain_output, show_canvas_layers};
 pub use camera::{NEAR_CLIPPING_PLANE, view_rotation};
 use animated_materials::{AnimatedMaterials, MovingUv, animate_materials};
-pub(crate) use animated_materials::set_uv_transform;
+pub(crate) use animated_materials::{set_specular_uv, set_uv_transform};
 pub use restyle::{SwitchedLook, restyle_switched};
 use fog::zone_fog;
 use zone_culling::{follower_zones, zone_visibility};

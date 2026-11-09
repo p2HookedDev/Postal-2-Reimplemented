@@ -32,7 +32,7 @@ impl<L: LoaderRef> Vm<L> {
                     continue;
                 }
             }
-            if self.event_bool(actor, "EncroachingOn", [Value::Object(Some(other))])? {
+            if self.event_bool(actor, crate::states::Event::EncroachingOn, [Value::Object(Some(other))])? {
                 return Ok(true);
             }
         }
@@ -45,7 +45,7 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             }
             if self.is_blocked_by(actor, other) {
-                self.event(other, "EncroachedBy", [Value::Object(Some(actor))])?;
+                self.event(other, crate::states::Event::EncroachedBy, [Value::Object(Some(actor))])?;
             } else {
                 self.begin_touch(actor, other)?;
             }

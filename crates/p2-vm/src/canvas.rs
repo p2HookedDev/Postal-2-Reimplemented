@@ -58,7 +58,7 @@ impl<L: LoaderRef> Vm<L> {
         self.media.canvas.items.clear();
         self.process_interactions("Process_PreRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         if let Some(hud) = hud {
-            self.event(hud, "PostRender", [Value::Object(Some(canvas))])?;
+            self.event(hud, crate::states::Event::PostRender, [Value::Object(Some(canvas))])?;
         }
         self.process_interactions("Process_PostRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         let next = Vec::with_capacity(self.media.canvas.items.len());

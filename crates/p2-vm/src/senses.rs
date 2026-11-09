@@ -73,7 +73,7 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             }
             if self.can_hear(listener, location, loudness, actor) {
-                self.event(listener, "HearNoise", [Value::Float(loudness), Value::Object(Some(actor))])?;
+                self.event(listener, crate::states::Event::HearNoise, [Value::Float(loudness), Value::Object(Some(actor))])?;
             }
         }
         Ok(())
@@ -228,7 +228,7 @@ impl<L: LoaderRef> Vm<L> {
     fn check_enemy_visible(&mut self, controller: ObjectId) -> Result<(), Error> {
         let Some(enemy) = self.store.object_of(controller, Prop::Enemy) else { return Ok(()) };
         if !self.line_of_sight_to(controller, enemy, SightCheck::Full) {
-            self.event(controller, "EnemyNotVisible", Vec::new())?;
+            self.event(controller, crate::states::Event::EnemyNotVisible, Vec::new())?;
         }
         Ok(())
     }

@@ -119,19 +119,19 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn end_climb_ladder(&mut self, controller: ObjectId, pawn: Option<ObjectId>) {
-        let moving = self.script.states.objects.get(&controller).and_then(|s| s.latent_move) == Some(LatentMove::MoveToward);
+        let moving = self.script.states.of(controller).and_then(|s| s.latent_move) == Some(LatentMove::MoveToward);
         let target = self.store.object_of(controller, Prop::MoveTarget).filter(|&target| self.store.is_a(target, "Ladder"));
         let (true, Some(pawn), Some(target)) = (moving, pawn, target) else { return };
         if self.may_overlap(pawn, target) && self.shapes_overlap(pawn, target) {
             self.store.set(pawn, Prop::Anchor, Value::Object(Some(target)));
         }
-        if let Some(entry) = self.script.states.objects.get_mut(&controller) {
+        if let Some(entry) = self.script.states.of_mut(controller) {
             entry.latent_move = None;
         }
     }
 
     pub(crate) fn stop_waiting(&mut self, controller: ObjectId) {
-        let Some(entry) = self.script.states.objects.get_mut(&controller) else { return };
+        let Some(entry) = self.script.states.of_mut(controller) else { return };
         if entry.sleep > 0.0 {
             entry.sleep = 0.0;
             self.store.set(controller, Prop::LatentFloat, Value::Float(-1.0));

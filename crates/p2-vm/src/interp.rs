@@ -132,7 +132,7 @@ pub(crate) struct Frame {
     function: Arc<Function>,
     this: Option<ObjectId>,
     class: ClassId,
-    locals: Mem,
+    pub(crate) locals: Mem,
     switch: Option<Value>,
     iterators: Vec<Iteration>,
 }

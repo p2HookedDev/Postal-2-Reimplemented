@@ -230,7 +230,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(true);
             }
         }
-        self.event(pawn, "Falling", Vec::new())?;
+        self.event(pawn, crate::states::Event::Falling, Vec::new())?;
         if self.store.is_deleted(pawn) {
             return Ok(false);
         }

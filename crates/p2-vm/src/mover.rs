@@ -63,7 +63,7 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(mover, Prop::PhysAlpha, Value::Float(new_alpha));
             if new_alpha == 1.0 {
                 self.store.set(mover, Prop::bInterpolating, Value::Bool(false));
-                self.event(mover, "KeyFrameReached", Vec::new())?;
+                self.event(mover, crate::states::Event::KeyFrameReached, Vec::new())?;
             }
         }
         if delta > 0.0 {
@@ -121,13 +121,13 @@ impl<L: LoaderRef> Vm<L> {
                     continue;
                 }
             }
-            if self.event_bool(mover, "EncroachingOn", [Value::Object(Some(other))])? {
+            if self.event_bool(mover, crate::states::Event::EncroachingOn, [Value::Object(Some(other))])? {
                 return Ok(true);
             }
         }
         for other in overlapped {
             if !self.store.is_deleted(other) {
-                self.event(other, "EncroachedBy", [Value::Object(Some(mover))])?;
+                self.event(other, crate::states::Event::EncroachedBy, [Value::Object(Some(mover))])?;
             }
         }
         Ok(false)

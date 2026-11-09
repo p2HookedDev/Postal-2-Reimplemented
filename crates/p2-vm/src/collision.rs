@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use p2_assets::{Model, read_model, read_static_mesh};
-use p2_collision::{Hit, MeshCollision, model_triangles, static_mesh_collision};
+use p2_collision::{BspHulls, Hit, MeshCollision, model_triangles, static_mesh_collision};
 
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
@@ -38,6 +38,7 @@ pub(crate) struct Primitives {
     local: FxHashMap<ObjectId, Option<Arc<LocalShape>>>,
     placed: FxHashMap<ObjectId, (Placement, PlacedShape)>,
     models: FxHashMap<ObjectId, Option<Arc<Model>>>,
+    hulls: FxHashMap<ObjectId, BspHulls>,
     pub(crate) physics_volumes: Option<Arc<[ObjectId]>>,
     pub(crate) volume_table: Vec<crate::volumes::VolumeBox>,
     pub(crate) volume_table_frame: Option<u64>,
@@ -292,10 +293,11 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_a(actor, Kind::Brush)
             && let Some((model, _, Placement { location, rotation, scale, pre_pivot })) = self.primitive_placement(actor)
         {
-            let Some(model) = self.brush_model(model) else { return false };
+            let Some(brush) = self.brush_model(model) else { return false };
             let axes = rotation.axes();
             let Some(local) = p2_collision::world_to_local(center, location, &axes, scale, pre_pivot) else { return false };
-            return p2_collision::point_check(&model, local, local_extent(extent, &axes, scale)).is_some();
+            let hulls = self.world.primitives.hulls.entry(model).or_insert_with(|| BspHulls::new(&brush));
+            return p2_collision::point_check(&brush, hulls, local, local_extent(extent, &axes, scale)).is_some();
         }
         match self.actor_shape(actor) {
             Some(shape) => p2_collision::mesh_box_overlaps([&*shape.boxes], center, extent),

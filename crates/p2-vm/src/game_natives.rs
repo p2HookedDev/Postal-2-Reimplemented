@@ -175,7 +175,7 @@ impl<L: LoaderRef> Vm<L> {
                 || thick_line_cylinder_collide(line[0], line[1], default_size[0], default_size[1], location, actor_radius, actor_height);
             if hit {
                 let args = vec![damage.clone(), instigator.clone(), Value::Vector(location), Value::Vector(Vector::ZERO), damage_type.clone()];
-                self.event(actor, "TakeDamage", args)?;
+                self.event(actor, crate::states::Event::TakeDamage, args)?;
             }
         }
         Ok(())

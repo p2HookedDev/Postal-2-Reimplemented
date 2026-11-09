@@ -339,7 +339,7 @@ impl PreparedScene {
             radius: ((max - min).length() / 2.0).max(1.0),
             sky,
             start: start.map(|(location, rotation)| (Vec3::from(to_bevy(location)), rotation.yaw)),
-            collision: Some(StaticCollision { model, terrains: static_terrains, meshes: collisions }),
+            collision: Some(StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: static_terrains, meshes: collisions }),
             fogs: zone_fogs,
             decals,
             actors: followers,

@@ -38,13 +38,13 @@ impl<L: LoaderRef> Vm<L> {
         let (scripted, script, sound, destroy_effect, effect) =
             (names.anim_notify_scripted, names.anim_notify_script, names.anim_notify_sound, names.anim_notify_destroy_effect, names.anim_notify_effect);
         if self.store.is_a(notify, scripted) {
-            return self.event(notify, "Notify", [Value::Object(Some(owner))]);
+            return self.event(notify, crate::states::Event::Notify, [Value::Object(Some(owner))]);
         }
         if self.store.is_a(notify, script) {
             let function = name_of(self, Prop::NotifyName);
             if function != NameId::NONE {
                 let function = self.store.name(function).to_owned();
-                self.event(owner, &function, Vec::new())?;
+                self.event(owner, function.as_str(), Vec::new())?;
             }
             return Ok(());
         }

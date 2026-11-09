@@ -86,14 +86,14 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         if self.store.flag_of(pawn, Prop::bUpdateEyeheight) && self.is_probing(pawn, EProbe::UpdateEyeHeight as u32)? {
-            self.event(pawn, "UpdateEyeHeight", [Value::Float(delta)])?;
+            self.event(pawn, crate::states::Event::UpdateEyeHeight, [Value::Float(delta)])?;
         }
         let breath = self.store.float_of(pawn, Prop::BreathTime);
         if ENetRole::from_byte(self.store.byte_of(pawn, Prop::Role)) == Some(ENetRole::Authority) && breath > 0.0 {
             let left = breath - delta;
             if left < 0.001 {
                 self.store.set(pawn, Prop::BreathTime, Value::Float(0.0));
-                self.event(pawn, "BreathTimer", Vec::new())?;
+                self.event(pawn, crate::states::Event::BreathTimer, Vec::new())?;
             } else {
                 self.store.set(pawn, Prop::BreathTime, Value::Float(left));
             }
@@ -135,7 +135,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let (crouched, walking) = (self.store.flag_of(pawn, Prop::bIsCrouched), self.store.flag_of(pawn, Prop::bIsWalking));
         if crouched != self.store.flag_of(pawn, Prop::bWasCrouched) || walking != self.store.flag_of(pawn, Prop::bWasWalking) {
-            self.event(pawn, "ChangeAnimation", Vec::new())?;
+            self.event(pawn, crate::states::Event::ChangeAnimation, Vec::new())?;
             self.store.set(pawn, Prop::bWasCrouched, Value::Bool(crouched));
             self.store.set(pawn, Prop::bWasWalking, Value::Bool(walking));
         }
@@ -152,7 +152,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let physics = self.store.byte_of(pawn, Prop::Physics);
         if physics != old_physics && physics != EPhysics::Falling as u8 {
-            self.event(pawn, "ChangeAnimation", Vec::new())?;
+            self.event(pawn, crate::states::Event::ChangeAnimation, Vec::new())?;
         }
         let physics = self.store.byte_of(pawn, Prop::Physics);
         self.store.set(pawn, Prop::OldPhysics, Value::Byte(physics));
@@ -168,7 +168,7 @@ impl<L: LoaderRef> Vm<L> {
             self.blend_movement(pawn, physics, acceleration, step);
         } else {
             if self.store.vector(pawn, Prop::OldAcceleration) != Vector::ZERO && self.store.physics_of(pawn) != Some(EPhysics::Falling) {
-                self.event(pawn, "ChangeAnimation", Vec::new())?;
+                self.event(pawn, crate::states::Event::ChangeAnimation, Vec::new())?;
             }
             self.zero_movement_alpha(pawn, FIRST_MOVEMENT_CHANNEL, END_CHANNEL, step);
             self.turn_in_place(pawn, delta, step);

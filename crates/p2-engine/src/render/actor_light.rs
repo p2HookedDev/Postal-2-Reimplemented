@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bevy::app::{App, Plugin};
 use bevy::camera::visibility::RenderLayers;
 use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
-use bevy::ecs::prelude::{Commands, Component, Entity, Has, Query, Res, ResMut};
+use bevy::ecs::prelude::{Commands, Component, Entity, Has, Local, Query, Res, ResMut, With};
 use bevy::ecs::system::SystemParam;
 use bevy::time::Time;
 use bevy::math::{Vec3, Vec4};
@@ -23,6 +23,7 @@ use p2_bevy_assets::{lighting_colors, set_vertex_colors, to_bevy};
 use p2_vm::ObjectId;
 
 use crate::render::mesh_light::MeshLitMaterial;
+use crate::mesh_view::set_specular_uv;
 use crate::components::{CanvasDrawn, OVERLAY_LAYERS};
 use crate::shown_scene::ShownScene;
 use crate::level_collision::LevelCollision;
@@ -395,17 +396,24 @@ pub(crate) fn light_actors<F: ActorFrames>(
         Has<CanvasDrawn>,
         Option<&RenderLayers>,
     )>,
+    canvases: Query<(), With<CanvasDrawn>>,
+    mut buffers: Local<LightActorBuffers>,
 ) {
     let (Some(play), Some(environment)) = (frames.play.as_deref(), frames.shown.lighting.as_deref()) else { return };
     let (Some(origin), Some(model)) = (play.origin(), frames.collision.model()) else { return };
     let world = RelightWorld { environment, model, origin };
     let step = 1.0 - (-frames.time.delta_secs() / LIGHT_SETTLE_SECONDS).exp();
-    let mut colors: FxHashMap<ObjectId, Vec<[f32; 4]>> = FxHashMap::default();
-    let hud_bases: FxHashMap<ObjectId, (f32, usize)> = models
-        .iter()
-        .filter(|(_, lit, _, _, _, canvas, _)| *canvas && matches!(lit.shading, Shading::Tint))
-        .map(|(_, lit, ..)| (lit.actor, (lit.radius, lit.max_lights)))
-        .collect();
+    let LightActorBuffers { colors, hud_bases } = &mut *buffers;
+    colors.clear();
+    hud_bases.clear();
+    if !canvases.is_empty() {
+        hud_bases.extend(
+            models
+                .iter()
+                .filter(|(_, lit, _, _, _, canvas, _)| *canvas && matches!(lit.shading, Shading::Tint))
+                .map(|(_, lit, ..)| (lit.actor, (lit.radius, lit.max_lights))),
+        );
+    }
     let overlay_layers = RenderLayers::from_layers(&OVERLAY_LAYERS);
     for (entity, mut lit, mesh, standard, vertex_lit, canvas, layers) in &mut models {
         let base = (!canvas && layers.is_some_and(|layers| layers.intersects(&overlay_layers)))
@@ -423,7 +431,7 @@ pub(crate) fn light_actors<F: ActorFrames>(
             continue;
         }
         if vertices {
-            if !relight_vertices(&lit, frame, &mesh.0, &world, &mut colors, &mut assets.meshes) {
+            if !relight_vertices(&lit, frame, &mesh.0, &world, colors, &mut assets.meshes) {
                 continue;
             }
         } else if let Some(handle) = relight_tint(&mut lit, still, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
@@ -435,6 +443,12 @@ pub(crate) fn light_actors<F: ActorFrames>(
         lit.lit_at = Some(placed);
         lit.glow = frame.glow;
     }
+}
+
+#[derive(Default)]
+pub(crate) struct LightActorBuffers {
+    colors: FxHashMap<ObjectId, Vec<[f32; 4]>>,
+    hud_bases: FxHashMap<ObjectId, (f32, usize)>,
 }
 
 fn attach_to_hud_base(lit: &mut ActorLit, mesh: &Mesh3d, (radius, max_lights): (f32, usize), meshes: &mut Assets<Mesh>) {
@@ -505,10 +519,8 @@ pub(crate) fn animate_actor_speculars(
         }
         let size = images.get(specular).map_or([1.0, 1.0], |image| image.size().as_vec2().to_array());
         let [[a, b, c], [d, e, f]] = uv_matrix(&lit.layers.specular_uv, seconds, size);
-        if let Some(mut material) = lit_materials.get_mut(handle) {
-            material.extension.layers.specular_u = Vec4::new(a, b, c, 0.0);
-            material.extension.layers.specular_v = Vec4::new(d, e, f, 0.0);
-        }
+        let uv = (Vec4::new(a, b, c, 0.0), Vec4::new(d, e, f, 0.0));
+        set_specular_uv(&mut lit_materials, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers);
     }
 }
 

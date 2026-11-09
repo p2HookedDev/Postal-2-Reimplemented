@@ -4,7 +4,7 @@
 use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT};
 use bevy::color::{Color, LinearRgba};
 use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::ecs::prelude::{Commands, Component, Entity, Query, Res, With};
+use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, With};
 use bevy::light::{PointLight, SpotLight};
 use bevy::math::Vec3;
 use bevy::camera::visibility::RenderLayers;
@@ -71,19 +71,25 @@ pub(crate) fn dynamic_lights(
     frame: Res<FrameLights>,
     shown: Res<ShownScene>,
     mut existing: Query<(Entity, Option<&mut PointLight>, Option<&mut SpotLight>, &mut Transform), With<DynamicLight>>,
+    mut by_kind: Local<LightsByKind>,
 ) {
     let level_brightness = shown.lighting.as_ref().map_or(1.0, |environment| environment.level_brightness);
-    let lights = frame.0.iter().filter(|light| light.dynamic).filter_map(|light| Some((light, gpu_light(light, level_brightness)?)));
+    let lights = frame.0.iter().enumerate().filter(|(_, light)| light.dynamic).filter_map(|(index, light)| Some((index, gpu_light(light, level_brightness)?)));
     // Per kind: the query yields the entities archetype by archetype, not in the frame's order, so one cursor over all
     // lights would pair a point light with a spot entity whenever the kinds interleave.
-    let (points, spots): (Vec<_>, Vec<_>) = lights.partition(|(_, gpu)| matches!(gpu, BevyLight::Point(_)));
-    let (mut points, mut spots) = (points.into_iter(), spots.into_iter());
+    let LightsByKind { points, spots } = &mut *by_kind;
+    for (index, gpu) in lights {
+        let list = if matches!(gpu, BevyLight::Point(_)) { &mut *points } else { &mut *spots };
+        list.push((index, gpu));
+    }
+    let (mut points, mut spots) = (points.drain(..), spots.drain(..));
     for (entity, point, spot, mut transform) in &mut existing {
         let next = if point.is_some() { points.next() } else { spots.next() };
-        let Some((light, gpu)) = next else {
+        let Some((index, gpu)) = next else {
             commands.entity(entity).despawn();
             continue;
         };
+        let light = &frame.0[index];
         transform.set_if_neq(place(light, &gpu, shown.origin));
         match (gpu, point, spot) {
             (BevyLight::Point(new), Some(mut point), _) => {
@@ -98,10 +104,16 @@ pub(crate) fn dynamic_lights(
             _ => {}
         }
     }
-    for (light, gpu) in points.chain(spots) {
-        let at = place(light, &gpu, shown.origin);
+    for (index, gpu) in points.chain(spots) {
+        let at = place(&frame.0[index], &gpu, shown.origin);
         spawn(&mut commands, gpu, at);
     }
+}
+
+#[derive(Default)]
+pub(crate) struct LightsByKind {
+    points: Vec<(usize, BevyLight)>,
+    spots: Vec<(usize, BevyLight)>,
 }
 
 fn spawn(commands: &mut Commands, gpu: BevyLight, place: Transform) {

@@ -16,14 +16,14 @@ const WALK_SCALE: f32 = 1.1;
 
 type Plane = [f32; 4];
 
-pub fn box_check(model: &Model, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
+pub fn box_check(model: &Model, hulls: &BspHulls, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
     if extent == Vector::ZERO {
         return line_check(model, start, end);
     }
     if model.nodes.is_empty() {
         return None;
     }
-    let mut sweep = Sweep { model, start, end, extent, walk: extent * WALK_SCALE, best: None, steps: model.nodes.len(), hull: Hull::default() };
+    let mut sweep = Sweep { model, hulls, start, end, extent, walk: extent * WALK_SCALE, best: None, steps: model.nodes.len() };
     sweep.node(0, Some(0), model.root_outside, MAX_TREE_DEPTH);
     let (time, normal) = sweep.best?;
     // Pull the hit back along the sweep: 0.1 of the distance, at least 0.1 and at most 4 units.
@@ -42,24 +42,26 @@ pub fn box_check(model: &Model, start: Vector, end: Vector, extent: Vector) -> O
 
 /// The hit's `location` is `point` pushed out of the nearest overlapping plane (×1.02), `normal` that plane's normal;
 /// `time` is 0. Zero extent tests the point alone (solid space, with points on a plane counted behind it).
-pub fn point_check(model: &Model, point: Vector, extent: Vector) -> Option<Hit> {
+pub fn point_check(model: &Model, hulls: &BspHulls, point: Vector, extent: Vector) -> Option<Hit> {
     let blocked = Hit { time: 0.0, location: point, normal: Vector::ZERO };
-    if model.nodes.is_empty() {
-        return (!model.root_outside).then_some(blocked);
+    if model.nodes.is_empty() || extent == Vector::ZERO {
+        return point_solid(model, point).then_some(blocked);
     }
-    if extent == Vector::ZERO {
-        let mut outside = model.root_outside;
-        let mut node = Some(0);
-        for _ in 0..model.nodes.len() {
-            let Some(n) = node.and_then(|index| model.nodes.get(index)) else { break };
-            let front = dot_plane(n.plane, point) > 0.0;
-            outside = child_outside(n, front, outside);
-            node = child(n, front);
-        }
-        return (!outside).then_some(blocked);
-    }
-    let mut overlap = Overlap { model, point, extent, walk: extent * WALK_SCALE, nearest: 100_000.0, hit: blocked, steps: model.nodes.len(), hull: Hull::default() };
+    let mut overlap = Overlap { model, hulls, point, extent, walk: extent * WALK_SCALE, nearest: 100_000.0, hit: blocked, steps: model.nodes.len() };
     (!overlap.node(0, Some(0), model.root_outside, MAX_TREE_DEPTH)).then_some(overlap.hit)
+}
+
+/// [`point_check`] with zero extent: whether the point is in solid space, points on a plane counted behind it.
+pub fn point_solid(model: &Model, point: Vector) -> bool {
+    let mut outside = model.root_outside;
+    let mut node = Some(0);
+    for _ in 0..model.nodes.len() {
+        let Some(n) = node.and_then(|index| model.nodes.get(index)) else { break };
+        let front = dot_plane(n.plane, point) > 0.0;
+        outside = child_outside(n, front, outside);
+        node = child(n, front);
+    }
+    !outside
 }
 
 fn radius(plane: Plane, extent: Vector) -> f32 {
@@ -68,13 +70,13 @@ fn radius(plane: Plane, extent: Vector) -> f32 {
 
 struct Sweep<'a> {
     model: &'a Model,
+    hulls: &'a BspHulls,
     start: Vector,
     end: Vector,
     extent: Vector,
     walk: Vector,
     best: Option<(f32, Vector)>,
     steps: usize,
-    hull: Hull,
 }
 
 impl Sweep<'_> {
@@ -102,13 +104,10 @@ impl Sweep<'_> {
         if outside {
             return;
         }
-        let Some(n) = model.nodes.get(parent) else { return };
-        if self.hull.read(model, n).is_none() {
-            return;
-        }
+        let Some(planes) = self.hulls.planes(parent) else { return };
         let mut clip = Clip { t0: -1.0, t1: self.best.map_or(2.0, |(time, _)| time), normal: Vector::ZERO };
         let (start, end, extent) = (self.start, self.end, self.extent);
-        if self.hull.planes(|plane| clip.plane(plane, start, end, extent))
+        if planes.iter().all(|&plane| clip.plane(plane, start, end, extent))
             && clip.t0 > -1.0
             && clip.t1 > clip.t0
             && clip.t1 > 0.0
@@ -153,13 +152,13 @@ impl Clip {
 
 struct Overlap<'a> {
     model: &'a Model,
+    hulls: &'a BspHulls,
     point: Vector,
     extent: Vector,
     walk: Vector,
     nearest: f32,
     hit: Hit,
     steps: usize,
-    hull: Hull,
 }
 
 impl Overlap<'_> {
@@ -184,10 +183,8 @@ impl Overlap<'_> {
         if outside {
             return free;
         }
-        let Some(n) = model.nodes.get(parent) else { return free };
-        let mut hull = std::mem::take(&mut self.hull);
-        let blocked = hull.read(model, n).is_some() && hull.planes(|plane| self.plane(plane));
-        self.hull = hull;
+        let hulls = self.hulls;
+        let blocked = hulls.planes(parent).is_some_and(|planes| planes.iter().all(|&plane| self.plane(plane)));
         if blocked { false } else { free }
     }
 
@@ -204,82 +201,90 @@ impl Overlap<'_> {
     }
 }
 
+/// Every node's collision hull planes, built once per `Model`, in the engine's test order: the hull planes, the six
+/// bounding box planes (0.1 outside the box on the −X, −Y, −Z, +Z sides, 0.1 inside on +X and +Y), then edge bevels.
 #[derive(Default)]
-struct Hull {
+pub struct BspHulls {
     planes: Vec<Plane>,
-    /// Per plane: bit 0 / 1 = normal X negative / positive, bits 2 / 3 for Y, bits 4 / 5 for Z.
-    signs: Vec<u8>,
-    min: [f32; 3],
-    max: [f32; 3],
+    /// Per node: the `planes` range, `None` if the node has no hull or its data is out of range.
+    nodes: Vec<Option<(usize, usize)>>,
 }
 
-impl Hull {
-    /// Reads `Model::leaf_hulls` from the node's `collision_bound`: node indices (bit 30 = flipped) up to −1, then the
-    /// bounding box as six floats. `None` if the node has no hull or the data is out of range.
-    fn read(&mut self, model: &Model, node: &BspNode) -> Option<()> {
-        let first = node.collision_bound?;
-        let list = model.leaf_hulls.get(first..)?;
-        self.planes.clear();
-        self.signs.clear();
-        for &entry in list.iter().take_while(|&&e| e != -1).take(MAX_HULL_PLANES) {
-            let index = usize::try_from(entry & !HULL_FLIPPED).ok()?;
-            let mut plane = model.nodes.get(index)?.plane;
-            if entry & HULL_FLIPPED != 0 {
-                plane = plane.map(|v| -v);
-            }
-            let sign = |v: f32, negative: u8| {
-                if v < 0.0 {
-                    negative
-                } else if v > 0.0 {
-                    negative << 1
-                } else {
-                    0
-                }
-            };
-            self.signs.push(sign(plane[0], 1) | sign(plane[1], 4) | sign(plane[2], 16));
-            self.planes.push(plane);
+impl BspHulls {
+    pub fn new(model: &Model) -> Self {
+        let mut hulls = Self { planes: Vec::new(), nodes: Vec::with_capacity(model.nodes.len()) };
+        let (mut planes, mut signs) = (Vec::new(), Vec::new());
+        for node in &model.nodes {
+            let range = hull_planes(model, node, &mut planes, &mut signs).map(|()| {
+                let start = hulls.planes.len();
+                hulls.planes.extend_from_slice(&planes);
+                (start, hulls.planes.len())
+            });
+            hulls.nodes.push(range);
         }
-        let count = self.planes.len();
-        let bounds = list.get(count + 1..count + 7)?;
-        let float = |i: usize| f32::from_bits(bounds[i] as u32);
-        (self.min, self.max) = ([float(0), float(1), float(2)], [float(3), float(4), float(5)]);
-        Some(())
+        hulls
     }
 
-    /// Calls `test` on every plane bounding the hull, in the engine's order, until it returns false: the hull
-    /// planes, the six bounding box planes (0.1 outside the box on the −X, −Y, −Z, +Z sides, 0.1 inside on +X
-    /// and +Y), then edge bevels. Returns whether every test passed.
-    fn planes(&self, mut test: impl FnMut(Plane) -> bool) -> bool {
-        const EPS: f64 = 0.1;
-        let (min, max) = (self.min.map(f64::from), self.max.map(f64::from));
-        let boxes = [
-            [0.0, 0.0, -1.0, (EPS - min[2]) as f32],
-            [0.0, 0.0, 1.0, (max[2] + EPS) as f32],
-            [-1.0, 0.0, 0.0, (EPS - min[0]) as f32],
-            [1.0, 0.0, 0.0, (max[0] - EPS) as f32],
-            [0.0, -1.0, 0.0, (EPS - min[1]) as f32],
-            [0.0, 1.0, 0.0, (max[1] - EPS) as f32],
-        ];
-        if !self.planes.iter().chain(&boxes).all(|&plane| test(plane)) {
-            return false;
+    fn planes(&self, node: usize) -> Option<&[Plane]> {
+        let (start, end) = (*self.nodes.get(node)?)?;
+        self.planes.get(start..end)
+    }
+}
+
+/// Reads `Model::leaf_hulls` from the node's `collision_bound`: node indices (bit 30 = flipped) up to −1, then the
+/// bounding box as six floats. `None` if the node has no hull or the data is out of range.
+fn hull_planes(model: &Model, node: &BspNode, planes: &mut Vec<Plane>, signs: &mut Vec<u8>) -> Option<()> {
+    const EPS: f64 = 0.1;
+    let first = node.collision_bound?;
+    let list = model.leaf_hulls.get(first..)?;
+    planes.clear();
+    // Per plane: bit 0 / 1 = normal X negative / positive, bits 2 / 3 for Y, bits 4 / 5 for Z.
+    signs.clear();
+    for &entry in list.iter().take_while(|&&e| e != -1).take(MAX_HULL_PLANES) {
+        let index = usize::try_from(entry & !HULL_FLIPPED).ok()?;
+        let mut plane = model.nodes.get(index)?.plane;
+        if entry & HULL_FLIPPED != 0 {
+            plane = plane.map(|v| -v);
         }
-        // Bevels: for two hull planes whose normals point opposite ways along an axis, the plane through their
-        // common edge that contains the axis, facing like the later plane.
-        for i in 0..self.planes.len() {
-            for j in 0..i {
-                let signs = self.signs[i] | self.signs[j];
-                for axis in 0..3 {
-                    if signs >> (2 * axis) & 3 == 3
-                        && let Some(plane) = bevel(axis, self.planes[i], self.planes[j])
-                        && !test(plane)
-                    {
-                        return false;
-                    }
+        let sign = |v: f32, negative: u8| {
+            if v < 0.0 {
+                negative
+            } else if v > 0.0 {
+                negative << 1
+            } else {
+                0
+            }
+        };
+        signs.push(sign(plane[0], 1) | sign(plane[1], 4) | sign(plane[2], 16));
+        planes.push(plane);
+    }
+    let count = planes.len();
+    let bounds = list.get(count + 1..count + 7)?;
+    let float = |i: usize| f64::from(f32::from_bits(bounds[i] as u32));
+    let (min, max) = ([float(0), float(1), float(2)], [float(3), float(4), float(5)]);
+    planes.extend([
+        [0.0, 0.0, -1.0, (EPS - min[2]) as f32],
+        [0.0, 0.0, 1.0, (max[2] + EPS) as f32],
+        [-1.0, 0.0, 0.0, (EPS - min[0]) as f32],
+        [1.0, 0.0, 0.0, (max[0] - EPS) as f32],
+        [0.0, -1.0, 0.0, (EPS - min[1]) as f32],
+        [0.0, 1.0, 0.0, (max[1] - EPS) as f32],
+    ]);
+    // Bevels: for two hull planes whose normals point opposite ways along an axis, the plane through their
+    // common edge that contains the axis, facing like the later plane.
+    for i in 0..count {
+        for j in 0..i {
+            let either = signs[i] | signs[j];
+            for axis in 0..3 {
+                if either >> (2 * axis) & 3 == 3
+                    && let Some(plane) = bevel(axis, planes[i], planes[j])
+                {
+                    planes.push(plane);
                 }
             }
         }
-        true
     }
+    Some(())
 }
 
 fn normal(plane: Plane) -> Vector {
@@ -379,9 +384,10 @@ mod tests {
         crate::point_leaf(&model, above);
         crate::box_zones(&model, below, above);
         line_check(&model, above, below);
-        box_check(&model, above, below, v(10.0, 10.0, 10.0));
-        point_check(&model, above, Vector::ZERO);
-        point_check(&model, above, v(10.0, 10.0, 10.0));
+        let hulls = BspHulls::new(&model);
+        box_check(&model, &hulls, above, below, v(10.0, 10.0, 10.0));
+        point_check(&model, &hulls, above, Vector::ZERO);
+        point_check(&model, &hulls, above, v(10.0, 10.0, 10.0));
     }
 
     #[test]
@@ -399,34 +405,37 @@ mod tests {
     #[test]
     fn box_lands_on_floor() {
         let model = floor();
-        let hit = box_check(&model, v(0.0, 0.0, 100.0), v(0.0, 0.0, -100.0), v(10.0, 10.0, 10.0)).unwrap();
+        let hulls = BspHulls::new(&model);
+        let hit = box_check(&model, &hulls, v(0.0, 0.0, 100.0), v(0.0, 0.0, -100.0), v(10.0, 10.0, 10.0)).unwrap();
         assert!((hit.time - 0.43).abs() < 1e-5, "{hit:?}");
         assert!(close(hit.location, v(0.0, 0.0, 14.0)), "{hit:?}");
         assert_eq!(hit.normal, v(0.0, 0.0, 1.0));
-        let hit = box_check(&model, v(0.0, 0.0, 20.0), v(0.0, 0.0, 0.0), v(10.0, 10.0, 10.0)).unwrap();
+        let hit = box_check(&model, &hulls, v(0.0, 0.0, 20.0), v(0.0, 0.0, 0.0), v(10.0, 10.0, 10.0)).unwrap();
         assert!(close(hit.location, v(0.0, 0.0, 12.0)), "{hit:?}");
-        assert!(box_check(&model, v(0.0, 0.0, 100.0), v(0.0, 0.0, 20.0), v(10.0, 10.0, 10.0)).is_none());
-        assert!(box_check(&model, v(0.0, 0.0, 20.0), v(0.0, 0.0, 100.0), v(10.0, 10.0, 10.0)).is_none());
+        assert!(box_check(&model, &hulls, v(0.0, 0.0, 100.0), v(0.0, 0.0, 20.0), v(10.0, 10.0, 10.0)).is_none());
+        assert!(box_check(&model, &hulls, v(0.0, 0.0, 20.0), v(0.0, 0.0, 100.0), v(10.0, 10.0, 10.0)).is_none());
     }
 
     #[test]
     fn box_hits_hull_bounds() {
         let model = floor();
-        let hit = box_check(&model, v(2000.0, 0.0, -50.0), v(0.0, 0.0, -50.0), v(10.0, 10.0, 10.0)).unwrap();
+        let hulls = BspHulls::new(&model);
+        let hit = box_check(&model, &hulls, v(2000.0, 0.0, -50.0), v(0.0, 0.0, -50.0), v(10.0, 10.0, 10.0)).unwrap();
         assert!(close(hit.location, v(1013.9, 0.0, -50.0)), "{hit:?}");
         assert_eq!(hit.normal, v(1.0, 0.0, 0.0));
-        assert!(box_check(&model, v(2000.0, 0.0, 100.0), v(-2000.0, 0.0, 100.0), v(10.0, 10.0, 10.0)).is_none());
+        assert!(box_check(&model, &hulls, v(2000.0, 0.0, 100.0), v(-2000.0, 0.0, 100.0), v(10.0, 10.0, 10.0)).is_none());
     }
 
     #[test]
     fn point_overlap() {
         let model = floor();
-        let hit = point_check(&model, v(0.0, 0.0, 5.0), v(10.0, 10.0, 10.0)).unwrap();
+        let hulls = BspHulls::new(&model);
+        let hit = point_check(&model, &hulls, v(0.0, 0.0, 5.0), v(10.0, 10.0, 10.0)).unwrap();
         assert!(close(hit.location, v(0.0, 0.0, 10.202)), "{hit:?}");
         assert_eq!(hit.normal, v(0.0, 0.0, 1.0));
-        assert!(point_check(&model, v(0.0, 0.0, 20.0), v(10.0, 10.0, 10.0)).is_none());
-        assert!(point_check(&model, v(0.0, 0.0, 1.0), Vector::ZERO).is_none());
-        assert!(point_check(&model, v(0.0, 0.0, -1.0), Vector::ZERO).is_some());
+        assert!(point_check(&model, &hulls, v(0.0, 0.0, 20.0), v(10.0, 10.0, 10.0)).is_none());
+        assert!(point_check(&model, &hulls, v(0.0, 0.0, 1.0), Vector::ZERO).is_none());
+        assert!(point_check(&model, &hulls, v(0.0, 0.0, -1.0), Vector::ZERO).is_some());
     }
 
     #[test]

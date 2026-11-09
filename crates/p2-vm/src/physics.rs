@@ -169,13 +169,14 @@ impl<L: LoaderRef> Vm<L> {
         self.store.set_vector(object, property, value);
     }
 
-    pub(crate) fn event_bool(&mut self, object: ObjectId, name: &str, args: impl IntoIterator<Item = Value>) -> Result<bool, Error> {
-        if let Some(bit) = crate::states::probe_bit(name)
+    pub(crate) fn event_bool(&mut self, object: ObjectId, name: impl crate::states::EventKey, args: impl IntoIterator<Item = Value>) -> Result<bool, Error> {
+        let (name, probe) = name.resolve(self);
+        if let Some(bit) = probe
             && !self.is_probing(object, bit)?
         {
             return Ok(false);
         }
-        let Some(function) = self.find_object_function(object, name)? else { return Ok(false) };
+        let Some(function) = self.find_object_function_id(object, name)? else { return Ok(false) };
         let Some(class) = self.store.object(object).class else { return Ok(false) };
         Ok(self.call(&function, Some(object), class, args)?.as_ref().is_some_and(crate::interp::truthy))
     }

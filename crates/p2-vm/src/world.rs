@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use p2_assets::{Model, Terrain};
-use p2_collision::MeshCollision;
+use p2_collision::{BspHulls, MeshCollision};
 use p2_math::Vector;
 use p2_package::PackageId;
 
@@ -113,6 +113,7 @@ thread_local! {
 pub(crate) struct World {
     map: Option<PackageId>,
     model: Option<Model>,
+    hulls: BspHulls,
     zone_actors: Vec<Option<ObjectId>>,
     terrains: Vec<Terrain>,
     boxes: Vec<WorldShape>,

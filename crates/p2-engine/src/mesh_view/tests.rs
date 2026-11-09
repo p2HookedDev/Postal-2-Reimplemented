@@ -160,7 +160,8 @@ fn a_forced_zone_tag_shows_only_from_its_zones() {
 #[test]
 fn a_moving_actor_is_in_the_zones_where_it_is() {
     let mut app = App::new();
-    let collision = StaticCollision { model: two_zones(), terrains: Vec::new(), meshes: Vec::new() };
+    let model = two_zones();
+    let collision = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: Vec::new(), meshes: Vec::new() };
     app.insert_resource(LevelCollision(Some(Arc::new(collision))));
     app.add_systems(Update, follower_zones);
     let follow = FollowActor { actor: ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };

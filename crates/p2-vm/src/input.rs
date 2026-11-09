@@ -248,7 +248,7 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         self.read_input(controller, Some(delta))?;
-        let result = self.event(controller, "PlayerTick", [Value::Float(delta)]);
+        let result = self.event(controller, crate::states::Event::PlayerTick, [Value::Float(delta)]);
         self.read_input(controller, None)?;
         result
     }

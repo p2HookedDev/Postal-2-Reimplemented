@@ -80,7 +80,7 @@ impl<L: LoaderRef> Vm<L> {
             self.volume_moved(actor);
         }
         if to_desired && rotation == desired {
-            self.event(actor, "EndedRotation", Vec::new())?;
+            self.event(actor, crate::states::Event::EndedRotation, Vec::new())?;
         }
         Ok(())
     }
