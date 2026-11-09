@@ -10,7 +10,7 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(actor, Prop::Acceleration, [0.0; 3].into());
             return;
         }
-        if !self.flag_of(actor, Prop::bJustTeleported) {
+        if !self.store.flag_of(actor, Prop::bJustTeleported) {
             self.set_vector(actor, Prop::Velocity, [0.0; 3].into());
         }
     }

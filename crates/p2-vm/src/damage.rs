@@ -51,7 +51,7 @@ impl<L: LoaderRef> Vm<L> {
                 stop_at_wall: b(7),
                 ignore_instigator: b(8),
                 ignore: object(9),
-                target_class: object(10).map(|class| self.object(class).name),
+                target_class: object(10).map(|class| self.store.object(class).name),
                 explosion: b(11),
                 class_check: match args.get(12) {
                     Some(Value::Str(list)) => list.as_str(),
@@ -75,36 +75,36 @@ impl<L: LoaderRef> Vm<L> {
     /// The instigator is hit only when within it less its collision radius.
     fn hurt_radius(&mut self, this: ObjectId, hurt: RadiusDamage, options: &HurtOptions<'_>) -> Result<(i32, bool), Error> {
         let RadiusDamage { amount, radius, damage_type, momentum, centre } = hurt;
-        let instigator = self.object_of(this, Prop::Instigator);
+        let instigator = self.store.object_of(this, Prop::Instigator);
         let of_target_class = |vm: &Self, victim: ObjectId| match options.target_class {
-            Some(class) => vm.is_a(victim, class),
-            None => vm.is_a(victim, Kind::Actor),
+            Some(class) => vm.store.is_a(victim, class),
+            None => vm.store.is_a(victim, Kind::Actor),
         };
         let class_matches = !options.class_check.is_empty() && {
-            let own_class = self.name(self.object(this).class_name);
+            let own_class = self.store.name(self.store.object(this).class_name);
             options.class_check.split(',').any(|c| c.trim().eq_ignore_ascii_case(own_class))
         };
         let candidates: Vec<ObjectId> = self
             .colliders_near([centre[0], centre[1]], [centre[0], centre[1]], radius)
             .into_iter()
             .map(|e| e.actor)
-            .filter(|&o| self.flag_of(o, Prop::bCollideActors) && (self.vector(o, Prop::Location) - centre).size() < radius)
+            .filter(|&o| self.store.flag_of(o, Prop::bCollideActors) && (self.store.vector(o, Prop::Location) - centre).size() < radius)
             .collect();
         let (mut live_pawns, mut matched) = (0, false);
         for victim in candidates {
-            if self.is_deleted(victim)
+            if self.store.is_deleted(victim)
                 || !of_target_class(self, victim)
                 || victim == this
-                || self.byte_of(victim, Prop::Role) != ROLE_AUTHORITY
-                || self.flag_of(victim, Prop::bHidden)
+                || self.store.byte_of(victim, Prop::Role) != ROLE_AUTHORITY
+                || self.store.flag_of(victim, Prop::bHidden)
                 || (options.ignore_instigator && Some(victim) == instigator)
                 || Some(victim) == options.ignore
             {
                 continue;
             }
-            let at = self.vector(victim, Prop::Location);
+            let at = self.store.vector(victim, Prop::Location);
             if options.stop_at_wall && self.is_player(victim) {
-                let from = self.vector(this, Prop::Location);
+                let from = self.store.vector(this, Prop::Location);
                 if self.any_hit(from, at, [0.0; 3].into(), Some(this), trace::WORLD) {
                     continue;
                 }
@@ -112,8 +112,8 @@ impl<L: LoaderRef> Vm<L> {
             let mut reach = radius;
             if options.instigator_radius > 0.0 {
                 if Some(victim) == instigator {
-                    let distance = (self.vector(this, Prop::Location) - at).size();
-                    if distance > options.instigator_radius - self.float_of(victim, Prop::CollisionRadius) {
+                    let distance = (self.store.vector(this, Prop::Location) - at).size();
+                    if distance > options.instigator_radius - self.store.float_of(victim, Prop::CollisionRadius) {
                         continue;
                     }
                 }
@@ -122,7 +122,7 @@ impl<L: LoaderRef> Vm<L> {
             let offset = at - centre;
             let distance = offset.size().max(1.0);
             let direction = offset * (1.0 / distance);
-            let share = if options.no_scale { 1.0 } else { 1.0 - ((distance - self.float_of(victim, Prop::CollisionRadius)) / reach).max(0.0) };
+            let share = if options.no_scale { 1.0 } else { 1.0 - ((distance - self.store.float_of(victim, Prop::CollisionRadius)) / reach).max(0.0) };
             let mut damage = share * amount;
             let mut push = direction * (share * momentum);
             if options.explosion && direction[2] > 0.0 {
@@ -137,10 +137,10 @@ impl<L: LoaderRef> Vm<L> {
             } else {
                 damage = 1.0;
             }
-            if self.is_a(victim, Kind::Pawn) && self.float_of(victim, Prop::Health) > 0.0 {
+            if self.store.is_a(victim, Kind::Pawn) && self.store.float_of(victim, Prop::Health) > 0.0 {
                 live_pawns += 1;
             }
-            let half = 0.5 * (self.float_of(victim, Prop::CollisionHeight) + self.float_of(victim, Prop::CollisionRadius));
+            let half = 0.5 * (self.store.float_of(victim, Prop::CollisionHeight) + self.store.float_of(victim, Prop::CollisionRadius));
             let hit = at - (direction * half);
             let args = [Value::Int((damage as i32).max(1)), Value::Object(instigator), Value::Vector(hit), Value::Vector(push), damage_type.clone()];
             self.event(victim, "TakeDamage", args)?;
@@ -155,30 +155,30 @@ impl<L: LoaderRef> Vm<L> {
         let (fire_dir, start) = (vec3(args.get(2)), vec3(args.get(3)));
         let min_aim = best_aim * 3.0 - 2.0;
         let flat = Vector::new(fire_dir[0], fire_dir[1], 0.0).safe_normal();
-        let own_pawn = self.object_of(this, Prop::Pawn);
+        let own_pawn = self.store.object_of(this, Prop::Pawn);
         let eyes = |vm: &Self, pawn: ObjectId| {
-            let at = vm.vector(pawn, Prop::Location);
-            Vector::new(at[0], at[1], at[2] + vm.float_of(pawn, Prop::EyeHeight))
+            let at = vm.store.vector(pawn, Prop::Location);
+            Vector::new(at[0], at[1], at[2] + vm.store.float_of(pawn, Prop::EyeHeight))
         };
-        let zoomed = self.is_a(this, Kind::PlayerController) && self.float_of(this, Prop::FovAngle) != self.float_of(this, Prop::DefaultFOV);
-        let team_game = self.level.and_then(|l| self.object_of(l, Prop::Game)).is_some_and(|g| self.flag_of(g, Prop::bTeamGame));
-        let team = |vm: &Self, c: ObjectId| vm.object_of(c, Prop::PlayerReplicationInfo).map(|pri| vm.object_of(pri, Prop::Team));
+        let zoomed = self.store.is_a(this, Kind::PlayerController) && self.store.float_of(this, Prop::FovAngle) != self.store.float_of(this, Prop::DefaultFOV);
+        let team_game = self.level.and_then(|l| self.store.object_of(l, Prop::Game)).is_some_and(|g| self.store.flag_of(g, Prop::bTeamGame));
+        let team = |vm: &Self, c: ObjectId| vm.store.object_of(c, Prop::PlayerReplicationInfo).map(|pri| vm.store.object_of(pri, Prop::Team));
         // The engine traces each candidate at its turn; the result is the same as tracing best aim first and stopping at the
         // first visible one (a shotgun's 12 pellets traced every pawn in front of the player, ~320 us a call in a crowd).
         let mut strong: Vec<(ObjectId, f32, f32)> = Vec::new();
         let mut weak: Vec<(ObjectId, f32)> = Vec::new();
-        let mut next = self.level.and_then(|l| self.object_of(l, Prop::ControllerList));
+        let mut next = self.level.and_then(|l| self.store.object_of(l, Prop::ControllerList));
         for _ in 0..MAX_CONTROLLERS {
             let Some(controller) = next else { break };
-            next = self.object_of(controller, Prop::nextController);
-            let Some(pawn) = self.object_of(controller, Prop::Pawn) else { continue };
-            if controller == this || self.float_of(pawn, Prop::Health) <= 0.0 || !self.flag_of(pawn, Prop::bProjTarget) {
+            next = self.store.object_of(controller, Prop::nextController);
+            let Some(pawn) = self.store.object_of(controller, Prop::Pawn) else { continue };
+            if controller == this || self.store.float_of(pawn, Prop::Health) <= 0.0 || !self.store.flag_of(pawn, Prop::bProjTarget) {
                 continue;
             }
             if team_game && let (Some(ours), Some(theirs)) = (team(self, this), team(self, controller)) && ours == theirs {
                 continue;
             }
-            let delta = self.vector(pawn, Prop::Location) - start;
+            let delta = self.store.vector(pawn, Prop::Location) - start;
             let aim = fire_dir.dot(delta);
             let distance_squared = delta.dot(delta);
             if aim <= 0.0 || !(distance_squared < PICK_TARGET_RANGE_SQUARED || zoomed) {
@@ -195,7 +195,7 @@ impl<L: LoaderRef> Vm<L> {
         let visible = |vm: &mut Self, pawn: ObjectId| {
             own_pawn.is_some_and(|own| {
                 let mine = eyes(vm, own);
-                !vm.any_hit(vm.vector(pawn, Prop::Location), mine, [0.0; 3].into(), Some(this), trace::WORLD)
+                !vm.any_hit(vm.store.vector(pawn, Prop::Location), mine, [0.0; 3].into(), Some(this), trace::WORLD)
                     || !vm.any_hit(eyes(vm, pawn), mine, [0.0; 3].into(), Some(this), trace::WORLD)
             })
         };

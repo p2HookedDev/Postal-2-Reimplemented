@@ -67,13 +67,9 @@ impl EDrawType {
 }
 
 impl<L: LoaderRef> Vm<L> {
-    #[inline]
-    pub(crate) fn physics_of(&self, actor: ObjectId) -> Option<EPhysics> {
-        self.store.physics_of(actor)
-    }
 
     pub(crate) fn draw_type_of(&self, actor: ObjectId) -> Option<EDrawType> {
-        EDrawType::from_byte(self.byte_of(actor, Prop::DrawType))
+        EDrawType::from_byte(self.store.byte_of(actor, Prop::DrawType))
     }
 }
 

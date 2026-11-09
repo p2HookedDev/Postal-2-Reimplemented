@@ -113,13 +113,13 @@ impl PlayWorld {
         let (player, player_pawn) = (player.map(|(controller, _)| controller), player.and_then(|(_, pawn)| pawn));
         let seen = vm.object_ids().count();
         let lights = vm.object_ids().filter(|&actor| crate::actors::mesh_light(&vm, actor).is_some_and(|light| light.dynamic)).collect();
-        let fluid_surfaces = vm.actors().filter(|&actor| vm.is_a(actor, "FluidSurfaceInfo") && !vm.is_deleted(actor)).collect();
+        let fluid_surfaces = vm.actors().filter(|&actor| vm.store.is_a(actor, "FluidSurfaceInfo") && !vm.store.is_deleted(actor)).collect();
         let corona_lights = vm.object_ids().filter(|&actor| crate::map::is_corona(&vm, actor)).collect();
-        let volumes = vm.actors().filter(|&actor| vm.is_a(actor, Kind::Volume) && !vm.is_deleted(actor)).collect();
+        let volumes = vm.actors().filter(|&actor| vm.store.is_a(actor, Kind::Volume) && !vm.store.is_deleted(actor)).collect();
         let switches = vm
             .object_ids()
             .filter(|&object| is_switch(&vm, object))
-            .map(|object| (object, vm.object(object).class.map(|_| switch_material(&vm, object))))
+            .map(|object| (object, vm.store.object(object).class.map(|_| switch_material(&vm, object))))
             .collect();
         let sim = Simulation {
             vm,

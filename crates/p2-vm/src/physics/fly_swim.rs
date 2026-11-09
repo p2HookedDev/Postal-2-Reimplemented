@@ -38,15 +38,15 @@ fn water_line_point(in_water: Vector, out_of_water: Vector, time: f32, own_volum
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn phys_flying(&mut self, pawn: ObjectId, delta: f32) -> Result<(), Error> {
-        let accel_dir = self.vector(pawn, Prop::Acceleration).safe_normal();
+        let accel_dir = self.store.vector(pawn, Prop::Acceleration).safe_normal();
         let friction = 0.5 * self.water(pawn).1;
-        self.calc_fluid_velocity(pawn, accel_dir, delta, self.float_of(pawn, Prop::AirSpeed), friction, false);
-        let mut old_location = self.vector(pawn, Prop::Location);
-        self.set(pawn, Prop::bJustTeleported, Value::Bool(false));
+        self.calc_fluid_velocity(pawn, accel_dir, delta, self.store.float_of(pawn, Prop::AirSpeed), friction, false);
+        let mut old_location = self.store.vector(pawn, Prop::Location);
+        self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
         let zone = self.zone_push(pawn, 1.0);
-        let adjusted = (self.vector(pawn, Prop::Velocity) + zone) * delta;
+        let adjusted = (self.store.vector(pawn, Prop::Velocity) + zone) * delta;
         let hit = self.move_actor(pawn, adjusted, Bases::Block)?;
-        if self.is_deleted(pawn) {
+        if self.store.is_deleted(pawn) {
             return Ok(());
         }
         if hit.time < 1.0 {
@@ -54,31 +54,31 @@ impl<L: LoaderRef> Vm<L> {
         } else {
             self.set_vector(pawn, Prop::Floor, [0.0, 0.0, 1.0].into());
         }
-        if !self.flag_of(pawn, Prop::bJustTeleported) && !self.flag_of(pawn, Prop::bNoVelocityUpdate) {
-            let moved = self.vector(pawn, Prop::Location) - old_location;
+        if !self.store.flag_of(pawn, Prop::bJustTeleported) && !self.store.flag_of(pawn, Prop::bNoVelocityUpdate) {
+            let moved = self.store.vector(pawn, Prop::Location) - old_location;
             self.set_vector(pawn, Prop::Velocity, moved * (1.0 / delta));
         }
-        self.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(false));
+        self.store.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(false));
         Ok(())
     }
 
     pub(crate) fn phys_swimming(&mut self, pawn: ObjectId, delta: f32, iterations: u32) -> Result<(), Error> {
         let (in_water, fluid_friction) = self.water(pawn);
-        let buoyancy = self.float_of(pawn, Prop::Buoyancy);
-        let mut velocity = self.vector(pawn, Prop::Velocity);
+        let buoyancy = self.store.float_of(pawn, Prop::Buoyancy);
+        let mut velocity = self.store.vector(pawn, Prop::Velocity);
         if velocity[2] > BUOYANT_RISE && buoyancy != 0.0 {
             velocity[2] = velocity[2] * self.net_buoyancy(pawn, in_water, buoyancy) / buoyancy;
             self.set_vector(pawn, Prop::Velocity, velocity);
         }
-        let mut old_location = self.vector(pawn, Prop::Location);
-        self.set(pawn, Prop::bJustTeleported, Value::Bool(false));
-        let accel_dir = self.vector(pawn, Prop::Acceleration).safe_normal();
-        self.calc_fluid_velocity(pawn, accel_dir, delta, self.float_of(pawn, Prop::WaterSpeed), 0.5 * fluid_friction, true);
-        let mut vel_z = self.vector(pawn, Prop::Velocity)[2];
+        let mut old_location = self.store.vector(pawn, Prop::Location);
+        self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
+        let accel_dir = self.store.vector(pawn, Prop::Acceleration).safe_normal();
+        self.calc_fluid_velocity(pawn, accel_dir, delta, self.store.float_of(pawn, Prop::WaterSpeed), 0.5 * fluid_friction, true);
+        let mut vel_z = self.store.vector(pawn, Prop::Velocity)[2];
         let zone = self.zone_push(pawn, 25.0 * delta);
-        let adjusted = (self.vector(pawn, Prop::Velocity) + zone) * delta;
+        let adjusted = (self.store.vector(pawn, Prop::Velocity) + zone) * delta;
         let (fraction, hit) = self.swim(pawn, adjusted)?;
-        if self.is_deleted(pawn) {
+        if self.store.is_deleted(pawn) {
             return Ok(());
         }
         let mut remaining = delta * fraction;
@@ -87,55 +87,55 @@ impl<L: LoaderRef> Vm<L> {
         } else {
             self.set_vector(pawn, Prop::Floor, [0.0, 0.0, 1.0].into());
         }
-        if !self.flag_of(pawn, Prop::bJustTeleported) && remaining < delta {
+        if !self.store.flag_of(pawn, Prop::bJustTeleported) && remaining < delta {
             let water_jump = !self.water(pawn).0;
             if water_jump {
-                vel_z = self.vector(pawn, Prop::Velocity)[2];
+                vel_z = self.store.vector(pawn, Prop::Velocity)[2];
             }
-            if !self.flag_of(pawn, Prop::bNoVelocityUpdate) {
-                let moved = self.vector(pawn, Prop::Location) - old_location;
+            if !self.store.flag_of(pawn, Prop::bNoVelocityUpdate) {
+                let moved = self.store.vector(pawn, Prop::Location) - old_location;
                 self.set_vector(pawn, Prop::Velocity, moved * (1.0 / (delta - remaining)));
             }
-            self.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(false));
+            self.store.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(false));
             if water_jump {
-                let mut velocity = self.vector(pawn, Prop::Velocity);
+                let mut velocity = self.store.vector(pawn, Prop::Velocity);
                 velocity[2] = vel_z;
                 self.set_vector(pawn, Prop::Velocity, velocity);
             }
         }
         if !self.water(pawn).0 {
-            if self.physics_of(pawn) == Some(EPhysics::Swimming) {
+            if self.store.physics_of(pawn) == Some(EPhysics::Swimming) {
                 self.set_physics(pawn, EPhysics::Falling, None)?;
             }
-            let mut velocity = self.vector(pawn, Prop::Velocity);
+            let mut velocity = self.store.vector(pawn, Prop::Velocity);
             if velocity[2] > 0.0 && velocity[2] < BOB_SPEED {
                 velocity[2] = 40.0 + 0.4 * horizontal_size(velocity);
                 self.set_vector(pawn, Prop::Velocity, velocity);
             }
         }
-        if self.physics_of(pawn) != Some(EPhysics::Swimming) {
+        if self.store.physics_of(pawn) != Some(EPhysics::Swimming) {
             return self.start_new_physics(pawn, remaining, iterations + 1);
         }
         Ok(())
     }
 
     pub(crate) fn start_swimming(&mut self, pawn: ObjectId, old_location: Vector, old_velocity: Vector, tick: f32, remaining: f32, iterations: u32) -> Result<(), Error> {
-        if !self.flag_of(pawn, Prop::bJustTeleported) {
-            let average = if tick > 0.0 { (self.vector(pawn, Prop::Location) - old_location) * (1.0 / tick) } else { self.vector(pawn, Prop::Velocity) };
+        if !self.store.flag_of(pawn, Prop::bJustTeleported) {
+            let average = if tick > 0.0 { (self.store.vector(pawn, Prop::Location) - old_location) * (1.0 / tick) } else { self.store.vector(pawn, Prop::Velocity) };
             let terminal = self.volume(pawn).terminal_velocity;
             self.set_vector(pawn, Prop::Velocity, entry_velocity(average, old_velocity, terminal));
         }
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         let line = self.find_water_line(pawn, location, old_location);
         let mut time_left = remaining;
         if line != location {
             time_left += (line - location).size() * tick / (location - old_location).size();
             self.move_actor(pawn, line - location, Bases::Block)?;
-            if self.is_deleted(pawn) {
+            if self.store.is_deleted(pawn) {
                 return Ok(());
             }
         }
-        let velocity = sink_bob(self.vector(pawn, Prop::Velocity));
+        let velocity = sink_bob(self.store.vector(pawn, Prop::Velocity));
         self.set_vector(pawn, Prop::Velocity, velocity);
         if time_left > MIN_SWIM_TIME {
             self.phys_swimming(pawn, time_left, iterations)?;
@@ -148,7 +148,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.trace_world(out_of_water, in_water, Vector::ZERO).is_some_and(|hit| hit.time < time) {
             return out_of_water;
         }
-        water_line_point(in_water, out_of_water, time, self.object_of(pawn, Prop::PhysicsVolume) == Some(volume))
+        water_line_point(in_water, out_of_water, time, self.store.object_of(pawn, Prop::PhysicsVolume) == Some(volume))
     }
 
     /// `advance` makes each further move (`MoveActor` flying, `Swim` swimming) and returns its time fraction; the result is
@@ -164,11 +164,11 @@ impl<L: LoaderRef> Vm<L> {
         self.set_vector(pawn, Prop::Floor, hit.normal);
         let grav_dir = gravity_direction(self.gravity_of(pawn));
         let desired_dir = adjusted.safe_normal();
-        let up_down = grav_dir.dot(self.vector(pawn, Prop::Velocity).safe_normal());
+        let up_down = grav_dir.dot(self.store.vector(pawn, Prop::Velocity).safe_normal());
         if hit.normal[2].abs() < STEP_WALL_Z && up_down < 0.5 && up_down > -0.2 {
-            let step_z = self.vector(pawn, Prop::Location)[2];
+            let step_z = self.store.vector(pawn, Prop::Location)[2];
             self.step_up(pawn, grav_dir, desired_dir, adjusted * (1.0 - hit.time), hit, 0)?;
-            old_location[2] = self.vector(pawn, Prop::Location)[2] + (old_location[2] - step_z);
+            old_location[2] = self.store.vector(pawn, Prop::Location)[2] + (old_location[2] - step_z);
             return Ok(1.0);
         }
         self.process_hit_wall(pawn, hit.normal, hit.actor)?;
@@ -189,12 +189,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn swim(&mut self, pawn: ObjectId, step: Vector) -> Result<(f32, MoveHit), Error> {
-        let start = self.vector(pawn, Prop::Location);
+        let start = self.store.vector(pawn, Prop::Location);
         let hit = self.move_actor(pawn, step, Bases::Block)?;
-        if self.is_deleted(pawn) || self.water(pawn).0 {
+        if self.store.is_deleted(pawn) || self.water(pawn).0 {
             return Ok((0.0, hit));
         }
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         let line = self.find_water_line(pawn, start, location);
         if line == location {
             return Ok((0.0, hit));
@@ -205,8 +205,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn water(&self, pawn: ObjectId) -> (bool, f32) {
-        match self.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.object(v).class.is_some()) {
-            Some(v) => (self.flag_of(v, Prop::bWaterVolume), self.float_of(v, Prop::FluidFriction)),
+        match self.store.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some()) {
+            Some(v) => (self.store.flag_of(v, Prop::bWaterVolume), self.store.float_of(v, Prop::FluidFriction)),
             None => (false, DEFAULT_FLUID_FRICTION),
         }
     }
@@ -228,15 +228,15 @@ impl<L: LoaderRef> Vm<L> {
 
     fn calc_fluid_velocity(&mut self, pawn: ObjectId, accel_dir: Vector, delta: f32, max_speed: f32, friction: f32, buoyant: bool) {
         let (limit, cap) = self.velocity_caps(pawn, max_speed);
-        let mut velocity = self.vector(pawn, Prop::Velocity);
-        let mut acceleration = self.vector(pawn, Prop::Acceleration);
+        let mut velocity = self.store.vector(pawn, Prop::Velocity);
+        let mut acceleration = self.store.vector(pawn, Prop::Acceleration);
         if acceleration.dot(acceleration) > limit * limit {
             acceleration = accel_dir * limit;
         }
         velocity = turned_velocity(velocity, accel_dir, delta, friction);
         velocity = (velocity * (1.0 - friction * delta)) + (acceleration * delta);
         if buoyant {
-            let lift = 1.0 - self.float_of(pawn, Prop::Buoyancy) / self.float_of(pawn, Prop::Mass);
+            let lift = 1.0 - self.store.float_of(pawn, Prop::Buoyancy) / self.store.float_of(pawn, Prop::Mass);
             if lift.is_finite() {
                 velocity += self.gravity_of(pawn) * (delta * lift);
             }

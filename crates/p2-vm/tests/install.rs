@@ -17,7 +17,7 @@ fn load_animations(loader: &mut Loader) {
 }
 
 fn sequence_names(loader: &Loader, vm: &Vm<&Loader>, animation: ObjectId) -> Vec<String> {
-    let (id, export) = loader.loaded_export_by_path(&vm.object(animation).path).expect("animation export");
+    let (id, export) = loader.loaded_export_by_path(&vm.store.object(animation).path).expect("animation export");
     let loaded = loader.package(id);
     let pkg = &loaded.package;
     let animation = p2_assets::read_mesh_animation(pkg, &loaded.data, &pkg.exports[export]).unwrap();
@@ -30,20 +30,20 @@ fn actor_defaults() {
     let mut vm = Vm::new(&loader);
     let actor = vm.find_class("Engine", "Actor").unwrap();
 
-    assert_eq!(vm.default_value(actor, "DrawType"), Some(Value::Byte(1)));
-    assert_eq!(vm.default_value(actor, "DrawScale"), Some(Value::Float(1.0)));
-    assert_eq!(vm.default_value(actor, "CollisionRadius"), Some(Value::Float(22.0)));
-    assert_eq!(vm.default_value(actor, "bMovable"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.default_value(actor, "DrawType"), Some(Value::Byte(1)));
+    assert_eq!(vm.store.default_value(actor, "DrawScale"), Some(Value::Float(1.0)));
+    assert_eq!(vm.store.default_value(actor, "CollisionRadius"), Some(Value::Float(22.0)));
+    assert_eq!(vm.store.default_value(actor, "bMovable"), Some(Value::Bool(true)));
     assert_eq!(
-        vm.default_value(actor, "DrawScale3D"),
+        vm.store.default_value(actor, "DrawScale3D"),
         Some(Value::Vector(p2_math::Vector::new(1.0, 1.0, 1.0)))
     );
-    let Some(Value::Object(Some(texture))) = vm.default_value(actor, "Texture") else { panic!("Texture") };
-    assert_eq!(vm.name(vm.object(texture).name), "S_Actor");
-    let Some(Value::Object(Some(message))) = vm.default_value(actor, "MessageClass") else { panic!("MessageClass") };
-    assert_eq!(vm.object(message).path, "Engine.LocalMessage");
-    assert_eq!(vm.name(vm.object(message).class_name), "Class");
-    assert_eq!(vm.default_value(actor, "bHidden"), Some(Value::Bool(false)));
+    let Some(Value::Object(Some(texture))) = vm.store.default_value(actor, "Texture") else { panic!("Texture") };
+    assert_eq!(vm.store.name(vm.store.object(texture).name), "S_Actor");
+    let Some(Value::Object(Some(message))) = vm.store.default_value(actor, "MessageClass") else { panic!("MessageClass") };
+    assert_eq!(vm.store.object(message).path, "Engine.LocalMessage");
+    assert_eq!(vm.store.name(vm.store.object(message).class_name), "Class");
+    assert_eq!(vm.store.default_value(actor, "bHidden"), Some(Value::Bool(false)));
 }
 
 #[test]
@@ -51,13 +51,13 @@ fn pawn_inherits_actor_defaults() {
     let Some(loader) = loader() else { return };
     let mut vm = Vm::new(&loader);
     let pawn = vm.find_class("Engine", "Pawn").unwrap();
-    let actor = vm.class(pawn).super_class.map(|id| vm.class(id).name);
-    assert_eq!(actor.map(|name| vm.name(name)), Some("Actor"));
-    assert_eq!(vm.default_value(pawn, "DrawType"), Some(Value::Byte(2)));
-    assert_eq!(vm.default_value(pawn, "bMovable"), Some(Value::Bool(true)));
+    let actor = vm.store.class(pawn).super_class.map(|id| vm.store.class(id).name);
+    assert_eq!(actor.map(|name| vm.store.name(name)), Some("Actor"));
+    assert_eq!(vm.store.default_value(pawn, "DrawType"), Some(Value::Byte(2)));
+    assert_eq!(vm.store.default_value(pawn, "bMovable"), Some(Value::Bool(true)));
     let actor = vm.find_class("Engine", "Actor").unwrap();
-    assert_eq!(vm.default_value(actor, "SoundRadius"), Some(Value::Float(64.0)));
-    assert_eq!(vm.default_value(pawn, "SoundRadius"), Some(Value::Float(9.0)));
+    assert_eq!(vm.store.default_value(actor, "SoundRadius"), Some(Value::Float(64.0)));
+    assert_eq!(vm.store.default_value(pawn, "SoundRadius"), Some(Value::Float(9.0)));
 }
 
 #[test]
@@ -88,14 +88,14 @@ fn new_object_from_defaults() {
     let actor = vm.find_class("Engine", "Actor").unwrap();
     let first = vm.new_object(actor, None);
     let second = vm.new_object(actor, None);
-    assert_eq!(vm.name(vm.object(first).name), "Actor0");
-    assert_eq!(vm.name(vm.object(second).name), "Actor1");
-    assert_eq!(vm.get(first, "DrawScale"), Some(Value::Float(1.0)));
-    assert!(vm.set(first, "DrawScale", Value::Float(2.0)));
-    assert_eq!(vm.get(first, "DrawScale"), Some(Value::Float(2.0)));
-    assert_eq!(vm.get(second, "DrawScale"), Some(Value::Float(1.0)));
-    assert_eq!(vm.default_value(actor, "DrawScale"), Some(Value::Float(1.0)));
-    assert!(!vm.set(first, "NoSuchProperty", Value::Int(0)));
+    assert_eq!(vm.store.name(vm.store.object(first).name), "Actor0");
+    assert_eq!(vm.store.name(vm.store.object(second).name), "Actor1");
+    assert_eq!(vm.store.get(first, "DrawScale"), Some(Value::Float(1.0)));
+    assert!(vm.store.set(first, "DrawScale", Value::Float(2.0)));
+    assert_eq!(vm.store.get(first, "DrawScale"), Some(Value::Float(2.0)));
+    assert_eq!(vm.store.get(second, "DrawScale"), Some(Value::Float(1.0)));
+    assert_eq!(vm.store.default_value(actor, "DrawScale"), Some(Value::Float(1.0)));
+    assert!(!vm.store.set(first, "NoSuchProperty", Value::Int(0)));
 }
 
 #[test]
@@ -114,9 +114,9 @@ fn church_actors_load() {
                 continue;
             }
         };
-        let drawn = vm.get(object, "DrawType") == Some(Value::Byte(8))
-            && vm.get(object, "bHidden") == Some(Value::Bool(false))
-            && matches!(vm.get(object, "StaticMesh"), Some(Value::Object(Some(_))));
+        let drawn = vm.store.get(object, "DrawType") == Some(Value::Byte(8))
+            && vm.store.get(object, "bHidden") == Some(Value::Bool(false))
+            && matches!(vm.store.get(object, "StaticMesh"), Some(Value::Object(Some(_))));
         mesh_actors += usize::from(drawn);
     }
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
@@ -140,13 +140,13 @@ fn run_ammunition_add_ammo() {
     let mut vm = Vm::new(&loader);
     let class = vm.find_class("Engine", "Ammunition").unwrap();
     let ammo = vm.new_object(class, None);
-    vm.set(ammo, "AmmoAmount", Value::Int(5));
-    vm.set(ammo, "MaxAmmo", Value::Int(10));
+    vm.store.set(ammo, "AmmoAmount", Value::Int(5));
+    vm.store.set(ammo, "MaxAmmo", Value::Int(10));
     let function = vm.find_function(class, "AddAmmo").unwrap().unwrap();
     assert_eq!(vm.call(&function, Some(ammo), class, vec![Value::Int(3)]).unwrap(), Some(Value::Bool(true)));
-    assert_eq!(vm.get(ammo, "AmmoAmount"), Some(Value::Int(8)));
+    assert_eq!(vm.store.get(ammo, "AmmoAmount"), Some(Value::Int(8)));
     vm.call(&function, Some(ammo), class, vec![Value::Int(10)]).unwrap();
-    assert_eq!(vm.get(ammo, "AmmoAmount"), Some(Value::Int(10)));
+    assert_eq!(vm.store.get(ammo, "AmmoAmount"), Some(Value::Int(10)));
 }
 #[test]
 fn run_game_info_options() {
@@ -179,12 +179,12 @@ fn run_trigger_is_relevant() {
     let trigger = vm.new_object(trigger_class, None);
     let other = vm.new_object(trigger_class, None);
     let projectile = vm.new_object(projectile_class, None);
-    vm.set(trigger, "bInitiallyActive", Value::Bool(true));
-    vm.set(trigger, "DamageThreshold", Value::Float(10.0));
-    vm.set(projectile, "Damage", Value::Float(50.0));
+    vm.store.set(trigger, "bInitiallyActive", Value::Bool(true));
+    vm.store.set(trigger, "DamageThreshold", Value::Float(10.0));
+    vm.store.set(projectile, "Damage", Value::Float(50.0));
     let function = vm.find_function(trigger_class, "IsRelevant").unwrap().unwrap();
     let relevant = |vm: &mut Vm<&Loader>, trigger_type: u8, actor| {
-        vm.set(trigger, "TriggerType", Value::Byte(trigger_type));
+        vm.store.set(trigger, "TriggerType", Value::Byte(trigger_type));
         vm.call(&function, Some(trigger), trigger_class, vec![Value::Object(Some(actor))]).unwrap()
     };
     assert_eq!(relevant(&mut vm, 3, other), Some(Value::Bool(true)));
@@ -192,7 +192,7 @@ fn run_trigger_is_relevant() {
     assert_eq!(relevant(&mut vm, 0, other), Some(Value::Bool(false)));
     assert_eq!(relevant(&mut vm, 4, projectile), Some(Value::Bool(true)));
     assert_eq!(relevant(&mut vm, 4, other), Some(Value::Bool(false)));
-    vm.set(projectile, "Damage", Value::Float(5.0));
+    vm.store.set(projectile, "Damage", Value::Float(5.0));
     assert_eq!(relevant(&mut vm, 4, projectile), Some(Value::Bool(false)));
 }
 
@@ -207,17 +207,17 @@ fn run_warp_zone_marker_find_trigger_actor() {
     let zone = vm.new_object(zone_class, None);
     let (wrong, right) = (vm.new_object(trigger_class, None), vm.new_object(trigger_class, None));
     let (zone_tag, other_tag) = (vm.intern("Zone1"), vm.intern("Elsewhere"));
-    vm.set(zone, "ZoneTag", Value::Name(zone_tag));
-    vm.set(marker, "markedWarpZone", Value::Object(Some(zone)));
-    vm.set(wrong, "Event", Value::Name(other_tag));
-    vm.set(right, "Event", Value::Name(zone_tag));
+    vm.store.set(zone, "ZoneTag", Value::Name(zone_tag));
+    vm.store.set(marker, "markedWarpZone", Value::Object(Some(zone)));
+    vm.store.set(wrong, "Event", Value::Name(other_tag));
+    vm.store.set(right, "Event", Value::Name(zone_tag));
     let function = vm.find_function(marker_class, "FindTriggerActor").unwrap().unwrap();
     vm.call(&function, Some(marker), marker_class, Vec::new()).unwrap();
-    assert_eq!(vm.get(marker, "TriggerActor"), Some(Value::Object(Some(right))));
-    vm.set(marker, "TriggerActor", Value::Object(None));
-    vm.set(right, "Event", Value::Name(other_tag));
+    assert_eq!(vm.store.get(marker, "TriggerActor"), Some(Value::Object(Some(right))));
+    vm.store.set(marker, "TriggerActor", Value::Object(None));
+    vm.store.set(right, "Event", Value::Name(other_tag));
     vm.call(&function, Some(marker), marker_class, Vec::new()).unwrap();
-    assert_eq!(vm.get(marker, "TriggerActor"), Some(Value::Object(None)));
+    assert_eq!(vm.store.get(marker, "TriggerActor"), Some(Value::Object(None)));
 }
 #[test]
 fn run_pawn_dying_state() {
@@ -228,15 +228,15 @@ fn run_pawn_dying_state() {
     let dying = vm.intern("Dying");
     vm.goto_state(pawn, dying, NameId::NONE).unwrap();
     assert_eq!(vm.state_name(pawn), dying);
-    assert_eq!(vm.get(pawn, "bInvulnerableBody"), Some(Value::Bool(true)));
-    assert_eq!(vm.get(pawn, "Physics"), Some(Value::Byte(2)), "PHYS_Falling");
-    assert_eq!(vm.get(pawn, "TimerRate"), Some(Value::Float(12.0)));
+    assert_eq!(vm.store.get(pawn, "bInvulnerableBody"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.get(pawn, "Physics"), Some(Value::Byte(2)), "PHYS_Falling");
+    assert_eq!(vm.store.get(pawn, "TimerRate"), Some(Value::Float(12.0)));
 
     vm.tick(pawn, 0.0).unwrap();
     vm.tick(pawn, 0.1).unwrap();
-    assert_eq!(vm.get(pawn, "bInvulnerableBody"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.get(pawn, "bInvulnerableBody"), Some(Value::Bool(true)));
     vm.tick(pawn, 0.15).unwrap();
-    assert_eq!(vm.get(pawn, "bInvulnerableBody"), Some(Value::Bool(false)));
+    assert_eq!(vm.store.get(pawn, "bInvulnerableBody"), Some(Value::Bool(false)));
 
     let died = vm.find_object_function(pawn, "Died").unwrap().unwrap();
     let pawn_died = vm.find_function(class, "Died").unwrap().unwrap();
@@ -251,27 +251,27 @@ fn spawn_tick_destroy() {
     let mutator_class = vm.find_class("Engine", "Mutator").unwrap();
     let (level, game, mutator) =
         (vm.new_object(level_class, None), vm.new_object(game_class, None), vm.new_object(mutator_class, None));
-    vm.set(game, "BaseMutator", Value::Object(Some(mutator)));
-    vm.set(level, "Game", Value::Object(Some(game)));
+    vm.store.set(game, "BaseMutator", Value::Object(Some(mutator)));
+    vm.store.set(level, "Game", Value::Object(Some(game)));
     vm.set_level(level);
 
     let trigger_class = vm.find_class("Engine", "Trigger").unwrap();
     let trigger = vm.spawn(trigger_class, None, [None, None]).unwrap().expect("spawned");
-    assert_eq!(vm.get(trigger, "Level"), Some(Value::Object(Some(level))));
-    assert_eq!(vm.get(trigger, "bScriptInitialized"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.get(trigger, "Level"), Some(Value::Object(Some(level))));
+    assert_eq!(vm.store.get(trigger, "bScriptInitialized"), Some(Value::Bool(true)));
     let normal = vm.intern("NormalTrigger");
     assert_eq!(vm.state_name(trigger), normal);
-    let Some(Value::Object(Some(class))) = vm.get(trigger, "Class") else { panic!("Class") };
-    assert_eq!(vm.object(class).path, "Engine.Trigger");
+    let Some(Value::Object(Some(class))) = vm.store.get(trigger, "Class") else { panic!("Class") };
+    assert_eq!(vm.store.object(class).path, "Engine.Trigger");
 
-    vm.set(trigger, "TimerRate", Value::Float(1.0));
+    vm.store.set(trigger, "TimerRate", Value::Float(1.0));
     vm.tick_actors(0.6).unwrap();
-    assert_eq!(vm.get(trigger, "TimerRate"), Some(Value::Float(1.0)));
+    assert_eq!(vm.store.get(trigger, "TimerRate"), Some(Value::Float(1.0)));
     vm.tick_actors(0.6).unwrap();
-    assert_eq!(vm.get(trigger, "TimerRate"), Some(Value::Float(0.0)));
+    assert_eq!(vm.store.get(trigger, "TimerRate"), Some(Value::Float(0.0)));
 
     vm.destroy(trigger).unwrap();
-    assert!(vm.is_deleted(trigger));
+    assert!(vm.store.is_deleted(trigger));
     assert!(!vm.actors().any(|actor| actor == trigger), "a destroyed actor leaves the actor list");
     assert_eq!(vm.state_name(trigger), NameId::NONE);
 }
@@ -287,8 +287,8 @@ fn church_begin_play() {
         *grouped.entry(format!("{event}: {error}")).or_insert(0) += 1;
     }
     assert!(errors.is_empty(), "{grouped:#?}");
-    let Some(Value::Object(Some(game))) = vm.get(vm.level().unwrap(), "Game") else { panic!("Game") };
-    assert!(matches!(vm.get(game, "BaseMutator"), Some(Value::Object(Some(_)))));
+    let Some(Value::Object(Some(game))) = vm.store.get(vm.level().unwrap(), "Game") else { panic!("Game") };
+    assert!(matches!(vm.store.get(game, "BaseMutator"), Some(Value::Object(Some(_)))));
 }
 #[test]
 fn church_begin_play_postal2_game() {
@@ -311,7 +311,7 @@ fn church_ticks_a_minute() {
     let mut vm = Vm::new(&loader);
     let game_class = vm.find_class("GameTypes", "AWPGameInfo").unwrap();
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
-    let time = |vm: &Vm<&Loader>| match vm.get(vm.level().unwrap(), "TimeSeconds") {
+    let time = |vm: &Vm<&Loader>| match vm.store.get(vm.level().unwrap(), "TimeSeconds") {
         Some(Value::Float(time)) => time,
         _ => panic!("TimeSeconds"),
     };
@@ -337,7 +337,7 @@ fn church_pawns_animate() {
     let mut vm = Vm::new(&loader);
     let game = vm.find_class("GameTypes", "AWPGameInfo").unwrap();
     assert!(vm.begin_play(map, game, "").unwrap().is_empty());
-    let pawns: Vec<ObjectId> = vm.object_ids().filter(|&o| vm.is_a(o, "Pawn") && !vm.is_deleted(o)).collect();
+    let pawns: Vec<ObjectId> = vm.object_ids().filter(|&o| vm.store.is_a(o, "Pawn") && !vm.store.is_deleted(o)).collect();
     let channels = |vm: &Vm<&Loader>| -> Vec<_> {
         pawns.iter().map(|&p| vm.anim_channel(p, 0).map(|(c, a)| (c.sequence, c.frame, c.looping, a))).collect()
     };
@@ -360,7 +360,7 @@ fn church_pawns_animate() {
     let mut playing = std::collections::BTreeMap::new();
     for (sequence, _, _, animation) in previous.iter().flatten().filter(|c| c.0 != NameId::NONE) {
         let animation = animation.expect("animation of a playing channel");
-        let name = vm.name(*sequence).to_owned();
+        let name = vm.store.name(*sequence).to_owned();
         assert!(sequence_names(&loader, &vm, animation).iter().any(|s| s.eq_ignore_ascii_case(&name)), "{name}");
         *playing.entry(name).or_insert(0) += 1;
     }
@@ -376,20 +376,20 @@ fn finish_anim_waits_for_the_sequence() {
     let mut vm = Vm::new(&loader);
     let class = vm.find_class("Inventory", "HandsWeapon").unwrap();
     let hands = vm.new_object(class, None);
-    vm.set(hands, "DrawType", Value::Byte(2));
-    let Some(Value::Object(Some(mesh))) = vm.get(hands, "Mesh") else { panic!("Mesh") };
+    vm.store.set(hands, "DrawType", Value::Byte(2));
+    let Some(Value::Object(Some(mesh))) = vm.store.get(hands, "Mesh") else { panic!("Mesh") };
     let get_default_anim = vm.find_function(class, "GetDefaultAnim").unwrap().unwrap();
     let Some(Value::Object(Some(animation))) = vm.call(&get_default_anim, Some(hands), class, vec![Value::Object(Some(mesh))]).unwrap()
     else {
-        panic!("no default animation for {}", vm.object(mesh).path)
+        panic!("no default animation for {}", vm.store.object(mesh).path)
     };
-    let (id, export) = loader.loaded_export_by_path(&vm.object(animation).path).unwrap();
+    let (id, export) = loader.loaded_export_by_path(&vm.store.object(animation).path).unwrap();
     let pkg = &loader.package(id).package;
     let anim = p2_assets::read_mesh_animation(pkg, &loader.package(id).data, &pkg.exports[export]).unwrap();
     let sequence = anim.sequences.iter().find(|s| s.num_frames > 10 && s.rate > 0.0).unwrap();
     let name = vm.intern(pkg.name(sequence.name));
-    vm.set(hands, "CurrentUpAnim", Value::Name(name));
-    let Some(Value::Float(speed)) = vm.get(hands, "WeaponSpeedShoot1") else { panic!("WeaponSpeedShoot1") };
+    vm.store.set(hands, "CurrentUpAnim", Value::Name(name));
+    let Some(Value::Float(speed)) = vm.store.get(hands, "WeaponSpeedShoot1") else { panic!("WeaponSpeedShoot1") };
     let frames = sequence.num_frames as f32;
     let seconds = (1.0 - 1.0 / frames - 0.001) * frames / (sequence.rate * speed);
 
@@ -400,7 +400,7 @@ fn finish_anim_waits_for_the_sequence() {
         vm.tick_actor(hands, 0.05).unwrap();
         ticks += 1;
     }
-    assert_eq!(vm.name(vm.state_name(hands)), "NormalFire");
+    assert_eq!(vm.store.name(vm.state_name(hands)), "NormalFire");
     let expected = (seconds / 0.05).ceil() as i32 + 2;
     assert!((ticks - expected).abs() <= 1, "{ticks} ticks, expected {expected}");
 }
@@ -451,9 +451,9 @@ fn church_pawns_get_heads() {
     assert!(vm.begin_play(map, game, "").unwrap().is_empty());
     let heads: Vec<_> = vm
         .object_ids()
-        .filter(|&o| vm.is_a(o, "Head") && matches!(vm.get(o, "Base"), Some(Value::Object(Some(_)))))
+        .filter(|&o| vm.store.is_a(o, "Head") && matches!(vm.store.get(o, "Base"), Some(Value::Object(Some(_)))))
         .collect();
-    let with_mesh = heads.iter().filter(|&&h| matches!(vm.get(h, "Mesh"), Some(Value::Object(Some(_))))).count();
+    let with_mesh = heads.iter().filter(|&&h| matches!(vm.store.get(h, "Mesh"), Some(Value::Object(Some(_))))).count();
     assert!(heads.len() > 50 && with_mesh * 10 >= heads.len() * 9);
 }
 #[test]
@@ -465,10 +465,10 @@ fn church_player_joins() {
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
     let (player, pawn) = vm.login("").unwrap().expect("no player controller");
     let pawn = pawn.expect("no pawn");
-    let start = vm.object_ids().find(|&o| vm.is_a(o, "PlayerStart")).unwrap();
-    assert_eq!(vm.get(pawn, "Location"), vm.get(start, "Location"));
-    assert_eq!(vm.get(pawn, "Controller"), Some(Value::Object(Some(player))));
-    let dudes = vm.object_ids().filter(|&o| vm.is_a(o, "AWPostalDude") && !vm.is_deleted(o)).count();
+    let start = vm.object_ids().find(|&o| vm.store.is_a(o, "PlayerStart")).unwrap();
+    assert_eq!(vm.store.get(pawn, "Location"), vm.store.get(start, "Location"));
+    assert_eq!(vm.store.get(pawn, "Controller"), Some(Value::Object(Some(player))));
+    let dudes = vm.object_ids().filter(|&o| vm.store.is_a(o, "AWPostalDude") && !vm.store.is_deleted(o)).count();
     assert_eq!(dudes, 1);
 }
 
@@ -509,20 +509,20 @@ fn player_touches_a_trigger() {
     let pawn = pawn.unwrap();
     let triggers: Vec<_> = vm
         .object_ids()
-        .filter(|&o| vm.is_a(o, "Trigger") && vm.get(o, "bCollideActors") == Some(Value::Bool(true)))
+        .filter(|&o| vm.store.is_a(o, "Trigger") && vm.store.get(o, "bCollideActors") == Some(Value::Bool(true)))
         .collect();
     assert!(!triggers.is_empty());
     let mut fired = 0;
     for trigger in triggers {
-        let at = ["X", "Y", "Z"].map(|m| match vm.get_path(trigger, &["Location", m]) {
+        let at = ["X", "Y", "Z"].map(|m| match vm.store.get_path(trigger, &["Location", m]) {
             Some(Value::Float(v)) => v,
             _ => 0.0,
         });
         vm.call_native("SetLocation", Some(pawn), &mut [Value::Vector(at.into())]).unwrap();
-        if vm.get(trigger, "bCollideActors") == Some(Value::Bool(false)) {
+        if vm.store.get(trigger, "bCollideActors") == Some(Value::Bool(false)) {
             fired += 1;
         }
-        let touching = |o| match vm.get(o, "Touching") {
+        let touching = |o| match vm.store.get(o, "Touching") {
             Some(Value::Array(list)) => list.contains(&Value::Object(Some(if o == pawn { trigger } else { pawn }))),
             _ => false,
         };
@@ -544,7 +544,7 @@ fn take_travel(vm: &mut Vm<&Loader>) -> Option<String> {
 }
 
 fn vector_of(vm: &Vm<&Loader>, object: ObjectId, property: &str, index: Option<usize>) -> [f32; 3] {
-    let value = match (vm.get(object, property), index) {
+    let value = match (vm.store.get(object, property), index) {
         (Some(Value::Array(elements)), Some(index)) => elements.get(index).cloned(),
         (value, None) => value,
         _ => None,
@@ -561,12 +561,12 @@ fn ticks_to_reach(vm: &mut Vm<&Loader>, mover: ObjectId, target: [f32; 3], limit
     for tick in 1..=limit {
         assert!(vm.tick_level(0.05).is_empty());
         if distance(vector_of(vm, mover, "Location", None), target) < 0.01
-            && vm.get(mover, "bInterpolating") == Some(Value::Bool(false))
+            && vm.store.get(mover, "bInterpolating") == Some(Value::Bool(false))
         {
             return tick;
         }
     }
-    panic!("{} never reached {target:?}", vm.object(mover).path);
+    panic!("{} never reached {target:?}", vm.store.object(mover).path);
 }
 
 #[test]
@@ -577,9 +577,9 @@ fn church_mover_moves_when_triggered() {
     let game_class = vm.find_class("GameTypes", "AWPGameInfo").unwrap();
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
     let (_, pawn) = vm.login("").unwrap().unwrap();
-    let mover = vm.object_ids().find(|&o| vm.object(o).path == "Church.Mover5").expect("Church.Mover5");
-    let trigger = vm.object_ids().find(|&o| vm.object(o).path == "Church.TriggerSuper0").expect("Church.TriggerSuper0");
-    assert_eq!(vm.name(vm.state_name(mover)), "TriggerToggle");
+    let mover = vm.object_ids().find(|&o| vm.store.object(o).path == "Church.Mover5").expect("Church.Mover5");
+    let trigger = vm.object_ids().find(|&o| vm.store.object(o).path == "Church.TriggerSuper0").expect("Church.TriggerSuper0");
+    assert_eq!(vm.store.name(vm.state_name(mover)), "TriggerToggle");
     let base = vector_of(&vm, mover, "BasePos", None);
     let [closed, open] = [0, 1].map(|key| {
         let offset = vector_of(&vm, mover, "KeyPos", Some(key));
@@ -593,19 +593,19 @@ fn church_mover_moves_when_triggered() {
     }
     let halfway = [0, 1, 2].map(|i| (closed[i] + open[i]) / 2.0);
     assert!(distance(vector_of(&vm, mover, "Location", None), halfway) < 1.0, "{:?}", vector_of(&vm, mover, "Location", None));
-    assert_eq!(vm.get(mover, "bInterpolating"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.get(mover, "bInterpolating"), Some(Value::Bool(true)));
     let ticks = 10 + ticks_to_reach(&mut vm, mover, open, 40);
     assert!((20..=21).contains(&ticks), "{ticks} ticks");
-    assert_eq!(vm.get(mover, "KeyNum"), Some(Value::Byte(1)));
-    assert_eq!(vm.get(mover, "bClosed"), Some(Value::Bool(false)));
+    assert_eq!(vm.store.get(mover, "KeyNum"), Some(Value::Byte(1)));
+    assert_eq!(vm.store.get(mover, "bClosed"), Some(Value::Bool(false)));
 
     assert!(vm.tick_level(0.05).is_empty());
     vm.event(mover, "Trigger", vec![Value::Object(Some(trigger)), Value::Object(pawn)]).unwrap();
     let ticks = ticks_to_reach(&mut vm, mover, closed, 40);
     assert!((20..=21).contains(&ticks), "{ticks} ticks");
     assert!(vm.tick_level(0.05).is_empty());
-    assert_eq!(vm.get(mover, "bClosed"), Some(Value::Bool(true)));
-    assert_eq!(vm.get(mover, "Velocity"), Some(Value::Vector(p2_math::Vector::ZERO)));
+    assert_eq!(vm.store.get(mover, "bClosed"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.get(mover, "Velocity"), Some(Value::Vector(p2_math::Vector::ZERO)));
 }
 
 #[test]
@@ -617,25 +617,25 @@ fn police_movers_open_and_close() {
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
     let (_, pawn) = vm.login("").unwrap().unwrap();
     let pawn = pawn.expect("no pawn");
-    let find = |vm: &Vm<&Loader>, path: &str| vm.object_ids().find(|&o| vm.object(o).path == path).expect(path);
+    let find = |vm: &Vm<&Loader>, path: &str| vm.object_ids().find(|&o| vm.store.object(o).path == path).expect(path);
 
     let door = find(&vm, "police.Mover4");
-    assert_eq!(vm.name(vm.state_name(door)), "TriggerOpenTimed");
+    assert_eq!(vm.store.name(vm.state_name(door)), "TriggerOpenTimed");
     let base = vector_of(&vm, door, "BasePos", None);
     let key = |vm: &Vm<&Loader>, k| {
         let offset = vector_of(vm, door, "KeyPos", Some(k));
         [0, 1, 2].map(|i| base[i] + offset[i])
     };
     let (closed, open) = (key(&vm, 0), key(&vm, 2));
-    let Some(Value::Float(stay)) = vm.get(door, "StayOpenTime") else { panic!("StayOpenTime") };
+    let Some(Value::Float(stay)) = vm.store.get(door, "StayOpenTime") else { panic!("StayOpenTime") };
     vm.event(door, "Trigger", vec![Value::Object(Some(pawn)), Value::Object(Some(pawn))]).unwrap();
     let opened = ticks_to_reach(&mut vm, door, open, 100);
-    assert_eq!(vm.get(door, "KeyNum"), Some(Value::Byte(2)));
+    assert_eq!(vm.store.get(door, "KeyNum"), Some(Value::Byte(2)));
     let closed_after = ticks_to_reach(&mut vm, door, closed, 400);
     assert!((40..=43).contains(&opened), "{opened} ticks");
     let expected = (stay / 0.05) as usize + 40;
     assert!(closed_after.abs_diff(expected) <= 3, "{closed_after} ticks, expected {expected}");
-    assert_eq!(vm.get(door, "KeyNum"), Some(Value::Byte(0)));
+    assert_eq!(vm.store.get(door, "KeyNum"), Some(Value::Byte(0)));
 
     let trigger = find(&vm, "police.Trigger5");
     let lockers = [find(&vm, "police.Mover10"), find(&vm, "police.Mover11")];
@@ -647,7 +647,7 @@ fn police_movers_open_and_close() {
         let base = vector_of(&vm, locker, "BasePos", None);
         let offset = vector_of(&vm, locker, "KeyPos", Some(1));
         let open = [0, 1, 2].map(|i| base[i] + offset[i]);
-        assert!(distance(vector_of(&vm, locker, "Location", None), open) < 0.01, "{} not open", vm.object(locker).path);
+        assert!(distance(vector_of(&vm, locker, "Location", None), open) < 0.01, "{} not open", vm.store.object(locker).path);
     }
 }
 
@@ -663,15 +663,15 @@ fn config_values_reach_class_defaults() {
     let expected_difficulty: f32 = system.get("Engine.GameInfo", "GameDifficulty").unwrap().parse().unwrap();
     for (package, class) in [("Engine", "GameInfo"), ("GameTypes", "AWPGameInfo")] {
         let class = vm.find_class(package, class).unwrap();
-        assert_eq!(vm.default_value(class, "GoreLevel"), Some(Value::Int(expected_gore)));
-        assert_eq!(vm.default_value(class, "GameDifficulty"), Some(Value::Float(expected_difficulty)));
+        assert_eq!(vm.store.default_value(class, "GoreLevel"), Some(Value::Int(expected_gore)));
+        assert_eq!(vm.store.default_value(class, "GameDifficulty"), Some(Value::Float(expected_difficulty)));
     }
     let client = system.get("Engine.Engine", "ViewportManager").unwrap();
     let fullscreen = system.get(client, "StartupFullscreen").unwrap();
     assert_eq!(vm.get_command("ini:Engine.Engine.ViewportManager StartupFullscreen").unwrap(), fullscreen);
     let gri = vm.find_class("Engine", "GameReplicationInfo").unwrap();
     let server = system.get("Engine.GameReplicationInfo", "ServerName").unwrap().to_owned();
-    assert_eq!(vm.default_value(gri, "ServerName"), Some(Value::Str(server)));
+    assert_eq!(vm.store.default_value(gri, "ServerName"), Some(Value::Str(server)));
 }
 
 #[test]
@@ -698,14 +698,14 @@ fn church_hud_draws() {
 }
 
 fn float_of(vm: &Vm<&Loader>, object: ObjectId, path: &[&str]) -> f32 {
-    match vm.get_path(object, path) {
+    match vm.store.get_path(object, path) {
         Some(Value::Float(value)) => value,
         other => panic!("{path:?} is {other:?}"),
     }
 }
 
 fn int_of(vm: &Vm<&Loader>, object: ObjectId, path: &[&str]) -> i32 {
-    match vm.get_path(object, path) {
+    match vm.store.get_path(object, path) {
         Some(Value::Int(value)) => value,
         other => panic!("{path:?} is {other:?}"),
     }
@@ -725,12 +725,12 @@ fn player_input_moves_the_pawn() {
     let (player, pawn) = vm.login("").unwrap().unwrap();
     let pawn = pawn.expect("no pawn");
     assert_eq!(vm.player(), Some(player));
-    let Some(Value::Object(Some(input))) = vm.get(player, "PlayerInput") else { panic!("no PlayerInput") };
-    assert_eq!(vm.get(input, "Outer"), Some(Value::Object(Some(player))));
+    let Some(Value::Object(Some(input))) = vm.store.get(player, "PlayerInput") else { panic!("no PlayerInput") };
+    assert_eq!(vm.store.get(input, "Outer"), Some(Value::Object(Some(player))));
     for _ in 0..40 {
         assert!(vm.tick_level(0.05).is_empty());
     }
-    assert_eq!(vm.name(vm.state_name(player)), "PlayerWalking");
+    assert_eq!(vm.store.name(vm.state_name(player)), "PlayerWalking");
 
     let bindings = user.section("Engine.Input");
     let key = |alias: &str| {
@@ -781,9 +781,9 @@ fn player_input_moves_the_pawn() {
 
     let duck = key("Duck");
     tick(&mut vm, &[&duck], [0.0, 0.0]);
-    assert_eq!(vm.get(player, "bDuck"), Some(Value::Byte(1)));
+    assert_eq!(vm.store.get(player, "bDuck"), Some(Value::Byte(1)));
     tick(&mut vm, &[], [0.0, 0.0]);
-    assert_eq!(vm.get(player, "bDuck"), Some(Value::Byte(0)));
+    assert_eq!(vm.store.get(player, "bDuck"), Some(Value::Byte(0)));
     let jump = "Space";
     assert!(user.get("Engine.Input", jump).unwrap().starts_with("Jump"));
     tick(&mut vm, &[jump], [0.0, 0.0]);
@@ -807,23 +807,23 @@ fn startup_client_interactions() {
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
     vm.init_client().unwrap();
     let viewport = vm.viewport().expect("no viewport");
-    let Some(Value::Object(Some(master))) = vm.get(viewport, "InteractionMaster") else { panic!("no master") };
-    let class_of = |vm: &Vm<&Loader>, property: &str| match vm.get(master, property) {
-        Some(Value::Object(Some(o))) => vm.name(vm.object(o).class_name).to_owned(),
+    let Some(Value::Object(Some(master))) = vm.store.get(viewport, "InteractionMaster") else { panic!("no master") };
+    let class_of = |vm: &Vm<&Loader>, property: &str| match vm.store.get(master, property) {
+        Some(Value::Object(Some(o))) => vm.store.name(vm.store.object(o).class_name).to_owned(),
         other => format!("{other:?}"),
     };
     assert_eq!(class_of(&vm, "Console"), "FPSConsoleExt");
     assert_eq!(class_of(&vm, "BaseMenu"), "ShellRootWindow");
     let (player, _) = vm.login("").unwrap().unwrap();
-    assert_eq!(vm.get(player, "Player"), Some(Value::Object(Some(viewport))));
+    assert_eq!(vm.store.get(player, "Player"), Some(Value::Object(Some(viewport))));
     for frame in 0..200 {
         let errors = vm.tick_level(0.05);
         assert!(errors.is_empty(), "frame {frame}: {:?}", errors.iter().map(|(a, e)| format!("{a}: {e}")).collect::<Vec<_>>());
         vm.render_hud(player, 1024.0, 768.0).unwrap();
     }
-    let scenes: Vec<_> = vm.object_ids().filter(|&o| vm.is_a(o, "SceneManager")).collect();
-    let started: Vec<String> = scenes.iter().filter(|&&s| vm.get(s, "bIsRunning") == Some(Value::Bool(true)) || vm.get(s, "bIsSceneStarted") == Some(Value::Bool(true))).map(|&s| format!("{:?}", vm.get(s, "Tag"))).collect();
-    assert!(!started.is_empty() && vm.get(player, "bInterpolating") == Some(Value::Bool(true)), "intro not running: {started:?}");
+    let scenes: Vec<_> = vm.object_ids().filter(|&o| vm.store.is_a(o, "SceneManager")).collect();
+    let started: Vec<String> = scenes.iter().filter(|&&s| vm.store.get(s, "bIsRunning") == Some(Value::Bool(true)) || vm.store.get(s, "bIsSceneStarted") == Some(Value::Bool(true))).map(|&s| format!("{:?}", vm.store.get(s, "Tag"))).collect();
+    assert!(!started.is_empty() && vm.store.get(player, "bInterpolating") == Some(Value::Bool(true)), "intro not running: {started:?}");
     for frame in 0..40 {
         let keys: &[&str] = if frame % 20 == 0 { &["Escape"] } else { &[] };
         vm.player_input(keys, [3.0, -2.0]).unwrap();
@@ -831,11 +831,11 @@ fn startup_client_interactions() {
         assert!(errors.is_empty(), "{:?}", errors.iter().map(|(a, e)| format!("{a}: {e}")).collect::<Vec<_>>());
         vm.render_hud(player, 1024.0, 768.0).unwrap();
     }
-    let Some(Value::Object(Some(menu))) = vm.get(master, "BaseMenu") else { panic!("no base menu") };
+    let Some(Value::Object(Some(menu))) = vm.store.get(master, "BaseMenu") else { panic!("no base menu") };
     vm.event(menu, "ShowMenu", Vec::new()).unwrap();
-    assert!(vm.name(vm.state_name(menu)).ends_with("MenuShowingVirgin"), "in {}", vm.name(vm.state_name(menu)));
-    let Some(Value::Object(Some(main))) = vm.get(menu, "MyMenu") else { panic!("no MyMenu") };
-    assert_eq!(vm.name(vm.object(main).class_name), "MenuMain");
+    assert!(vm.store.name(vm.state_name(menu)).ends_with("MenuShowingVirgin"), "in {}", vm.store.name(vm.state_name(menu)));
+    let Some(Value::Object(Some(main))) = vm.store.get(menu, "MyMenu") else { panic!("no MyMenu") };
+    assert_eq!(vm.store.name(vm.store.object(main).class_name), "MenuMain");
     assert!(vm.shows_mouse(), "the menu wants the system cursor");
     vm.set_mouse_position(512.0, 384.0);
     vm.typed("Dude 1").unwrap();
@@ -845,15 +845,15 @@ fn startup_client_interactions() {
         items = vm.render_hud(player, 1024.0, 768.0).unwrap();
     }
     let texts: Vec<&str> = items.iter().filter_map(|i| if let p2_vm::CanvasItem::Text { text, .. } = i { Some(text.as_str()) } else { None }).collect();
-    let open_menu = |vm: &Vm<&Loader>| match vm.get(menu, "MyMenu") {
+    let open_menu = |vm: &Vm<&Loader>| match vm.store.get(menu, "MyMenu") {
         Some(Value::Object(Some(m))) => m,
         _ => panic!("no menu open"),
     };
     let click = |vm: &mut Vm<&Loader>, window: ObjectId, field: &str| {
-        let Some(Value::Object(Some(choice))) = vm.get(window, field) else { panic!("no {field}") };
+        let Some(Value::Object(Some(choice))) = vm.store.get(window, field) else { panic!("no {field}") };
         vm.event(window, "Notify", vec![Value::Object(Some(choice)), Value::Byte(2)]).unwrap();
     };
-    let class_of = |vm: &Vm<&Loader>, o: ObjectId| vm.name(vm.object(o).class_name).to_owned();
+    let class_of = |vm: &Vm<&Loader>, o: ObjectId| vm.store.name(vm.store.object(o).class_name).to_owned();
     click(&mut vm, main, "NewChoice");
     let modes = open_menu(&vm);
     assert_eq!(class_of(&vm, modes), "MenuGameMode");
@@ -888,7 +888,7 @@ fn startup_client_interactions() {
     assert_eq!(ask(&mut vm, "KEYNAME 1"), "LeftMouse");
     assert!(!ask(&mut vm, "MOVEBIND 0").is_empty());
     let game_info = vm.find_class("Postal2Game", "P2GameInfo").unwrap();
-    assert_eq!(vm.default_value(game_info, "bLocalizedDialog"), Some(Value::Bool(false)));
+    assert_eq!(vm.store.default_value(game_info, "bLocalizedDialog"), Some(Value::Bool(false)));
     let exit_font = items.iter().find_map(|i| match i {
         p2_vm::CanvasItem::Text { text, font, .. } if text == "Exit" => Some(font.clone()),
         _ => None,
@@ -951,18 +951,18 @@ fn church_player_walks_by_vm_physics() {
     for _ in 0..40 {
         tick(&mut vm, &[]);
     }
-    assert_eq!(vm.get(pawn, "Physics"), Some(Value::Byte(1)), "walking again after the jump");
-    let standing = (vm.get(pawn, "CollisionHeight"), vector_of(&vm, pawn, "Location", None)[2]);
+    assert_eq!(vm.store.get(pawn, "Physics"), Some(Value::Byte(1)), "walking again after the jump");
+    let standing = (vm.store.get(pawn, "CollisionHeight"), vector_of(&vm, pawn, "Location", None)[2]);
     for _ in 0..10 {
         tick(&mut vm, &["Ctrl"]);
     }
-    assert_eq!(vm.get(pawn, "bIsCrouched"), Some(Value::Bool(true)), "crouched");
-    assert_eq!(vm.get(pawn, "CollisionHeight"), vm.get(pawn, "CrouchHeight"));
+    assert_eq!(vm.store.get(pawn, "bIsCrouched"), Some(Value::Bool(true)), "crouched");
+    assert_eq!(vm.store.get(pawn, "CollisionHeight"), vm.store.get(pawn, "CrouchHeight"));
     for _ in 0..10 {
         tick(&mut vm, &[]);
     }
-    assert_eq!(vm.get(pawn, "bIsCrouched"), Some(Value::Bool(false)), "stood up");
-    assert_eq!(vm.get(pawn, "CollisionHeight"), standing.0);
+    assert_eq!(vm.store.get(pawn, "bIsCrouched"), Some(Value::Bool(false)), "stood up");
+    assert_eq!(vm.store.get(pawn, "CollisionHeight"), standing.0);
     assert!((vector_of(&vm, pawn, "Location", None)[2] - standing.1).abs() < 3.0);
 }
 
@@ -974,11 +974,11 @@ fn church_traces_hit_the_level_and_pawns() {
     let mut vm = Vm::new(&loader);
     let game_class = vm.find_class("GameTypes", "AWPGameInfo").unwrap();
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
-    let start = vm.object_ids().find(|&o| vm.is_a(o, "PlayerStart")).unwrap();
+    let start = vm.object_ids().find(|&o| vm.store.is_a(o, "PlayerStart")).unwrap();
     let at = vector_of(&vm, start, "Location", None);
     let hit = vm.trace_world(at.into(), [at[0], at[1], at[2] - 1000.0].into(), [0.0; 3].into()).expect("floor below the start");
     assert!(hit.normal[2] > 0.7 && at[2] - hit.location[2] < 200.0);
-    let pawns: Vec<_> = vm.object_ids().filter(|&o| vm.is_a(o, "Pawn") && !vm.is_deleted(o)).collect();
+    let pawns: Vec<_> = vm.object_ids().filter(|&o| vm.store.is_a(o, "Pawn") && !vm.store.is_deleted(o)).collect();
     let mut tested = 0;
     for pawn in pawns {
         let p = vector_of(&vm, pawn, "Location", None);
@@ -989,7 +989,7 @@ fn church_traces_hit_the_level_and_pawns() {
             let vector = |v: [f32; 3]| Value::Vector(v.into());
             let mut args = vec![Value::Map, Value::Map, vector(p), vector(from), Value::Bool(true), Value::Map, Value::Map];
             let hit = vm.call_native("Trace", None, &mut args).unwrap();
-            assert!(matches!(hit, Some(Value::Object(Some(o))) if vm.is_a(o, "Actor") && !vm.is_a(o, "LevelInfo")), "{hit:?}");
+            assert!(matches!(hit, Some(Value::Object(Some(o))) if vm.store.is_a(o, "Actor") && !vm.store.is_a(o, "LevelInfo")), "{hit:?}");
             tested += 1;
             break;
         }
@@ -1024,7 +1024,7 @@ fn hurt_radius_reaches_nearby_actors() {
     let mut vm = Vm::new(&loader);
     let game_class = vm.find_class("GameTypes", "AWPGameInfo").unwrap();
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
-    let pawn = vm.object_ids().find(|&o| vm.is_a(o, "Pawn") && !vm.is_deleted(o) && vm.object(o).path.contains("Bystander")).unwrap();
+    let pawn = vm.object_ids().find(|&o| vm.store.is_a(o, "Pawn") && !vm.store.is_deleted(o) && vm.store.object(o).path.contains("Bystander")).unwrap();
     let at = vector_of(&vm, pawn, "Location", None);
     let vector = |v: [f32; 3]| Value::Vector(v.into());
     let exploded = Value::Object(Some(vm.stub("BaseFX.ExplodedDamage", "Class")));
@@ -1080,10 +1080,10 @@ fn church_find_path_toward_takes_a_cheapest_route() {
     }
     let controller = vm
         .object_ids()
-        .find(|&o| vm.is_a(o, "Controller") && !vm.is_a(o, "PlayerController") && object_of(&vm, o, "Pawn").is_some_and(|p| vm.is_a(p, "Bystander") || vm.is_a(p, "Pawn")))
+        .find(|&o| vm.store.is_a(o, "Controller") && !vm.store.is_a(o, "PlayerController") && object_of(&vm, o, "Pawn").is_some_and(|p| vm.store.is_a(p, "Bystander") || vm.store.is_a(p, "Pawn")))
         .unwrap();
     let pawn = object_of(&vm, controller, "Pawn").unwrap();
-    let flag = |vm: &Vm<&Loader>, o: ObjectId, name: &str| vm.get(o, name) == Some(Value::Bool(true));
+    let flag = |vm: &Vm<&Loader>, o: ObjectId, name: &str| vm.store.get(o, name) == Some(Value::Bool(true));
     let crouch = flag(&vm, pawn, "bCanCrouch");
     let size = |name: &str, crouched: &str| float_of(&vm, pawn, &[if crouch { crouched } else { name }]) as i32;
     let (radius, height) = (size("CollisionRadius", "CrouchRadius"), size("CollisionHeight", "CrouchHeight"));
@@ -1096,13 +1096,13 @@ fn church_find_path_toward_takes_a_cheapest_route() {
     let mut edges: std::collections::HashMap<ObjectId, Vec<(ObjectId, i32)>> = std::collections::HashMap::new();
     let mut specs = 0;
     for &nav in &navs {
-        let Some(Value::Array(list)) = vm.get(nav, "PathList") else { continue };
+        let Some(Value::Array(list)) = vm.store.get(nav, "PathList") else { continue };
         for spec in list {
             let Value::Object(Some(spec)) = spec else { panic!("{spec:?}") };
             specs += 1;
             assert_eq!(object_of(&vm, spec, "Start"), Some(nav));
             let end = object_of(&vm, spec, "End").unwrap();
-            assert!(vm.is_a(end, "NavigationPoint"));
+            assert!(vm.store.is_a(end, "NavigationPoint"));
             let int = |name: &str| int_of(&vm, spec, &[name]);
             let fits = int("CollisionRadius") >= radius && int("CollisionHeight") >= height && int("reachFlags") & moves == int("reachFlags") && int("MaxLandingVelocity") <= max_fall;
             if fits && !flag(&vm, end, "bBlocked") && !flag(&vm, nav, "bBlocked") {
@@ -1127,13 +1127,13 @@ fn church_find_path_toward_takes_a_cheapest_route() {
     };
     let (start, goal) = navs
         .iter()
-        .filter(|&&n| vm.is_a(n, "PathNode"))
+        .filter(|&&n| vm.store.is_a(n, "PathNode"))
         .find_map(|&n| hops(n).into_iter().filter(|&(_, d)| d >= 3).max_by_key(|&(_, d)| d).map(|(goal, _)| (n, goal)))
         .unwrap();
     let at = vector_of(&vm, start, "Location", None);
     let lift = float_of(&vm, pawn, &["CollisionHeight"]) - float_of(&vm, start, &["CollisionHeight"]);
     vm.place_far_moved(pawn, [at[0], at[1], at[2] + lift].into(), Encroachment::Ignored).unwrap();
-    vm.set(pawn, "Anchor", Value::Object(Some(start)));
+    vm.store.set(pawn, "Anchor", Value::Object(Some(start)));
     let mut args = vec![Value::Object(Some(goal)), Value::Map];
     let Some(Value::Object(Some(next))) = vm.call_native("FindPathToward", Some(controller), &mut args).unwrap() else { panic!("no path") };
     let from_start = route_costs(&edges, start);
@@ -1148,12 +1148,12 @@ fn church_ai_pawns_walk() {
     let Some(mut loader) = loader() else { return };
     let mut vm = church_with_ai(&mut loader);
     let player_pawn = vm.player().and_then(|p| object_of(&vm, p, "Pawn"));
-    let pawns: Vec<ObjectId> = vm.object_ids().filter(|&o| vm.is_a(o, "Pawn") && !vm.is_deleted(o) && Some(o) != player_pawn).collect();
+    let pawns: Vec<ObjectId> = vm.object_ids().filter(|&o| vm.store.is_a(o, "Pawn") && !vm.store.is_deleted(o) && Some(o) != player_pawn).collect();
     let starts: Vec<[f32; 3]> = pawns.iter().map(|&p| vector_of(&vm, p, "Location", None)).collect();
     let mut grouped = std::collections::BTreeMap::new();
     for _ in 0..1200 {
         for &pawn in &pawns {
-            if !vm.is_deleted(pawn) {
+            if !vm.store.is_deleted(pawn) {
                 vm.mark_rendered(pawn).unwrap();
             }
         }
@@ -1164,14 +1164,14 @@ fn church_ai_pawns_walk() {
     assert!(grouped.is_empty(), "{grouped:#?}");
     let mut walked = 0;
     for (&pawn, &start) in pawns.iter().zip(&starts) {
-        if vm.is_deleted(pawn) || vm.get(pawn, "Physics") != Some(Value::Byte(1)) {
+        if vm.store.is_deleted(pawn) || vm.store.get(pawn, "Physics") != Some(Value::Byte(1)) {
             continue;
         }
         let at = vector_of(&vm, pawn, "Location", None);
         let height = float_of(&vm, pawn, &["CollisionHeight"]);
         let floor = vm.trace_world(at.into(), [at[0], at[1], at[2] - 1000.0].into(), [0.0; 3].into()).map(|hit| at[2] - height - hit.location[2]);
         let moved = (at[0] - start[0]).hypot(at[1] - start[1]);
-        assert!(floor.is_some_and(|f| (-1.0..40.0).contains(&f)), "{} is not on the ground", vm.object(pawn).path);
+        assert!(floor.is_some_and(|f| (-1.0..40.0).contains(&f)), "{} is not on the ground", vm.store.object(pawn).path);
         walked += usize::from(moved > 500.0);
     }
     assert!(walked >= 3);
@@ -1201,21 +1201,21 @@ fn church_fire_emitters() {
     let player_pawn = vm.player().and_then(|p| object_of(&vm, p, "Pawn"));
     let pawn = vm
         .object_ids()
-        .find(|&o| vm.is_a(o, "FPSPawn") && !vm.is_deleted(o) && Some(o) != player_pawn)
+        .find(|&o| vm.store.is_a(o, "FPSPawn") && !vm.store.is_deleted(o) && Some(o) != player_pawn)
         .expect("a pawn");
     let at = vector_of(&vm, pawn, "Location", None);
     let location = Value::Vector(at.into());
 
     let woof_class = vm.find_class("FX", "SizeableWoof").unwrap();
     let woof = vm.spawn(woof_class, None, [Some(location.clone()), None]).unwrap().expect("woof");
-    let Some(Value::Array(emitters)) = vm.get(woof, "Emitters") else { panic!("Emitters") };
+    let Some(Value::Array(emitters)) = vm.store.get(woof, "Emitters") else { panic!("Emitters") };
     let Value::Object(Some(emitter)) = emitters[0] else { panic!("Emitters[0]") };
     let set_size = vm.find_function(woof_class, "SetSize").unwrap().unwrap();
     vm.call(&set_size, Some(woof), woof_class, vec![Value::Float(100.0)]).unwrap();
     assert!(!vm.diagnostics.missing_natives.contains_key("SetMaxParticles"), "{:?}", vm.diagnostics.missing_natives);
-    let Some(Value::Int(max)) = vm.get(emitter, "MaxParticles") else { panic!("MaxParticles") };
+    let Some(Value::Int(max)) = vm.store.get(emitter, "MaxParticles") else { panic!("MaxParticles") };
     assert_ne!(max, 15, "the default");
-    assert_eq!(vm.get(emitter, "InitialParticlesPerSecond"), Some(Value::Float(4.0 * max as f32)));
+    assert_eq!(vm.store.get(emitter, "InitialParticlesPerSecond"), Some(Value::Float(4.0 * max as f32)));
     assert!(take_particles(&mut vm).contains(&ParticleCommand::Reset(emitter, ())));
 
     let vec = |v: [f32; 3]| Value::Vector(v.into());
@@ -1232,8 +1232,8 @@ fn church_fire_emitters() {
     let emitter_class = vm.find_class("BaseFX", "P2Emitter").unwrap();
     let fire = vm.spawn(emitter_class, None, [Some(location), None]).unwrap().expect("fire");
     let streak = vm.find_class("FX", "FireStreak").unwrap();
-    let damage_type = vm.default_value(streak, "MyDamageType").unwrap();
-    let health = vm.get(pawn, "Health");
+    let damage_type = vm.store.default_value(streak, "MyDamageType").unwrap();
+    let health = vm.store.get(pawn, "Health");
     let mut args = [
         Value::Float(20.0),
         Value::Float(500.0),
@@ -1244,7 +1244,7 @@ fn church_fire_emitters() {
         Value::Float(10.0),
     ];
     vm.call_native("FireHurtRadius", Some(fire), &mut args).unwrap();
-    assert_ne!(vm.get(pawn, "Health"), health, "the pawn took damage");
+    assert_ne!(vm.store.get(pawn, "Health"), health, "the pawn took damage");
 }
 
 #[test]
@@ -1255,15 +1255,15 @@ fn startup_runs_matinee_scenes() {
     let mut vm = Vm::new(&loader);
     let game_class = vm.find_class("GameTypes", "AWPGameInfo").unwrap();
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
-    let scenes: Vec<ObjectId> = vm.object_ids().filter(|&o| vm.is_a(o, "SceneManager")).collect();
+    let scenes: Vec<ObjectId> = vm.object_ids().filter(|&o| vm.store.is_a(o, "SceneManager")).collect();
     assert_eq!(scenes.len(), 5);
     for &scene in &scenes {
         let total = float_of(&vm, scene, &["TotalSceneTime"]);
-        assert!(total > 0.0, "{} has no length", vm.object(scene).path);
+        assert!(total > 0.0, "{} has no length", vm.store.object(scene).path);
     }
-    let look_target = vm.object_ids().find(|&o| vm.is_a(o, "LookTarget")).expect("no LookTarget");
+    let look_target = vm.object_ids().find(|&o| vm.store.is_a(o, "LookTarget")).expect("no LookTarget");
     let (player, pawn) = vm.login("").unwrap().expect("no player controller");
-    let first = scenes.iter().copied().find(|&s| matches!(vm.get(s, "Tag"), Some(Value::Name(n)) if vm.name(n) == "StartFirstTime"));
+    let first = scenes.iter().copied().find(|&s| matches!(vm.store.get(s, "Tag"), Some(Value::Name(n)) if vm.store.name(n) == "StartFirstTime"));
     let first = first.expect("no StartFirstTime scene");
     let trigger = vm.intern("StartFirstTime");
     vm.event(first, "TriggerEvent", vec![Value::Name(trigger), Value::Object(Some(player)), Value::Object(pawn)]).unwrap();
@@ -1274,7 +1274,7 @@ fn startup_runs_matinee_scenes() {
         for (_, error) in vm.tick_level(0.05) {
             *grouped.entry(format!("{error}")).or_insert(0) += 1;
         }
-        let Some(scene) = scenes.iter().copied().find(|&s| vm.get(s, "bIsSceneStarted") == Some(Value::Bool(true))) else { continue };
+        let Some(scene) = scenes.iter().copied().find(|&s| vm.store.get(s, "bIsSceneStarted") == Some(Value::Bool(true))) else { continue };
         assert_eq!(object_of(&vm, scene, "Viewer"), Some(player));
         if started.last() != Some(&scene) {
             started.push(scene);
@@ -1285,7 +1285,7 @@ fn startup_runs_matinee_scenes() {
         }
         last = Some(at);
         let action = object_of(&vm, scene, "CurrentAction").expect("no current action");
-        let Some(Value::Array(samples)) = vm.get(action, "SampleLocations") else { panic!("no samples") };
+        let Some(Value::Array(samples)) = vm.store.get(action, "SampleLocations") else { panic!("no samples") };
         let samples: Vec<[f32; 3]> = (0..samples.len()).map(|i| vector_of(&vm, action, "SampleLocations", Some(i))).collect();
         let step = samples.windows(2).map(|w| distance(w[0], w[1])).fold(0.0, f32::max);
         let nearest = samples.iter().map(|&s| distance(s, at)).fold(f32::MAX, f32::min);
@@ -1295,17 +1295,17 @@ fn startup_runs_matinee_scenes() {
         let rotation = int_of(&vm, player, &["Rotation", "Yaw"]) as f32;
         let off = (rotation - yaw).rem_euclid(65536.0);
         looking += usize::from(off.min(65536.0 - off) < 3.0);
-        titles += usize::from(matches!(vm.get(player, "CameraEffects"), Some(Value::Array(effects)) if !effects.is_empty()));
+        titles += usize::from(matches!(vm.store.get(player, "CameraEffects"), Some(Value::Array(effects)) if !effects.is_empty()));
         fading += usize::from(float_of(&vm, player, &["FlashScale", "X"]) < 0.99);
     }
-    let order: Vec<&str> = started.iter().map(|&s| vm.object(s).path.as_str()).collect();
+    let order: Vec<&str> = started.iter().map(|&s| vm.store.object(s).path.as_str()).collect();
     assert!(grouped.is_empty(), "{grouped:#?}");
     assert_eq!(order, ["Startup.SceneManager2", "Startup.SceneManager3", "Startup.SceneManager1", "Startup.SceneManager0"]);
     assert!(travelled > 1000.0);
     assert!(on_path >= 595, "{on_path}");
     assert!(looking >= 595, "{looking}");
     assert!(titles > 50 && fading > 20, "{titles} {fading}");
-    assert_eq!(vm.get(player, "Pawn"), Some(Value::Object(None)));
+    assert_eq!(vm.store.get(player, "Pawn"), Some(Value::Object(None)));
 }
 #[test]
 fn church_karma_props_rest_and_get_pushed() {
@@ -1317,18 +1317,18 @@ fn church_karma_props_rest_and_get_pushed() {
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
     assert!(vm.tick_level(0.05).is_empty());
     let mut props: Vec<ObjectId> = vm.karma_actors().collect();
-    props.sort_by_key(|&o| vm.object(o).path.clone());
+    props.sort_by_key(|&o| vm.store.object(o).path.clone());
     assert!(props.len() > 40, "{} bodies", props.len());
     let start: Vec<[f32; 3]> = props.iter().map(|&p| vector_of(&vm, p, "Location", None)).collect();
     for _ in 0..20 {
         assert!(vm.tick_level(0.05).is_empty());
     }
     let still = props.iter().zip(&start).filter(|&(&p, s)| vector_of(&vm, p, "Location", None) == *s).count();
-    let enabled = props.iter().filter(|&&p| object_of(&vm, p, "KParams").is_some_and(|k| vm.get(k, "KStartEnabled") == Some(Value::Bool(true)))).count();
+    let enabled = props.iter().filter(|&&p| object_of(&vm, p, "KParams").is_some_and(|k| vm.store.get(k, "KStartEnabled") == Some(Value::Bool(true)))).count();
     assert!(still + enabled >= props.len());
     for &prop in &props {
         if let Some(params) = object_of(&vm, prop, "KParams") {
-            vm.set(params, "KImpactThreshold", Value::Float(10.0));
+            vm.store.set(params, "KImpactThreshold", Value::Float(10.0));
         }
         vm.call_native("KWake", Some(prop), &mut []).unwrap();
     }
@@ -1342,7 +1342,7 @@ fn church_karma_props_rest_and_get_pushed() {
         .zip(&start)
         .map(|(&p, s)| {
             let at = vector_of(&vm, p, "Location", None);
-            (vm.object(p).path.clone(), [0, 1, 2].map(|i| at[i] - s[i]))
+            (vm.store.object(p).path.clone(), [0, 1, 2].map(|i| at[i] - s[i]))
         })
         .filter(|(_, d)| d.iter().any(|c| c.abs() > 4.0))
         .collect();
@@ -1352,14 +1352,14 @@ fn church_karma_props_rest_and_get_pushed() {
         .filter_map(|(&p, &s)| {
             let floor = vm.trace_world(s.into(), [s[0], s[1], s[2] - 2000.0].into(), [0.0; 3].into())?.location[2];
             let z = vector_of(&vm, p, "Location", None)[2];
-            (z < floor - 8.0).then(|| (vm.object(p).path.clone(), floor, z))
+            (z < floor - 8.0).then(|| (vm.store.object(p).path.clone(), floor, z))
         })
         .collect();
     assert!(fell.is_empty(), "below the floor: {fell:?}");
     assert!(moved.len() * 10 < props.len(), "{} moved", moved.len());
 
     let vector = |v: [f32; 3]| Value::Vector(v.into());
-    let plain: Vec<ObjectId> = props.iter().copied().filter(|&p| vm.name(vm.object(p).class_name) == "KActor").collect();
+    let plain: Vec<ObjectId> = props.iter().copied().filter(|&p| vm.store.name(vm.store.object(p).class_name) == "KActor").collect();
     let (shot, blasted) = (plain[0], plain[plain.len() / 2]);
     let at = vector_of(&vm, shot, "Location", None);
     let damage = vm.stub("BaseFX.ExplodedDamage", "Class");
@@ -1373,7 +1373,7 @@ fn church_karma_props_rest_and_get_pushed() {
         assert!(vm.tick_level(0.05).is_empty());
     }
     for (i, &p) in [shot, blasted].iter().enumerate() {
-        assert!(distance(vector_of(&vm, p, "Location", None), before[i]) > 10.0, "{} not pushed", vm.object(p).path);
+        assert!(distance(vector_of(&vm, p, "Location", None), before[i]) > 10.0, "{} not pushed", vm.store.object(p).path);
     }
 }
 
@@ -1392,14 +1392,14 @@ fn new_game_travels_in_the_same_vm() {
     assert!(vm.begin_play(map, game_class, "").unwrap().is_empty());
     vm.init_client().unwrap();
     let viewport = vm.viewport().unwrap();
-    let Some(Value::Object(Some(master))) = vm.get(viewport, "InteractionMaster") else { panic!("no master") };
-    let Some(Value::Object(Some(menu))) = vm.get(master, "BaseMenu") else { panic!("no base menu") };
+    let Some(Value::Object(Some(master))) = vm.store.get(viewport, "InteractionMaster") else { panic!("no master") };
+    let Some(Value::Object(Some(menu))) = vm.store.get(master, "BaseMenu") else { panic!("no base menu") };
     let (player, _) = vm.login("").unwrap().unwrap();
     vm.tick_level(0.05);
     vm.event(menu, "ShowMenu", Vec::new()).unwrap();
     let click = |vm: &mut Vm<&Loader>, field: &str| {
-        let Some(Value::Object(Some(window))) = vm.get(menu, "MyMenu") else { panic!("no menu for {field}") };
-        let Some(Value::Object(Some(choice))) = vm.get(window, field) else { panic!("no {field}") };
+        let Some(Value::Object(Some(window))) = vm.store.get(menu, "MyMenu") else { panic!("no menu for {field}") };
+        let Some(Value::Object(Some(choice))) = vm.store.get(window, field) else { panic!("no {field}") };
         vm.event(window, "Notify", vec![Value::Object(Some(choice)), Value::Byte(2)]).unwrap();
     };
     for field in ["NewChoice", "P2Choice", "StartMF", "StartChoice"] {
@@ -1428,24 +1428,24 @@ fn new_game_travels_in_the_same_vm() {
     };
     vm.set_loader(&next_loader.0);
     let next_game = vm.url_game_class(&url).expect("no ?Game= class");
-    assert_eq!(vm.name(vm.class(next_game).name), "GameSinglePlayer");
+    assert_eq!(vm.store.name(vm.store.class(next_game).name), "GameSinglePlayer");
     vm.begin_play(next_loader.1, next_game, &options).unwrap();
     let (player, pawn) = vm.login(&options).unwrap().unwrap();
     let pawn = pawn.expect("no pawn after travel");
     assert_eq!(vm.viewport(), Some(viewport));
-    assert_eq!(vm.get(viewport, "InteractionMaster"), Some(Value::Object(Some(master))));
-    assert_eq!(vm.get(player, "Player"), Some(Value::Object(Some(viewport))));
+    assert_eq!(vm.store.get(viewport, "InteractionMaster"), Some(Value::Object(Some(master))));
+    assert_eq!(vm.store.get(player, "Player"), Some(Value::Object(Some(viewport))));
     let mut inventory = Vec::new();
-    let mut next = vm.get(pawn, "Inventory");
+    let mut next = vm.store.get(pawn, "Inventory");
     while let Some(Value::Object(Some(item))) = next {
-        inventory.push(vm.name(vm.object(item).class_name).to_owned());
-        next = vm.get(item, "Inventory");
+        inventory.push(vm.store.name(vm.store.object(item).class_name).to_owned());
+        next = vm.store.get(item, "Inventory");
         assert!(inventory.len() < 100);
     }
     assert!(inventory.iter().any(|class| class == "HandsWeapon"), "inventory {inventory:?}");
     assert!(vm.diagnostics.log.iter().any(|l| l.contains("Continuing existing game")), "the game state did not travel");
-    let Some(Value::Object(Some(game))) = vm.get(vm.level().unwrap(), "Game") else { panic!("no game") };
-    assert!(matches!(vm.get(game, "TheGameState"), Some(Value::Object(Some(_)))));
+    let Some(Value::Object(Some(game))) = vm.store.get(vm.level().unwrap(), "Game") else { panic!("no game") };
+    assert!(matches!(vm.store.get(game, "TheGameState"), Some(Value::Object(Some(_)))));
     assert!(vm.diagnostics.log.iter().any(|l| l.contains("P2Screen.PostTravel()")));
     for frame in 0..40 {
         let errors = vm.tick_level(0.05);
@@ -1453,13 +1453,13 @@ fn new_game_travels_in_the_same_vm() {
         vm.render_hud(player, 1024.0, 768.0).unwrap();
     }
     for _ in 0..180 {
-        for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+        for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
             vm.mark_rendered(pawn).unwrap();
         }
         vm.tick_level(1.0 / 60.0);
         vm.render_hud(player, 1920.0, 1080.0).unwrap();
     }
-    let url = match vm.default_value(next_game, "StartFirstDayURL") {
+    let url = match vm.store.default_value(next_game, "StartFirstDayURL") {
         Some(Value::Str(url)) => format!("{url}?Game=GameTypes.GameSinglePlayer"),
         other => panic!("no first day {other:?}"),
     };
@@ -1481,9 +1481,9 @@ fn new_game_travels_in_the_same_vm() {
         assert!(errors.is_empty(), "{name} frame {frame}: {:?}", errors.iter().map(|(a, e)| format!("{a}: {e}")).collect::<Vec<_>>());
         vm.render_hud(player, 1024.0, 768.0).unwrap();
     }
-    let removed = vm.actors().filter(|&a| vm.is_deleted(a) && vm.object(a).path.to_ascii_lowercase().starts_with("suburbs-3.")).count();
+    let removed = vm.actors().filter(|&a| vm.store.is_deleted(a) && vm.store.object(a).path.to_ascii_lowercase().starts_with("suburbs-3.")).count();
     assert!(removed > 0, "no actors removed for the day");
-    assert!(vm.actors().all(|a| !["startup.", "intro."].iter().any(|p| vm.object(a).path.to_ascii_lowercase().starts_with(p))), "old actors");
+    assert!(vm.actors().all(|a| !["startup.", "intro."].iter().any(|p| vm.store.object(a).path.to_ascii_lowercase().starts_with(p))), "old actors");
 }
 
 #[test]
@@ -1505,7 +1505,7 @@ fn suburbs_player_stays_on_the_ground() {
         vm.player_input(&[], [0.0, 0.0]).unwrap();
         vm.tick_level(0.05);
     }
-    let height = match vm.get(pawn, "CollisionHeight") { Some(Value::Float(h)) => h, _ => 0.0 };
+    let height = match vm.store.get(pawn, "CollisionHeight") { Some(Value::Float(h)) => h, _ => 0.0 };
     let mut bad = Vec::new();
     for frame in 0..1200 {
         let keys: &[&str] = if frame % 300 < 280 { &["W"] } else { &[] };
@@ -1515,7 +1515,7 @@ fn suburbs_player_stays_on_the_ground() {
         let ground = vm.trace_world(at.into(), [at[0], at[1], at[2] - 3000.0].into(), [0.0; 3].into());
         let feet = at[2] - height;
         if ground.is_none_or(|g| feet < g.location[2] - 8.0) {
-            bad.push((frame, at, ground.map(|g| g.location[2]), vm.get(pawn, "Physics")));
+            bad.push((frame, at, ground.map(|g| g.location[2]), vm.store.get(pawn, "Physics")));
         }
     }
     assert!(bad.is_empty(), "{} frames below ground; first {:?}", bad.len(), bad.iter().take(8).collect::<Vec<_>>());
@@ -1552,8 +1552,8 @@ fn monday_wheel_and_click_pick_a_weapon() {
     assert!(
         selected(&vm) >= 0,
         "the wheel opens the selector; weapon {:?}, groups {:?}, log {:?}",
-        pawn.and_then(|p| object_of(&vm, p, "Weapon")).map(|w| vm.object(w).path.clone()),
-        vm.get(selector, "WeaponGroups").map(|g| format!("{g:?}").chars().take(200).collect::<String>()),
+        pawn.and_then(|p| object_of(&vm, p, "Weapon")).map(|w| vm.store.object(w).path.clone()),
+        vm.store.get(selector, "WeaponGroups").map(|g| format!("{g:?}").chars().take(200).collect::<String>()),
         vm.diagnostics.log.iter().rev().take(10).collect::<Vec<_>>()
     );
     frame(&mut vm, &["LeftMouse"]);
@@ -1578,14 +1578,14 @@ fn monday_frame_profile() {
     vm.begin_play(map, game_class, "").unwrap();
     vm.init_client().unwrap();
     let (player, _) = vm.login("").unwrap().unwrap();
-    let drawn: Vec<ObjectId> = vm.actors().filter(|&a| vm.get(a, "DrawType").is_some_and(|d| d != Value::Byte(0))).collect();
+    let drawn: Vec<ObjectId> = vm.actors().filter(|&a| vm.store.get(a, "DrawType").is_some_and(|d| d != Value::Byte(0))).collect();
     let mut profile = std::collections::HashMap::<String, std::time::Duration>::new();
     let mut frames = 0u32;
     for second in 0..25 {
         vm.diagnostics.tick_profile = Some(Default::default());
         for _ in 0..60 {
             vm.player_input(&[], [0.0, 0.0]).unwrap();
-            for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+            for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
                 vm.mark_rendered(pawn).unwrap();
             }
             let started = std::time::Instant::now();
@@ -1597,10 +1597,10 @@ fn monday_frame_profile() {
             let reads = std::time::Instant::now();
             let mut sink = 0.0f32;
             for &actor in &drawn {
-                sink += <[f32; 3]>::from(vm.location(actor)).iter().sum::<f32>() + <[i32; 3]>::from(vm.rotation(actor)).iter().sum::<i32>() as f32;
-                let flags = [vm.is_deleted(actor), vm.get(actor, p2_vm::Prop::bHidden) == Some(Value::Bool(true))];
+                sink += <[f32; 3]>::from(vm.store.location(actor)).iter().sum::<f32>() + <[i32; 3]>::from(vm.store.rotation(actor)).iter().sum::<i32>() as f32;
+                let flags = [vm.store.is_deleted(actor), vm.store.get(actor, p2_vm::Prop::bHidden) == Some(Value::Bool(true))];
                 sink += flags.iter().filter(|&&f| f).count() as f32;
-                let reads = [vm.get(actor, p2_vm::Prop::Base), vm.get(actor, p2_vm::Prop::AttachmentBone), vm.get(actor, p2_vm::Prop::Emitters)];
+                let reads = [vm.store.get(actor, p2_vm::Prop::Base), vm.store.get(actor, p2_vm::Prop::AttachmentBone), vm.store.get(actor, p2_vm::Prop::Emitters)];
                 sink += reads.iter().filter(|v| v.is_some()).count() as f32;
             }
             std::hint::black_box(sink);
@@ -1613,7 +1613,7 @@ fn monday_frame_profile() {
             }
         }
     }
-    let pawns = vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).count();
+    let pawns = vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).count();
     let mut v: Vec<_> = profile.iter().collect();
     v.sort_by_key(|(_, d)| std::cmp::Reverse(**d));
     eprintln!("{pawns} pawns, {:?}", v.iter().take(24).map(|(c, d)| format!("{c} {:?}", **d / frames)).collect::<Vec<_>>());
@@ -1621,7 +1621,7 @@ fn monday_frame_profile() {
     for _ in 0..3 {
         for _ in 0..60 {
             vm.player_input(&[], [0.0, 0.0]).unwrap();
-            for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+            for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
                 vm.mark_rendered(pawn).unwrap();
             }
             let started = std::time::Instant::now();
@@ -1637,7 +1637,7 @@ fn monday_frame_profile() {
         let frames = if by_function { 120 } else { 60 };
         for _ in 0..frames {
             vm.player_input(&[], [0.0, 0.0]).unwrap();
-            for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+            for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
                 vm.mark_rendered(pawn).unwrap();
             }
             vm.diagnostics.count_work = !by_function;
@@ -1680,27 +1680,27 @@ fn monday_is_deterministic() {
         vm.options.player_physics = true;
         for frame in 0..240 {
             vm.player_input(if frame % 80 < 60 { &["W"] } else { &[] }, [if frame % 40 < 10 { 20.0 } else { 0.0 }, 0.0]).unwrap();
-            for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+            for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
                 vm.mark_rendered(pawn).unwrap();
             }
             vm.tick_level(1.0 / 60.0);
         }
         let level = vm.level().unwrap();
         for field in ["Year", "Month", "Day", "DayOfWeek", "Hour", "Minute", "Second", "Millisecond"] {
-            vm.set(level, field, Value::Int(0));
+            vm.store.set(level, field, Value::Int(0));
         }
-        for object in vm.object_ids().filter(|&o| vm.is_a(o, "GameState") || vm.is_a(o, "GameInfo")).collect::<Vec<_>>() {
+        for object in vm.object_ids().filter(|&o| vm.store.is_a(o, "GameState") || vm.store.is_a(o, "GameInfo")).collect::<Vec<_>>() {
             for field in ["TimeStart", "TimeStop", "PreTravelTime", "PostTravelTime"] {
-                vm.set(object, field, Value::Struct(vec![Value::Float(0.0); 3]));
+                vm.store.set(object, field, Value::Struct(vec![Value::Float(0.0); 3]));
             }
         }
         let state: Vec<String> = vm
             .object_ids()
-            .filter(|&o| !vm.is_a(o, "SlotInfoMgr"))
+            .filter(|&o| !vm.store.is_a(o, "SlotInfoMgr"))
             .map(|o| {
-                let object = vm.object(o);
+                let object = vm.store.object(o);
                 let channels: Vec<_> = (0..16).filter_map(|c| vm.anim_channel(o, c).map(|(channel, _)| channel.clone())).collect();
-                format!("{} {:?} {:?} {:?}", object.path, vm.name(vm.state_name(o)), vm.properties(o), channels)
+                format!("{} {:?} {:?} {:?}", object.path, vm.store.name(vm.state_name(o)), vm.store.properties(o), channels)
             })
             .collect();
         (state, vm.diagnostics.log.clone())
@@ -1714,7 +1714,7 @@ fn monday_is_deterministic() {
 }
 
 fn movement_anim(vm: &Vm<&Loader>, pawn: ObjectId, index: usize) -> NameId {
-    match vm.get(pawn, "MovementAnims") {
+    match vm.store.get(pawn, "MovementAnims") {
         Some(Value::Array(names)) => match names.get(index) {
             Some(&Value::Name(name)) => name,
             _ => NameId::NONE,
@@ -1743,13 +1743,13 @@ fn suburbs_pawns_animate_their_movement() {
     vm.login("").unwrap().unwrap();
     let people = |vm: &Vm<&Loader>| -> Vec<ObjectId> {
         vm.actors()
-            .filter(|&a| vm.is_a(a, "P2MoCapPawn") && !vm.is_deleted(a) && vm.get(a, "bPhysicsAnimUpdate") == Some(Value::Bool(true)))
-            .filter(|&a| vm.get(a, "Controller").is_some_and(|c| !matches!(c, Value::Object(None))))
+            .filter(|&a| vm.store.is_a(a, "P2MoCapPawn") && !vm.store.is_deleted(a) && vm.store.get(a, "bPhysicsAnimUpdate") == Some(Value::Bool(true)))
+            .filter(|&a| vm.store.get(a, "Controller").is_some_and(|c| !matches!(c, Value::Object(None))))
             .collect()
     };
     let frame = |vm: &mut Vm<&Loader>| {
         vm.player_input(&[], [0.0, 0.0]).unwrap();
-        for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+        for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
             vm.mark_rendered(pawn).unwrap();
         }
         vm.tick_level(0.05);
@@ -1775,17 +1775,17 @@ fn suburbs_pawns_animate_their_movement() {
         let (channel, alpha) = (4..8).map(|c| (c, alpha_of(&vm, pawn, c))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
         let (state, animation) = vm.anim_channel(pawn, channel).unwrap();
         let wanted = movement_anim(&vm, pawn, channel - 4);
-        assert!(alpha > 0.0 && state.sequence == wanted, "{}: channel {channel} alpha {alpha} plays {} not {}", vm.object(pawn).path, vm.name(state.sequence), vm.name(wanted));
-        let (id, export) = loader.loaded_export_by_path(&vm.object(animation.unwrap()).path).unwrap();
+        assert!(alpha > 0.0 && state.sequence == wanted, "{}: channel {channel} alpha {alpha} plays {} not {}", vm.store.object(pawn).path, vm.store.name(state.sequence), vm.store.name(wanted));
+        let (id, export) = loader.loaded_export_by_path(&vm.store.object(animation.unwrap()).path).unwrap();
         let pkg = &loader.package(id).package;
         let anim = p2_assets::read_mesh_animation(pkg, &loader.package(id).data, &pkg.exports[export]).unwrap();
-        let sequence = |name: NameId| anim.sequences.iter().find(|s| pkg.name(s.name).eq_ignore_ascii_case(vm.name(name)));
+        let sequence = |name: NameId| anim.sequences.iter().find(|s| pkg.name(s.name).eq_ignore_ascii_case(vm.store.name(name)));
         let frames = sequence(state.sequence).unwrap().num_frames as f32;
         let rates: Vec<f32> = (0..4).filter_map(|i| sequence(movement_anim(&vm, pawn, i))).map(|s| if s.rate == 0.0 { 30.0 } else { s.rate }).collect();
         let scale = float_of(&vm, pawn, &["GroundSpeed"]) / float_of(&vm, pawn, &["BaseMovementRate"]);
         let own_rate = state.rate * frames / scale;
         let (low, high) = rates.iter().fold((f32::MAX, f32::MIN), |(l, h), &r| (l.min(r), h.max(r)));
-        assert!(own_rate >= low * 0.99 && own_rate <= high * 1.01, "{}: {own_rate} fps / scale, sequences {rates:?}", vm.object(pawn).path);
+        assert!(own_rate >= low * 0.99 && own_rate <= high * 1.01, "{}: {own_rate} fps / scale, sequences {rates:?}", vm.store.object(pawn).path);
     }
     frame(&mut vm);
     let mut advanced = 0;
@@ -1794,7 +1794,7 @@ fn suburbs_pawns_animate_their_movement() {
         if accelerating(&vm, pawn) && *rate > 0.0 {
             let moved = (after.frame - frame0).rem_euclid(1.0);
             let expected = (rate * 0.05 * dilation).rem_euclid(1.0);
-            assert!((moved - expected).abs() < 1e-3, "{}: moved {moved}, expected {expected}", vm.object(pawn).path);
+            assert!((moved - expected).abs() < 1e-3, "{}: moved {moved}, expected {expected}", vm.store.object(pawn).path);
             advanced += 1;
         }
     }
@@ -1802,11 +1802,11 @@ fn suburbs_pawns_animate_their_movement() {
 
     for &pawn in &standing {
         for channel in 4..12 {
-            assert_eq!(alpha_of(&vm, pawn, channel), 0.0, "{} channel {channel}", vm.object(pawn).path);
+            assert_eq!(alpha_of(&vm, pawn, channel), 0.0, "{} channel {channel}", vm.store.object(pawn).path);
         }
     }
 
-    let pawn = standing.iter().copied().find(|&p| vm.get(p, "Physics") == Some(Value::Byte(1))).expect("a walking-physics standing person");
+    let pawn = standing.iter().copied().find(|&p| vm.store.get(p, "Physics") == Some(Value::Byte(1))).expect("a walking-physics standing person");
     for (direction, channel) in [("back", 5), ("left", 6), ("right", 7)] {
         for _ in 0..10 {
             let yaw = int_of(&vm, pawn, &["Rotation", "Yaw"]) as f32 * std::f32::consts::PI / 32768.0;
@@ -1816,9 +1816,9 @@ fn suburbs_pawns_animate_their_movement() {
                 "left" => [look[1], -look[0], 0.0],
                 _ => [-look[1], look[0], 0.0],
             };
-            vm.set(pawn, "Acceleration", Value::Vector(push.map(|c| c * 100.0).into()));
-            if let Some(rotation) = vm.get(pawn, "Rotation") {
-                vm.set(pawn, "DesiredRotation", rotation);
+            vm.store.set(pawn, "Acceleration", Value::Vector(push.map(|c| c * 100.0).into()));
+            if let Some(rotation) = vm.store.get(pawn, "Rotation") {
+                vm.store.set(pawn, "DesiredRotation", rotation);
             }
             vm.mark_rendered(pawn).unwrap();
             vm.tick_actor(pawn, 0.05).unwrap();
@@ -1857,7 +1857,7 @@ fn console_cheat_gives_weapons() {
             seen.push(item);
             next = object_of(vm, item, "Inventory");
         }
-        seen.iter().filter(|&&item| vm.is_a(item, "Weapon")).count()
+        seen.iter().filter(|&&item| vm.store.is_a(item, "Weapon")).count()
     };
     let before = count(&vm);
     vm.call_native("ConsoleCommand", Some(controller), &mut [Value::Str("PackNHeat".to_owned()), Value::Bool(false)]).unwrap();

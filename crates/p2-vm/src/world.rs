@@ -8,7 +8,7 @@ use p2_collision::{
     Hit, MeshCollision, Primitive, Sides, box_check, line_check, line_check_node, mesh_box_check, mesh_line_check, mesh_line_check_at, pull_back,
     pull_back_units, segment_cylinder, terrain_box_check, terrain_line_check,
 };
-use p2_math::{Rotator, Vector};
+use p2_math::Vector;
 use p2_package::PackageId;
 use p2_script::{Objects, Source};
 
@@ -151,8 +151,8 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             }
             let Ok(object) = self.load_object(map, index) else { continue };
-            let Some(class) = self.object(object).class else { continue };
-            let Ok(mut terrain) = read_terrain(pkg, data, export, &self.class(class).layout) else { continue };
+            let Some(class) = self.store.object(object).class else { continue };
+            let Ok(mut terrain) = read_terrain(pkg, data, export, &self.store.class(class).layout) else { continue };
             let heights = loader.resolve_loaded(map, terrain.heightmap).and_then(|found| {
                 let loaded = loader.package(found.package);
                 let source = Source { package: &loaded.package, data: &loaded.data };
@@ -173,15 +173,15 @@ impl<L: LoaderRef> Vm<L> {
         self.hash = crate::hash::CollisionHash::default();
         let actors: Vec<_> = self.actors().collect();
         for actor in actors {
-            let world_geometry = [Prop::bStatic, Prop::bWorldGeometry, Prop::bCollideActors].into_iter().all(|f| self.flag_of(actor, f));
-            if !world_geometry || self.is_deleted(actor) || (self.is_a(actor, Kind::BlockingVolume) && self.flag_of(actor, Prop::bClassBlocker)) {
+            let world_geometry = [Prop::bStatic, Prop::bWorldGeometry, Prop::bCollideActors].into_iter().all(|f| self.store.flag_of(actor, f));
+            if !world_geometry || self.store.is_deleted(actor) || (self.store.is_a(actor, Kind::BlockingVolume) && self.store.flag_of(actor, Prop::bClassBlocker)) {
                 continue;
             }
             let Some(shape) = self.actor_shape(actor) else { continue };
-            if self.flag_of(actor, Prop::bBlockNonZeroExtentTraces) {
+            if self.store.flag_of(actor, Prop::bBlockNonZeroExtentTraces) {
                 self.world.boxes.push(WorldShape { shape: shape.boxes, model: shape.model, actor });
             }
-            if self.flag_of(actor, Prop::bBlockZeroExtentTraces) {
+            if self.store.flag_of(actor, Prop::bBlockZeroExtentTraces) {
                 self.world.lines.push(WorldShape { shape: shape.lines, model: shape.model, actor });
             }
             self.world.static_actors.insert(actor);
@@ -225,61 +225,41 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn karma_blocking_hulls(&mut self) -> Vec<Vec<[f32; 3]>> {
         let volumes: Vec<ObjectId> = self
             .actors()
-            .filter(|&a| !self.is_deleted(a) && self.is_a(a, Kind::BlockingVolume) && self.flag_of(a, Prop::bBlockKarma))
+            .filter(|&a| !self.store.is_deleted(a) && self.store.is_a(a, Kind::BlockingVolume) && self.store.flag_of(a, Prop::bBlockKarma))
             .collect();
         let mut hulls = Vec::new();
         for volume in volumes {
-            let Some(model) = self.object_of(volume, Prop::Brush).and_then(|brush| self.brush_model(brush)) else { continue };
-            let (location, pre_pivot) = (self.vector(volume, Prop::Location), self.vector(volume, Prop::PrePivot));
-            let axes = self.rotator_of(volume, Prop::Rotation).axes();
+            let Some(model) = self.store.object_of(volume, Prop::Brush).and_then(|brush| self.brush_model(brush)) else { continue };
+            let (location, pre_pivot) = (self.store.vector(volume, Prop::Location), self.store.vector(volume, Prop::PrePivot));
+            let axes = self.store.rotator_of(volume, Prop::Rotation).axes();
             hulls.push(brush_corners(&model).map(|p| [0, 1, 2].map(|c| location[c] + (0..3).map(|k| axes[k][c] * (p[k] - pre_pivot[k])).sum::<f32>())).collect());
         }
         hulls
     }
 
-    #[inline]
-    pub(crate) fn vector(&self, object: ObjectId, property: impl crate::PropertyName) -> Vector {
-        self.store.vector(object, property)
-    }
-
-    #[inline]
-    pub(crate) fn vec3_of(&self, object: ObjectId, property: impl crate::PropertyName) -> Vector {
-        self.store.vec3_of(object, property)
-    }
-
-    #[inline]
-    pub fn location(&self, actor: ObjectId) -> Vector {
-        self.store.location(actor)
-    }
-
     pub fn velocity(&self, actor: ObjectId) -> Vector {
-        self.vector(actor, Prop::Velocity)
+        self.store.vector(actor, Prop::Velocity)
     }
 
     /// Retail divides an emitter's step by `TimeDilation` when its `Owner` is a player (unverified),
     /// so the player's own effects run in real time.
     pub fn particle_time_scale(&self, actor: ObjectId) -> f32 {
-        let player_owned = self.object_of(actor, Prop::Owner).is_some_and(|owner| self.is_player(owner));
-        let dilation = self.level.map_or(1.0, |level| self.float_of(level, Prop::TimeDilation));
+        let player_owned = self.store.object_of(actor, Prop::Owner).is_some_and(|owner| self.is_player(owner));
+        let dilation = self.level.map_or(1.0, |level| self.store.float_of(level, Prop::TimeDilation));
         if player_owned && dilation > 0.0 { 1.0 / dilation } else { 1.0 }
     }
 
     pub fn drag_actors(&self) -> Vec<(Vector, Vector, f32, f32)> {
         const FT_DRAG_ALONG: u8 = 1;
-        let float = |actor, name: Prop| match self.get(actor, name) {
+        let float = |actor, name: Prop| match self.store.get(actor, name) {
             Some(Value::Float(value)) => value,
             _ => 0.0,
         };
         self.actors()
-            .filter(|&actor| !self.is_deleted(actor) && self.get(actor, Prop::ForceType) == Some(Value::Byte(FT_DRAG_ALONG)))
+            .filter(|&actor| !self.store.is_deleted(actor) && self.store.get(actor, Prop::ForceType) == Some(Value::Byte(FT_DRAG_ALONG)))
             .filter(|&actor| float(actor, Prop::ForceRadius) != 0.0)
-            .map(|actor| (self.location(actor), self.velocity(actor), float(actor, Prop::ForceRadius), float(actor, Prop::ForceScale)))
+            .map(|actor| (self.store.location(actor), self.velocity(actor), float(actor, Prop::ForceRadius), float(actor, Prop::ForceScale)))
             .collect()
-    }
-
-    #[inline]
-    pub fn rotation(&self, actor: ObjectId) -> Rotator {
-        self.store.rotation(actor)
     }
 
     pub fn zone_at(&self, point: Vector) -> Option<ObjectId> {
@@ -362,7 +342,7 @@ impl<L: LoaderRef> Vm<L> {
         for _ in 0..64 {
             match current {
                 Some(at) if at == owner => return true,
-                Some(at) => current = self.object_of(at, Prop::Owner),
+                Some(at) => current = self.store.object_of(at, Prop::Owner),
                 None => return false,
             }
         }
@@ -371,28 +351,28 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn should_trace(&self, actor: ObjectId, source: Option<ObjectId>, flags: u32) -> bool {
         use crate::{Kind, Prop};
-        let source_not_pawn = source.is_some_and(|s| !self.is_a(s, Kind::Pawn));
-        if self.is_a(actor, Kind::Pawn) {
-            return !(self.flag_of(actor, Prop::bOnlyAffectPawns) && source_not_pawn) && flags & trace::PAWNS != 0;
+        let source_not_pawn = source.is_some_and(|s| !self.store.is_a(s, Kind::Pawn));
+        if self.store.is_a(actor, Kind::Pawn) {
+            return !(self.store.flag_of(actor, Prop::bOnlyAffectPawns) && source_not_pawn) && flags & trace::PAWNS != 0;
         }
-        if self.is_a(actor, Kind::Mover) {
+        if self.store.is_a(actor, Kind::Mover) {
             return flags & trace::MOVERS != 0;
         }
-        if source.is_some_and(|s| self.flag_of(s, Prop::bOnlyAffectPawns)) || (self.flag_of(actor, Prop::bOnlyAffectPawns) && source_not_pawn) {
+        if source.is_some_and(|s| self.store.flag_of(s, Prop::bOnlyAffectPawns)) || (self.store.flag_of(actor, Prop::bOnlyAffectPawns) && source_not_pawn) {
             return false;
         }
-        let volume = self.is_a(actor, Kind::Volume);
-        if volume && self.is_a(actor, Kind::BlockingVolume) && source.is_none_or(|s| !self.class_blocks(actor, s)) {
+        let volume = self.store.is_a(actor, Kind::Volume);
+        if volume && self.store.is_a(actor, Kind::BlockingVolume) && source.is_none_or(|s| !self.class_blocks(actor, s)) {
             return false;
         }
-        if self.flag_of(actor, Prop::bWorldGeometry) && flags & trace::LEVEL_GEOMETRY != 0 {
+        if self.store.flag_of(actor, Prop::bWorldGeometry) && flags & trace::LEVEL_GEOMETRY != 0 {
             return true;
         }
-        if flags & (if volume { trace::VOLUMES } else { trace::OTHERS }) == 0 || (!volume && self.flag_of(actor, Prop::bWorldGeometry)) {
+        if flags & (if volume { trace::VOLUMES } else { trace::OTHERS }) == 0 || (!volume && self.store.flag_of(actor, Prop::bWorldGeometry)) {
             return false;
         }
         if flags & trace::ONLY_PROJ_ACTOR != 0 {
-            self.flag_of(actor, Prop::bProjTarget) || (self.flag_of(actor, Prop::bBlockActors) && self.flag_of(actor, Prop::bBlockPlayers))
+            self.store.flag_of(actor, Prop::bProjTarget) || (self.store.flag_of(actor, Prop::bBlockActors) && self.store.flag_of(actor, Prop::bBlockPlayers))
         } else if flags & trace::BLOCKING != 0 {
             source.is_some_and(|s| self.is_blocked_by(s, actor))
         } else {
@@ -424,7 +404,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn keep_line_of_sight(&mut self, source: Option<ObjectId>, from: Vector, items: &mut Vec<Value>) {
         items.retain(|item| match item {
             &Value::Object(Some(object)) => {
-                let to = self.vector(object, Prop::Location);
+                let to = self.store.vector(object, Prop::Location);
                 self.first_hit(from, to, Vector::ZERO, source, trace::WORLD).is_none_or(|(actor, _)| actor == Some(object))
             }
             _ => false,
@@ -491,9 +471,9 @@ impl<L: LoaderRef> Vm<L> {
             let actor = entry.actor;
             if self.world.static_actors.contains(&actor)
                 || Some(actor) == source
-                || self.is_deleted(actor)
-                || !self.flag_of(actor, Prop::bCollideActors)
-                || !self.flag_of(actor, blocks_traces)
+                || self.store.is_deleted(actor)
+                || !self.store.flag_of(actor, Prop::bCollideActors)
+                || !self.store.flag_of(actor, blocks_traces)
                 || source.is_some_and(|s| self.is_owned_by(s, actor))
                 || !self.should_trace(actor, source, flags)
             {
@@ -511,13 +491,13 @@ impl<L: LoaderRef> Vm<L> {
                 let units = if zero_extent && shape.model { 0.5 } else { pull_back_units(primitive, length) };
                 if zero_extent { mesh_line_check([&*shape.lines], start, end) } else { mesh_box_check([&*shape.boxes], start, end, extent) }
                     .map(|hit| pull_back(start, end, hit, units))
-            } else if self.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
-                let height = self.vector(actor, Prop::Location)[2];
+            } else if self.store.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
+                let height = self.store.vector(actor, Prop::Location)[2];
                 crate::collision::fluid_line_check(self.fluid_bounds(actor), height, start, end, extent)
             } else {
-                let radius = self.float_of(actor, Prop::CollisionRadius) + extent.x.max(extent.y);
-                let height = self.float_of(actor, Prop::CollisionHeight) + extent.z;
-                segment_cylinder(start, end, self.vector(actor, Prop::Location), radius, height)
+                let radius = self.store.float_of(actor, Prop::CollisionRadius) + extent.x.max(extent.y);
+                let height = self.store.float_of(actor, Prop::CollisionHeight) + extent.z;
+                segment_cylinder(start, end, self.store.vector(actor, Prop::Location), radius, height)
             };
             if let Some(hit) = hit.filter(|hit| hit.time <= reach)
                 && visit(Some(actor), hit)
@@ -534,8 +514,8 @@ impl<L: LoaderRef> Vm<L> {
     /// `Trace(out HitLocation, out HitNormal, TraceEnd, TraceStart, bTraceActors, Extent, out Material)`.
     #[expect(clippy::unnecessary_wraps, reason = "every native dispatcher has this shape: `natives::call` returns its result")]
     pub(crate) fn trace_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
-        let here = this.map_or(Vector::ZERO, |this| self.vector(this, Prop::Location));
-        let source = this.map(|this| if self.is_a(this, Kind::Controller) { self.object_of(this, Prop::Pawn).unwrap_or(this) } else { this });
+        let here = this.map_or(Vector::ZERO, |this| self.store.vector(this, Prop::Location));
+        let source = this.map(|this| if self.store.is_a(this, Kind::Controller) { self.store.object_of(this, Prop::Pawn).unwrap_or(this) } else { this });
         if native == Native::FastTrace {
             let end = vector_arg(args, 0).unwrap_or(here);
             let start = vector_arg(args, 1).unwrap_or(here);
@@ -544,7 +524,7 @@ impl<L: LoaderRef> Vm<L> {
         let end = vector_arg(args, 2).unwrap_or(here);
         let start = vector_arg(args, 3).unwrap_or(here);
         let actors = match args.get(4) {
-            None | Some(Value::Map) => this.is_some_and(|this| self.flag_of(this, Prop::bCollideActors)),
+            None | Some(Value::Map) => this.is_some_and(|this| self.store.flag_of(this, Prop::bCollideActors)),
             Some(value) => crate::interp::truthy(value),
         };
         let extent = vector_arg(args, 5).unwrap_or(Vector::ZERO);
@@ -603,18 +583,18 @@ impl<L: LoaderRef> Vm<L> {
             (actor, shape.lines.slot(triangle)?)
         };
         let slot = slot as usize;
-        if let Some(Value::Array(skins)) = self.get(mesh_actor, Prop::Skins)
+        if let Some(Value::Array(skins)) = self.store.get(mesh_actor, Prop::Skins)
             && let Some(&Value::Object(Some(skin))) = skins.get(slot)
         {
             self.load_stub(skin);
             return Some(skin);
         }
-        let mesh = self.object_of(mesh_actor, Prop::StaticMesh)?;
+        let mesh = self.store.object_of(mesh_actor, Prop::StaticMesh)?;
         let loader = self.loader.clone();
         let (package, materials) = match self.world.mesh_materials.get(&mesh) {
             Some(known) => known.clone()?,
             None => {
-                let read = loader.loaded_export_by_path_of_class(&self.object(mesh).path, "StaticMesh").and_then(|(package, export)| {
+                let read = loader.loaded_export_by_path_of_class(&self.store.object(mesh).path, "StaticMesh").and_then(|(package, export)| {
                     let source = loader.package(package);
                     let materials = read_static_mesh_materials(&source.package, &source.data, &source.package.exports[export]).ok()?;
                     Some((package, Arc::<[i32]>::from(materials)))
@@ -631,16 +611,16 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn trace_actors_items(&mut self, this: Option<ObjectId>, args: &[Value]) -> Vec<Value> {
         let class = match args.first() {
-            Some(&Value::Object(Some(class))) => self.object(class).name,
+            Some(&Value::Object(Some(class))) => self.store.object(class).name,
             _ => self.script.lookups.class_names.actor,
         };
         let vector_arg = |n: usize| vector_arg(args, n);
-        let here = this.map_or(Vector::ZERO, |this| self.vector(this, Prop::Location));
+        let here = this.map_or(Vector::ZERO, |this| self.store.vector(this, Prop::Location));
         let (end, start, extent) = (vector_arg(3).unwrap_or(here), vector_arg(4).unwrap_or(here), vector_arg(5).unwrap_or(Vector::ZERO));
         self.line_check(start, end, extent, this, trace::ALL_COLLIDING)
             .into_iter()
             .map(|(actor, hit)| match actor {
-                Some(actor) if !self.is_deleted(actor) && self.is_a(actor, class) => Value::Struct(vec![
+                Some(actor) if !self.store.is_deleted(actor) && self.store.is_a(actor, class) => Value::Struct(vec![
                     Value::Object(Some(actor)),
                     Value::Vector(hit.location),
                     Value::Vector(hit.normal),

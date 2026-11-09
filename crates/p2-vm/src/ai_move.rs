@@ -42,7 +42,7 @@ impl<L: LoaderRef> Vm<L> {
         if native == Native::ReachedDestination {
             let goal = object_arg(args, 0);
             let reached = goal.is_some_and(|goal| {
-                let direction = self.vector(goal, Prop::Location) - self.vector(this, Prop::Location);
+                let direction = self.store.vector(goal, Prop::Location) - self.store.vector(this, Prop::Location);
                 self.reached_destination(this, direction, Some(goal))
             });
             return Ok(Some(Value::Bool(reached)));
@@ -52,7 +52,7 @@ impl<L: LoaderRef> Vm<L> {
             let current = self.script.states.objects.get(&this).and_then(|s| s.latent_move);
             return Ok(Some(Value::Bool(current.is_some_and(|m| m.number() == number))));
         }
-        let pawn = self.object_of(this, Prop::Pawn);
+        let pawn = self.store.object_of(this, Prop::Pawn);
         match native {
             Native::MoveTo | Native::MoveToWithRadius => {
                 let Some(pawn) = pawn else { return Ok(None) };
@@ -64,18 +64,18 @@ impl<L: LoaderRef> Vm<L> {
                     false => (0.0, optional_float(args, 2, 1.0), bool_arg(args, 3)),
                 };
                 self.set_walking(pawn, walk)?;
-                self.set(this, Prop::MoveTarget, Value::Object(None));
-                self.set(pawn, Prop::bReducedSpeed, Value::Bool(false));
-                self.set(pawn, Prop::DesiredSpeed, Value::Float(self.desired_speed(pawn, speed)));
-                self.set(pawn, Prop::DestinationOffset, Value::Float(0.0));
-                self.set(pawn, Prop::NextPathRadius, Value::Float(0.0));
-                self.set(this, Prop::Focus, Value::Object(focus));
+                self.store.set(this, Prop::MoveTarget, Value::Object(None));
+                self.store.set(pawn, Prop::bReducedSpeed, Value::Bool(false));
+                self.store.set(pawn, Prop::DesiredSpeed, Value::Float(self.desired_speed(pawn, speed)));
+                self.store.set(pawn, Prop::DestinationOffset, Value::Float(0.0));
+                self.store.set(pawn, Prop::NextPathRadius, Value::Float(0.0));
+                self.store.set(this, Prop::Focus, Value::Object(focus));
                 if radius_version {
-                    let timer = self.float_of(pawn, Prop::PathCheckTimePoint);
-                    self.set(this, Prop::MoveTimer, Value::Float(timer));
-                    self.set(this, Prop::TargetRadius, Value::Float(radius));
+                    let timer = self.store.float_of(pawn, Prop::PathCheckTimePoint);
+                    self.store.set(this, Prop::MoveTimer, Value::Float(timer));
+                    self.store.set(this, Prop::TargetRadius, Value::Float(radius));
                 } else {
-                    let distance = (destination - self.vector(pawn, Prop::Location)).size();
+                    let distance = (destination - self.store.vector(pawn, Prop::Location)).size();
                     self.set_move_timer(pawn, this, distance);
                 }
                 self.set_vector(this, Prop::Destination, destination);
@@ -101,37 +101,37 @@ impl<L: LoaderRef> Vm<L> {
                 let offset = optional_float(args, 3 + first, 0.0);
                 let strafing = bool_arg(args, 4 + first);
                 self.set_walking(pawn, bool_arg(args, 5 + first))?;
-                self.set(pawn, Prop::bReducedSpeed, Value::Bool(false));
-                self.set(pawn, Prop::DesiredSpeed, Value::Float(self.desired_speed(pawn, speed)));
-                self.set(this, Prop::MoveTarget, Value::Object(Some(target)));
-                self.set(this, Prop::Focus, Value::Object(focus));
-                let destination = self.vector(target, Prop::Location);
+                self.store.set(pawn, Prop::bReducedSpeed, Value::Bool(false));
+                self.store.set(pawn, Prop::DesiredSpeed, Value::Float(self.desired_speed(pawn, speed)));
+                self.store.set(this, Prop::MoveTarget, Value::Object(Some(target)));
+                self.store.set(this, Prop::Focus, Value::Object(focus));
+                let destination = self.store.vector(target, Prop::Location);
                 if radius_version {
-                    let timer = self.float_of(pawn, Prop::PathCheckTimeActor);
-                    self.set(this, Prop::MoveTimer, Value::Float(timer));
-                    self.set(this, Prop::TargetRadius, Value::Float(radius));
-                } else if self.is_a(target, Kind::Pawn) {
-                    self.set(this, Prop::MoveTimer, Value::Float(PAWN_TARGET_MOVE_TIMER));
+                    let timer = self.store.float_of(pawn, Prop::PathCheckTimeActor);
+                    self.store.set(this, Prop::MoveTimer, Value::Float(timer));
+                    self.store.set(this, Prop::TargetRadius, Value::Float(radius));
+                } else if self.store.is_a(target, Kind::Pawn) {
+                    self.store.set(this, Prop::MoveTimer, Value::Float(PAWN_TARGET_MOVE_TIMER));
                 } else {
-                    let distance = (destination - self.vector(pawn, Prop::Location)).size();
+                    let distance = (destination - self.store.vector(pawn, Prop::Location)).size();
                     self.set_move_timer(pawn, this, distance);
                 }
                 self.set_vector(this, Prop::Destination, destination);
                 self.start_move(this, pawn, destination, strafing);
                 let mut destination_offset = offset;
-                if self.is_a(target, Kind::NavigationPoint) {
-                    if self.flag_of(target, Prop::bSpecialMove) {
+                if self.store.is_a(target, Kind::NavigationPoint) {
+                    if self.store.flag_of(target, Prop::bSpecialMove) {
                         self.event(target, "SuggestMovePreparation", [Value::Object(Some(pawn))])?;
                     }
-                    let straight = self.flag_of(target, Prop::bNeverUseStrafing) || self.flag_of(target, Prop::bForceNoStrafing);
-                    if !radius_version && offset == 0.0 && !straight && self.object_of(this, Prop::RouteGoal) != Some(target) {
-                        let room = (self.float_of(pawn, Prop::NextPathRadius) - self.float_of(pawn, Prop::CollisionRadius)).max(0.0);
+                    let straight = self.store.flag_of(target, Prop::bNeverUseStrafing) || self.store.flag_of(target, Prop::bForceNoStrafing);
+                    if !radius_version && offset == 0.0 && !straight && self.store.object_of(this, Prop::RouteGoal) != Some(target) {
+                        let room = (self.store.float_of(pawn, Prop::NextPathRadius) - self.store.float_of(pawn, Prop::CollisionRadius)).max(0.0);
                         destination_offset = (self.random() * 0.3 + 0.7) * room;
                     }
                 }
-                self.set(pawn, Prop::DestinationOffset, Value::Float(destination_offset));
-                self.set(pawn, Prop::NextPathRadius, Value::Float(0.0));
-                if !self.flag_of(this, Prop::bPreparingMove) {
+                self.store.set(pawn, Prop::DestinationOffset, Value::Float(destination_offset));
+                self.store.set(pawn, Prop::NextPathRadius, Value::Float(0.0));
+                if !self.store.flag_of(this, Prop::bPreparingMove) {
                     if radius_version {
                         self.move_toward_with_radius(pawn, destination, Some(target), radius)?;
                     } else {
@@ -148,22 +148,22 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(Some(Value::Int(pitch)));
             }
             Native::WaitToSeeEnemy => {
-                if let (Some(_), Some(enemy)) = (pawn, self.object_of(this, Prop::Enemy)) {
-                    self.set(this, Prop::Focus, Value::Object(Some(enemy)));
+                if let (Some(_), Some(enemy)) = (pawn, self.store.object_of(this, Prop::Enemy)) {
+                    self.store.set(this, Prop::Focus, Value::Object(Some(enemy)));
                     self.latent_wait(LatentMove::WaitToSeeEnemy);
                 }
             }
             Native::EAdjustJump => {
                 let Some(pawn) = pawn else { return Ok(Some(Value::Vector(Vector::ZERO))) };
-                let to = self.vector(this, Prop::Destination) - self.vector(pawn, Prop::Location);
-                let (jump_z, ground_speed) = (self.float_of(pawn, "JumpZ"), self.float_of(pawn, "GroundSpeed"));
+                let to = self.store.vector(this, Prop::Destination) - self.store.vector(pawn, Prop::Location);
+                let (jump_z, ground_speed) = (self.store.float_of(pawn, "JumpZ"), self.store.float_of(pawn, "GroundSpeed"));
                 let gravity_z = self.gravity_of(pawn).z;
                 let velocity = crate::movement_natives::suggest_jump_velocity(to, optional_float(args, 1, 0.0), optional_float(args, 0, 0.0), jump_z, ground_speed, gravity_z);
                 return Ok(Some(Value::Vector(velocity)));
             }
             Native::WaitForLanding => {
-                self.set(this, Prop::LatentFloat, Value::Float(LANDING_WAIT_SECONDS));
-                if pawn.is_some_and(|p| self.physics_of(p) == Some(EPhysics::Falling)) {
+                self.store.set(this, Prop::LatentFloat, Value::Float(LANDING_WAIT_SECONDS));
+                if pawn.is_some_and(|p| self.store.physics_of(p) == Some(EPhysics::Falling)) {
                     self.latent_wait(LatentMove::WaitForLanding);
                 }
             }
@@ -178,45 +178,45 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn start_move(&mut self, controller: ObjectId, pawn: ObjectId, destination: Vector, strafing: bool) {
-        self.set(controller, Prop::bAdjusting, Value::Bool(false));
-        self.set(controller, Prop::CurrentPath, Value::Object(None));
-        self.set(controller, Prop::bAdvancedTactics, Value::Bool(strafing));
+        self.store.set(controller, Prop::bAdjusting, Value::Bool(false));
+        self.store.set(controller, Prop::CurrentPath, Value::Object(None));
+        self.store.set(controller, Prop::bAdvancedTactics, Value::Bool(strafing));
         self.set_vector(controller, Prop::AdjustLoc, destination);
-        self.set(pawn, Prop::SerpentineTime, Value::Float(0.0));
-        self.set(pawn, Prop::SerpentineDist, Value::Float(0.0));
+        self.store.set(pawn, Prop::SerpentineTime, Value::Float(0.0));
+        self.store.set(pawn, Prop::SerpentineDist, Value::Float(0.0));
     }
 
     fn set_walking(&mut self, pawn: ObjectId, walk: bool) -> Result<(), Error> {
-        if walk != self.flag_of(pawn, Prop::bIsWalking) {
+        if walk != self.store.flag_of(pawn, Prop::bIsWalking) {
             self.event(pawn, "SetWalking", [Value::Bool(walk)])?;
         }
         Ok(())
     }
 
     fn desired_speed(&self, pawn: ObjectId, speed: f32) -> f32 {
-        let max = self.float_of(pawn, Prop::MaxDesiredSpeed);
+        let max = self.store.float_of(pawn, Prop::MaxDesiredSpeed);
         if max < 0.0 { 0.0 } else { speed.min(max) }
     }
 
     fn set_move_timer(&mut self, pawn: ObjectId, controller: ObjectId, distance: f32) {
-        let desired = self.float_of(pawn, Prop::DesiredSpeed);
+        let desired = self.store.float_of(pawn, Prop::DesiredSpeed);
         let timer = if desired == 0.0 {
             0.5
         } else {
-            let walking = self.flag_of(pawn, Prop::bIsWalking) || self.flag_of(pawn, Prop::bIsCrouched);
-            let factor = if walking { 2.0_f32.max(1.0 / self.float_of(pawn, Prop::WalkingPct)) } else { 2.0 };
+            let walking = self.store.flag_of(pawn, Prop::bIsWalking) || self.store.flag_of(pawn, Prop::bIsCrouched);
+            let factor = if walking { 2.0_f32.max(1.0 / self.store.float_of(pawn, Prop::WalkingPct)) } else { 2.0 };
             factor * distance / (self.max_speed(pawn) * desired) + 1.0
         };
-        self.set(controller, Prop::MoveTimer, Value::Float(timer));
+        self.store.set(controller, Prop::MoveTimer, Value::Float(timer));
     }
 
     pub(crate) fn poll_latent_move(&mut self, controller: ObjectId, action: LatentMove, delta: f32) -> Result<bool, Error> {
-        let pawn = self.object_of(controller, Prop::Pawn);
-        let timed_out = self.float_of(controller, Prop::MoveTimer) < 0.0;
+        let pawn = self.store.object_of(controller, Prop::Pawn);
+        let timed_out = self.store.float_of(controller, Prop::MoveTimer) < 0.0;
         match action {
             LatentMove::MoveTo | LatentMove::MoveToWithRadius => {
                 let Some(pawn) = pawn.filter(|_| !timed_out) else { return Ok(true) };
-                let radius = self.float_of(controller, Prop::TargetRadius);
+                let radius = self.store.float_of(controller, Prop::TargetRadius);
                 let step = |vm: &mut Self, to: Vector| match action {
                     LatentMove::MoveTo => vm.move_toward(pawn, to, None),
                     _ => vm.move_toward_with_radius(pawn, to, None, radius),
@@ -224,18 +224,18 @@ impl<L: LoaderRef> Vm<L> {
                 if self.poll_adjust(controller, step)? {
                     return Ok(false);
                 }
-                step(self, self.vector(controller, Prop::Destination))
+                step(self, self.store.vector(controller, Prop::Destination))
             }
             LatentMove::MoveToward | LatentMove::MoveTowardWithRadius => {
-                let target = self.object_of(controller, Prop::MoveTarget);
+                let target = self.store.object_of(controller, Prop::MoveTarget);
                 let (Some(target), Some(pawn)) = (target, pawn) else { return Ok(true) };
                 if timed_out {
                     return Ok(true);
                 }
-                if self.flag_of(controller, Prop::bPreparingMove) {
+                if self.store.flag_of(controller, Prop::bPreparingMove) {
                     return Ok(false);
                 }
-                let radius = self.float_of(controller, Prop::TargetRadius);
+                let radius = self.store.float_of(controller, Prop::TargetRadius);
                 let step = |vm: &mut Self, to: Vector| match action {
                     LatentMove::MoveToward => vm.move_toward(pawn, to, Some(target)),
                     _ => vm.move_toward_with_radius(pawn, to, Some(target), radius),
@@ -243,14 +243,14 @@ impl<L: LoaderRef> Vm<L> {
                 if self.poll_adjust(controller, step)? {
                     return Ok(false);
                 }
-                let mut destination = self.vector(target, Prop::Location);
-                if self.physics_of(pawn) == Some(EPhysics::Flying) && self.is_a(target, Kind::Pawn) {
-                    destination[2] += 0.7 * self.float_of(target, Prop::CollisionHeight);
+                let mut destination = self.store.vector(target, Prop::Location);
+                if self.store.physics_of(pawn) == Some(EPhysics::Flying) && self.store.is_a(target, Kind::Pawn) {
+                    destination[2] += 0.7 * self.store.float_of(target, Prop::CollisionHeight);
                 }
                 self.set_vector(controller, Prop::Destination, destination);
                 let done = step(self, destination)?;
-                if let Some(target) = self.object_of(controller, Prop::MoveTarget) {
-                    let location = self.vector(target, Prop::Location);
+                if let Some(target) = self.store.object_of(controller, Prop::MoveTarget) {
+                    let location = self.store.vector(target, Prop::Location);
                     self.set_vector(controller, Prop::Destination, location);
                 }
                 Ok(done)
@@ -260,19 +260,19 @@ impl<L: LoaderRef> Vm<L> {
                 Ok(self.turned_to_desired(pawn))
             }
             LatentMove::WaitToSeeEnemy => {
-                let (Some(pawn), Some(_)) = (pawn, self.object_of(controller, Prop::Enemy)) else { return Ok(true) };
-                let now = self.level.map_or(0.0, |level| self.float_of(level, Prop::TimeSeconds));
-                if now - self.float_of(controller, Prop::LastSeenTime) > 0.1 {
+                let (Some(pawn), Some(_)) = (pawn, self.store.object_of(controller, Prop::Enemy)) else { return Ok(true) };
+                let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));
+                if now - self.store.float_of(controller, Prop::LastSeenTime) > 0.1 {
                     return Ok(false);
                 }
                 Ok(self.turned_to_desired(pawn))
             }
             LatentMove::WaitForLanding => {
-                if pawn.is_some_and(|p| self.physics_of(p) != Some(EPhysics::Falling)) {
+                if pawn.is_some_and(|p| self.store.physics_of(p) != Some(EPhysics::Falling)) {
                     return Ok(true);
                 }
-                let left = self.float_of(controller, Prop::LatentFloat) - delta;
-                self.set(controller, Prop::LatentFloat, Value::Float(left));
+                let left = self.store.float_of(controller, Prop::LatentFloat) - delta;
+                self.store.set(controller, Prop::LatentFloat, Value::Float(left));
                 if left < 0.0 {
                     self.event(controller, "LongFall", Vec::new())?;
                 }
@@ -292,23 +292,23 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn move_toward_with(&mut self, pawn: ObjectId, destination: Vector, goal: Option<ObjectId>, radius: Option<f32>) -> Result<bool, Error> {
-        let Some(controller) = self.object_of(pawn, Prop::Controller) else { return Ok(false) };
-        let goal = if self.flag_of(controller, Prop::bAdjusting) { None } else { goal };
-        let location = self.vector(pawn, Prop::Location);
-        let physics = self.physics_of(pawn);
+        let Some(controller) = self.store.object_of(pawn, Prop::Controller) else { return Ok(false) };
+        let goal = if self.store.flag_of(controller, Prop::bAdjusting) { None } else { goal };
+        let location = self.store.vector(pawn, Prop::Location);
+        let physics = self.store.physics_of(pawn);
         let mut direction = destination - location;
         match physics {
             Some(EPhysics::Walking) => direction[2] = 0.0,
             Some(EPhysics::Falling) => {
                 let flat = Vector::new(direction[0], direction[1], 0.0).safe_normal();
-                let accel = flat * self.float_of(pawn, Prop::AccelRate);
+                let accel = flat * self.store.float_of(pawn, Prop::AccelRate);
                 self.set_vector(pawn, Prop::Acceleration, accel);
                 return Ok(false);
             }
             _ => {}
         }
         let distance = direction.size();
-        let fly = !self.flag_of(pawn, Prop::bCanStrafe) && matches!(physics, Some(EPhysics::Flying | EPhysics::Swimming));
+        let fly = !self.store.flag_of(pawn, Prop::bCanStrafe) && matches!(physics, Some(EPhysics::Flying | EPhysics::Swimming));
         let to_goal = destination - location;
         let reached = match radius {
             Some(radius) => self.reached_destination_with_radius(pawn, to_goal, goal, radius),
@@ -318,35 +318,35 @@ impl<L: LoaderRef> Vm<L> {
             if radius.is_some() && !fly {
                 self.set_vector(pawn, Prop::Acceleration, Vector::ZERO);
             }
-            if let Some(goal) = goal.filter(|&g| self.is_a(g, Kind::NavigationPoint)) {
-                self.set(pawn, Prop::Anchor, Value::Object(Some(goal)));
+            if let Some(goal) = goal.filter(|&g| self.store.is_a(g, Kind::NavigationPoint)) {
+                self.store.set(pawn, Prop::Anchor, Value::Object(Some(goal)));
             }
             self.event(controller, "HitPathGoal", [Value::Object(goal), Value::Vector(destination)])?;
             return Ok(true);
         }
         let heading = if fly {
-            self.rotator_of(pawn, Prop::Rotation).vector()
+            self.store.rotator_of(pawn, Prop::Rotation).vector()
         } else if distance > 0.0 {
             direction * (1.0 / distance)
         } else {
             direction
         };
-        let accel_rate = self.float_of(pawn, Prop::AccelRate);
-        let mut acceleration = self.vector(pawn, Prop::Acceleration);
+        let accel_rate = self.store.float_of(pawn, Prop::AccelRate);
+        let mut acceleration = self.store.vector(pawn, Prop::Acceleration);
         acceleration = if radius.is_some() || (acceleration[0] == 0.0 && acceleration[1] == 0.0) {
             heading * accel_rate
         } else {
             (acceleration * 0.8) + (heading * (accel_rate * 0.2))
         };
-        let move_target = self.object_of(controller, Prop::MoveTarget);
-        if !self.flag_of(controller, Prop::bAdjusting)
-            && let Some(target) = move_target.filter(|&t| self.is_a(t, Kind::Pawn))
+        let move_target = self.store.object_of(controller, Prop::MoveTarget);
+        if !self.store.flag_of(controller, Prop::bAdjusting)
+            && let Some(target) = move_target.filter(|&t| self.store.is_a(t, Kind::Pawn))
         {
             self.set_vector(pawn, Prop::Acceleration, acceleration);
-            let reach = self.float_of(target, Prop::CollisionRadius) + self.float_of(pawn, Prop::CollisionRadius) + 0.8 * self.float_of(pawn, Prop::MeleeRange);
+            let reach = self.store.float_of(target, Prop::CollisionRadius) + self.store.float_of(pawn, Prop::CollisionRadius) + 0.8 * self.store.float_of(pawn, Prop::MeleeRange);
             return Ok(distance < reach);
         }
-        let velocity = self.vector(pawn, Prop::Velocity);
+        let velocity = self.store.vector(pawn, Prop::Velocity);
         let speed = velocity.size();
         if !fly && speed > 100.0 {
             let velocity_dir = velocity * (1.0 / speed);
@@ -354,108 +354,108 @@ impl<L: LoaderRef> Vm<L> {
             acceleration -= (velocity_dir - heading) * correction;
         }
         self.set_vector(pawn, Prop::Acceleration, acceleration);
-        if distance >= self.float_of(pawn, Prop::AvgPhysicsTime) * 1.4 * speed {
+        if distance >= self.store.float_of(pawn, Prop::AvgPhysicsTime) * 1.4 * speed {
             return Ok(false);
         }
-        let mut desired = self.float_of(pawn, Prop::DesiredSpeed);
-        if !self.flag_of(pawn, Prop::bReducedSpeed) {
+        let mut desired = self.store.float_of(pawn, Prop::DesiredSpeed);
+        if !self.store.flag_of(pawn, Prop::bReducedSpeed) {
             desired *= 0.51;
-            self.set(pawn, Prop::bReducedSpeed, Value::Bool(true));
+            self.store.set(pawn, Prop::bReducedSpeed, Value::Bool(true));
         }
         if speed > 0.0 {
             desired = desired.min(200.0 / speed);
         }
-        self.set(pawn, Prop::DesiredSpeed, Value::Float(desired));
+        self.store.set(pawn, Prop::DesiredSpeed, Value::Float(desired));
         Ok(fly)
     }
 
     /// Cases between the two height thresholds (retail's slope test) count as not reached (unverified).
     pub(crate) fn reached_destination(&self, pawn: ObjectId, direction: Vector, goal: Option<ObjectId>) -> bool {
-        let height = self.float_of(pawn, Prop::CollisionHeight);
-        let radius = self.float_of(pawn, Prop::CollisionRadius);
-        let default_height = self.object(pawn).class.and_then(|c| self.default_value(c, Prop::CollisionHeight)).as_ref().map_or(height, float);
+        let height = self.store.float_of(pawn, Prop::CollisionHeight);
+        let radius = self.store.float_of(pawn, Prop::CollisionRadius);
+        let default_height = self.store.object(pawn).class.and_then(|c| self.store.default_value(c, Prop::CollisionHeight)).as_ref().map_or(height, float);
         let (mut up, mut down, mut reach) = (2.0 * default_height - height, height, radius);
         if let Some(goal) = goal {
-            let goal_height = self.float_of(goal, Prop::CollisionHeight);
-            let goal_radius = self.float_of(goal, Prop::CollisionRadius);
-            if self.is_a(goal, Kind::NavigationPoint) {
+            let goal_height = self.store.float_of(goal, Prop::CollisionHeight);
+            let goal_radius = self.store.float_of(goal, Prop::CollisionRadius);
+            if self.store.is_a(goal, Kind::NavigationPoint) {
                 up = up.max(goal_height + 2.0 - height + crate::physics::MAX_STEP_HEIGHT);
                 down = down.max(height + 2.0 + crate::physics::MAX_STEP_HEIGHT - goal_height);
                 reach = goal_radius + radius;
-            } else if self.is_a(goal, Kind::Pawn) {
+            } else if self.store.is_a(goal, Kind::Pawn) {
                 up = up.max(goal_height);
                 down = down.max(goal_height);
-                let melee = self.float_of(pawn, Prop::MeleeRange).min(radius * 1.5);
+                let melee = self.store.float_of(pawn, Prop::MeleeRange).min(radius * 1.5);
                 reach = (radius + melee + goal_radius) * 1.5;
             } else {
                 up += goal_height;
                 down += goal_height;
-                if self.flag_of(goal, Prop::bBlockActors) {
+                if self.store.flag_of(goal, Prop::bBlockActors) {
                     reach = goal_radius + radius;
                 }
             }
-            reach += self.float_of(pawn, Prop::DestinationOffset);
+            reach += self.store.float_of(pawn, Prop::DestinationOffset);
         }
         within(direction, reach, up, down)
     }
 
     fn poll_adjust(&mut self, controller: ObjectId, step: impl Fn(&mut Self, Vector) -> Result<bool, Error>) -> Result<bool, Error> {
-        if !self.flag_of(controller, Prop::bAdjusting) {
+        if !self.store.flag_of(controller, Prop::bAdjusting) {
             return Ok(false);
         }
-        let target = self.vector(controller, Prop::AdjustLoc);
+        let target = self.store.vector(controller, Prop::AdjustLoc);
         let adjusting = !step(self, target)?;
-        self.set(controller, Prop::bAdjusting, Value::Bool(adjusting));
+        self.store.set(controller, Prop::bAdjusting, Value::Bool(adjusting));
         Ok(adjusting)
     }
 
     fn turned_to_desired(&self, pawn: ObjectId) -> bool {
-        let yaw = (self.rotator_of(pawn, Prop::DesiredRotation).yaw - (self.rotator_of(pawn, Prop::Rotation).yaw & 0xffff)).abs();
+        let yaw = (self.store.rotator_of(pawn, Prop::DesiredRotation).yaw - (self.store.rotator_of(pawn, Prop::Rotation).yaw & 0xffff)).abs();
         !(2000..=63535).contains(&yaw)
     }
 
     fn reached_destination_with_radius(&self, pawn: ObjectId, direction: Vector, goal: Option<ObjectId>, radius: f32) -> bool {
-        let height = self.float_of(pawn, Prop::CollisionHeight);
+        let height = self.store.float_of(pawn, Prop::CollisionHeight);
         let (threshold, reach) = match goal {
             None => (height + radius, radius),
-            Some(goal) => (height + self.float_of(goal, Prop::CollisionHeight), radius + self.float_of(pawn, Prop::DestinationOffset)),
+            Some(goal) => (height + self.store.float_of(goal, Prop::CollisionHeight), radius + self.store.float_of(pawn, Prop::DestinationOffset)),
         };
         within(direction, reach, threshold, threshold)
     }
 
     pub(crate) fn controller_tick(&mut self, controller: ObjectId, delta: f32) -> Result<(), Error> {
         self.controller_sight(controller, delta)?;
-        if self.is_deleted(controller) {
+        if self.store.is_deleted(controller) {
             return Ok(());
         }
-        let Some(pawn) = self.object_of(controller, Prop::Pawn).filter(|&p| !self.is_deleted(p)) else { return Ok(()) };
-        if self.flag_of(pawn, Prop::bRotateToDesired) {
-            let focus = self.object_of(controller, Prop::Focus);
-            let focal_point = self.vector(controller, Prop::FocalPoint);
+        let Some(pawn) = self.store.object_of(controller, Prop::Pawn).filter(|&p| !self.store.is_deleted(p)) else { return Ok(()) };
+        if self.store.flag_of(pawn, Prop::bRotateToDesired) {
+            let focus = self.store.object_of(controller, Prop::Focus);
+            let focal_point = self.store.vector(controller, Prop::FocalPoint);
             self.rotate_toward(pawn, focus, focal_point);
         }
-        let rotation = self.rotator_of(pawn, Prop::Rotation);
-        self.set(controller, Prop::Rotation, Value::Rotator(rotation));
+        let rotation = self.store.rotator_of(pawn, Prop::Rotation);
+        self.store.set(controller, Prop::Rotation, Value::Rotator(rotation));
         Ok(())
     }
 
     fn rotate_toward(&mut self, pawn: ObjectId, focus: Option<ObjectId>, focal_point: Vector) {
-        let physics = self.physics_of(pawn);
+        let physics = self.store.physics_of(pawn);
         if physics == Some(EPhysics::Spider) {
             return;
         }
-        if !self.flag_of(pawn, Prop::bCanStrafe) && matches!(physics, Some(EPhysics::Flying | EPhysics::Swimming)) {
-            let ahead = self.rotator_of(pawn, Prop::Rotation).vector() * self.float_of(pawn, Prop::AccelRate);
+        if !self.store.flag_of(pawn, Prop::bCanStrafe) && matches!(physics, Some(EPhysics::Flying | EPhysics::Swimming)) {
+            let ahead = self.store.rotator_of(pawn, Prop::Rotation).vector() * self.store.float_of(pawn, Prop::AccelRate);
             self.set_vector(pawn, Prop::Acceleration, ahead);
         }
-        let point = focus.map_or(focal_point, |f| self.vector(f, Prop::Location));
-        let mut desired = (point - self.vector(pawn, Prop::Location)).rotation();
+        let point = focus.map_or(focal_point, |f| self.store.vector(f, Prop::Location));
+        let mut desired = (point - self.store.vector(pawn, Prop::Location)).rotation();
         desired.yaw &= 0xffff;
-        let toward_pawn = self.object_of(pawn, Prop::Controller).and_then(|c| self.object_of(c, Prop::MoveTarget)).is_some_and(|t| self.is_a(t, Kind::Pawn));
+        let toward_pawn = self.store.object_of(pawn, Prop::Controller).and_then(|c| self.store.object_of(c, Prop::MoveTarget)).is_some_and(|t| self.store.is_a(t, Kind::Pawn));
         if physics == Some(EPhysics::Walking) && !toward_pawn {
             desired.pitch = 0;
         }
-        self.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
+        self.store.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
     }
 }
 

@@ -216,7 +216,7 @@ impl<L: LoaderRef> Vm<L> {
             let axes = frame.axes.map(|axis| normalized(axis.into()));
             Value::Struct(vec![Value::Vector(frame.origin.into()), Value::Vector(axes[0]), Value::Vector(axes[1]), Value::Vector(axes[2])])
         };
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return coords(UNIT);
         }
         match self.bone_frame(actor, bone) {
@@ -235,7 +235,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// `None` without a skeletal mesh, `Some(None)` when the mesh has no such bone.
     fn bone_frame(&mut self, actor: ObjectId, bone: NameId) -> Option<Option<Frame>> {
-        let mesh_object = self.object_of(actor, Prop::Mesh)?;
+        let mesh_object = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
         let Some(index) = self.media.bone_data.ref_bone(&self.store, mesh_object, &mesh, bone) else { return Some(None) };
         if let Some(frames) = self.ragdoll_world_frames(actor) {
@@ -247,7 +247,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Scale included in the axes. Kept per actor and reused while nothing it is posed from changed.
     pub(crate) fn world_bone_frames(&mut self, actor: ObjectId) -> Option<(Arc<PosedMesh>, Arc<[Frame]>)> {
-        let mesh_object = self.object_of(actor, Prop::Mesh)?;
+        let mesh_object = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
         let key = {
             let mut channels = Vec::new();
@@ -268,7 +268,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// `None` when no channel plays yet: a first animation starts at once.
     pub(crate) fn kept_pose(&mut self, actor: ObjectId) -> Option<Arc<[LocalBone]>> {
-        let mesh_object = self.object_of(actor, Prop::Mesh)?;
+        let mesh_object = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
         self.local_bone_pose(actor, mesh_object, &mesh).map(Into::into)
     }
@@ -310,7 +310,7 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         let scales: Vec<(String, f32)> =
-            self.bone_scales(actor).map(|(bone, scale)| (self.name(bone).to_ascii_lowercase(), scale)).collect();
+            self.bone_scales(actor).map(|(bone, scale)| (self.store.name(bone).to_ascii_lowercase(), scale)).collect();
         let scale = |bone: usize| scales.iter().filter(|(name, _)| *name == mesh.names[bone]).map(|(_, s)| s).product::<f32>();
         let frames = bone_frames(&mesh.parents, &local, scale);
         let world = self.mesh_to_world(actor, mesh);
@@ -340,14 +340,14 @@ impl<L: LoaderRef> Vm<L> {
         let (frame, saved) = if let Some((mesh, posed)) = skeletal {
             (self.mesh_to_world(actor, &posed), self.media.bone_data.saved_sphere(&self.store, &self.loader, mesh, "SkeletalMesh"))
         } else if draw_type == Some(EDrawType::StaticMesh)
-            && let Some(mesh) = self.object_of(actor, Prop::StaticMesh)
+            && let Some(mesh) = self.store.object_of(actor, Prop::StaticMesh)
         {
             (local_to_world, self.media.bone_data.saved_sphere(&self.store, &self.loader, mesh, "StaticMesh"))
         } else {
             (local_to_world, None)
         };
         let sphere = saved.unwrap_or_else(|| {
-            let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+            let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
             [0.0, 0.0, 0.0, (radius * radius + height * height).sqrt()]
         });
         let [x, y, z, w] = transform_sphere(&frame, sphere);
@@ -370,7 +370,7 @@ impl<L: LoaderRef> Vm<L> {
             return found.clone();
         }
         let loader = self.loader.clone();
-        let read = loader.loaded_export_by_path_of_class(&self.object(animation).path, "MeshAnimation").and_then(|(id, export)| {
+        let read = loader.loaded_export_by_path_of_class(&self.store.object(animation).path, "MeshAnimation").and_then(|(id, export)| {
             let parsed = self.mesh_animation_at(id, export)?;
             let pkg = &loader.package(id).package;
             let bones = parsed.bones.iter().map(|b| pkg.name(b.name).to_ascii_lowercase()).collect();
@@ -398,7 +398,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn mesh_animation(&mut self, animation: ObjectId) -> Option<Arc<MeshAnimation>> {
-        let (package, export) = self.loader.loaded_export_by_path_of_class(&self.object(animation).path, "MeshAnimation")?;
+        let (package, export) = self.loader.loaded_export_by_path_of_class(&self.store.object(animation).path, "MeshAnimation")?;
         self.mesh_animation_at(package, export)
     }
 

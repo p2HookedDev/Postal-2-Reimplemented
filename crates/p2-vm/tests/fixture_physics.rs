@@ -98,8 +98,8 @@ fn falling_after(dir: &str, class: &str, velocity: Vector, acceleration: Vector,
     let mut vm = load_fixture(&package, dir);
     let class = vm.find_class("Fixture", class).unwrap();
     let object = vm.spawn(class, None, [Some(Value::Vector(START)), None]).unwrap().unwrap();
-    assert!(vm.set(object, "Velocity", Value::Vector(velocity)));
-    assert!(vm.set(object, "Acceleration", Value::Vector(acceleration)));
+    assert!(vm.store.set(object, "Velocity", Value::Vector(velocity)));
+    assert!(vm.store.set(object, "Acceleration", Value::Vector(acceleration)));
     vm.tick_actor(object, delta).unwrap();
     (vm, object)
 }
@@ -122,7 +122,7 @@ fn level_and_tickers(dir: &str, dilation: f32) -> (Vm<Arc<Loader>>, ObjectId, Ob
     let mut vm = load_fixture(&package, dir);
     let class = vm.find_class("Fixture", "LevelInfo").unwrap();
     let level = vm.new_object(class, None);
-    assert!(vm.set(level, "TimeDilation", Value::Float(dilation)));
+    assert!(vm.store.set(level, "TimeDilation", Value::Float(dilation)));
     vm.set_level(level);
     let class = vm.find_class("Fixture", "Ticker").unwrap();
     let first = vm.spawn(class, None, [None, None]).unwrap().unwrap();
@@ -131,7 +131,7 @@ fn level_and_tickers(dir: &str, dilation: f32) -> (Vm<Arc<Loader>>, ObjectId, Ob
 }
 
 fn vector_of(vm: &Vm<Arc<Loader>>, object: ObjectId, property: &str) -> Vector {
-    match vm.get(object, property) {
+    match vm.store.get(object, property) {
         Some(Value::Vector(value)) => value,
         other => panic!("{property}: {other:?}"),
     }
@@ -152,22 +152,22 @@ fn falling_pawn_lands_on_a_blocking_actor_and_walks() {
     let start = Vector::new(0.0, 0.0, contact_z + 20.0);
     let floor_at = Vector::new(0.0, 0.0, FLOOR_Z);
     let (mut vm, pawn, floor) = pawn_and_blocker("physics-landing", start, floor_at, [FLOOR_RADIUS, FLOOR_HEIGHT]);
-    assert!(vm.set(pawn, "Velocity", Value::Vector(Vector::new(0.0, 0.0, FALL_SPEED))));
+    assert!(vm.store.set(pawn, "Velocity", Value::Vector(Vector::new(0.0, 0.0, FALL_SPEED))));
 
     vm.tick_actor(pawn, ONE_SUBSTEP).unwrap();
 
     let half_step = FALL_SPEED + GRAVITY_Z * 0.5 * ONE_SUBSTEP;
     let test_length = -half_step * ONE_SUBSTEP + MOVE_TEST_ADJUST;
     let rest_z = contact_z + MOVE_TEST_ADJUST + test_length * CYLINDER_PULL_BACK;
-    assert_near(vm.location(pawn), [0.0, 0.0, rest_z], 1e-3);
+    assert_near(vm.store.location(pawn), [0.0, 0.0, rest_z], 1e-3);
     assert_near(vm.velocity(pawn), [0.0, 0.0, half_step], 0.05);
-    assert_eq!(vm.get(pawn, "Physics"), Some(Value::Byte(PHYS_WALKING)));
+    assert_eq!(vm.store.get(pawn, "Physics"), Some(Value::Byte(PHYS_WALKING)));
     assert_near(vector_of(&vm, pawn, "LandedNormal"), [0.0, 0.0, 1.0], 1e-6);
-    assert_eq!(vm.get(pawn, "Base"), Some(Value::Object(Some(floor))));
+    assert_eq!(vm.store.get(pawn, "Base"), Some(Value::Object(Some(floor))));
 
-    let landed_at = vm.location(pawn);
+    let landed_at = vm.store.location(pawn);
     vm.tick_actor(pawn, ONE_SUBSTEP).unwrap();
-    assert_eq!(vm.location(pawn), landed_at);
+    assert_eq!(vm.store.location(pawn), landed_at);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn falling_pawn_stops_at_a_blocking_actors_side_and_gets_hit_wall() {
     let start = Vector::new(START_X, 0.0, START_Z);
     let wall_at = Vector::new(WALL_X, 0.0, START_Z);
     let (mut vm, pawn, wall) = pawn_and_blocker("physics-wall", start, wall_at, [WALL_RADIUS, WALL_HEIGHT]);
-    assert!(vm.set(pawn, "Velocity", Value::Vector(Vector::new(SPEED_X, 0.0, 0.0))));
+    assert!(vm.store.set(pawn, "Velocity", Value::Vector(Vector::new(SPEED_X, 0.0, 0.0))));
 
     vm.tick_actor(pawn, ONE_SUBSTEP).unwrap();
 
@@ -191,15 +191,15 @@ fn falling_pawn_stops_at_a_blocking_actors_side_and_gets_hit_wall() {
     let direction_x = move_x / move_x.hypot(move_z);
     let test_x = move_x + direction_x * MOVE_TEST_ADJUST;
     let rest_x = contact_x - direction_x * MOVE_TEST_ADJUST - test_x * CYLINDER_PULL_BACK;
-    assert_near(vm.location(pawn), [rest_x, 0.0, START_Z + move_z], 1e-3);
+    assert_near(vm.store.location(pawn), [rest_x, 0.0, START_Z + move_z], 1e-3);
     assert_near(vm.velocity(pawn), [(rest_x - START_X) / ONE_SUBSTEP, 0.0, 2.0 * half_step_z], 0.01);
-    assert_eq!(vm.get(pawn, "Physics"), Some(Value::Byte(PHYS_FALLING)));
+    assert_eq!(vm.store.get(pawn, "Physics"), Some(Value::Byte(PHYS_FALLING)));
     assert_near(vector_of(&vm, pawn, "WallNormal"), [-1.0, 0.0, 0.0], 1e-6);
-    assert_eq!(vm.get(pawn, "WallActor"), Some(Value::Object(Some(wall))));
+    assert_eq!(vm.store.get(pawn, "WallActor"), Some(Value::Object(Some(wall))));
 
     for _ in 0..8 {
         vm.tick_actor(pawn, ONE_SUBSTEP).unwrap();
-        assert!(vm.location(pawn)[0] < contact_x, "{:?} went through the wall", vm.location(pawn));
+        assert!(vm.store.location(pawn)[0] < contact_x, "{:?} went through the wall", vm.store.location(pawn));
     }
 }
 
@@ -208,7 +208,7 @@ fn falling_actor_takes_its_acceleration_and_gravity_over_half_a_step() {
     let velocity = Vector::new(100.0, 0.0, 0.0);
     let acceleration = Vector::new(320.0, 0.0, 0.0);
     let (vm, actor) = falling_after("physics-actor-fall", "Actor", velocity, acceleration, ONE_SUBSTEP);
-    assert_near(vm.location(actor), [3.281_25, 0.0, 999.267_6], 1e-3);
+    assert_near(vm.store.location(actor), [3.281_25, 0.0, 999.267_6], 1e-3);
     assert_near(vm.velocity(actor), [110.0, 0.0, -46.875], 1e-3);
     assert_near(vector_of(&vm, actor, "Acceleration"), [320.0, 0.0, 0.0], 1e-6);
 }
@@ -217,7 +217,7 @@ fn falling_actor_takes_its_acceleration_and_gravity_over_half_a_step() {
 fn falling_actor_stops_at_terminal_velocity_after_the_move() {
     let velocity = Vector::new(0.0, 0.0, -3000.0);
     let (vm, actor) = falling_after("physics-actor-terminal", "Actor", velocity, Vector::ZERO, ONE_SUBSTEP);
-    assert_near(vm.location(actor), [0.0, 0.0, 905.517_6], 1e-3);
+    assert_near(vm.store.location(actor), [0.0, 0.0, 905.517_6], 1e-3);
     assert_near(vm.velocity(actor), [0.0, 0.0, -2500.0], 1e-3);
 }
 
@@ -225,7 +225,7 @@ fn falling_actor_stops_at_terminal_velocity_after_the_move() {
 fn delta_of_two_substeps_adds_up_to_free_fall() {
     let velocity = Vector::new(100.0, 0.0, 0.0);
     let (vm, pawn) = falling_after("physics-two-substeps", "Pawn", velocity, Vector::ZERO, 2.0 * ONE_SUBSTEP);
-    assert_near(vm.location(pawn), [6.25, 0.0, 997.070_3], 1e-3);
+    assert_near(vm.store.location(pawn), [6.25, 0.0, 997.070_3], 1e-3);
     assert_near(vm.velocity(pawn), [100.0, 0.0, -93.75], 1e-3);
 }
 
@@ -235,7 +235,7 @@ fn pawn_and_actor_clamp_to_terminal_velocity_in_every_substep() {
     let velocity = Vector::new(0.0, 0.0, -2490.0);
     for (dir, class) in [("physics-substeps-pawn", "Pawn"), ("physics-substeps-actor", "Actor")] {
         let (vm, falling) = falling_after(dir, class, velocity, Vector::ZERO, DELTA);
-        assert_near(vm.location(falling), [0.0, 0.0, 684.015_6], 1e-2);
+        assert_near(vm.store.location(falling), [0.0, 0.0, 684.015_6], 1e-2);
         assert_near(vm.velocity(falling), [0.0, 0.0, -2500.0], 1e-3);
     }
 }
@@ -245,14 +245,14 @@ fn tick_level_scales_the_delta_by_time_dilation() {
     let (mut vm, level, first, second) = level_and_tickers("physics-level-dilation", 0.5);
     let errors = vm.tick_level(0.25);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(vm.get(level, "TimeSeconds"), Some(Value::Float(0.125)));
-    assert_eq!(vm.get(level, "TimeSecondsAlways"), Some(Value::Float(0.125)));
-    assert_eq!(vm.get(first, "LastDelta"), Some(Value::Float(0.125)));
-    assert_eq!(vm.get(second, "LastDelta"), Some(Value::Float(0.125)));
+    assert_eq!(vm.store.get(level, "TimeSeconds"), Some(Value::Float(0.125)));
+    assert_eq!(vm.store.get(level, "TimeSecondsAlways"), Some(Value::Float(0.125)));
+    assert_eq!(vm.store.get(first, "LastDelta"), Some(Value::Float(0.125)));
+    assert_eq!(vm.store.get(second, "LastDelta"), Some(Value::Float(0.125)));
 
     let errors = vm.tick_level(0.25);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(vm.get(level, "TimeSeconds"), Some(Value::Float(0.25)));
+    assert_eq!(vm.store.get(level, "TimeSeconds"), Some(Value::Float(0.25)));
 }
 
 #[test]
@@ -260,29 +260,29 @@ fn tick_level_advances_time_by_the_dilated_delta_before_the_tick_clamp() {
     let (mut vm, level, first, _) = level_and_tickers("physics-level-clamp", 2.0);
     let errors = vm.tick_level(0.25);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(vm.get(level, "TimeSeconds"), Some(Value::Float(0.5)));
-    assert_eq!(vm.get(first, "LastDelta"), Some(Value::Float(0.4)));
+    assert_eq!(vm.store.get(level, "TimeSeconds"), Some(Value::Float(0.5)));
+    assert_eq!(vm.store.get(first, "LastDelta"), Some(Value::Float(0.4)));
 }
 
 #[test]
 fn pauser_stops_time_and_ticks_except_always_tick_actors() {
     let (mut vm, level, always, other) = level_and_tickers("physics-level-pause", 1.0);
-    assert!(vm.set(always, "bAlwaysTick", Value::Bool(true)));
-    assert!(vm.set(level, "Pauser", Value::Object(Some(other))));
+    assert!(vm.store.set(always, "bAlwaysTick", Value::Bool(true)));
+    assert!(vm.store.set(level, "Pauser", Value::Object(Some(other))));
     assert!(vm.paused());
 
     let errors = vm.tick_level(0.25);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(vm.get(level, "TimeSeconds"), Some(Value::Float(0.0)));
-    assert_eq!(vm.get(level, "TimeSecondsAlways"), Some(Value::Float(0.25)));
-    assert_eq!(vm.get(always, "LastDelta"), Some(Value::Float(0.25)));
-    assert_eq!(vm.get(other, "LastDelta"), Some(Value::Float(0.0)));
+    assert_eq!(vm.store.get(level, "TimeSeconds"), Some(Value::Float(0.0)));
+    assert_eq!(vm.store.get(level, "TimeSecondsAlways"), Some(Value::Float(0.25)));
+    assert_eq!(vm.store.get(always, "LastDelta"), Some(Value::Float(0.25)));
+    assert_eq!(vm.store.get(other, "LastDelta"), Some(Value::Float(0.0)));
 
-    assert!(vm.set(level, "Pauser", Value::Object(None)));
+    assert!(vm.store.set(level, "Pauser", Value::Object(None)));
     assert!(!vm.paused());
     let errors = vm.tick_level(0.25);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(vm.get(level, "TimeSeconds"), Some(Value::Float(0.25)));
-    assert_eq!(vm.get(level, "TimeSecondsAlways"), Some(Value::Float(0.5)));
-    assert_eq!(vm.get(other, "LastDelta"), Some(Value::Float(0.25)));
+    assert_eq!(vm.store.get(level, "TimeSeconds"), Some(Value::Float(0.25)));
+    assert_eq!(vm.store.get(level, "TimeSecondsAlways"), Some(Value::Float(0.5)));
+    assert_eq!(vm.store.get(other, "LastDelta"), Some(Value::Float(0.25)));
 }

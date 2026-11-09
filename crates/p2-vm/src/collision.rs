@@ -64,34 +64,34 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn primitive_placement(&self, actor: ObjectId) -> Option<(ObjectId, bool, Placement)> {
-        let brush = self.is_a(actor, Kind::Brush);
+        let brush = self.store.is_a(actor, Kind::Brush);
         let primitive = if brush {
-            self.object_of(actor, Prop::Brush)?
+            self.store.object_of(actor, Prop::Brush)?
         } else {
-            if self.object_of(actor, Prop::Mesh).is_some() || self.flag_of(actor, Prop::bUseCylinderCollision) {
+            if self.store.object_of(actor, Prop::Mesh).is_some() || self.store.flag_of(actor, Prop::bUseCylinderCollision) {
                 return None;
             }
-            self.object_of(actor, Prop::StaticMesh)?
+            self.store.object_of(actor, Prop::StaticMesh)?
         };
         Some((primitive, brush, self.placement(actor)))
     }
 
     /// For collision and volumes: a missing `DrawScale` reads 0.
     pub(crate) fn placement(&self, actor: ObjectId) -> Placement {
-        self.placement_scaled(actor, self.float_of(actor, Prop::DrawScale))
+        self.placement_scaled(actor, self.store.float_of(actor, Prop::DrawScale))
     }
 
     /// As drawn (meshes, Karma shapes): a missing `DrawScale` reads 1.
     pub(crate) fn drawn_placement(&self, actor: ObjectId) -> Placement {
-        self.placement_scaled(actor, self.get(actor, Prop::DrawScale).as_ref().map_or(1.0, crate::interp::float))
+        self.placement_scaled(actor, self.store.get(actor, Prop::DrawScale).as_ref().map_or(1.0, crate::interp::float))
     }
 
     fn placement_scaled(&self, actor: ObjectId, draw_scale: f32) -> Placement {
         Placement {
-            location: self.vector(actor, Prop::Location),
-            rotation: self.rotator_of(actor, Prop::Rotation),
-            scale: self.vector(actor, Prop::DrawScale3D) * draw_scale,
-            pre_pivot: self.vector(actor, Prop::PrePivot),
+            location: self.store.vector(actor, Prop::Location),
+            rotation: self.store.rotator_of(actor, Prop::Rotation),
+            scale: self.store.vector(actor, Prop::DrawScale3D) * draw_scale,
+            pre_pivot: self.store.vector(actor, Prop::PrePivot),
         }
     }
 
@@ -117,9 +117,9 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn reach_of(&self, actor: ObjectId, shape: Option<&PlacedShape>) -> f32 {
-        let radius = self.float_of(actor, Prop::CollisionRadius);
+        let radius = self.store.float_of(actor, Prop::CollisionRadius);
         let Some(shape) = shape else {
-            if self.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
+            if self.store.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
                 return fluid_reach(self.fluid_bounds(actor)).max(radius);
             }
             return radius;
@@ -128,7 +128,7 @@ impl<L: LoaderRef> Vm<L> {
         if min[0] > max[0] {
             return radius;
         }
-        let at = self.vector(actor, Prop::Location);
+        let at = self.store.vector(actor, Prop::Location);
         let reach = |i: usize| (min[i] - at[i]).abs().max((max[i] - at[i]).abs());
         reach(0).hypot(reach(1)).max(radius)
     }
@@ -138,7 +138,7 @@ impl<L: LoaderRef> Vm<L> {
             return found.clone();
         }
         let loader = self.loader.clone();
-        let read = loader.loaded_export_by_path_of_class(&self.object(model).path, "Model").and_then(|(package, export)| {
+        let read = loader.loaded_export_by_path_of_class(&self.store.object(model).path, "Model").and_then(|(package, export)| {
             let source = loader.package(package);
             read_model(&source.package, &source.data, &source.package.exports[export]).ok().map(Arc::new)
         });
@@ -155,7 +155,7 @@ impl<L: LoaderRef> Vm<L> {
             self.brush_model(primitive).map(|model| LocalShape { boxes: model_triangles(&model), lines: None, box_slots: Arc::default(), line_slots: Arc::default() })
         } else {
             let loader = self.loader.clone();
-            let path = &self.object(primitive).path;
+            let path = &self.store.object(primitive).path;
             loader.loaded_export_by_path_of_class(path, "StaticMesh").and_then(|(package, export)| {
                 let source = loader.package(package);
                 let mesh = read_static_mesh(&source.package, &source.data, &source.package.exports[export]).ok()?;
@@ -175,16 +175,16 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn is_player_pawn(&self, actor: ObjectId) -> bool {
-        self.is_a(actor, Kind::Pawn)
-            && self.object_of(actor, Prop::Controller).is_some_and(|c| self.is_a(c, Kind::PlayerController) && self.object_of(c, Prop::Player).is_some())
+        self.store.is_a(actor, Kind::Pawn)
+            && self.store.object_of(actor, Prop::Controller).is_some_and(|c| self.store.is_a(c, Kind::PlayerController) && self.store.object_of(c, Prop::Player).is_some())
     }
 
     /// Retail does not test `bCollideActors` here.
     pub(crate) fn is_encroacher(&self, actor: ObjectId) -> bool {
-        let physics = self.physics_of(actor);
-        (self.object_of(actor, Prop::StaticMesh).is_some() && self.is_a(actor, Kind::Mover))
+        let physics = self.store.physics_of(actor);
+        (self.store.object_of(actor, Prop::StaticMesh).is_some() && self.store.is_a(actor, Kind::Mover))
             || physics == Some(EPhysics::KarmaRagDoll)
-            || (physics == Some(EPhysics::Karma) && !self.is_a(actor, Kind::KConstraint))
+            || (physics == Some(EPhysics::Karma) && !self.store.is_a(actor, Kind::KConstraint))
     }
 
     pub(crate) fn is_blocked_by(&self, actor: ObjectId, other: ObjectId) -> bool {
@@ -194,40 +194,40 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn blocking(&self, actor: ObjectId) -> Blocking {
         let player = self.is_player_pawn(actor);
         Blocking {
-            world_geometry: self.flag_of(actor, Prop::bWorldGeometry),
-            collide_world: self.flag_of(actor, Prop::bCollideWorld),
-            brush_or_encroacher: (self.object_of(actor, Prop::Brush).is_some() && self.is_a(actor, Kind::Brush)) || self.is_encroacher(actor),
+            world_geometry: self.store.flag_of(actor, Prop::bWorldGeometry),
+            collide_world: self.store.flag_of(actor, Prop::bCollideWorld),
+            brush_or_encroacher: (self.store.object_of(actor, Prop::Brush).is_some() && self.store.is_a(actor, Kind::Brush)) || self.is_encroacher(actor),
             player,
-            fast: player || self.is_a(actor, Kind::Projectile),
-            block_actors: self.flag_of(actor, Prop::bBlockActors),
-            block_players: self.flag_of(actor, Prop::bBlockPlayers),
+            fast: player || self.store.is_a(actor, Kind::Projectile),
+            block_actors: self.store.flag_of(actor, Prop::bBlockActors),
+            block_players: self.store.flag_of(actor, Prop::bBlockPlayers),
         }
     }
 
     /// `bAllowOnlySpecifiedClasses` is read as retail; its comment suggests the reverse (unverified).
     pub(crate) fn class_blocks(&self, volume: ObjectId, actor: ObjectId) -> bool {
-        if !self.is_a(volume, Kind::BlockingVolume) || !self.flag_of(volume, Prop::bClassBlocker) {
+        if !self.store.is_a(volume, Kind::BlockingVolume) || !self.store.flag_of(volume, Prop::bClassBlocker) {
             return true;
         }
-        let exact = self.flag_of(volume, Prop::bExactClassesOnly);
-        let class = self.object(actor).class;
-        let listed = match self.get(volume, Prop::BlockedClasses) {
+        let exact = self.store.flag_of(volume, Prop::bExactClassesOnly);
+        let class = self.store.object(actor).class;
+        let listed = match self.store.get(volume, Prop::BlockedClasses) {
             Some(crate::Value::Array(classes)) => classes.iter().any(|c| match c {
                 &crate::Value::Object(Some(blocked)) => {
-                    let name = self.object(blocked).path.rsplit('.').next().unwrap_or_default();
-                    if exact { class.is_some_and(|c| self.name(self.class(c).name).eq_ignore_ascii_case(name)) } else { self.is_a(actor, name) }
+                    let name = self.store.object(blocked).path.rsplit('.').next().unwrap_or_default();
+                    if exact { class.is_some_and(|c| self.store.name(self.store.class(c).name).eq_ignore_ascii_case(name)) } else { self.store.is_a(actor, name) }
                 }
                 _ => false,
             }),
             _ => false,
         };
-        listed || self.flag_of(volume, Prop::bAllowOnlySpecifiedClasses)
+        listed || self.store.flag_of(volume, Prop::bAllowOnlySpecifiedClasses)
     }
 
     /// Retail picks the actor whose primitive is tested in this order: `a` a projector, `b` a projector,
     /// `a` a volume or fluid, `b` the same, `a` an encroacher, `b` an encroacher.
     pub(crate) fn shapes_overlap(&mut self, a: ObjectId, b: ObjectId) -> bool {
-        let projector = |vm: &Self, actor: ObjectId| vm.is_a(actor, Kind::Projector);
+        let projector = |vm: &Self, actor: ObjectId| vm.store.is_a(actor, Kind::Projector);
         let tested = if projector(self, a) {
             Some((a, b))
         } else if projector(self, b) {
@@ -250,19 +250,19 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn fluid_bounds(&self, actor: ObjectId) -> [Vector; 2] {
         fluid_box(
-            self.vector(actor, Prop::Location),
-            [self.float_of(actor, Prop::FluidXSize), self.float_of(actor, Prop::FluidYSize)],
-            self.float_of(actor, Prop::FluidGridSpacing),
-            self.byte_of(actor, Prop::FluidGridType) == FGT_HEXAGONAL,
+            self.store.vector(actor, Prop::Location),
+            [self.store.float_of(actor, Prop::FluidXSize), self.store.float_of(actor, Prop::FluidYSize)],
+            self.store.float_of(actor, Prop::FluidGridSpacing),
+            self.store.byte_of(actor, Prop::FluidGridType) == FGT_HEXAGONAL,
         )
     }
 
     fn volume_or_fluid(&self, actor: ObjectId) -> bool {
-        (self.object_of(actor, Prop::Brush).is_some() && self.is_a(actor, Kind::Volume)) || self.is_a(actor, self.script.lookups.class_names.fluid_surface_info)
+        (self.store.object_of(actor, Prop::Brush).is_some() && self.store.is_a(actor, Kind::Volume)) || self.store.is_a(actor, self.script.lookups.class_names.fluid_surface_info)
     }
 
     pub(crate) fn overlaps_by_primitive(&self, actor: ObjectId) -> bool {
-        self.is_a(actor, Kind::Projector) || self.volume_or_fluid(actor) || self.is_encroacher(actor)
+        self.store.is_a(actor, Kind::Projector) || self.volume_or_fluid(actor) || self.is_encroacher(actor)
     }
 
     /// A static mesh uses its placed collision triangles' bounds (retail's placed box can be larger).
@@ -274,22 +274,22 @@ impl<L: LoaderRef> Vm<L> {
                 return ([0, 1, 2].map(|i| (min[i] + max[i]) * 0.5).into(), [0, 1, 2].map(|i| (max[i] - min[i]) * 0.5).into());
             }
         }
-        let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
-        (self.vector(actor, Prop::Location), [radius, radius, height].into())
+        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+        (self.store.vector(actor, Prop::Location), [radius, radius, height].into())
     }
 
     fn primitive_meets_box(&mut self, actor: ObjectId, center: Vector, extent: Vector) -> bool {
         let cylinder = |vm: &Self| {
-            let (radius, height) = (vm.float_of(actor, Prop::CollisionRadius), vm.float_of(actor, Prop::CollisionHeight));
-            cylinder_meets_box(vm.vector(actor, Prop::Location), radius, height, center, extent)
+            let (radius, height) = (vm.store.float_of(actor, Prop::CollisionRadius), vm.store.float_of(actor, Prop::CollisionHeight));
+            cylinder_meets_box(vm.store.vector(actor, Prop::Location), radius, height, center, extent)
         };
-        if self.is_a(actor, Kind::Projector) {
+        if self.store.is_a(actor, Kind::Projector) {
             return self.projector_meets_box(actor, center, extent).unwrap_or_else(|| cylinder(self));
         }
-        if self.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
+        if self.store.is_a(actor, self.script.lookups.class_names.fluid_surface_info) {
             return boxes_meet(self.fluid_bounds(actor), center, extent);
         }
-        if self.is_a(actor, Kind::Brush)
+        if self.store.is_a(actor, Kind::Brush)
             && let Some((model, _, Placement { location, rotation, scale, pre_pivot })) = self.primitive_placement(actor)
         {
             let Some(model) = self.brush_model(model) else { return false };
@@ -308,7 +308,7 @@ impl<L: LoaderRef> Vm<L> {
     /// Without `ProjTexture` retail's planes stay zero and meet every box; ours use current properties.
     /// `None`: the caller keeps the cylinder.
     fn projector_meets_box(&mut self, projector: ObjectId, center: Vector, extent: Vector) -> Option<bool> {
-        let Some(texture) = self.object_of(projector, Prop::ProjTexture) else { return Some(true) };
+        let Some(texture) = self.store.object_of(projector, Prop::ProjTexture) else { return Some(true) };
         let frustum = self.projector_frustum(projector, texture)?;
         Some(crate::projector::frustum_meets_box(&frustum.planes, center, extent))
     }
@@ -318,18 +318,18 @@ impl<L: LoaderRef> Vm<L> {
         if u <= 0 || v <= 0 {
             return None;
         }
-        let int = |vm: &Self, name: Prop| match vm.get(projector, name) {
+        let int = |vm: &Self, name: Prop| match vm.store.get(projector, name) {
             Some(crate::Value::Int(value)) => value,
             _ => 0,
         };
         let shape = crate::projector::ProjectorShape {
-            location: self.vector(projector, Prop::Location),
-            rotation: self.rotator_of(projector, Prop::Rotation),
+            location: self.store.vector(projector, Prop::Location),
+            rotation: self.store.rotator_of(projector, Prop::Rotation),
             texels: [u as f32, v as f32],
-            draw_scale: self.float_of(projector, Prop::DrawScale),
+            draw_scale: self.store.float_of(projector, Prop::DrawScale),
             fov: int(self, Prop::FOV),
             max_trace_distance: int(self, Prop::MaxTraceDistance),
-            rotating: self.physics_of(projector) == Some(EPhysics::Rotating),
+            rotating: self.store.physics_of(projector) == Some(EPhysics::Rotating),
         };
         Some(crate::projector::frustum(&shape))
     }

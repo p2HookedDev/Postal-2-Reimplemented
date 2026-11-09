@@ -104,7 +104,7 @@ impl ActorFx {
 impl<L: LoaderRef> Vm<L> {
     pub fn projector_actors(&mut self) -> Option<FxHashSet<ObjectId>> {
         let actors: FxHashSet<ObjectId> =
-            self.actor_fx.projected.iter().filter(|&&(projector, actor)| !self.is_deleted(projector) && !self.is_deleted(actor)).map(|&(_, actor)| actor).collect();
+            self.actor_fx.projected.iter().filter(|&&(projector, actor)| !self.store.is_deleted(projector) && !self.store.is_deleted(actor)).map(|&(_, actor)| actor).collect();
         if actors == self.actor_fx.projected_sent {
             return None;
         }
@@ -113,10 +113,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn attach_static_meshes(&mut self, projector: ObjectId) {
-        if self.get(projector, "bProjectStaticMesh") != Some(Value::Bool(true)) {
+        if self.store.get(projector, "bProjectStaticMesh") != Some(Value::Bool(true)) {
             return;
         }
-        let Some(texture) = self.object_of(projector, Prop::ProjTexture) else { return };
+        let Some(texture) = self.store.object_of(projector, Prop::ProjTexture) else { return };
         let Some(frustum) = self.projector_frustum(projector, texture) else { return };
         let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
         for vertex in frustum.vertices {
@@ -127,16 +127,16 @@ impl<L: LoaderRef> Vm<L> {
             Some(Value::Name(name)) => name,
             _ => NameId::NONE,
         };
-        let project_tag = name(self.get(projector, "ProjectTag"));
+        let project_tag = name(self.store.get(projector, "ProjectTag"));
         let nearby = self.colliders_near(min, max, 0.0);
         let attached: Vec<ObjectId> = nearby
             .iter()
             .map(|e| e.actor)
             .filter(|&actor| {
                 actor != projector
-                    && self.is_a(actor, Kind::Actor)
-                    && !self.is_deleted(actor)
-                    && attach_takes(project_tag, self.get(actor, "bAcceptsProjectors") == Some(Value::Bool(true)), name(self.get(actor, Prop::Tag)), self.object_of(actor, Prop::StaticMesh).is_some())
+                    && self.store.is_a(actor, Kind::Actor)
+                    && !self.store.is_deleted(actor)
+                    && attach_takes(project_tag, self.store.get(actor, "bAcceptsProjectors") == Some(Value::Bool(true)), name(self.store.get(actor, Prop::Tag)), self.store.object_of(actor, Prop::StaticMesh).is_some())
                     && self.shapes_overlap(projector, actor)
             })
             .collect();
@@ -158,11 +158,11 @@ impl<L: LoaderRef> Vm<L> {
         let movie_class = self.find_class("Engine", "Movie")?;
         let texture_class = self.find_class("Engine", "MovieTexture")?;
         let movie = self.new_object(movie_class, None);
-        self.set(hud, "Movie", Value::Object(Some(movie)));
+        self.store.set(hud, "Movie", Value::Object(Some(movie)));
         let texture = self.new_object(texture_class, None);
         let texture_movie = self.new_object(movie_class, None);
-        self.set(texture, "Movie", Value::Object(Some(texture_movie)));
-        self.set(hud, "TextureMovie", Value::Object(Some(texture)));
+        self.store.set(texture, "Movie", Value::Object(Some(texture_movie)));
+        self.store.set(hud, "TextureMovie", Value::Object(Some(texture)));
         Ok(())
     }
 
@@ -187,7 +187,7 @@ impl<L: LoaderRef> Vm<L> {
         let value = match native {
             // Not modelled: a controller's pawn joining with it, and retail doing nothing while the projector
             // has no projection yet.
-            Native::AttachActor if self.is_a(this, Kind::Projector) => {
+            Native::AttachActor if self.store.is_a(this, Kind::Projector) => {
                 if let Some(actor) = object(0)
                     && !self.actor_fx.projected.contains(&(this, actor))
                 {
@@ -195,35 +195,35 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 return Ok(None);
             }
-            Native::DetachActor if self.is_a(this, Kind::Projector) => {
+            Native::DetachActor if self.store.is_a(this, Kind::Projector) => {
                 if let Some(actor) = object(0) {
                     self.actor_fx.projected.retain(|&pair| pair != (this, actor));
                 }
                 return Ok(None);
             }
-            Native::Kill if self.is_a(this, Kind::Emitter) => {
+            Native::Kill if self.store.is_a(this, Kind::Emitter) => {
                 self.host.commands.push(HostCommand::Particle(ParticleCommand::Kill(this)));
                 return Ok(None);
             }
             // Spawns wrap over the oldest; the VM counts, the host simulates.
-            Native::SpawnParticle if self.is_a(this, self.script.lookups.class_names.particle_emitter) => {
-                let max = self.get(this, Prop::MaxParticles).as_ref().map_or(0, int).clamp(0, MAX_SPAWN);
+            Native::SpawnParticle if self.store.is_a(this, self.script.lookups.class_names.particle_emitter) => {
+                let max = self.store.get(this, Prop::MaxParticles).as_ref().map_or(0, int).clamp(0, MAX_SPAWN);
                 let amount = args.first().map_or(0, int).clamp(0, max);
                 for _ in 0..amount {
                     self.host.commands.push(HostCommand::Particle(ParticleCommand::Spawn { emitter: this, offset: Vector::ZERO, line: None }));
                 }
                 if amount > 0 {
-                    let active = self.get(this, Prop::ActiveParticles).as_ref().map_or(0, int);
-                    self.set(this, Prop::ActiveParticles, Value::Int((active + amount).min(max)));
+                    let active = self.store.get(this, Prop::ActiveParticles).as_ref().map_or(0, int);
+                    self.store.set(this, Prop::ActiveParticles, Value::Int((active + amount).min(max)));
                 }
                 return Ok(None);
             }
-            Native::Pling if self.is_a(this, self.script.lookups.class_names.fluid_surface_info) => {
+            Native::Pling if self.store.is_a(this, self.script.lookups.class_names.fluid_surface_info) => {
                 let pling = FluidPling { surface: this, position: vec3(args.first()), strength: f(1), radius: f(2) };
                 queue(&mut self.actor_fx.plings, pling);
                 return Ok(None);
             }
-            Native::GetCameraLocation if self.is_a(this, self.script.lookups.class_names.canvas) => {
+            Native::GetCameraLocation if self.store.is_a(this, self.script.lookups.class_names.canvas) => {
                 let (location, rotation) = self.camera();
                 if let Some(out) = args.get_mut(0) {
                     *out = Value::Vector(location);
@@ -237,7 +237,7 @@ impl<L: LoaderRef> Vm<L> {
             Native::ScreenToWorld => {
                 let Vector { x, y, .. } = vec3(args.first());
                 let (_, rotation) = self.camera();
-                let fov = self.player().map_or(90.0, |p| self.float_of(p, Prop::FovAngle));
+                let fov = self.player().map_or(90.0, |p| self.store.float_of(p, Prop::FovAngle));
                 let (width, height) = self.media.canvas.object.map_or((0, 0), |c| (self.int_prop(c, Prop::SizeX), self.int_prop(c, Prop::SizeY)));
                 Value::Vector(screen_to_near_plane([x, y], [width as f32, height as f32], if fov > 0.0 { fov } else { 90.0 }, rotation))
             }
@@ -246,7 +246,7 @@ impl<L: LoaderRef> Vm<L> {
             Native::PlayFlashbangSound => {
                 if let Some(sound) = object(0) {
                     let volume = self.sound_volume().clamp(0.0, 1.0);
-                    let sound = self.object(sound).path.clone();
+                    let sound = self.store.object(sound).path.clone();
                     let played = crate::PlayedSound { actor: Some(this), sound, slot: 0, volume, radius: crate::natives::AUDIO_DEFAULT_RADIUS, pitch: 1.0, attenuate: false, no_override: false, flashbang: Some(f(1).max(0.0)) };
                     self.subtitle_insert_sound(played.actor, &played.sound);
                     self.host.commands.push(HostCommand::Sound(played));
@@ -366,7 +366,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn movie_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
-        if native != Native::InitializeMovie && !self.is_a(this, Kind::Movie) {
+        if native != Native::InitializeMovie && !self.store.is_a(this, Kind::Movie) {
             return Err(Error::UnknownNative(format!("{native:?}")));
         }
         let value = match native {
@@ -411,12 +411,12 @@ impl<L: LoaderRef> Vm<L> {
             // Retail also opens the texture's `MovieFilename` here; whether that starts it is unverified,
             // script's `Play` follows at once.
             Native::InitializeMovie => {
-                let movie = match self.get(this, "Movie") {
+                let movie = match self.store.get(this, "Movie") {
                     Some(Value::Object(Some(movie))) => movie,
                     _ => {
                         let class = self.find_class("Engine", "Movie")?;
                         let movie = self.new_object(class, None);
-                        self.set(this, "Movie", Value::Object(Some(movie)));
+                        self.store.set(this, "Movie", Value::Object(Some(movie)));
                         movie
                     }
                 };
@@ -438,14 +438,14 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn int_prop(&self, object: ObjectId, property: Prop) -> i32 {
-        self.get(object, property).as_ref().map_or(0, int)
+        self.store.get(object, property).as_ref().map_or(0, int)
     }
 
     fn skeleton_bone(&mut self, actor: ObjectId, bone: Option<&Value>) -> Option<NameId> {
         let Some(&Value::Name(bone)) = bone else { return None };
-        let mesh = self.object_of(actor, Prop::Mesh)?;
+        let mesh = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh)?;
-        let wanted = self.name(bone).to_ascii_lowercase();
+        let wanted = self.store.name(bone).to_ascii_lowercase();
         mesh.match_ref_bone(&wanted).map(|_| bone)
     }
 

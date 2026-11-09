@@ -181,13 +181,13 @@ impl Simulation {
     fn pass_switches(vm: &Vm<Arc<Loader>>, switches: &mut Vec<(ObjectId, Option<Option<ObjectId>>)>, new: &[ObjectId], frame: &mut VmFrame) {
         switches.extend(new.iter().filter(|&&object| is_switch(vm, object)).map(|&object| (object, None)));
         for (switch, last) in switches {
-            if vm.object(*switch).class.is_none() {
+            if vm.store.object(*switch).class.is_none() {
                 continue;
             }
             let now = switch_material(vm, *switch);
             if *last != Some(now) {
                 *last = Some(now);
-                frame.material_switches.push((vm.object(*switch).path.clone(), now.map(|material| vm.object(material).path.clone())));
+                frame.material_switches.push((vm.store.object(*switch).path.clone(), now.map(|material| vm.store.object(material).path.clone())));
             }
         }
     }
@@ -246,7 +246,7 @@ impl Simulation {
             }
         }
         let commands: Vec<_> = self.vm.take_commands(|command| matches!(command, HostCommand::Sound(_) | HostCommand::Music(_))).collect();
-        let at = |actor: Option<ObjectId>| actor.map(|actor| self.vm.location(actor));
+        let at = |actor: Option<ObjectId>| actor.map(|actor| self.vm.store.location(actor));
         for command in commands {
             match command {
                 HostCommand::Sound(played) => {
@@ -393,12 +393,12 @@ impl Simulation {
     fn zone_sounds(&mut self, listener: Vector) -> Option<Vec<ZoneSound>> {
         let vm = &mut self.vm;
         let mut sources: Vec<ObjectId> = vm.zone_at(listener).into_iter().collect();
-        sources.extend(self.volumes.iter().copied().filter(|&volume| matches!(vm.get(volume, Prop::ZoneSounds), Some(p2_vm::Value::Array(ref entries)) if !entries.is_empty()) && vm.encompasses(volume, listener)));
+        sources.extend(self.volumes.iter().copied().filter(|&volume| matches!(vm.store.get(volume, Prop::ZoneSounds), Some(p2_vm::Value::Array(ref entries)) if !entries.is_empty()) && vm.encompasses(volume, listener)));
         let (sound_volume, music_volume) = (vm.sound_volume(), vm.music_volume());
         let mut heard: Vec<(ZoneSound, Option<ObjectId>)> = Vec::new();
         for source in sources {
-            let Some(p2_vm::Value::Array(entries)) = vm.get(source, Prop::ZoneSounds) else { continue };
-            let pitch = match vm.get(source, Prop::SoundPitch) {
+            let Some(p2_vm::Value::Array(entries)) = vm.store.get(source, Prop::ZoneSounds) else { continue };
+            let pitch = match vm.store.get(source, Prop::SoundPitch) {
                 Some(p2_vm::Value::Byte(pitch)) => pitch_factor(f32::from(pitch) / 64.0),
                 _ => 1.0,
             };
@@ -441,7 +441,7 @@ impl Simulation {
         self.zone_keys.clear();
         self.zone_keys.extend(heard.iter().map(|(zone_sound, _)| zone_sound.key));
         let vm = &self.vm;
-        Some(heard.into_iter().map(|(zone_sound, sound)| ZoneSound { sound: sound.map(|sound| vm.object(sound).path.clone()), ..zone_sound }).collect())
+        Some(heard.into_iter().map(|(zone_sound, sound)| ZoneSound { sound: sound.map(|sound| vm.store.object(sound).path.clone()), ..zone_sound }).collect())
     }
 
     fn send_sound_files(&mut self, frame: &mut VmFrame, ambient_paths: &[Arc<str>]) {
@@ -471,7 +471,7 @@ impl Simulation {
         frame.dynamic_lights.extend(
             self.lights
                 .iter()
-                .filter(|&&actor| vm.get(actor, Prop::bDynamicLight) == Some(p2_vm::Value::Bool(true)))
+                .filter(|&&actor| vm.store.get(actor, Prop::bDynamicLight) == Some(p2_vm::Value::Bool(true)))
                 .filter_map(|&actor| crate::actors::mesh_light(vm, actor))
                 .map(|light| clock.animate(light, now)),
         );
@@ -499,13 +499,13 @@ impl Simulation {
         if forces {
             frame.forces.extend(vm.drag_actors().into_iter().map(|(location, velocity, radius, scale)| ActorForce { location, velocity, radius, scale }));
         }
-        frame.fov = self.player.and_then(|player| match self.vm.get(player, Prop::FovAngle) {
+        frame.fov = self.player.and_then(|player| match self.vm.store.get(player, Prop::FovAngle) {
             Some(p2_vm::Value::Float(fov)) if fov > 0.0 => Some(fov),
             _ => None,
         });
         frame.overlay = self.screen_overlay();
         let vm = &self.vm;
-        frame.movies.extend(vm.movie_textures().filter_map(|(texture, movie)| Some((vm.object(texture).path.clone(), movie, vm.movie(movie)?.clone()))));
+        frame.movies.extend(vm.movie_textures().filter_map(|(texture, movie)| Some((vm.store.object(texture).path.clone(), movie, vm.movie(movie)?.clone()))));
         frame.paused = vm.paused();
         frame.quit = self.quit;
         self.read_audio(frame);
@@ -543,14 +543,14 @@ impl Simulation {
         }
         if self.unmeshed.insert(actor) {
             let vm = &self.vm;
-            let path = |property: Prop| match vm.get(actor, property) {
-                Some(p2_vm::Value::Object(Some(object))) => vm.object(object).path.clone(),
+            let path = |property: Prop| match vm.store.get(actor, property) {
+                Some(p2_vm::Value::Object(Some(object))) => vm.store.object(object).path.clone(),
                 _ => "None".to_owned(),
             };
             bevy::log::warn!(
                 "HUD actor {} ({actor:?}) draws neither a static nor a skeletal mesh: DrawType {:?}, Mesh {}, StaticMesh {}",
-                vm.object(actor).path,
-                vm.get(actor, Prop::DrawType),
+                vm.store.object(actor).path,
+                vm.store.get(actor, Prop::DrawType),
                 path(Prop::Mesh),
                 path(Prop::StaticMesh)
             );
@@ -561,16 +561,16 @@ impl Simulation {
     fn read_spawned(&mut self, frame: &mut VmFrame, new: &[ObjectId]) {
         for &actor in new {
             let vm = &self.vm;
-            if vm.is_a(actor, Kind::Emitter) && (crate::actors::emitter_objects(vm, actor).is_empty() || vm.is_deleted(actor)) {
-                let class = vm.object(actor).class.map_or_else(String::new, |class| vm.name(vm.class(class).name).to_owned());
+            if vm.store.is_a(actor, Kind::Emitter) && (crate::actors::emitter_objects(vm, actor).is_empty() || vm.store.is_deleted(actor)) {
+                let class = vm.store.object(actor).class.map_or_else(String::new, |class| vm.store.name(vm.store.class(class).name).to_owned());
                 if self.emitterless.insert(class.clone()) {
-                    bevy::log::warn!("spawned {class} ({actor:?}) has no particle emitter to simulate: deleted {}, Emitters {:?}", vm.is_deleted(actor), vm.get(actor, Prop::Emitters));
+                    bevy::log::warn!("spawned {class} ({actor:?}) has no particle emitter to simulate: deleted {}, Emitters {:?}", vm.store.is_deleted(actor), vm.store.get(actor, Prop::Emitters));
                 }
             }
         }
         frame.spawned.extend(
             new.iter()
-                .filter(|&&actor| self.vm.is_a(actor, Kind::Actor))
+                .filter(|&&actor| self.vm.store.is_a(actor, Kind::Actor))
                 .map(|&actor| Spawned {
                     actor,
                     mesh: mesh_actor(&self.vm, actor),
@@ -586,14 +586,14 @@ impl Simulation {
 
     fn update_tracked_lists(&mut self, frame: &mut VmFrame, new: &[ObjectId]) {
         let vm = &self.vm;
-        let destroyed = |actor: ObjectId| vm.is_deleted(actor);
+        let destroyed = |actor: ObjectId| vm.store.is_deleted(actor);
         track(
             &mut self.lights,
             new,
-            |actor| vm.get(actor, Prop::bDynamicLight) == Some(p2_vm::Value::Bool(true)) || crate::actors::mesh_light(vm, actor).is_some(),
+            |actor| vm.store.get(actor, Prop::bDynamicLight) == Some(p2_vm::Value::Bool(true)) || crate::actors::mesh_light(vm, actor).is_some(),
             destroyed,
         );
-        track(&mut self.volumes, new, |actor| vm.is_a(actor, Kind::Volume), destroyed);
+        track(&mut self.volumes, new, |actor| vm.store.is_a(actor, Kind::Volume), destroyed);
         track(&mut self.corona_lights, new, |actor| crate::map::is_corona(vm, actor), destroyed);
         Self::pass_switches(vm, &mut self.switches, new, frame);
         fluid_touchers(vm, &self.fluid_surfaces, &mut frame.fluid_touchers);
@@ -601,14 +601,14 @@ impl Simulation {
         // Outside the view or in an unseen zone it fades as if blocked, with no trace.
         if let Some(view) = self.view {
             let (eye, forward) = (view.location, view.rotation.vector());
-            let fov = self.player.and_then(|player| match self.vm.get(player, Prop::FovAngle) {
+            let fov = self.player.and_then(|player| match self.vm.store.get(player, Prop::FovAngle) {
                 Some(p2_vm::Value::Float(fov)) if fov > 0.0 => Some(fov),
                 _ => None,
             });
             let reach = (fov.unwrap_or(90.0).clamp(1.0, 170.0).to_radians() * 0.5).tan() * CORONA_CONE_WIDTH;
             let seen_zones = self.vm.zones_seen_from(eye);
             for &light in &self.corona_lights {
-                let at = self.vm.location(light);
+                let at = self.vm.store.location(light);
                 let in_view = view.behind || in_view_cone(at - eye, forward, reach);
                 let zone_seen = seen_zones & (1u64 << (self.vm.zone_number(at) & 63)) != 0;
                 if !in_view || !zone_seen || self.vm.corona_blocked(eye, at) {
@@ -654,7 +654,7 @@ impl Simulation {
         for actor in vm.actors() {
             let Some(ambient) = crate::actors::ambient_actor(vm, actor) else { continue };
             let path = ambient_paths.entry(ambient.sound).or_insert_with(|| {
-                let path: Arc<str> = Arc::from(vm.object(ambient.sound).path.as_str());
+                let path: Arc<str> = Arc::from(vm.store.object(ambient.sound).path.as_str());
                 new_paths.push(Arc::clone(&path));
                 path
             });
@@ -717,7 +717,7 @@ impl Simulation {
             pre_pivot: vector(vm, actor, Prop::PrePivot),
             velocity: vm.velocity(actor),
             time_scale: vm.particle_time_scale(actor),
-            gone: vm.is_deleted(actor),
+            gone: vm.store.is_deleted(actor),
             hidden: vm.filtered_from_view(actor, self.view.as_ref(), &self.hud_drawn),
             attachment: bone_attachment(vm, actor, &mut self.lower_names),
             emitters_disabled: emitters_disabled(vm, actor),
@@ -736,7 +736,7 @@ impl Simulation {
 
     pub(super) fn actor_mesh(&self, actor: ObjectId) -> Option<CanvasMesh> {
         let vm = &self.vm;
-        let path = object_path(vm, vm.get(actor, Prop::Mesh).as_ref())?;
+        let path = object_path(vm, vm.store.get(actor, Prop::Mesh).as_ref())?;
         let skins = skin_paths(vm, actor);
         let scale = actor_scale(vm, actor);
         let follow = FollowActor { actor, scale, pre_pivot: vector(vm, actor, Prop::PrePivot), skeletal: None };
@@ -748,7 +748,7 @@ impl Simulation {
         let titles = overlay
             .titles
             .iter()
-            .filter_map(|t| Some(OverlayTitle { material: self.vm.object(t.material?).path.clone(), color: t.color, size: t.size, at: [t.x, t.y], alpha: t.alpha }))
+            .filter_map(|t| Some(OverlayTitle { material: self.vm.store.object(t.material?).path.clone(), color: t.color, size: t.size, at: [t.x, t.y], alpha: t.alpha }))
             .collect();
         Some(Overlay { flash_scale: overlay.flash_scale, flash_fog: overlay.flash_fog, titles })
     }
@@ -776,7 +776,7 @@ impl Simulation {
     pub(super) fn lower_name(&mut self, name: p2_vm::NameId) -> Arc<str> {
         let vm = &self.vm;
         let made = self.lower_names.entry(name).or_insert_with(|| {
-            if name == p2_vm::NameId::NONE { Arc::from("") } else { Arc::from(vm.name(name).to_ascii_lowercase()) }
+            if name == p2_vm::NameId::NONE { Arc::from("") } else { Arc::from(vm.store.name(name).to_ascii_lowercase()) }
         });
         Arc::clone(made)
     }
@@ -791,11 +791,11 @@ impl Simulation {
             .animations
             .entry(object)
             .or_insert_with(|| {
-                let path = vm.object(object).path.clone();
+                let path = vm.store.object(object).path.clone();
                 PlayedAnimation::load(vm, object, &path)
             })
             .clone()?;
-        let index = *self.sequences.entry((object, sequence)).or_insert_with(|| animation.sequences.get(&self.vm.name(sequence).to_ascii_lowercase()).copied());
+        let index = *self.sequences.entry((object, sequence)).or_insert_with(|| animation.sequences.get(&self.vm.store.name(sequence).to_ascii_lowercase()).copied());
         let index = index?;
         let frames = animation.animation.sequences[index].num_frames.max(1) as f32;
         Some(ChannelPose { animation, sequence: index, time: frame * frames, tween })
@@ -837,15 +837,15 @@ impl Worker {
 
 fn fluid_touchers(vm: &Vm<Arc<Loader>>, surfaces: &[ObjectId], touchers: &mut Vec<(ObjectId, Vec<p2_particles::FluidToucher>)>) {
     for &surface in surfaces {
-        let Some(p2_vm::Value::Array(touching)) = vm.get(surface, Prop::Touching) else { continue };
+        let Some(p2_vm::Value::Array(touching)) = vm.store.get(surface, Prop::Touching) else { continue };
         let disturbing: Vec<_> = touching
             .iter()
             .filter_map(|value| if let p2_vm::Value::Object(Some(actor)) = value { Some(*actor) } else { None })
-            .filter(|&actor| vm.get(actor, "bDisturbFluidSurface") == Some(p2_vm::Value::Bool(true)))
+            .filter(|&actor| vm.store.get(actor, "bDisturbFluidSurface") == Some(p2_vm::Value::Bool(true)))
             .map(|actor| p2_particles::FluidToucher {
-                location: vm.location(actor),
+                location: vm.store.location(actor),
                 velocity: vm.velocity(actor),
-                radius: match vm.get(actor, Prop::CollisionRadius) {
+                radius: match vm.store.get(actor, Prop::CollisionRadius) {
                     Some(p2_vm::Value::Float(radius)) => radius,
                     _ => 0.0,
                 },
@@ -858,18 +858,18 @@ fn fluid_touchers(vm: &Vm<Arc<Loader>>, surfaces: &[ObjectId], touchers: &mut Ve
 }
 
 fn level_time(vm: &Vm<Arc<Loader>>) -> f32 {
-    match vm.level().and_then(|level| vm.get(level, Prop::TimeSeconds)) {
+    match vm.level().and_then(|level| vm.store.get(level, Prop::TimeSeconds)) {
         Some(p2_vm::Value::Float(time)) => time,
         _ => 0.0,
     }
 }
 
 pub(super) fn is_switch(vm: &Vm<Arc<Loader>>, object: ObjectId) -> bool {
-    vm.name(vm.object(object).class_name).eq_ignore_ascii_case("MaterialSwitch")
+    vm.store.name(vm.store.object(object).class_name).eq_ignore_ascii_case("MaterialSwitch")
 }
 
 pub(super) fn switch_material(vm: &Vm<Arc<Loader>>, switch: ObjectId) -> Option<ObjectId> {
-    match vm.get(switch, Prop::Material) {
+    match vm.store.get(switch, Prop::Material) {
         Some(p2_vm::Value::Object(material)) => material,
         _ => None,
     }

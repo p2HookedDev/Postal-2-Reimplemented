@@ -158,7 +158,7 @@ impl CollisionHash {
 
 impl<L: LoaderRef> Vm<L> {
     fn hash_read(&self, actor: ObjectId) -> Option<(ObjectId, Vector, Option<f32>)> {
-        if self.is_deleted(actor) || !self.flag_of(actor, Prop::bCollideActors) {
+        if self.store.is_deleted(actor) || !self.store.flag_of(actor, Prop::bCollideActors) {
             return None;
         }
         let world = self.world.static_actors.contains(&actor);
@@ -168,8 +168,8 @@ impl<L: LoaderRef> Vm<L> {
             let half = (max.x - min.x).max(max.y - min.y) * 0.5;
             return Some((actor, (min + max) * 0.5, Some(half)));
         }
-        let reach = if world { Some(self.float_of(actor, Prop::CollisionRadius)) } else { self.placed_reach(actor) };
-        Some((actor, self.vector(actor, Prop::Location), reach))
+        let reach = if world { Some(self.store.float_of(actor, Prop::CollisionRadius)) } else { self.placed_reach(actor) };
+        Some((actor, self.store.vector(actor, Prop::Location), reach))
     }
 
     pub(crate) fn collision_hash(&mut self) -> &mut CollisionHash {
@@ -193,7 +193,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn collision_hash_census(&self) -> (usize, usize, usize) {
         let hash = &self.hash;
-        let stale = hash.placed.keys().filter(|&&actor| self.is_deleted(actor) || !self.flag_of(actor, Prop::bCollideActors)).count();
+        let stale = hash.placed.keys().filter(|&&actor| self.store.is_deleted(actor) || !self.store.flag_of(actor, Prop::bCollideActors)).count();
         (hash.placed.len(), hash.always.len(), stale)
     }
 
@@ -203,7 +203,7 @@ impl<L: LoaderRef> Vm<L> {
         if !self.hash.built {
             return;
         }
-        if self.flag_of(actor, Prop::bStatic) {
+        if self.store.flag_of(actor, Prop::bStatic) {
             self.hash.built = false;
             return;
         }
@@ -239,7 +239,7 @@ impl<L: LoaderRef> Vm<L> {
     /// `bBlockNonZeroExtentTraces` without moving the actor.
     fn current_entries(&self, mut found: Vec<Entry>) -> Vec<Entry> {
         for entry in &mut found {
-            entry.blocks = !self.world.static_actors.contains(&entry.actor) && self.flag_of(entry.actor, Prop::bBlockNonZeroExtentTraces);
+            entry.blocks = !self.world.static_actors.contains(&entry.actor) && self.store.flag_of(entry.actor, Prop::bBlockNonZeroExtentTraces);
         }
         found.sort_unstable_by_key(|e| e.actor);
         found

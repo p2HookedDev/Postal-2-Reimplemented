@@ -28,7 +28,7 @@ impl Host {
                 self.emitters.insert(actor, (Emitter::new(e.settings, props, 1), e.objects));
             }
         }
-        self.emitters.retain(|&actor, _| !vm.is_deleted(actor));
+        self.emitters.retain(|&actor, _| !vm.store.is_deleted(actor));
         let watched: Vec<ObjectId> = self.emitters.keys().copied().collect();
         for (object, props) in self.values.changes(vm, &watched) {
             if let Some((sim, index)) = self.emitter_of(object) {
@@ -54,7 +54,7 @@ impl Host {
         }
         for (&actor, (sim, objects)) in &mut self.emitters {
             for (index, &object) in objects.iter().enumerate() {
-                let disabled = vm.get(object, "Disabled") == Some(Value::Bool(true));
+                let disabled = vm.store.get(object, "Disabled") == Some(Value::Bool(true));
                 if let Some(e) = sim.emitters_mut().get_mut(index)
                     && e.props().disabled != disabled
                 {
@@ -72,14 +72,14 @@ impl Host {
 }
 
 fn float(vm: &Vm<&Loader>, object: ObjectId, property: &str) -> f32 {
-    match vm.get(object, property) {
+    match vm.store.get(object, property) {
         Some(Value::Float(v)) => v,
         other => panic!("{property}: {other:?}"),
     }
 }
 
 fn vector(vm: &Vm<&Loader>, object: ObjectId, property: &str) -> [f32; 3] {
-    match vm.get(object, property) {
+    match vm.store.get(object, property) {
         Some(Value::Vector(v)) => <[f32; 3]>::from(v),
         other => panic!("{property}: {other:?}"),
     }
@@ -114,7 +114,7 @@ fn start<'a>(loader: &'a Loader, dir: &std::path::Path, id: p2_package::PackageI
     let mut host = Host::default();
     for _ in 0..300 {
         frame(&mut vm, &mut host, controller, &[]);
-        if vm.name(vm.state_name(controller)) != "PlayerPrepSave" {
+        if vm.store.name(vm.state_name(controller)) != "PlayerPrepSave" {
             break;
         }
     }
@@ -123,7 +123,7 @@ fn start<'a>(loader: &'a Loader, dir: &std::path::Path, id: p2_package::PackageI
 
 fn stream_at(loader: &Loader, dir: &std::path::Path, id: p2_package::PackageId, yaw: i32) -> Vec<p2_particles::StripPoint> {
     let (mut vm, controller, mut host) = start(loader, dir, id);
-    vm.set(controller, "Rotation", Value::Rotator(p2_math::Rotator::new(65536 - 3000, yaw, 0)));
+    vm.store.set(controller, "Rotation", Value::Rotator(p2_math::Rotator::new(65536 - 3000, yaw, 0)));
     frame(&mut vm, &mut host, controller, &["R"]);
     for _ in 0..90 {
         frame(&mut vm, &mut host, controller, &[]);
@@ -131,7 +131,7 @@ fn stream_at(loader: &Loader, dir: &std::path::Path, id: p2_package::PackageId, 
     for _ in 0..45 {
         frame(&mut vm, &mut host, controller, &["LeftMouse"]);
     }
-    let feeder = vm.actors().find(|&a| vm.is_a(a, "UrinePourFeeder") && !vm.is_deleted(a)).expect("no urine stream");
+    let feeder = vm.actors().find(|&a| vm.store.is_a(a, "UrinePourFeeder") && !vm.store.is_deleted(a)).expect("no urine stream");
     let (sim, _) = &host.emitters[&feeder];
     sim.strip(0)
 }
@@ -164,11 +164,11 @@ fn urine_stream_puddle_and_trail_as_drawn() {
     for _ in 0..90 {
         frame(&mut vm, &mut host, controller, &[]);
     }
-    vm.set(controller, "Rotation", Value::Rotator(p2_math::Rotator::new(65536 - 3000, 0, 0)));
+    vm.store.set(controller, "Rotation", Value::Rotator(p2_math::Rotator::new(65536 - 3000, 0, 0)));
     for _ in 0..90 {
         frame(&mut vm, &mut host, controller, &["LeftMouse"]);
     }
-    let actors_of = |vm: &Vm<&Loader>, class: &str| -> Vec<ObjectId> { vm.actors().filter(|&a| vm.is_a(a, class) && !vm.is_deleted(a)).collect() };
+    let actors_of = |vm: &Vm<&Loader>, class: &str| -> Vec<ObjectId> { vm.actors().filter(|&a| vm.store.is_a(a, class) && !vm.store.is_deleted(a)).collect() };
     let feeder = *actors_of(&vm, "UrinePourFeeder").first().expect("no urine stream");
     let (nozzle, hit) = (vector(&vm, feeder, "Location"), vector(&vm, feeder, "LastHitLocation"));
     let (sim, _) = &host.emitters[&feeder];

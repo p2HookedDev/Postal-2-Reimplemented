@@ -228,7 +228,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(found) = self.script.lookups.functions.get(&(class, None, name)) {
             return Ok(found.clone());
         }
-        let text = self.name(name).to_owned();
+        let text = self.store.name(name).to_owned();
         let found = self.search_function(class, &text)?;
         self.script.lookups.functions.insert((class, None, name), found.clone());
         Ok(found)
@@ -238,11 +238,11 @@ impl<L: LoaderRef> Vm<L> {
         self.count(crate::profiling::Work::FunctionSearch);
         let mut current = Some(class);
         while let Some(class) = current {
-            let (package, export) = (self.class(class).package, self.class(class).export);
+            let (package, export) = (self.store.class(class).package, self.store.class(class).export);
             if let Some((package, export)) = self.find_child(package, export, name, false)? {
                 return self.load_function(package, export).map(Some);
             }
-            current = self.class(class).super_class;
+            current = self.store.class(class).super_class;
         }
         Ok(None)
     }
@@ -474,7 +474,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Err(Error::Recursion { chain, .. }) = &mut result
             && chain.len() <= RECURSION_CHAIN
         {
-            chain.push(format!("{}.{}", self.name(self.class(class).name), function.object_name));
+            chain.push(format!("{}.{}", self.store.name(self.store.class(class).name), function.object_name));
         }
         result
     }
@@ -570,7 +570,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn state_frame(&mut self, code: &Arc<Function>, object: ObjectId) -> Result<Frame, Error> {
-        let class = self.object(object).class.ok_or(Error::Unsupported("state code of a stub".to_owned()))?;
+        let class = self.store.object(object).class.ok_or(Error::Unsupported("state code of a stub".to_owned()))?;
         let locals = self.store.memory.zero(code.mem);
         Ok(Frame { function: Arc::clone(code), this: Some(object), class, locals, switch: None, iterators: Vec::new() })
     }
@@ -680,7 +680,7 @@ impl<L: LoaderRef> Vm<L> {
                 && let Some(target) = target
             {
                 values.truncate(2);
-                values.push(Value::Vector(self.vector(target, Prop::Location)));
+                values.push(Value::Vector(self.store.vector(target, Prop::Location)));
             }
             ListWalk { name, target, args: values, first_new }
         });
@@ -727,7 +727,7 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(done);
             };
             iteration.next += 1;
-            if !matches!(item, Value::Object(Some(object)) if self.is_deleted(object)) {
+            if !matches!(item, Value::Object(Some(object)) if self.store.is_deleted(object)) {
                 break item;
             }
         };
@@ -870,7 +870,7 @@ impl<L: LoaderRef> Vm<L> {
         let name = match name {
             Expr::Nothing => None,
             name => match self.eval(frame, name, context)? {
-                Value::Name(name) if name != NameId::NONE => Some(self.name(name).to_owned()),
+                Value::Name(name) if name != NameId::NONE => Some(self.store.name(name).to_owned()),
                 Value::Str(name) if !name.is_empty() => Some(name),
                 _ => None,
             },
@@ -882,7 +882,7 @@ impl<L: LoaderRef> Vm<L> {
         Ok(match class {
             Some(class) => {
                 let object = self.new_object(self.redirected(class), name.as_deref());
-                self.set(object, Prop::Outer, Value::Object(outer));
+                self.store.set(object, Prop::Outer, Value::Object(outer));
                 Value::Object(Some(object))
             }
             None => Value::Object(None),
@@ -913,16 +913,16 @@ impl<L: LoaderRef> Vm<L> {
     /// export or a script class cannot run: true (counted), and the call gives zero, like Accessed None.
     fn call_on_stub(&mut self, frame: &Frame, callee: Callee, context: Option<ObjectId>) -> bool {
         if let (Callee::Virtual(name), Some(target)) = (callee, context)
-            && self.object(target).class.is_none()
-            && self.object(target).class_name != self.script.lookups.class_names.class
+            && self.store.object(target).class.is_none()
+            && self.store.object(target).class_name != self.script.lookups.class_names.class
             && {
                 self.load_stub(target);
-                self.object(target).class.is_none()
+                self.store.object(target).class.is_none()
             }
         {
-            let key = (self.object(target).class_name, frame.function.package, name);
+            let key = (self.store.object(target).class_name, frame.function.package, name);
             if !self.script.lookups.stub_calls.contains_key(&key) {
-                let text = format!("call on stub: {}.{}", self.name(key.0), self.loader.package(key.1).package.name(name));
+                let text = format!("call on stub: {}.{}", self.store.name(key.0), self.loader.package(key.1).package.name(name));
                 self.script.lookups.stub_calls.insert(key, text);
             }
             let text = &self.script.lookups.stub_calls[&key];
@@ -1110,7 +1110,7 @@ impl<L: LoaderRef> Vm<L> {
                 // Virtual calls see the target's state; `Global.` calls only its class, as do calls on a class object
                 // (`class'X'.static.F()`: `class` is the class it stands for).
                 let receiver = match (callee, context) {
-                    (Callee::Virtual(_), Some(target)) if self.object(target).class.is_some() => Some(target),
+                    (Callee::Virtual(_), Some(target)) if self.store.object(target).class.is_some() => Some(target),
                     _ => None,
                 };
                 let state = receiver.map_or(0, |target| self.object_state_key(target));
@@ -1127,7 +1127,7 @@ impl<L: LoaderRef> Vm<L> {
                     Some(target) => self.find_object_function_id(target, name)?,
                     None => self.find_function_id(class, name)?,
                 };
-                let function = found.ok_or_else(|| Error::Unsupported(format!("no function {}", self.name(name))))?;
+                let function = found.ok_or_else(|| Error::Unsupported(format!("no function {}", self.store.name(name))))?;
                 if let Some(key) = key
                     && u64::from(function.index) < SITE_FUNCTION_MASK
                 {
@@ -1181,16 +1181,16 @@ impl<L: LoaderRef> Vm<L> {
     fn dynamic_cast(&mut self, frame: &Frame, link: Option<u32>, class: i32, value: Value) -> Value {
         let package = frame.function.package;
         let Value::Object(Some(object)) = value else { return Value::Object(None) };
-        let key = self.object(object).class.map(|of| (of, package, class, false));
+        let key = self.store.object(object).class.map(|of| (of, package, class, false));
         if let Some(keeps) = key.and_then(|key| self.known_cast(frame, link, key)) {
             return Value::Object(keeps.then_some(object));
         }
         let target = self.cast_target(package, class);
-        let class_name = self.name(target);
+        let class_name = self.store.name(target);
         // `Viewport` is C++-only: the VM's one `Player`, the local one, stands for it (scripts find the local
         // player by `ViewPort(Player) != None`, e.g. the ragdoll pool in `P2MoCapPawn.GetKarmaSkeleton`).
-        let viewport = class_name.eq_ignore_ascii_case("Viewport") && self.is_a(object, "Player");
-        let keeps = self.is_a(object, target) || self.stub_is_a(object, class_name) || viewport;
+        let viewport = class_name.eq_ignore_ascii_case("Viewport") && self.store.is_a(object, "Player");
+        let keeps = self.store.is_a(object, target) || self.stub_is_a(object, class_name) || viewport;
         if let Some(key) = key {
             self.script.lookups.casts.insert(key, keeps);
         }
@@ -1339,7 +1339,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Expr::InstanceVariable(reference) => {
                 let object = context.ok_or_else(|| Error::Unsupported(format!("{} without an object", property_name(self, *reference))))?;
-                if let Some(class) = self.object(object).class {
+                if let Some(class) = self.store.object(object).class {
                     let index = match linked(frame, link).and_then(|value| member_of_link(value, class)) {
                         Some(index) => index,
                         None => {
@@ -1381,7 +1381,7 @@ impl<L: LoaderRef> Vm<L> {
                     }
                 };
                 let index = index.ok_or_else(|| Error::Unsupported(format!("default {}", property_name(self, *reference))))?;
-                match self.store.memory.get(self.class(class).mem).fields.get(index) {
+                match self.store.memory.get(self.store.class(class).mem).fields.get(index) {
                     Some(field) => Target::Place(Place::new(Root::Default(class), field)),
                     None => Target::Nowhere,
                 }
@@ -1410,7 +1410,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn instance_target(&self, object: ObjectId, class: ClassId, index: usize) -> Target {
-        match self.store.memory.get(self.class(class).mem).fields.get(index) {
+        match self.store.memory.get(self.store.class(class).mem).fields.get(index) {
             Some(field) => Target::Place(Place::new(Root::Instance(object), field)),
             None => Target::Nowhere,
         }
@@ -1458,26 +1458,21 @@ impl<L: LoaderRef> Vm<L> {
 
     fn context_class(&mut self, context: Option<ObjectId>) -> Result<Option<ClassId>, Error> {
         let Some(object) = context else { return Ok(None) };
-        if let Some(class) = self.object(object).class {
+        if let Some(class) = self.store.object(object).class {
             return Ok(Some(class));
         }
-        if self.object(object).class_name == self.script.lookups.class_names.class {
+        if self.store.object(object).class_name == self.script.lookups.class_names.class {
             return self.class_of_object(object);
         }
         Ok(None)
     }
 
-    #[inline]
-    pub fn is_a(&self, object: ObjectId, class_name: impl crate::ClassName) -> bool {
-        self.store.is_a(object, class_name)
-    }
-
     pub fn stub_is_a(&self, object: ObjectId, class_name: &str) -> bool {
-        let object = self.object(object);
+        let object = self.store.object(object);
         if object.class.is_some() {
             return false;
         }
-        let mut current = self.name(object.class_name);
+        let mut current = self.store.name(object.class_name);
         let mut loaded = self.store.class_by_name.get(&object.class_name).copied();
         for _ in 0..16 {
             if current.eq_ignore_ascii_case(class_name) {
@@ -1501,11 +1496,6 @@ impl<L: LoaderRef> Vm<L> {
         class_name.is_base_of(&self.store, class)
     }
 
-    #[inline]
-    pub(crate) fn class_has_name(&self, class: ClassId, name: NameId) -> bool {
-        self.store.class_has_name(class, name)
-    }
-
     fn cast_target(&mut self, package: PackageId, class: i32) -> NameId {
         if let Some(&id) = self.script.lookups.cast_targets.get(&(package, class)) {
             return id;
@@ -1527,13 +1517,13 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn reference_property(&self, class: ClassId, package: PackageId, reference: i32) -> Option<usize> {
-        self.property_index(class, self.loader.package(package).package.object_name(reference).unwrap_or(""))
+        self.store.property_index(class, self.loader.package(package).package.object_name(reference).unwrap_or(""))
     }
 
     fn stub_member(&mut self, object: ObjectId, package: PackageId, reference: i32) -> Value {
         let name = self.loader.package(package).package.object_name(reference).unwrap_or("");
         if name.eq_ignore_ascii_case("Name") {
-            return Value::Name(self.object(object).name);
+            return Value::Name(self.store.object(object).name);
         }
         match ["USize", "UClamp", "VSize", "VClamp"].iter().position(|member| name.eq_ignore_ascii_case(member)) {
             Some(member) => Value::Int(self.texture_size(object)[member / 2]),
@@ -1770,8 +1760,8 @@ fn cast<L: LoaderRef>(vm: &Vm<L>, to: PrimCast, value: Value) -> Result<Value, E
         (PrimCast::ToBool, _) => Value::Bool(truthy(&value)),
         (PrimCast::ToStr | PrimCast::VectorToStr, Value::Float(v)) => Value::Str(format!("{v:.2}")),
         (PrimCast::ToStr | PrimCast::VectorToStr, Value::Bool(v)) => Value::Str(if *v { "True" } else { "False" }.to_owned()),
-        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Name(n)) => Value::Str(vm.name(*n).to_owned()),
-        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Object(o)) => Value::Str(o.map_or("None".to_owned(), |o| vm.object(o).path.clone())),
+        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Name(n)) => Value::Str(vm.store.name(*n).to_owned()),
+        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Object(o)) => Value::Str(o.map_or("None".to_owned(), |o| vm.store.object(o).path.clone())),
         (PrimCast::ToStr | PrimCast::ToStrOr(_) | PrimCast::VectorToStr, _) => Value::Str(int(&value).to_string()),
         (PrimCast::StringToVector | PrimCast::StringToRotator, _) => return Err(Error::Unsupported(format!("cast {to:?}"))),
         (PrimCast::Unknown(kind), _) => return Err(Error::Unsupported(format!("cast {kind:#x}"))),

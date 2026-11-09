@@ -43,15 +43,15 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn see_pawn(&mut self, controller: ObjectId, other: ObjectId, check: SightCheck) -> bool {
-        let Some(pawn) = self.object_of(controller, Prop::Pawn) else { return false };
-        if self.object_of(controller, Prop::Enemy) == Some(other) {
+        let Some(pawn) = self.store.object_of(controller, Prop::Pawn) else { return false };
+        if self.store.object_of(controller, Prop::Enemy) == Some(other) {
             return self.line_of_sight_to(controller, other, SightCheck::Full);
         }
-        let flag = self.flag_of(controller, Prop::bLOSflag);
-        self.set(controller, Prop::bLOSflag, Value::Bool(!flag));
-        let offset = self.vector(other, Prop::Location) - self.vector(pawn, Prop::Location);
+        let flag = self.store.flag_of(controller, Prop::bLOSflag);
+        self.store.set(controller, Prop::bLOSflag, Value::Bool(!flag));
+        let offset = self.store.vector(other, Prop::Location) - self.store.vector(pawn, Prop::Location);
         let distance_squared = offset.dot(offset);
-        let reach = (self.byte_of(other, Prop::Visibility) as f32 * VISIBILITY_SCALE).min(1.0) * self.float_of(pawn, Prop::SightRadius);
+        let reach = (self.store.byte_of(other, Prop::Visibility) as f32 * VISIBILITY_SCALE).min(1.0) * self.store.float_of(pawn, Prop::SightRadius);
         let reach_squared = reach * reach;
         if distance_squared > reach_squared {
             return false;
@@ -59,13 +59,13 @@ impl<L: LoaderRef> Vm<L> {
         if check == SightCheck::Periodic && reach_squared * 0.25 < distance_squared && self.random() < 0.5 {
             return false;
         }
-        let facing = offset.safe_normal().dot(self.rotator_of(controller, Prop::Rotation).vector());
-        if facing < self.float_of(pawn, Prop::PeripheralVision) {
+        let facing = offset.safe_normal().dot(self.store.rotator_of(controller, Prop::Rotation).vector());
+        if facing < self.store.float_of(pawn, Prop::PeripheralVision) {
             return false;
         }
         if check == SightCheck::Periodic && self.random() * distance_squared > reach_squared * 0.01 {
             let flat = Vector::new(offset.x, offset.y, offset.z * 2.0);
-            if flat.safe_normal().dot(self.rotator_of(controller, Prop::Rotation).vector()) < self.float_of(pawn, Prop::PeripheralVision) {
+            if flat.safe_normal().dot(self.store.rotator_of(controller, Prop::Rotation).vector()) < self.store.float_of(pawn, Prop::PeripheralVision) {
                 return false;
             }
             let rise = offset[2].abs();
@@ -79,41 +79,41 @@ impl<L: LoaderRef> Vm<L> {
     /// Not modelled: retail skips the search under a level flag (unverified).
     fn assisted_aim_target(&mut self, weapon: ObjectId, start: Vector) -> Option<ObjectId> {
         let level = self.level?;
-        let auto_aim = self.object_of(level, Prop::Game).map_or(1.0, |game| self.float_of(game, Prop::AutoAim));
+        let auto_aim = self.store.object_of(level, Prop::Game).map_or(1.0, |game| self.store.float_of(game, Prop::AutoAim));
         let assist = 1.0 - auto_aim;
         let (yaw_limit, pitch_limit) = (assist / AIM_YAW_DIVISOR, assist / AIM_PITCH_DIVISOR);
-        let instigator = self.object_of(weapon, Prop::Instigator)?;
-        let view = match self.object_of(instigator, Prop::Controller) {
-            Some(controller) => self.rotator_of(controller, Prop::Rotation),
-            None => self.rotator_of(instigator, Prop::Rotation),
+        let instigator = self.store.object_of(weapon, Prop::Instigator)?;
+        let view = match self.store.object_of(instigator, Prop::Controller) {
+            Some(controller) => self.store.rotator_of(controller, Prop::Rotation),
+            None => self.store.rotator_of(instigator, Prop::Rotation),
         };
-        let now = self.float_of(level, Prop::TimeSeconds);
-        let pawns: Vec<ObjectId> = self.object_ids().filter(|&o| self.is_a(o, Kind::Pawn)).collect();
+        let now = self.store.float_of(level, Prop::TimeSeconds);
+        let pawns: Vec<ObjectId> = self.object_ids().filter(|&o| self.store.is_a(o, Kind::Pawn)).collect();
         pawns.into_iter().find(|&pawn| {
-            if now - self.float_of(pawn, Prop::LastRenderTime) >= AIM_RENDERED_SECONDS || !matches!(self.get(pawn, Prop::Health), Some(Value::Int(health)) if health > 0) {
+            if now - self.store.float_of(pawn, Prop::LastRenderTime) >= AIM_RENDERED_SECONDS || !matches!(self.store.get(pawn, Prop::Health), Some(Value::Int(health)) if health > 0) {
                 return false;
             }
-            let location = self.vector(pawn, Prop::Location);
+            let location = self.store.vector(pawn, Prop::Location);
             let to = (location - start).safe_normal();
             let target = to.rotation();
             let yaw_off = to.dot(Rotator::new(target.pitch, view.yaw, 0).vector()).clamp(-1.0, 1.0).acos();
             let pitch_off = to.dot(Rotator::new(view.pitch, target.yaw, 0).vector()).clamp(-1.0, 1.0).acos();
-            yaw_off < self.float_of(pawn, Prop::CollisionRadius) * yaw_limit
-                && pitch_off < self.float_of(pawn, Prop::CollisionHeight) * pitch_limit
+            yaw_off < self.store.float_of(pawn, Prop::CollisionRadius) * yaw_limit
+                && pitch_off < self.store.float_of(pawn, Prop::CollisionHeight) * pitch_limit
                 && self.trace_world(start, location, Vector::ZERO).is_none()
         })
     }
 
     /// A model for walking pawns. Not modelled: flying, swimming, jumping over a wall (unverified).
     fn pick_wall_adjust(&mut self, controller: ObjectId) -> bool {
-        let Some(pawn) = self.object_of(controller, Prop::Pawn) else { return false };
-        let physics = self.physics_of(pawn);
+        let Some(pawn) = self.store.object_of(controller, Prop::Pawn) else { return false };
+        let physics = self.store.physics_of(pawn);
         if matches!(physics, Some(EPhysics::Falling | EPhysics::Swimming | EPhysics::Flying)) {
             return false;
         }
-        let location = self.vector(pawn, Prop::Location);
-        let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
-        let to = self.vector(controller, Prop::Destination) - location;
+        let location = self.store.vector(pawn, Prop::Location);
+        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let to = self.store.vector(controller, Prop::Destination) - location;
         let flat = Vector::new(to.x, to.y, 0.0);
         if to[2] < height && flat.dot(flat) - radius * radius < 0.0 {
             return false;
@@ -131,7 +131,7 @@ impl<L: LoaderRef> Vm<L> {
             let onward = aside + (ahead * step);
             if self.trace_world(location, aside, extent).is_none() && self.trace_world(aside, onward, extent).is_none() {
                 self.set_vector(controller, Prop::AdjustLoc, aside);
-                self.set(controller, Prop::bAdjusting, Value::Bool(true));
+                self.store.set(controller, Prop::bAdjusting, Value::Bool(true));
                 return true;
             }
         }
@@ -140,20 +140,20 @@ impl<L: LoaderRef> Vm<L> {
 
     /// The last point of exactly `class` found becomes the `FindPath` goal.
     fn find_path_toward_nearest(&mut self, controller: ObjectId, class: Option<crate::ClassId>) -> Result<Option<ObjectId>, Error> {
-        let (Some(class), Some(_)) = (class, self.object_of(controller, Prop::Pawn)) else {
-            self.diagnostics.log.push(format!("Warning: No goal for FindPathTowardNearest by {}", self.object(controller).path));
+        let (Some(class), Some(_)) = (class, self.store.object_of(controller, Prop::Pawn)) else {
+            self.diagnostics.log.push(format!("Warning: No goal for FindPathTowardNearest by {}", self.store.object(controller).path));
             return Ok(None);
         };
         let mut goal = None;
-        let mut next = self.level.and_then(|level| self.object_of(level, Prop::NavigationPointList));
+        let mut next = self.level.and_then(|level| self.store.object_of(level, Prop::NavigationPointList));
         let mut seen = 0;
         while let Some(node) = next {
-            if self.object(node).class == Some(class) {
-                self.set(node, Prop::bTransientEndPoint, Value::Bool(true));
+            if self.store.object(node).class == Some(class) {
+                self.store.set(node, Prop::bTransientEndPoint, Value::Bool(true));
                 goal = Some(node);
             }
             seen += 1;
-            next = self.object_of(node, Prop::nextNavigationPoint).filter(|_| seen < MAX_NAVIGATION_POINTS);
+            next = self.store.object_of(node, Prop::nextNavigationPoint).filter(|_| seen < MAX_NAVIGATION_POINTS);
         }
         let Some(goal) = goal else { return Ok(None) };
         self.find_path(controller, Some(goal), Vector::ZERO)

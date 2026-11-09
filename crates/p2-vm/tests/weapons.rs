@@ -12,8 +12,8 @@ impl Dude<'_> {
 
     fn describe(&self, object: Option<ObjectId>) -> String {
         object.map_or("None".to_owned(), |o| {
-            let channel = self.vm.anim_channel(o, 0).map(|(c, _)| format!("{} f{:.3} r{:.3} t{:.3}", self.vm.name(c.sequence), c.frame, c.rate, c.tween_rate));
-            format!("{} ({}) {channel:?}", self.vm.name(self.vm.object(o).class_name), self.vm.name(self.vm.state_name(o)))
+            let channel = self.vm.anim_channel(o, 0).map(|(c, _)| format!("{} f{:.3} r{:.3} t{:.3}", self.vm.store.name(c.sequence), c.frame, c.rate, c.tween_rate));
+            format!("{} ({}) {channel:?}", self.vm.store.name(self.vm.store.object(o).class_name), self.vm.store.name(self.vm.state_name(o)))
         })
     }
 }
@@ -22,8 +22,8 @@ impl Dude<'_> {
     fn until_ready(&mut self, class: &str, limit: usize) -> usize {
         for frame in 0..limit {
             if let Some(weapon) = self.weapon()
-                && self.vm.name(self.vm.object(weapon).class_name).eq_ignore_ascii_case(class)
-                && self.vm.name(self.vm.state_name(weapon)) == "Idle"
+                && self.vm.store.name(self.vm.store.object(weapon).class_name).eq_ignore_ascii_case(class)
+                && self.vm.store.name(self.vm.state_name(weapon)) == "Idle"
             {
                 return frame;
             }
@@ -34,7 +34,7 @@ impl Dude<'_> {
 
     fn ammo(&self, class: &str) -> i32 {
         let ammo = object_of(&self.vm, self.item(class), "AmmoType").expect("ammo");
-        match self.vm.get(ammo, "AmmoAmount") {
+        match self.vm.store.get(ammo, "AmmoAmount") {
             Some(Value::Int(amount)) => amount,
             other => panic!("AmmoAmount {other:?}"),
         }
@@ -42,8 +42,8 @@ impl Dude<'_> {
 
     fn look(&mut self, yaw: i32) {
         let rotation = Value::Rotator(p2_math::Rotator::new(0, yaw, 0));
-        self.vm.set(self.controller, "Rotation", rotation.clone());
-        self.vm.set(self.pawn, "Rotation", rotation);
+        self.vm.store.set(self.controller, "Rotation", rotation.clone());
+        self.vm.store.set(self.pawn, "Rotation", rotation);
     }
 
     fn bystander_in_front(&mut self, distance: f32) -> ObjectId {
@@ -51,7 +51,7 @@ impl Dude<'_> {
         let candidates: Vec<ObjectId> = self
             .vm
             .actors()
-            .filter(|&a| a != self.pawn && self.vm.is_a(a, "P2MoCapPawn") && !self.vm.is_deleted(a))
+            .filter(|&a| a != self.pawn && self.vm.store.is_a(a, "P2MoCapPawn") && !self.vm.store.is_deleted(a))
             .filter(|&a| object_of(&self.vm, a, "Controller").is_some() && self.float(a, "Health") > 0.0)
             .collect();
         let pawn = candidates.into_iter().min_by(|&a, &b| {
@@ -79,7 +79,7 @@ impl Dude<'_> {
         let at = [me[0] + d[0] * distance, me[1] + d[1] * distance, me[2]];
         self.vm.place_far_moved(pawn, at.into(), Encroachment::Ignored).unwrap();
         let facing = Value::Rotator(p2_math::Rotator::new(0, yaw + 32768, 0));
-        self.vm.set(pawn, "Rotation", facing);
+        self.vm.store.set(pawn, "Rotation", facing);
         self.vm.mark_rendered(pawn).unwrap();
         pawn
     }
@@ -92,7 +92,7 @@ impl Dude<'_> {
 
     fn sound_of(&self, object: ObjectId, property: &str) -> String {
         let sound = object_of(&self.vm, object, property).unwrap_or_else(|| panic!("no {property}"));
-        self.vm.object(sound).path.clone()
+        self.vm.store.object(sound).path.clone()
     }
 
     fn fire(&mut self, key: &str, held: usize, total: usize) -> Vec<ObjectId> {
@@ -101,7 +101,7 @@ impl Dude<'_> {
         for frame in 0..total {
             let keys: &[&str] = if frame < held { &[key] } else { &[] };
             self.frames(1, keys);
-            for actor in self.vm.actors().filter(|a| !before.contains(a) && self.vm.is_a(*a, "Projectile")) {
+            for actor in self.vm.actors().filter(|a| !before.contains(a) && self.vm.store.is_a(*a, "Projectile")) {
                 if !spawned.contains(&actor) {
                     spawned.push(actor);
                 }
@@ -125,7 +125,7 @@ fn selector_switch_completes_and_fires() {
     for frame in 0..60 {
         let keys: &[&str] = if frame < 45 { &["LeftMouse"] } else { &[] };
         dude.frames(1, keys);
-        if ready.is_none() && dude.weapon() == Some(shotgun) && dude.vm.name(dude.vm.state_name(shotgun)) != "Active" {
+        if ready.is_none() && dude.weapon() == Some(shotgun) && dude.vm.store.name(dude.vm.state_name(shotgun)) != "Active" {
             ready = Some(frame);
         }
     }
@@ -210,12 +210,12 @@ fn grenade_and_molotov_fly_and_explode() {
             let thrown = dude.fire("LeftMouse", usize::from(frame < 3), 1);
             projectile = projectile.or(thrown.first().copied());
             let Some(projectile) = projectile else { continue };
-            if dude.vm.is_deleted(projectile) {
+            if dude.vm.store.is_deleted(projectile) {
                 break;
             }
             let at = dude.vector(projectile, "Location");
             far = far.max(((at[0] - start[0]).powi(2) + (at[1] - start[1]).powi(2)).sqrt());
-            if class == "GrenadeWeapon" && dude.vm.get(projectile, "Physics") == Some(Value::Byte(0)) {
+            if class == "GrenadeWeapon" && dude.vm.store.get(projectile, "Physics") == Some(Value::Byte(0)) {
                 let height = dude.float(victim, "CollisionHeight");
                 dude.vm.place_far_moved(victim, [at[0] + 50.0, at[1], at[2] + height].into(), Encroachment::Ignored).unwrap();
             }
@@ -225,7 +225,7 @@ fn grenade_and_molotov_fly_and_explode() {
         let sounds = dude.take_sounds();
         assert_eq!(dude.ammo(class), ammo - 1, "{class}: one thrown");
         assert!(far > 100.0, "{class}: flew {far} units");
-        assert!(dude.vm.is_deleted(projectile), "{class}: never exploded");
+        assert!(dude.vm.store.is_deleted(projectile), "{class}: never exploded");
         assert!(sounds.iter().any(|s| s.contains(explosion)), "{class}: {sounds:?}");
         assert!(dude.float(victim, "Health") < health, "{class}: the blast did not hurt the bystander");
     }
@@ -236,7 +236,7 @@ fn heads_end_their_channels_quietly() {
     let loader = load_suburbs(&dir);
     let mut dude = Dude::armed(&loader, &dir);
     for _ in 0..60 {
-        for pawn in dude.vm.actors().filter(|&a| dude.vm.is_a(a, "Pawn")).collect::<Vec<_>>() {
+        for pawn in dude.vm.actors().filter(|&a| dude.vm.store.is_a(a, "Pawn")).collect::<Vec<_>>() {
             dude.vm.mark_rendered(pawn).unwrap();
         }
         dude.frames(1, &[]);
@@ -262,8 +262,8 @@ fn bone_coords_follow_the_pose() {
         };
         (v(&parts[0]), v(&parts[1]))
     };
-    let head_bone = match dude.vm.get(victim, "HeadBone") {
-        Some(Value::Name(name)) => dude.vm.name(name).to_owned(),
+    let head_bone = match dude.vm.store.get(victim, "HeadBone") {
+        Some(Value::Name(name)) => dude.vm.store.name(name).to_owned(),
         _ => "MALE01 head".to_owned(),
     };
     let (head, x_axis) = coords(&mut dude, &head_bone);
@@ -289,7 +289,7 @@ fn same_name_mesh_and_animation_stay_apart() {
     let mesh = vm.stub(path, "SkeletalMesh");
     assert_ne!(animation, mesh);
     assert_eq!(vm.stub(path, "SkeletalMesh"), mesh);
-    assert_eq!(vm.name(vm.object(mesh).class_name), "SkeletalMesh");
+    assert_eq!(vm.store.name(vm.store.object(mesh).class_name), "SkeletalMesh");
     let class = vm.stub("Engine.Mesh", "Class");
     let found = vm.call_native("DynamicLoadObject", None, &mut [Value::Str(path.to_owned()), Value::Object(Some(class)), Value::Bool(false)]).unwrap();
     assert_eq!(found, Some(Value::Object(Some(mesh))));

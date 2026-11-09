@@ -34,7 +34,7 @@ pub(crate) struct Canvas {
 
 impl<L: LoaderRef> Vm<L> {
     pub fn render_hud(&mut self, controller: ObjectId, width: f32, height: f32) -> Result<Vec<CanvasItem>, Error> {
-        let hud = self.object_of(controller, Prop::myHUD);
+        let hud = self.store.object_of(controller, Prop::myHUD);
         let canvas = match self.media.canvas.object {
             Some(canvas) => canvas,
             None => {
@@ -46,13 +46,13 @@ impl<L: LoaderRef> Vm<L> {
         };
         self.event(canvas, "Reset", Vec::new())?;
         for (property, value) in [(Prop::SizeX, Value::Int(width as i32)), (Prop::SizeY, Value::Int(height as i32))] {
-            self.set(canvas, property, value);
+            self.store.set(canvas, property, value);
         }
         for (property, value) in [(Prop::ClipX, width), (Prop::ClipY, height)] {
-            self.set(canvas, property, Value::Float(value));
+            self.store.set(canvas, property, Value::Float(value));
         }
         if let Some(viewport) = self.viewport() {
-            self.set(canvas, Prop::Viewport, Value::Object(Some(viewport)));
+            self.store.set(canvas, Prop::Viewport, Value::Object(Some(viewport)));
         }
         self.media.canvas.items.clear();
         self.process_interactions("Process_PreRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
@@ -68,7 +68,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.media.canvas.fonts.contains_key(&font) {
             return;
         }
-        let path = self.object(font).path.clone();
+        let path = self.store.object(font).path.clone();
         let found = match self.export_of(font) {
             Some((package, export)) => {
                 let loaded = self.loader.package(package);
@@ -82,7 +82,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn canvas_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         // Reading a font can open a side package, which needs `Vm`; `Canvas` then finds it in `fonts`.
         if matches!(native, Native::StrLen | Native::TextSize | Native::DrawTextClipped | Native::DrawText)
-            && let Some(font) = this.and_then(|canvas| self.object_of(canvas, Prop::Font))
+            && let Some(font) = this.and_then(|canvas| self.store.object_of(canvas, Prop::Font))
         {
             self.load_font(font);
         }

@@ -6,8 +6,8 @@ use p2_package::Loader;
 use p2_vm::{HostCommand, SaveGame, Value, Vm};
 
 fn live_actors(vm: &Vm<&Loader>) -> usize {
-    let of_hud = |actor| vm.is_a(actor, "FontInfo") || vm.is_a(actor, "FPSButtonInfo");
-    vm.actors().filter(|&actor| !vm.is_deleted(actor) && !of_hud(actor)).count()
+    let of_hud = |actor| vm.store.is_a(actor, "FontInfo") || vm.store.is_a(actor, "FPSButtonInfo");
+    vm.actors().filter(|&actor| !vm.store.is_deleted(actor) && !of_hud(actor)).count()
 }
 
 #[test]
@@ -43,9 +43,9 @@ fn church_saves_and_loads() {
     let loaded_pawn = loaded_pawn.expect("saved pawn found by Login");
     let errors = loaded.post_load_game();
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(loaded.object(loaded_pawn).path, vm.object(pawn).path);
+    assert_eq!(loaded.store.object(loaded_pawn).path, vm.store.object(pawn).path);
     for property in ["Location", "Health"] {
-        assert_eq!(loaded.get(loaded_pawn, property), vm.get(pawn, property), "{property}");
+        assert_eq!(loaded.store.get(loaded_pawn, property), vm.store.get(pawn, property), "{property}");
     }
     let (before, after) = (live_actors(&vm), live_actors(&loaded));
     assert!(before.abs_diff(after) <= 2, "saved {before}, loaded {after}");

@@ -46,9 +46,9 @@ fn fall_one_substep(dir: &str, velocity: Vector) -> (Vector, Vector) {
     let mut vm = load_fixture(&package, dir);
     let class = vm.find_class("Fixture", "Pawn").unwrap();
     let pawn = vm.spawn(class, None, [Some(Value::Vector(START)), None]).unwrap().unwrap();
-    assert!(vm.set(pawn, "Velocity", Value::Vector(velocity)));
+    assert!(vm.store.set(pawn, "Velocity", Value::Vector(velocity)));
     vm.tick_actor(pawn, ONE_SUBSTEP).unwrap();
-    (vm.location(pawn), vm.velocity(pawn))
+    (vm.store.location(pawn), vm.velocity(pawn))
 }
 
 fn assert_near(actual: Vector, expected: [f32; 3]) {
@@ -84,15 +84,15 @@ fn defaults_of_every_property_type_load() {
     let class = vm.find_class("Fixture", "Holder").unwrap();
     let object = vm.new_object(class, None);
     let hello = vm.intern("Hello");
-    assert_eq!(vm.get(object, "Speed"), Some(Value::Float(1.5)));
-    assert_eq!(vm.get(object, "Mode"), Some(Value::Byte(9)));
-    assert_eq!(vm.get(object, "bOn"), Some(Value::Bool(true)));
-    assert_eq!(vm.get(object, "bOff"), Some(Value::Bool(false)));
-    assert_eq!(vm.get(object, "Label"), Some(Value::Name(hello)));
-    assert_eq!(vm.get(object, "Spot"), Some(Value::Vector(Vector::new(1.0, 2.0, 3.0))));
-    assert_eq!(vm.get(object, "Turn"), Some(Value::Rotator(Rotator::new(4, 5, 6))));
-    let Some(Value::Object(Some(target))) = vm.get(object, "Target") else { panic!("no object default") };
-    assert_eq!(vm.object(target).path, "Fixture.Other");
+    assert_eq!(vm.store.get(object, "Speed"), Some(Value::Float(1.5)));
+    assert_eq!(vm.store.get(object, "Mode"), Some(Value::Byte(9)));
+    assert_eq!(vm.store.get(object, "bOn"), Some(Value::Bool(true)));
+    assert_eq!(vm.store.get(object, "bOff"), Some(Value::Bool(false)));
+    assert_eq!(vm.store.get(object, "Label"), Some(Value::Name(hello)));
+    assert_eq!(vm.store.get(object, "Spot"), Some(Value::Vector(Vector::new(1.0, 2.0, 3.0))));
+    assert_eq!(vm.store.get(object, "Turn"), Some(Value::Rotator(Rotator::new(4, 5, 6))));
+    let Some(Value::Object(Some(target))) = vm.store.get(object, "Target") else { panic!("no object default") };
+    assert_eq!(vm.store.object(target).path, "Fixture.Other");
 }
 
 #[test]
@@ -130,13 +130,13 @@ fn tick_level_runs_tick_events_in_spawn_order_with_the_clamped_delta() {
     let class = vm.find_class("Fixture", "Ticker").unwrap();
     let first = vm.spawn(class, None, [None, None]).unwrap().unwrap();
     let second = vm.spawn(class, None, [None, None]).unwrap().unwrap();
-    assert!(vm.set(first, "Partner", Value::Object(Some(second))));
-    assert!(vm.set(second, "Partner", Value::Object(Some(first))));
+    assert!(vm.store.set(first, "Partner", Value::Object(Some(second))));
+    assert!(vm.store.set(second, "Partner", Value::Object(Some(first))));
 
     let errors = vm.tick_level(1.0);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(vm.get(first, "Seen"), Some(Value::Int(0)));
-    assert_eq!(vm.get(second, "Seen"), Some(Value::Int(1)));
-    assert_eq!(vm.get(first, "LastDelta"), Some(Value::Float(0.4)));
-    assert_eq!(vm.get(second, "LastDelta"), Some(Value::Float(0.4)));
+    assert_eq!(vm.store.get(first, "Seen"), Some(Value::Int(0)));
+    assert_eq!(vm.store.get(second, "Seen"), Some(Value::Int(1)));
+    assert_eq!(vm.store.get(first, "LastDelta"), Some(Value::Float(0.4)));
+    assert_eq!(vm.store.get(second, "LastDelta"), Some(Value::Float(0.4)));
 }

@@ -135,7 +135,7 @@ impl<L: LoaderRef> Vm<L> {
     fn each_live_actor(&mut self, event: &str) -> Result<(), Error> {
         let actors: Vec<ObjectId> = self.actors().collect();
         for actor in actors {
-            if !self.is_deleted(actor) {
+            if !self.store.is_deleted(actor) {
                 self.event(actor, event, Vec::new())?;
             }
         }
@@ -146,23 +146,23 @@ impl<L: LoaderRef> Vm<L> {
         let actors: Vec<ObjectId> = self.actors().collect();
         let mut errors = Vec::new();
         for actor in actors {
-            if !self.is_deleted(actor)
+            if !self.store.is_deleted(actor)
                 && let Err(e) = self.event(actor, "PostLoadGame", Vec::new())
             {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
         }
         errors
     }
 
     fn is_transient_object(&self, object: ObjectId) -> bool {
-        let object = self.object(object);
-        object.path.starts_with(TRANSIENT) && object.class.is_some_and(|class| !self.class(class).is_actor())
+        let object = self.store.object(object);
+        object.path.starts_with(TRANSIENT) && object.class.is_some_and(|class| !self.store.class(class).is_actor())
     }
 
     fn object_refs(&mut self, object: ObjectId, out: &mut Vec<ObjectId>) {
-        let Some(class) = self.object(object).class else { return };
-        let layout = self.class(class).mem;
+        let Some(class) = self.store.object(object).class else { return };
+        let layout = self.store.class(class).mem;
         let mut mem = std::mem::take(&mut self.store.objects[object.0 as usize].mem);
         self.store.memory.visit_refs(layout, &mut mem, &mut |shape, word| {
             if shape == Shape::Object
@@ -203,9 +203,9 @@ impl<L: LoaderRef> Vm<L> {
         let mut saved: Vec<ObjectId> = self
             .object_ids()
             .filter(|&o| {
-                let object = self.object(o);
+                let object = self.store.object(o);
                 match object.class {
-                    Some(class) if self.class(class).is_actor() => self.store.actor_ids.contains(&o) && !self.is_deleted(o),
+                    Some(class) if self.store.class(class).is_actor() => self.store.actor_ids.contains(&o) && !self.store.is_deleted(o),
                     Some(_) => object.path.to_ascii_lowercase().starts_with(&map_prefix),
                     None => false,
                 }
@@ -233,7 +233,7 @@ impl<L: LoaderRef> Vm<L> {
         let count = saved.len() as u32;
         let mut name_of = |vm: &Self, name: NameId| {
             *name_index.entry(name).or_insert_with(|| {
-                names.push(vm.name(name).to_owned());
+                names.push(vm.store.name(name).to_owned());
                 names.len() as u32 - 1
             })
         };
@@ -242,22 +242,22 @@ impl<L: LoaderRef> Vm<L> {
             if let Some(&i) = index.get(&object) {
                 return i + 1;
             }
-            let found = vm.object(object);
-            if found.path.starts_with(TRANSIENT) || found.class.is_some_and(|class| vm.class(class).is_actor()) {
+            let found = vm.store.object(object);
+            if found.path.starts_with(TRANSIENT) || found.class.is_some_and(|class| vm.store.class(class).is_actor()) {
                 return 0;
             }
             count
                 + 1
                 + *external_index.entry(object).or_insert_with(|| {
-                    externals.push((found.path.clone(), vm.name(found.class_name).to_owned()));
+                    externals.push((found.path.clone(), vm.store.name(found.class_name).to_owned()));
                     externals.len() as u32 - 1
                 })
         };
         let mut objects = Vec::with_capacity(saved.len());
         for &o in &saved {
-            let Some(class) = self.object(o).class else { continue };
-            let mut mem = self.object(o).mem.clone();
-            self.store.memory.visit_refs(self.class(class).mem, &mut mem, &mut |shape, word| {
+            let Some(class) = self.store.object(o).class else { continue };
+            let mut mem = self.store.object(o).mem.clone();
+            self.store.memory.visit_refs(self.store.class(class).mem, &mut mem, &mut |shape, word| {
                 *word = match shape {
                     Shape::Object => reference(self, memory::object(*word)),
                     _ => name_of(self, NameId(*word)),
@@ -274,10 +274,10 @@ impl<L: LoaderRef> Vm<L> {
                 finish_interpolation: reference(self, s.finish_interpolation),
                 latent_move: s.latent_move,
             });
-            let class = self.class(class);
+            let class = self.store.class(class);
             objects.push(SavedObject {
-                path: self.object(o).path.clone(),
-                class: format!("{}.{}", self.loader.package(class.package).name, self.name(class.name)),
+                path: self.store.object(o).path.clone(),
+                class: format!("{}.{}", self.loader.package(class.package).name, self.store.name(class.name)),
                 mem,
                 state,
                 probes_disabled: self.script.states.probes_disabled.get(&o).copied().unwrap_or(0),
@@ -308,7 +308,7 @@ impl<L: LoaderRef> Vm<L> {
                 .starts_with(&map_prefix)
                 .then(|| self.store.object_ids.get(&key).copied())
                 .flatten()
-                .filter(|&o| self.object(o).class == Some(class));
+                .filter(|&o| self.store.object(o).class == Some(class));
             ids.push(Some(existing.unwrap_or_else(|| {
                 let name = saved.path.rsplit('.').next().unwrap_or(&saved.path);
                 let free = !self.store.object_ids.contains_key(&format!("{TRANSIENT}{name}").to_ascii_lowercase());
@@ -327,15 +327,15 @@ impl<L: LoaderRef> Vm<L> {
         let name = |word: u32| names.get(word as usize).copied().unwrap_or(NameId::NONE);
         for (saved, &id) in save.objects.iter().zip(&ids) {
             let Some(id) = id else { continue };
-            let Some(class) = self.object(id).class else { continue };
-            let defaults = &self.class(class).defaults;
-            let layout = self.class(class).mem;
+            let Some(class) = self.store.object(id).class else { continue };
+            let defaults = &self.store.class(class).defaults;
+            let layout = self.store.class(class).mem;
             if saved.mem.words.len() != defaults.words.len() || saved.mem.heap.len() != defaults.heap.len() || !self.store.memory.arrays_fit(layout, &saved.mem) {
                 self.diagnostics.log.push(format!("Load: {} does not match its class {}, skipped", saved.path, saved.class));
                 continue;
             }
             let mut mem = saved.mem.clone();
-            self.store.memory.visit_refs(self.class(class).mem, &mut mem, &mut |shape, word| {
+            self.store.memory.visit_refs(self.store.class(class).mem, &mut mem, &mut |shape, word| {
                 *word = match shape {
                     Shape::Object => reference(*word),
                     _ => name(*word).0,
@@ -352,7 +352,7 @@ impl<L: LoaderRef> Vm<L> {
         let restored: HashSet<ObjectId> = ids.iter().flatten().copied().collect();
         for actor in map_actors {
             if !restored.contains(&actor) {
-                self.set(actor, Prop::bDeleteMe, Value::Bool(true));
+                self.store.set(actor, Prop::bDeleteMe, Value::Bool(true));
                 self.store.actor_ids.remove(&actor);
                 self.store.dynamic_ids.removed(actor);
             }
@@ -361,11 +361,11 @@ impl<L: LoaderRef> Vm<L> {
         self.url_options.clone_from(&save.options);
         self.media.subtitle_sounds = crate::util_natives::SubtitleSounds::default();
         if !self.url_options.iter().any(|option| option.to_ascii_lowercase().starts_with("game="))
-            && let Some(game) = self.level.and_then(|level| self.object_of(level, Prop::Game))
-            && let Some(class) = self.object(game).class
+            && let Some(game) = self.level.and_then(|level| self.store.object_of(level, Prop::Game))
+            && let Some(class) = self.store.object(game).class
         {
-            let class = self.class(class);
-            self.url_options.push(format!("Game={}.{}", self.loader.package(class.package).name, self.name(class.name)));
+            let class = self.store.class(class);
+            self.url_options.push(format!("Game={}.{}", self.loader.package(class.package).name, self.store.name(class.name)));
         }
         Ok(())
     }
@@ -376,7 +376,7 @@ impl<L: LoaderRef> Vm<L> {
             (export < vm.loader.package(id).package.exports.len()).then_some((id, export))
         };
         let (Some(state), Some(code_state)) = (export(self, &saved.state), export(self, &saved.code_state)) else {
-            self.diagnostics.log.push(format!("Load: state of {} not found", self.object(object).path));
+            self.diagnostics.log.push(format!("Load: state of {} not found", self.store.object(object).path));
             return;
         };
         let key = self.state_key(state);

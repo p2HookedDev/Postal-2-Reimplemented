@@ -8,7 +8,7 @@ const PHYS_KARMA_RAGDOLL: u8 = 14;
 
 impl Dude<'_> {
     fn physics(&self, actor: ObjectId) -> u8 {
-        match self.vm.get(actor, "Physics") {
+        match self.vm.store.get(actor, "Physics") {
             Some(Value::Byte(b)) => b,
             other => panic!("Physics {other:?}"),
         }
@@ -18,7 +18,7 @@ impl Dude<'_> {
         let shotgun = self.item("ShotGunWeapon");
         self.pick("ShotGunWeapon");
         for _ in 0..90 {
-            if object_of(&self.vm, self.pawn, "Weapon") == Some(shotgun) && self.vm.name(self.vm.state_name(shotgun)) == "Idle" {
+            if object_of(&self.vm, self.pawn, "Weapon") == Some(shotgun) && self.vm.store.name(self.vm.state_name(shotgun)) == "Idle" {
                 return;
             }
             self.frames(1, &[]);
@@ -31,7 +31,7 @@ impl Dude<'_> {
         let pawn = self
             .vm
             .actors()
-            .filter(|&a| a != self.pawn && self.vm.is_a(a, "P2MoCapPawn") && !self.vm.is_deleted(a))
+            .filter(|&a| a != self.pawn && self.vm.store.is_a(a, "P2MoCapPawn") && !self.vm.store.is_deleted(a))
             .filter(|&a| object_of(&self.vm, a, "Controller").is_some() && self.float(a, "Health") > 0.0)
             .min_by(|&a, &b| {
                 let d = |p: ObjectId| {
@@ -54,11 +54,11 @@ impl Dude<'_> {
             })
             .expect("a free direction");
         let rotation = Value::Rotator(p2_math::Rotator::new(0, yaw, 0));
-        self.vm.set(self.controller, "Rotation", rotation.clone());
-        self.vm.set(self.pawn, "Rotation", rotation);
+        self.vm.store.set(self.controller, "Rotation", rotation.clone());
+        self.vm.store.set(self.pawn, "Rotation", rotation);
         let d = direction(yaw);
         self.vm.place_far_moved(pawn, [me[0] + d[0] * distance, me[1] + d[1] * distance, me[2]].into(), Encroachment::Ignored).unwrap();
-        self.vm.set(pawn, "Rotation", Value::Rotator(p2_math::Rotator::new(0, yaw + 32768, 0)));
+        self.vm.store.set(pawn, "Rotation", Value::Rotator(p2_math::Rotator::new(0, yaw + 32768, 0)));
         self.vm.mark_rendered(pawn).unwrap();
         (pawn, d)
     }
@@ -92,11 +92,11 @@ fn shot_bystander_ragdolls_falls_and_rests() {
         "no ragdoll: health {}, physics {}, state {}, KParams {:?}; log {karma_log:?}",
         dude.float(victim, "Health"),
         dude.physics(victim),
-        dude.vm.name(dude.vm.state_name(victim)),
-        object_of(&dude.vm, victim, "KParams").map(|k| dude.vm.object(k).path.clone())
+        dude.vm.store.name(dude.vm.state_name(victim)),
+        object_of(&dude.vm, victim, "KParams").map(|k| dude.vm.store.object(k).path.clone())
     );
     let params = object_of(&dude.vm, victim, "KParams").expect("KParams");
-    let skeleton = dude.vm.get(params, "KSkeleton");
+    let skeleton = dude.vm.store.get(params, "KSkeleton");
     assert!(matches!(skeleton, Some(Value::Name(_))), "KSkeleton {skeleton:?}");
     let bones = dude.vm.ragdoll_pose(victim).expect("a ragdoll pose").len();
     let died_at = dude.vector(victim, "Location");
@@ -169,7 +169,7 @@ fn monday_kills_frame_spikes() {
     dude.ready_shotgun();
     let mut frames: Vec<(usize, std::time::Duration, String, Vec<(String, std::time::Duration)>)> = Vec::new();
     let frame = |frames: &mut Vec<_>, dude: &mut Dude, keys: &[&str], event: String| {
-        for pawn in dude.vm.actors().filter(|&a| dude.vm.is_a(a, "Pawn") && !dude.vm.is_deleted(a)).collect::<Vec<_>>() {
+        for pawn in dude.vm.actors().filter(|&a| dude.vm.store.is_a(a, "Pawn") && !dude.vm.store.is_deleted(a)).collect::<Vec<_>>() {
             dude.vm.mark_rendered(pawn).unwrap();
         }
         dude.vm.diagnostics.tick_profile = Some(Default::default());

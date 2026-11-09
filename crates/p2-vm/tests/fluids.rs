@@ -11,7 +11,7 @@ impl<'a> Dude<'a> {
         let mut dude = Self::playing(loader, dir);
         for _ in 0..300 {
             dude.frames(1, &[]);
-            if dude.vm.name(dude.vm.state_name(dude.controller)) != "PlayerPrepSave" {
+            if dude.vm.store.name(dude.vm.state_name(dude.controller)) != "PlayerPrepSave" {
                 break;
             }
         }
@@ -20,8 +20,8 @@ impl<'a> Dude<'a> {
     }
 
     fn weapon(&self) -> (String, String) {
-        match self.vm.get(self.pawn, "Weapon") {
-            Some(Value::Object(Some(w))) => (self.vm.name(self.vm.object(w).class_name).to_owned(), self.vm.name(self.vm.state_name(w)).to_owned()),
+        match self.vm.store.get(self.pawn, "Weapon") {
+            Some(Value::Object(Some(w))) => (self.vm.store.name(self.vm.store.object(w).class_name).to_owned(), self.vm.store.name(self.vm.state_name(w)).to_owned()),
             _ => (String::new(), String::new()),
         }
     }
@@ -38,16 +38,16 @@ impl<'a> Dude<'a> {
     }
 
     fn live(&self, class: &str) -> Vec<ObjectId> {
-        self.vm.actors().filter(|&a| self.vm.is_a(a, class) && !self.vm.is_deleted(a)).collect()
+        self.vm.actors().filter(|&a| self.vm.store.is_a(a, class) && !self.vm.store.is_deleted(a)).collect()
     }
 
     fn flag(&self, object: ObjectId, property: &str) -> bool {
-        self.vm.get(object, property) == Some(Value::Bool(true))
+        self.vm.store.get(object, property) == Some(Value::Bool(true))
     }
 
     fn look_down(&mut self, pitch: i32) {
         let rotation = Value::Rotator(p2_math::Rotator::new(65536 - pitch, 0, 0));
-        self.vm.set(self.controller, "Rotation", rotation);
+        self.vm.store.set(self.controller, "Rotation", rotation);
     }
 }
 
@@ -72,7 +72,7 @@ fn urine_streams_to_the_floor_and_makes_a_growing_puddle() {
     let reach = (hit[0] - at[0]).hypot(hit[1] - at[1]);
     assert!((hit[2] - feet).abs() < 20.0 && (20.0..600.0).contains(&reach), "the stream lands at {hit:?}, the dude stands at {at:?}");
     let splash = *dude.live("UrineSplashEmitter").first().expect("no splash");
-    let splash_emitter = match dude.vm.get(splash, "Emitters") {
+    let splash_emitter = match dude.vm.store.get(splash, "Emitters") {
         Some(Value::Array(e)) => match e[0] {
             Value::Object(Some(e)) => e,
             _ => panic!("no splash emitter"),
@@ -114,6 +114,6 @@ fn gasoline_pours_and_a_match_lights_it() {
         }
     }
     assert!(lit.is_some(), "the match did not light the gas");
-    assert!(!dude.live("FirePuddle").is_empty() || dude.vm.actors().any(|a| dude.vm.is_a(a, "FirePuddle")), "no fire puddle");
+    assert!(!dude.live("FirePuddle").is_empty() || dude.vm.actors().any(|a| dude.vm.store.is_a(a, "FirePuddle")), "no fire puddle");
     assert!(dude.vm.diagnostics.missing_natives.is_empty(), "missing natives {:?}", dude.vm.diagnostics.missing_natives);
 }

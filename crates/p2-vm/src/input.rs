@@ -126,7 +126,7 @@ impl<L: LoaderRef> Vm<L> {
     pub fn player_view(&mut self) -> Result<Option<PlayerView>, Error> {
         let Some(player) = self.host.input.player else { return Ok(None) };
         let Some(function) = self.find_object_function(player, "PlayerCalcView")? else { return Ok(None) };
-        let Some(class) = self.object(player).class else { return Ok(None) };
+        let Some(class) = self.store.object(player).class else { return Ok(None) };
         let args = vec![Value::Object(None), Value::Vector(Vector::ZERO), Value::Rotator([0; 3].into())];
         let (_, out) = self.run(&function, Some(player), class, args)?;
         let actor = match out.first() {
@@ -135,7 +135,7 @@ impl<L: LoaderRef> Vm<L> {
         };
         let location = crate::natives::vec3(out.get(1));
         let rotation = crate::natives::rot3(out.get(2));
-        Ok(Some(PlayerView { actor, location, rotation, behind: self.flag_of(player, Prop::bBehindView) }))
+        Ok(Some(PlayerView { actor, location, rotation, behind: self.store.flag_of(player, Prop::bBehindView) }))
     }
 
     /// An actor on a bone of a skeletal base is drawn by its base, through the same filter (unverified),
@@ -156,28 +156,28 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn bone_base(&self, actor: ObjectId) -> Option<ObjectId> {
-        let base = self.object_of(actor, Prop::Base)?;
-        let on_bone = matches!(self.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE);
+        let base = self.store.object_of(actor, Prop::Base)?;
+        let on_bone = matches!(self.store.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE);
         (on_bone && self.skeletal_mesh(base).is_some()).then_some(base)
     }
 
     fn filtered_alone(&self, actor: ObjectId, view: Option<&PlayerView>) -> bool {
-        if self.flag_of(actor, Prop::bHidden) {
+        if self.store.flag_of(actor, Prop::bHidden) {
             return true;
         }
         let viewer = view.and_then(|view| view.actor);
         if viewer.is_some_and(|viewer| self.is_owned_by(actor, viewer)) {
-            self.flag_of(actor, Prop::bOwnerNoSee) && !view.is_some_and(|view| view.behind)
+            self.store.flag_of(actor, Prop::bOwnerNoSee) && !view.is_some_and(|view| view.behind)
         } else {
-            self.flag_of(actor, Prop::bOnlyOwnerSee)
+            self.store.flag_of(actor, Prop::bOnlyOwnerSee)
         }
     }
 
     pub(crate) fn set_player(&mut self, controller: ObjectId) -> Result<(), Error> {
         self.host.input.player = Some(controller);
         if let Some(viewport) = self.viewport() {
-            self.set(controller, Prop::Player, Value::Object(Some(viewport)));
-            self.set(viewport, Prop::Actor, Value::Object(Some(controller)));
+            self.store.set(controller, Prop::Player, Value::Object(Some(viewport)));
+            self.store.set(viewport, Prop::Actor, Value::Object(Some(controller)));
         }
         self.host.input.held.clear();
         self.event(controller, "InitInputSystem", Vec::new())
@@ -240,7 +240,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn player_tick(&mut self, controller: ObjectId, delta: f32) -> Result<(), Error> {
-        let has_input = |vm: &Self| vm.object_of(controller, Prop::PlayerInput).is_some();
+        let has_input = |vm: &Self| vm.store.object_of(controller, Prop::PlayerInput).is_some();
         if !has_input(self) {
             self.event(controller, "InitInputSystem", Vec::new())?;
             if !has_input(self) {
@@ -265,9 +265,9 @@ impl<L: LoaderRef> Vm<L> {
             Some(delta) if delta > 0.0 => AXIS_RATE / delta,
             _ => 0.0,
         };
-        let Some(class) = self.object(controller).class else { return Ok(()) };
-        let layout = Arc::clone(&self.class(class).layout);
-        let fields = &self.store.memory.get(self.class(class).mem).fields;
+        let Some(class) = self.store.object(controller).class else { return Ok(()) };
+        let layout = Arc::clone(&self.store.class(class).layout);
+        let fields = &self.store.memory.get(self.store.class(class).mem).fields;
         let words = &mut self.store.objects[controller.0 as usize].mem.words;
         for (property, field) in layout.properties.iter().zip(fields) {
             if property.flags & CPF_INPUT != 0
@@ -315,7 +315,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.input_exec(controller, command, action, delta)? {
             return Ok(true);
         }
-        let object = |vm: &Self, of: Option<ObjectId>, name: Prop| of.and_then(|o| vm.object_of(o, name));
+        let object = |vm: &Self, of: Option<ObjectId>, name: Prop| of.and_then(|o| vm.store.object_of(o, name));
         let pawn = object(self, Some(controller), Prop::Pawn);
         let targets = [
             object(self, self.level, Prop::Game),
@@ -348,13 +348,13 @@ impl<L: LoaderRef> Vm<L> {
     fn run_input_command(&mut self, controller: ObjectId, command: &str, input: &InputCommand, action: Action, delta: f32) -> Result<bool, Error> {
         match *input {
             InputCommand::Byte { kind, ref name } => {
-                let pawn = self.object_of(controller, Prop::Pawn).filter(|_| matches!(kind, "BUTTON" | "PULSE"));
+                let pawn = self.store.object_of(controller, Prop::Pawn).filter(|_| matches!(kind, "BUTTON" | "PULSE"));
                 let found = [Some(controller), pawn].into_iter().flatten().find_map(|o| self.input_slot(o, name, &Type::Byte).map(|i| (o, i)));
                 let Some((object, index)) = found else {
                     self.diagnostics.log.push(format!("{command} Bad {kind} command"));
                     return Ok(true);
                 };
-                let Some(Value::Byte(value)) = self.property_at(object, index) else { return Ok(true) };
+                let Some(Value::Byte(value)) = self.store.property_at(object, index) else { return Ok(true) };
                 let new = match (kind, action) {
                     ("BUTTON" | "PULSE", Action::Press) => Some(1),
                     ("BUTTON", Action::Release) if value != 0 => Some(0),
@@ -363,7 +363,7 @@ impl<L: LoaderRef> Vm<L> {
                     _ => None,
                 };
                 if let Some(new) = new {
-                    self.set_property_at(object, index, Value::Byte(new));
+                    self.store.set_property_at(object, index, Value::Byte(new));
                 }
                 Ok(true)
             }
@@ -378,8 +378,8 @@ impl<L: LoaderRef> Vm<L> {
                     Action::Hold => delta * speed * invert,
                     Action::Press | Action::Release => 0.0,
                 };
-                if let Some(Value::Float(value)) = self.property_at(controller, index) {
-                    self.set_property_at(controller, index, Value::Float(value + added));
+                if let Some(Value::Float(value)) = self.store.property_at(controller, index) {
+                    self.store.set_property_at(controller, index, Value::Float(value + added));
                 }
                 Ok(true)
             }
@@ -398,15 +398,15 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn input_slot(&self, object: ObjectId, name: &str, ty: &Type) -> Option<usize> {
-        let class = self.object(object).class?;
-        self.class(class).layout.properties.iter().position(|f| {
+        let class = self.store.object(object).class?;
+        self.store.class(class).layout.properties.iter().position(|f| {
             f.flags & CPF_INPUT != 0 && f.name.eq_ignore_ascii_case(name) && std::mem::discriminant(&f.ty) == std::mem::discriminant(ty)
         })
     }
 
     /// The last string parameter takes the line's rest; a missing required one logs and calls nothing.
     fn script_console_exec(&mut self, object: ObjectId, command: &str) -> Result<bool, Error> {
-        let Some(class) = self.object(object).class else { return Ok(false) };
+        let Some(class) = self.store.object(object).class else { return Ok(false) };
         let (name, mut rest) = split_word(command);
         let Some(function) = self.find_object_function(object, name)? else { return Ok(false) };
         if function.flags & FUNC_EXEC == 0 {

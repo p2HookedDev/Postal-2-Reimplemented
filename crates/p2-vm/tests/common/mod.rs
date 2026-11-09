@@ -70,14 +70,14 @@ pub fn load_suburbs(dir: &Path) -> Loader {
 }
 
 pub fn vector(vm: &Vm<&Loader>, object: ObjectId, property: &str) -> [f32; 3] {
-    match vm.get(object, property) {
+    match vm.store.get(object, property) {
         Some(Value::Vector(v)) => <[f32; 3]>::from(v),
         _ => [0.0; 3],
     }
 }
 
 pub fn object_of(vm: &Vm<&Loader>, object: ObjectId, property: &str) -> Option<ObjectId> {
-    match vm.get(object, property) {
+    match vm.store.get(object, property) {
         Some(Value::Object(found)) => found,
         _ => None,
     }
@@ -128,7 +128,7 @@ impl<'a> Dude<'a> {
     }
 
     pub fn float(&self, object: ObjectId, property: &str) -> f32 {
-        match self.vm.get(object, property) {
+        match self.vm.store.get(object, property) {
             Some(Value::Float(v)) => v,
             Some(Value::Int(v)) => v as f32,
             other => panic!("{property}: {other:?}"),
@@ -136,7 +136,7 @@ impl<'a> Dude<'a> {
     }
 
     pub fn vector(&self, object: ObjectId, property: &str) -> [f32; 3] {
-        match self.vm.get(object, property) {
+        match self.vm.store.get(object, property) {
             Some(Value::Vector(v)) => <[f32; 3]>::from(v),
             other => panic!("{property}: {other:?}"),
         }
@@ -146,7 +146,7 @@ impl<'a> Dude<'a> {
         let mut next = object_of(&self.vm, self.pawn, "Inventory");
         for _ in 0..500 {
             let Some(item) = next else { break };
-            if self.vm.name(self.vm.object(item).class_name).eq_ignore_ascii_case(class) {
+            if self.vm.store.name(self.vm.store.object(item).class_name).eq_ignore_ascii_case(class) {
                 return item;
             }
             next = object_of(&self.vm, item, "Inventory");
@@ -156,10 +156,10 @@ impl<'a> Dude<'a> {
 
     pub fn pick(&mut self, class: &str) {
         let weapon = self.item(class);
-        self.vm.set(self.pawn, "PendingWeapon", Value::Object(Some(weapon)));
+        self.vm.store.set(self.pawn, "PendingWeapon", Value::Object(Some(weapon)));
         let current = object_of(&self.vm, self.pawn, "Weapon").expect("a weapon in hand");
         let put_down = self.vm.find_object_function(current, "PutDown").unwrap().unwrap();
-        let class = self.vm.object(current).class.unwrap();
+        let class = self.vm.store.object(current).class.unwrap();
         self.vm.call(&put_down, Some(current), class, Vec::new()).unwrap();
     }
 }

@@ -39,7 +39,7 @@ fn input(frame: usize) -> (Vec<&'static str>, [f32; 2]) {
 fn frame(vm: &mut Vm<&Loader>, player: ObjectId, frame: usize, out: Option<&mut String>) {
     let (keys, mouse) = input(frame);
     vm.player_input(&keys, mouse).unwrap();
-    for pawn in vm.actors().filter(|&a| vm.is_a(a, "Pawn") && !vm.is_deleted(a)).collect::<Vec<_>>() {
+    for pawn in vm.actors().filter(|&a| vm.store.is_a(a, "Pawn") && !vm.store.is_deleted(a)).collect::<Vec<_>>() {
         vm.mark_rendered(pawn).unwrap();
     }
     let errors = vm.tick_level(1.0 / 30.0);
@@ -60,7 +60,7 @@ fn frame(vm: &mut Vm<&Loader>, player: ObjectId, frame: usize, out: Option<&mut 
 }
 
 fn slot(vm: &Vm<&Loader>, object: ObjectId, index: usize) -> Option<Value> {
-    vm.property_at(object, index)
+    vm.store.property_at(object, index)
 }
 
 fn int(value: &Value) -> i32 {
@@ -100,11 +100,11 @@ fn typed(vm: &Vm<&Loader>, ty: &Type, dim: u32, value: Option<&Value>, out: &mut
             write!(out, "{f:?}").unwrap();
         }
         Type::Object | Type::Class => match value {
-            Some(Value::Object(Some(o))) => out.push_str(&vm.object(*o).path),
+            Some(Value::Object(Some(o))) => out.push_str(&vm.store.object(*o).path),
             _ => out.push_str("None"),
         },
         Type::Name => match value {
-            Some(Value::Name(n)) => out.push_str(vm.name(*n)),
+            Some(Value::Name(n)) => out.push_str(vm.store.name(*n)),
             _ => out.push_str("None"),
         },
         Type::Str | Type::String => match value {
@@ -141,7 +141,7 @@ fn typed(vm: &Vm<&Loader>, ty: &Type, dim: u32, value: Option<&Value>, out: &mut
         }
         Type::Delegate => match value {
             Some(Value::Delegate { object, function }) => {
-                write!(out, "{}.{}", object.map_or("None", |o| vm.object(o).path.as_str()), vm.name(*function)).unwrap();
+                write!(out, "{}.{}", object.map_or("None", |o| vm.store.object(o).path.as_str()), vm.store.name(*function)).unwrap();
             }
             _ => out.push_str("None.None"),
         },
@@ -152,18 +152,18 @@ fn typed(vm: &Vm<&Loader>, ty: &Type, dim: u32, value: Option<&Value>, out: &mut
 fn dump(vm: &mut Vm<&Loader>, out: &mut String) {
     let level = vm.level().unwrap();
     for field in ["Year", "Month", "Day", "DayOfWeek", "Hour", "Minute", "Second", "Millisecond"] {
-        vm.set(level, field, Value::Int(0));
+        vm.store.set(level, field, Value::Int(0));
     }
-    for object in vm.object_ids().filter(|&o| vm.is_a(o, "GameState") || vm.is_a(o, "GameInfo")).collect::<Vec<_>>() {
+    for object in vm.object_ids().filter(|&o| vm.store.is_a(o, "GameState") || vm.store.is_a(o, "GameInfo")).collect::<Vec<_>>() {
         for field in ["TimeStart", "TimeStop", "PreTravelTime", "PostTravelTime"] {
-            vm.set(object, field, Value::Struct(vec![Value::Float(0.0); 3]));
+            vm.store.set(object, field, Value::Struct(vec![Value::Float(0.0); 3]));
         }
     }
     for o in vm.object_ids() {
-        let object = vm.object(o);
-        write!(out, "{} {} state={}", object.path, vm.name(object.class_name), vm.name(vm.state_name(o))).unwrap();
+        let object = vm.store.object(o);
+        write!(out, "{} {} state={}", object.path, vm.store.name(object.class_name), vm.store.name(vm.state_name(o))).unwrap();
         if let Some(class) = object.class {
-            let layout = std::sync::Arc::clone(&vm.class(class).layout);
+            let layout = std::sync::Arc::clone(&vm.store.class(class).layout);
             for (i, field) in layout.properties.iter().enumerate() {
                 write!(out, " {}=", field.name).unwrap();
                 typed(vm, &field.ty, field.array_dim, slot(vm, o, i).as_ref(), out);
@@ -283,7 +283,7 @@ fn equivalence_bench() {
     vm.diagnostics.count_work = false;
     let counts: Vec<String> = vm.take_work_counts().into_iter().map(|(work, n)| format!("{work} {}", n / 60)).collect();
     eprintln!("BENCH work per frame: {counts:?}");
-    let actors: Vec<ObjectId> = vm.actors().filter(|&a| !vm.is_deleted(a)).collect();
+    let actors: Vec<ObjectId> = vm.actors().filter(|&a| !vm.store.is_deleted(a)).collect();
     let reads = |what: &str, read: &dyn Fn(ObjectId) -> f32| {
         let started = std::time::Instant::now();
         let mut sink = 0.0;
@@ -302,13 +302,13 @@ fn equivalence_bench() {
             _ => 0.0,
         }
     }
-    reads("bool (get by Prop)", &|a| number(vm.get(a, p2_vm::Prop::bHidden)));
-    reads("is_deleted", &|a| f32::from(u8::from(vm.is_deleted(a))));
-    reads("location", &|a| vm.location(a)[0]);
-    reads("rotation", &|a| vm.rotation(a)[1] as f32);
-    reads("float by name", &|a| number(vm.get(a, "CollisionRadius")));
+    reads("bool (get by Prop)", &|a| number(vm.store.get(a, p2_vm::Prop::bHidden)));
+    reads("is_deleted", &|a| f32::from(u8::from(vm.store.is_deleted(a))));
+    reads("location", &|a| vm.store.location(a)[0]);
+    reads("rotation", &|a| vm.store.rotation(a)[1] as f32);
+    reads("float by name", &|a| number(vm.store.get(a, "CollisionRadius")));
     if let Some(function) = vm.find_object_function(player, "PlayerCalcView").unwrap() {
-        let class = vm.object(player).class.unwrap();
+        let class = vm.store.object(player).class.unwrap();
         let started = std::time::Instant::now();
         for _ in 0..2000 {
             let args = vec![Value::Object(None), Value::Vector(p2_math::Vector::ZERO), Value::Rotator(p2_math::Rotator::ZERO)];

@@ -132,13 +132,13 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn find_object_function_id(&mut self, object: ObjectId, name: NameId) -> Result<Option<Arc<Function>>, Error> {
-        let Some(class) = self.object(object).class else { return Ok(None) };
+        let Some(class) = self.store.object(object).class else { return Ok(None) };
         let start = self.script.states.objects.get(&object).map(|s| s.state);
         if let Some(found) = self.script.lookups.functions.get(&(class, start, name)) {
             return Ok(found.clone());
         }
         self.count(crate::profiling::Work::FunctionSearch);
-        let text = self.name(name).to_owned();
+        let text = self.store.name(name).to_owned();
         let mut found = None;
         let mut state = start;
         while let Some((package, export)) = state {
@@ -156,7 +156,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn goto_state(&mut self, object: ObjectId, state: NameId, label: NameId) -> Result<(), Error> {
-        let Some(class) = self.object(object).class else { return Ok(()) };
+        let Some(class) = self.store.object(object).class else { return Ok(()) };
         let auto = state == self.script.lookups.class_names.auto;
         let (target, state) = if auto {
             match self.auto_state(class)? {
@@ -168,7 +168,7 @@ impl<L: LoaderRef> Vm<L> {
         } else {
             let found = self.class_state(class, state)?;
             if found.is_none() {
-                let line = format!("Attempt to go to non-existent state {}", self.name(state));
+                let line = format!("Attempt to go to non-existent state {}", self.store.name(state));
                 self.diagnostics.log.push(line);
                 return Ok(());
             }
@@ -323,12 +323,12 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(&found) = self.script.lookups.class_states.get(&(class, name)) {
             return Ok(found);
         }
-        let text = self.name(name).to_owned();
+        let text = self.store.name(name).to_owned();
         let mut found = None;
         let mut current = Some(class);
         while let (None, Some(class)) = (found, current) {
-            found = self.find_child(self.class(class).package, self.class(class).export, &text, true)?;
-            current = self.class(class).super_class;
+            found = self.find_child(self.store.class(class).package, self.store.class(class).export, &text, true)?;
+            current = self.store.class(class).super_class;
         }
         self.script.lookups.class_states.insert((class, name), found);
         Ok(found)
@@ -341,7 +341,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut found = None;
         let mut current = Some(class);
         'chain: while let Some(of) = current {
-            let (package, export) = (self.class(of).package, self.class(of).export);
+            let (package, export) = (self.store.class(of).package, self.store.class(of).export);
             let states: Vec<(String, (PackageId, usize))> = self
                 .children_of(package, export)?
                 .iter()
@@ -357,7 +357,7 @@ impl<L: LoaderRef> Vm<L> {
                     break 'chain;
                 }
             }
-            current = self.class(of).super_class;
+            current = self.store.class(of).super_class;
         }
         self.script.lookups.auto_states.insert(class, found);
         Ok(found)
@@ -383,7 +383,7 @@ impl<L: LoaderRef> Vm<L> {
             self.count(crate::profiling::Work::EventNoFunction);
             return Ok(());
         };
-        let Some(class) = self.object(object).class else { return Ok(()) };
+        let Some(class) = self.store.object(object).class else { return Ok(()) };
         self.call(&function, Some(object), class, args).map(drop)
     }
 

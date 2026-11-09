@@ -252,7 +252,7 @@ impl<L: LoaderRef> Code<L> {
                 let place = self.place(whole);
                 expr_fn(move |code, vm, frame, context| {
                     if let Some(object) = context
-                        && let Some(class) = vm.object(object).class
+                        && let Some(class) = vm.store.object(object).class
                         && let Some(Some(index)) = linked(frame, link).and_then(|value| member_of_link(value, class))
                     {
                         return Ok(vm.read_instance(object, class, index));
@@ -340,7 +340,7 @@ impl<L: LoaderRef> Code<L> {
                 let whole = whole.clone();
                 place_fn(move |_, vm, frame, context| {
                     if let Some(object) = context
-                        && let Some(class) = vm.object(object).class
+                        && let Some(class) = vm.store.object(object).class
                         && let Some(Some(index)) = linked(frame, link).and_then(|value| member_of_link(value, class))
                     {
                         return Ok(vm.instance_target(object, class, index));
@@ -555,7 +555,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn read_instance(&self, object: ObjectId, class: ClassId, index: usize) -> Value {
         let memory = &self.store.memory;
-        memory.get(self.class(class).mem).fields.get(index).map_or(Value::Int(0), |field| memory.read_field(field, &self.object(object).mem))
+        memory.get(self.store.class(class).mem).fields.get(index).map_or(Value::Int(0), |field| memory.read_field(field, &self.store.object(object).mem))
     }
 }
 

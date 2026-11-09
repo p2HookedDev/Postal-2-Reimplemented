@@ -159,23 +159,23 @@ pub(super) struct FluidActor {
 
 pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> Option<FluidActor> {
     use p2_vm::Value;
-    if !vm.is_a(actor, "FluidSurfaceInfo") {
+    if !vm.store.is_a(actor, "FluidSurfaceInfo") {
         return None;
     }
-    let float = |object: ObjectId, name: &str, default: f32| match vm.get(object, name) {
+    let float = |object: ObjectId, name: &str, default: f32| match vm.store.get(object, name) {
         Some(Value::Float(value)) => value,
         _ => default,
     };
-    let byte = |object: ObjectId, name: &str, default: u8| match vm.get(object, name) {
+    let byte = |object: ObjectId, name: &str, default: u8| match vm.store.get(object, name) {
         Some(Value::Byte(value)) => value,
         _ => default,
     };
-    let int = |name: &str, default: i32| match vm.get(actor, name) {
+    let int = |name: &str, default: i32| match vm.store.get(actor, name) {
         Some(Value::Int(value)) => value,
         _ => default,
     };
     let d = FluidSettings::default();
-    let noise_strength = match vm.get(actor, "FluidNoiseStrength") {
+    let noise_strength = match vm.store.get(actor, "FluidNoiseStrength") {
         Some(Value::Struct(range)) => match range.as_slice() {
             [Value::Float(min), Value::Float(max), ..] => (*min, *max),
             _ => d.noise_strength,
@@ -203,24 +203,24 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
         warm_up_time: float(actor, "WarmUpTime", d.warm_up_time),
         update_rate: float(actor, "UpdateRate", d.update_rate),
     };
-    let clamp_bitmap = match vm.get(actor, "ClampBitmap") {
+    let clamp_bitmap = match vm.store.get(actor, "ClampBitmap") {
         Some(Value::Array(words)) => words.iter().map(|word| if let Value::Int(word) = word { *word } else { 0 }).collect(),
         _ => Vec::new(),
     };
-    let skin = match vm.get(actor, "Skins") {
+    let skin = match vm.store.get(actor, "Skins") {
         Some(Value::Array(skins)) => match skins.first() {
-            Some(Value::Object(Some(material))) => Some(vm.object(*material).path.clone()),
+            Some(Value::Object(Some(material))) => Some(vm.store.object(*material).path.clone()),
             _ => None,
         },
         _ => None,
     };
-    let location = vm.location(actor);
+    let location = vm.store.location(actor);
     let mut surface = FluidSurface::new(settings, location, clamp_bitmap, seed);
     surface.oscillators = vm
         .actors()
-        .filter(|&o| !vm.is_deleted(o) && vm.is_a(o, "FluidSurfaceOscillator") && vm.get(o, "FluidInfo") == Some(Value::Object(Some(actor))))
+        .filter(|&o| !vm.store.is_deleted(o) && vm.store.is_a(o, "FluidSurfaceOscillator") && vm.store.get(o, "FluidInfo") == Some(Value::Object(Some(actor))))
         .map(|o| FluidOscillator {
-            location: vm.location(o),
+            location: vm.store.location(o),
             frequency: float(o, "Frequency", 1.0),
             phase: byte(o, "Phase", 0),
             strength: float(o, "Strength", 10.0),
@@ -231,7 +231,7 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
     let s = &surface.settings;
     let row = if s.hexagonal { HEX_ROW_SPACING } else { 1.0 };
     let half = Vector::new((s.x_size - 1).max(0) as f32 * 0.5 * s.spacing, (s.y_size - 1).max(0) as f32 * 0.5 * s.spacing * row, s.spacing);
-    let flag = |name: &str| vm.get(actor, name) == Some(Value::Bool(true));
+    let flag = |name: &str| vm.store.get(actor, name) == Some(Value::Bool(true));
     Some(FluidActor { object: actor, bounds: (location - half, location + half), skin, hidden: flag("bHidden"), surface })
 }
 

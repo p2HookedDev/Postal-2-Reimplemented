@@ -418,15 +418,15 @@ impl<L: LoaderRef> Vm<L> {
 
 impl<L: LoaderRef> Vm<L> {
     fn subtitle_manager(&self) -> Option<ObjectId> {
-        self.object_of(self.player()?, Prop::SubtitleManager)
+        self.store.object_of(self.player()?, Prop::SubtitleManager)
     }
 
     fn subtitle_time(&self) -> f32 {
-        self.level.map_or(0.0, |level| self.float_of(level, Prop::TimeSeconds))
+        self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds))
     }
 
     fn subtitle_array(&self, manager: ObjectId, array: Prop) -> Vec<Value> {
-        match self.get(manager, array) {
+        match self.store.get(manager, array) {
             Some(Value::Array(items)) => items,
             _ => Vec::new(),
         }
@@ -437,7 +437,7 @@ impl<L: LoaderRef> Vm<L> {
             let mut by_path = FxHashMap::default();
             for (index, entry) in self.subtitle_array(manager, Prop::SubSound).iter().enumerate() {
                 if let &Value::Object(Some(found)) = entry {
-                    by_path.entry(self.object(found).path.to_ascii_lowercase()).or_insert((index, found));
+                    by_path.entry(self.store.object(found).path.to_ascii_lowercase()).or_insert((index, found));
                 }
             }
             self.media.subtitle_sounds = SubtitleSounds { manager: Some(manager), by_path };
@@ -448,16 +448,16 @@ impl<L: LoaderRef> Vm<L> {
     /// The manager's array of that name hides `Actor.ActorID` (retail reads by offset), so it is taken by place in the
     /// layout.
     fn subtitle_actor_index(&self, manager: ObjectId, actor: ObjectId) -> i32 {
-        let Some(Value::Name(id)) = self.get(actor, "ActorID") else { return -1 };
-        let Some(class) = self.object(manager).class else { return -1 };
-        let Some(index) = self.class(class).layout.properties.iter().rposition(|p| p.name.eq_ignore_ascii_case("ActorID")) else { return -1 };
+        let Some(Value::Name(id)) = self.store.get(actor, "ActorID") else { return -1 };
+        let Some(class) = self.store.object(manager).class else { return -1 };
+        let Some(index) = self.store.class(class).layout.properties.iter().rposition(|p| p.name.eq_ignore_ascii_case("ActorID")) else { return -1 };
         if id == NameId::NONE {
             return -1;
         }
-        let field = self.store.memory.get(self.class(class).mem).fields[index];
-        let Value::Array(ids) = self.store.memory.read_field(&field, &self.object(manager).mem) else { return -1 };
-        let name = self.name(id);
-        ids.iter().rposition(|entry| matches!(entry, Value::Name(entry) if self.name(*entry).eq_ignore_ascii_case(name))).map_or(-1, |at| at as i32)
+        let field = self.store.memory.get(self.store.class(class).mem).fields[index];
+        let Value::Array(ids) = self.store.memory.read_field(&field, &self.store.object(manager).mem) else { return -1 };
+        let name = self.store.name(id);
+        ids.iter().rposition(|entry| matches!(entry, Value::Name(entry) if self.store.name(*entry).eq_ignore_ascii_case(name))).map_or(-1, |at| at as i32)
     }
 
     /// Retail reaches this from its audio layer; the VM's sound sites stand in for that,
@@ -473,15 +473,15 @@ impl<L: LoaderRef> Vm<L> {
             && let Some((index, found)) = subtitled
         {
             added = true;
-            invalid.push(Value::Struct(vec![Value::Object(Some(found)), Value::Float(now + self.float_of(manager, Prop::InvalidTime))]));
+            invalid.push(Value::Struct(vec![Value::Object(Some(found)), Value::Float(now + self.store.float_of(manager, Prop::InvalidTime))]));
             let actor_index = actor.map_or(-1, |actor| self.subtitle_actor_index(manager, actor));
             let mut pending = self.subtitle_array(manager, Prop::PendingSounds);
             let entry = Value::Struct(vec![Value::Object(Some(found)), Value::Object(actor), Value::Float(now + SUBTITLE_DELAY), Value::Int(index as i32), Value::Int(actor_index)]);
             insert_pending(&mut pending, actor, entry);
-            self.set(manager, Prop::PendingSounds, Value::Array(pending));
+            self.store.set(manager, Prop::PendingSounds, Value::Array(pending));
         }
         if added || invalid.len() != before {
-            self.set(manager, Prop::InvalidSounds, Value::Array(invalid));
+            self.store.set(manager, Prop::InvalidSounds, Value::Array(invalid));
         }
     }
 
@@ -492,7 +492,7 @@ impl<L: LoaderRef> Vm<L> {
         if due.is_empty() {
             return Ok(());
         }
-        self.set(manager, Prop::PendingSounds, Value::Array(pending));
+        self.store.set(manager, Prop::PendingSounds, Value::Array(pending));
         for entry in due {
             let member = |member| subtitle_member(&entry, member).cloned().unwrap_or(Value::Object(None));
             self.event(player, "CallSubtitle", [member(0), member(3), member(4), member(1)])?;

@@ -158,15 +158,15 @@ type State = Vec<(String, Vec<String>)>;
 fn vm_state(app: &mut App) -> State {
     let mut vm = app.world_mut().resource_mut::<Play>().take_vm().expect("a played VM");
     for id in vm.object_ids() {
-        if vm.get(id, "LastRenderTime").is_some() {
-            vm.set(id, "LastRenderTime", p2_vm::Value::Float(0.0));
+        if vm.store.get(id, "LastRenderTime").is_some() {
+            vm.store.set(id, "LastRenderTime", p2_vm::Value::Float(0.0));
         }
-        if matches!(vm.get(id, "AttachmentBone"), Some(p2_vm::Value::Name(bone)) if vm.name(bone) != "None") {
-            vm.set(id, "Location", p2_vm::Value::Vector([0.0; 3].into()));
-            vm.set(id, "Rotation", p2_vm::Value::Rotator([0; 3].into()));
+        if matches!(vm.store.get(id, "AttachmentBone"), Some(p2_vm::Value::Name(bone)) if vm.store.name(bone) != "None") {
+            vm.store.set(id, "Location", p2_vm::Value::Vector([0.0; 3].into()));
+            vm.store.set(id, "Rotation", p2_vm::Value::Rotator([0; 3].into()));
         }
     }
-    vm.object_ids().map(|id| (vm.object(id).path.clone(), vm.properties(id).iter().map(|p| format!("{p:?}")).collect())).collect()
+    vm.object_ids().map(|id| (vm.store.object(id).path.clone(), vm.store.properties(id).iter().map(|p| format!("{p:?}")).collect())).collect()
 }
 fn run(app: &mut App, frames: usize) -> Vec<Shown> {
     app.update();
@@ -305,7 +305,7 @@ fn walking_moves_evenly_over_uneven_frame_times() {
 }
 
 fn object_of(vm: &p2_vm::Vm<std::sync::Arc<p2_package::Loader>>, object: ObjectId, property: &str) -> Option<ObjectId> {
-    match vm.get(object, property) {
+    match vm.store.get(object, property) {
         Some(p2_vm::Value::Object(found)) => found,
         _ => None,
     }
@@ -327,35 +327,35 @@ fn monday_spawn_cost() {
     };
     let mut classes: Vec<p2_vm::ClassId> = Vec::new();
     vm(&mut app, &mut |vm| {
-        let draw = |vm: &p2_vm::Vm<_>, a: ObjectId| match vm.get(a, "DrawType") {
+        let draw = |vm: &p2_vm::Vm<_>, a: ObjectId| match vm.store.get(a, "DrawType") {
             Some(p2_vm::Value::Byte(d)) => d,
             _ => 0,
         };
-        let movable = |vm: &p2_vm::Vm<_>, a: ObjectId| vm.get(a, "bStatic") != Some(p2_vm::Value::Bool(true)) && !vm.is_deleted(a);
+        let movable = |vm: &p2_vm::Vm<_>, a: ObjectId| vm.store.get(a, "bStatic") != Some(p2_vm::Value::Bool(true)) && !vm.store.is_deleted(a);
         for kind in [8u8, 2] {
             let mut found: Vec<p2_vm::ClassId> = Vec::new();
-            for actor in vm.actors().filter(|&a| draw(vm, a) == kind && movable(vm, a) && !vm.is_a(a, "Pawn")).collect::<Vec<_>>() {
-                let class = vm.object(actor).class.unwrap();
+            for actor in vm.actors().filter(|&a| draw(vm, a) == kind && movable(vm, a) && !vm.store.is_a(a, "Pawn")).collect::<Vec<_>>() {
+                let class = vm.store.object(actor).class.unwrap();
                 if !found.contains(&class) && found.len() < 4 {
                     found.push(class);
                 }
             }
             classes.extend(found);
         }
-        let emitters: Vec<p2_vm::ClassId> = vm.actors().filter(|&a| vm.is_a(a, "Emitter") && movable(vm, a)).filter_map(|a| vm.object(a).class).collect();
+        let emitters: Vec<p2_vm::ClassId> = vm.actors().filter(|&a| vm.store.is_a(a, "Emitter") && movable(vm, a)).filter_map(|a| vm.store.object(a).class).collect();
         for class in emitters {
             if !classes.contains(&class) && classes.len() < 12 {
                 classes.push(class);
             }
         }
-        eprintln!("spawning {:?}", classes.iter().map(|&c| vm.name(vm.class(c).name).to_owned()).collect::<Vec<_>>());
+        eprintln!("spawning {:?}", classes.iter().map(|&c| vm.store.name(vm.store.class(c).name).to_owned()).collect::<Vec<_>>());
     });
     app.world_mut().resource_mut::<FrameTimes>().take_slowest();
     let ms = |time: Duration| time.as_secs_f64() * 1000.0;
     for round in 0..5 {
         vm(&mut app, &mut |vm| {
             let pawn = object_of(vm, vm.player().unwrap(), "Pawn").unwrap();
-            let at = vm.location(pawn);
+            let at = vm.store.location(pawn);
             for (i, &class) in classes.iter().enumerate() {
                 let spot = [at[0] + 80.0 * (i % 4) as f32 + 60.0, at[1] + 80.0 * (i / 4) as f32 - 80.0, at[2] + 200.0];
                 let place = p2_vm::Value::Vector(spot.into());

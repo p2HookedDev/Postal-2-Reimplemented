@@ -67,7 +67,7 @@ pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
 pub use profiling::{FunctionProfiling, FunctionTime};
 pub use memory::Mem as PropertyBlock;
-use object_store::ObjectStore;
+pub use object_store::ObjectStore;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -258,7 +258,7 @@ pub struct Vm<L> {
     pub options: VmOptions,
     media: Media,
     host: HostIo,
-    store: ObjectStore,
+    pub store: ObjectStore,
     script: ScriptRuntime,
 }
 
@@ -447,27 +447,12 @@ impl<L: LoaderRef> Vm<L> {
         id
     }
 
-    #[inline]
-    pub fn name(&self, id: NameId) -> &str {
-        self.store.name(id)
-    }
-
     pub fn actors(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.store.actor_ids.iter().copied()
     }
 
     pub fn object_ids(&self) -> impl Iterator<Item = ObjectId> + use<L> {
         (0..self.store.objects.len() as u32).map(ObjectId)
-    }
-
-    #[inline]
-    pub fn object(&self, id: ObjectId) -> &Object {
-        self.store.object(id)
-    }
-
-    #[inline]
-    pub fn class(&self, id: ClassId) -> &Class {
-        self.store.class(id)
     }
 
     pub fn find_class(&mut self, package: &str, name: &str) -> Result<ClassId, Error> {
@@ -499,11 +484,6 @@ impl<L: LoaderRef> Vm<L> {
         self.store.class_redirects.iter().find(|(from, _)| *from == class).map_or(class, |&(_, to)| to)
     }
 
-    #[inline]
-    pub fn property_index(&self, class: ClassId, name: &str) -> Option<usize> {
-        self.store.property_index(class, name)
-    }
-
     pub fn new_object(&mut self, class: ClassId, name: Option<&str>) -> ObjectId {
         let (name, key) = match name {
             Some(name) => (name.to_owned(), format!("transient.{name}").to_ascii_lowercase()),
@@ -519,10 +499,10 @@ impl<L: LoaderRef> Vm<L> {
         };
         let object = Object {
             name: self.intern(&name),
-            class_name: self.class(class).name,
+            class_name: self.store.class(class).name,
             path: format!("Transient.{name}"),
             class: Some(class),
-            mem: self.class(class).defaults.clone(),
+            mem: self.store.class(class).defaults.clone(),
         };
         let id = ObjectId(self.store.objects.len() as u32);
         self.store.objects.push(object);
@@ -534,9 +514,9 @@ impl<L: LoaderRef> Vm<L> {
     /// Copies a template, as retail makes an instanced subobject; `template` itself for a stub,
     /// which has no class to make one of.
     pub(crate) fn duplicate_object(&mut self, template: ObjectId) -> ObjectId {
-        let Some(class) = self.object(template).class else { return template };
+        let Some(class) = self.store.object(template).class else { return template };
         let copy = self.new_object(class, None);
-        let mem = self.object(template).mem.clone();
+        let mem = self.store.object(template).mem.clone();
         self.store.objects[copy.0 as usize].mem = mem;
         self.set_header(copy, class);
         copy
@@ -545,25 +525,25 @@ impl<L: LoaderRef> Vm<L> {
     /// Written at `Object`'s own slots, the last of their name: a subclass may declare a `Name` of its own
     /// (`ACTION_IfGameState`'s `String Name`, `DAY_A`), which a lookup by name finds first.
     fn set_header(&mut self, id: ObjectId, class: ClassId) {
-        if self.class(class).is_actor() {
+        if self.store.class(class).is_actor() {
             self.store.actor_ids.insert(id);
             self.store.dynamic_ids.added(id);
         }
-        let name = self.object(id).name;
-        if let Some(slot) = self.class(class).name_slot {
-            self.set_property_at(id, slot, Value::Name(name));
+        let name = self.store.object(id).name;
+        if let Some(slot) = self.store.class(class).name_slot {
+            self.store.set_property_at(id, slot, Value::Name(name));
         }
-        let class_object = match self.class(class).class_object {
+        let class_object = match self.store.class(class).class_object {
             Some(class_object) => class_object,
             None => {
-                let class_path = format!("{}.{}", self.loader.package(self.class(class).package).name, self.name(self.class(class).name));
+                let class_path = format!("{}.{}", self.loader.package(self.store.class(class).package).name, self.store.name(self.store.class(class).name));
                 let class_object = self.stub(&class_path, "Class");
                 self.store.classes[class.0 as usize].class_object = Some(class_object);
                 class_object
             }
         };
-        if let Some(slot) = self.class(class).class_slot {
-            self.set_property_at(id, slot, Value::Object(Some(class_object)));
+        if let Some(slot) = self.store.class(class).class_slot {
+            self.store.set_property_at(id, slot, Value::Object(Some(class_object)));
         }
     }
 
@@ -573,7 +553,7 @@ impl<L: LoaderRef> Vm<L> {
     fn object_key(&self, path: &str, class_name: &str) -> String {
         let key = path.to_ascii_lowercase();
         let Some(&existing) = self.store.object_ids.get(&key) else { return key };
-        let existing = self.name(self.object(existing).class_name);
+        let existing = self.store.name(self.store.object(existing).class_name);
         if class_name.is_empty() || existing.eq_ignore_ascii_case(class_name) {
             return key;
         }
@@ -586,8 +566,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn export_of(&self, object: ObjectId) -> Option<(PackageId, usize)> {
-        let object = self.object(object);
-        let class = self.name(object.class_name);
+        let object = self.store.object(object);
+        let class = self.store.name(object.class_name);
         std::iter::once(class)
             .chain(interp::intrinsic_subclasses(class))
             .find_map(|class| self.loader.loaded_export_by_path_of_class(&object.path, class))
@@ -616,11 +596,11 @@ impl<L: LoaderRef> Vm<L> {
     /// Assets stay stubs until a script uses them. A failed load leaves the stub (calls return zero, property reads read
     /// zero).
     pub(crate) fn load_stub(&mut self, object: ObjectId) {
-        if self.object(object).class.is_none()
+        if self.store.object(object).class.is_none()
             && let Some((package, export)) = self.export_of(object)
             && self.load_object(package, export).is_err()
         {
-            self.diagnostics.log.push(format!("Could not load {}", self.object(object).path));
+            self.diagnostics.log.push(format!("Could not load {}", self.store.object(object).path));
         }
     }
 
@@ -633,15 +613,15 @@ impl<L: LoaderRef> Vm<L> {
         let Some((class_package, class_export)) = self.loader.loaded_export(package, entry.class_index) else {
             return Ok(id);
         };
-        if self.object(id).class.is_some() || editor_only(pkg, export) {
+        if self.store.object(id).class.is_some() || editor_only(pkg, export) {
             return Ok(id);
         }
         let class = self.load_class(class_package, class_export)?;
-        let layout = Arc::clone(&self.class(class).layout);
-        let mut properties = self.class(class).defaults.clone();
+        let layout = Arc::clone(&self.store.class(class).layout);
+        let mut properties = self.store.class(class).defaults.clone();
         let mut r = pkg.export_reader(&loaded.data, entry)?;
         let tags = read_properties(pkg, &mut r, &layout)?;
-        self.apply(pkg, package, &layout, self.class(class).mem, &mut properties, tags.values);
+        self.apply(pkg, package, &layout, self.store.class(class).mem, &mut properties, tags.values);
         let object = &mut self.store.objects[id.0 as usize];
         object.class = Some(class);
         object.mem = properties;
@@ -650,19 +630,19 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn property_slot(&self, class: ClassId, name: &str) -> Option<Slot> {
-        self.property_index(class, name).map(Slot)
+        self.store.property_index(class, name).map(Slot)
     }
 
     /// For a reader that asks the same names in the same order every time: later runs read the i-th name asked by the i-th
     /// recorded slot, without hashing, after checking it is that name. The values are those of [`Vm::get`].
     pub fn read_ordered<R>(&self, object: ObjectId, reader: &'static str, f: impl FnOnce(&dyn Fn(&str) -> Option<Value>) -> R) -> R {
-        let Some(class) = self.object(object).class else {
-            return f(&|name: &str| self.get(object, name));
+        let Some(class) = self.store.object(object).class else {
+            return f(&|name: &str| self.store.get(object, name));
         };
         let recorded = self.script.slot_lists.lock().ok().and_then(|lists| lists.get(&(class, reader)).cloned());
         let ordered = props::Ordered::new(recorded.as_deref());
         let result =
-            f(&|name: &str| ordered.slot(name, |name| self.property_slot(class, name)).and_then(|slot| self.get(object, slot)));
+            f(&|name: &str| ordered.slot(name, |name| self.property_slot(class, name)).and_then(|slot| self.store.get(object, slot)));
         if let Some(list) = ordered.into_recorded()
             && let Ok(mut lists) = self.script.slot_lists.lock()
         {
@@ -672,67 +652,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     #[inline]
-    pub(crate) fn field(&self, object: ObjectId, property: impl PropertyName) -> Option<memory::Field> {
-        self.store.field(object, property)
-    }
-
-    #[inline]
-    pub fn get(&self, object: ObjectId, property: impl PropertyName) -> Option<Value> {
-        self.store.get(object, property)
-    }
-
-    #[inline]
     pub(crate) fn members<const N: usize>(&self, object: ObjectId, property: impl PropertyName) -> Option<[Value; N]> {
         self.store.members::<N>(object, property)
     }
 
-    #[inline]
-    pub(crate) fn array_words(&self, object: ObjectId, property: impl PropertyName) -> Option<&[u32]> {
-        self.store.array_words(object, property)
-    }
-
-    #[inline]
-    pub(crate) fn element_of(&self, object: ObjectId, property: impl PropertyName, index: usize) -> Option<Value> {
-        self.store.element_of(object, property, index)
-    }
-
-    #[inline]
-    pub(crate) fn object_list(&self, object: ObjectId, property: impl PropertyName) -> Vec<ObjectId> {
-        self.store.object_list(object, property)
-    }
-
     pub fn property_block(&self, object: ObjectId) -> &PropertyBlock {
-        &self.object(object).mem
-    }
-
-    #[inline]
-    pub fn properties(&self, object: ObjectId) -> Vec<Value> {
-        self.store.properties(object)
-    }
-
-    #[inline]
-    pub fn property_at(&self, object: ObjectId, index: usize) -> Option<Value> {
-        self.store.property_at(object, index)
-    }
-
-    #[inline]
-    pub(crate) fn set_property_at(&mut self, object: ObjectId, index: usize, value: Value) -> bool {
-        self.store.set_property_at(object, index, value)
-    }
-
-    #[inline]
-    pub fn get_path(&self, object: ObjectId, path: &[&str]) -> Option<Value> {
-        self.store.get_path(object, path)
-    }
-
-    #[inline]
-    pub fn set_path(&mut self, object: ObjectId, path: &[&str], value: Value) -> bool {
-        self.store.set_path(object, path, value)
-    }
-
-    #[inline]
-    pub fn set(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
-        self.store.set(object, property, value)
+        &self.store.object(object).mem
     }
 
     pub fn export_class(&self, path: &str, wanted: &str) -> Option<Option<String>> {
@@ -760,7 +685,7 @@ impl<L: LoaderRef> Vm<L> {
             return size;
         }
         let phase = self.profile_start();
-        let path = self.object(texture).path.clone();
+        let path = self.store.object(texture).path.clone();
         let size_of = |loader: &Loader, package: &Package, data: &[u8], export: usize| {
             let texture = p2_assets::read_texture(&mut Objects::new(loader), Source { package, data }, export).ok()?;
             texture.mips.first().map(|mip| [mip.width as i32, mip.height as i32])
@@ -792,7 +717,7 @@ impl<L: LoaderRef> Vm<L> {
             return duration;
         }
         let phase = self.profile_start();
-        let path = self.object(sound).path.clone();
+        let path = self.store.object(sound).path.clone();
         let duration = |pkg: &Package, data: &[u8], export: usize| p2_assets::read_sound_duration(pkg, data, &pkg.exports[export]).ok()?;
         let found = match self.export_of(sound) {
             Some((package, export)) => {
@@ -815,11 +740,6 @@ impl<L: LoaderRef> Vm<L> {
                 .any(|e| e.class_index == 0 && pkg.name(e.object_name).eq_ignore_ascii_case(name))
                 .then(|| loaded.name.clone())
         })
-    }
-
-    #[inline]
-    pub fn default_value(&self, class: ClassId, property: impl PropertyName) -> Option<Value> {
-        self.store.default_value(class, property)
     }
 
     fn load_class(&mut self, package: PackageId, export: usize) -> Result<ClassId, Error> {
@@ -848,11 +768,11 @@ impl<L: LoaderRef> Vm<L> {
 
         // The layout lists the class's own properties first, then the superclass's (whose defaults apply). In memory
         // the superclass's come first, at the superclass's offsets, as in the engine.
-        let base = super_class.map(|id| (self.class(id).mem, self.class(id).layout.properties.len()));
+        let base = super_class.map(|id| (self.store.class(id).mem, self.store.class(id).layout.properties.len()));
         let mem_layout = self.store.memory.of_class(&layout, base);
         let mut defaults = self.store.memory.zero(mem_layout);
         if let Some(id) = super_class {
-            let inherited = &self.class(id).defaults;
+            let inherited = &self.store.class(id).defaults;
             defaults.words[..inherited.words.len()].copy_from_slice(&inherited.words);
             defaults.heap[..inherited.heap.len()].clone_from_slice(&inherited.heap);
         }
@@ -881,7 +801,7 @@ impl<L: LoaderRef> Vm<L> {
         let lower = lowercase_index(&layout);
         let slot_of = |p: &str| index.get(p).copied().or_else(|| lower_lookup(&lower, p));
         let fields = &self.store.memory.get(mem_layout).fields;
-        let resolved = props::Resolved::new(slot_of, fields, self.name(name), super_class.map_or(0, |s| self.class(s).resolved.kinds()));
+        let resolved = props::Resolved::new(slot_of, fields, self.store.name(name), super_class.map_or(0, |s| self.store.class(s).resolved.kinds()));
         let lower_index = std::sync::OnceLock::from(lower);
         let mem = mem_layout;
         let last_named = |name: &str| layout.properties.iter().rposition(|p| p.name.eq_ignore_ascii_case(name));
@@ -903,7 +823,7 @@ impl<L: LoaderRef> Vm<L> {
         });
         self.store.class_ids.insert((package, export), id);
         self.store.class_by_name.entry(name).or_insert(id);
-        if let Some(index) = self.property_index(id, "Class") {
+        if let Some(index) = self.store.property_index(id, "Class") {
             let field = self.store.memory.get(mem).fields[index];
             self.store.memory.write_field(&field, &mut self.store.classes[id.0 as usize].defaults, Value::Object(Some(class_object)));
         }

@@ -21,10 +21,10 @@ impl<'a> Player<'a> {
     fn start(loader: &'a Loader, dir: &Path, id: PackageId) -> Self {
         let (vm, controller, pawn) = start_single_player(dir, loader, id);
         let mut player = Self { vm, pawn: pawn.expect("no pawn"), controller };
-        let others: Vec<ObjectId> = player.vm.actors().filter(|&a| a != player.pawn && player.vm.is_a(a, "Pawn")).collect();
+        let others: Vec<ObjectId> = player.vm.actors().filter(|&a| a != player.pawn && player.vm.store.is_a(a, "Pawn")).collect();
         for other in others {
-            player.vm.set(other, "bCollideActors", Value::Bool(false));
-            player.vm.set(other, "bBlockActors", Value::Bool(false));
+            player.vm.store.set(other, "bCollideActors", Value::Bool(false));
+            player.vm.store.set(other, "bBlockActors", Value::Bool(false));
         }
         player.frames(90, &[]);
         player
@@ -47,14 +47,14 @@ impl<'a> Player<'a> {
     }
 
     fn float(&self, property: &str) -> f32 {
-        match self.vm.get(self.pawn, property) {
+        match self.vm.store.get(self.pawn, property) {
             Some(Value::Float(v)) => v,
             other => panic!("{property}: {other:?}"),
         }
     }
 
     fn physics(&self) -> Value {
-        self.vm.get(self.pawn, "Physics").unwrap()
+        self.vm.store.get(self.pawn, "Physics").unwrap()
     }
 
     fn extent(&self) -> [f32; 3] {
@@ -64,24 +64,24 @@ impl<'a> Player<'a> {
 
     fn face(&mut self, yaw: i32) {
         let rotation = Value::Rotator(p2_math::Rotator::new(0, yaw, 0));
-        self.vm.set(self.controller, "Rotation", rotation.clone());
-        self.vm.set(self.pawn, "Rotation", rotation);
+        self.vm.store.set(self.controller, "Rotation", rotation.clone());
+        self.vm.store.set(self.pawn, "Rotation", rotation);
     }
 
     fn place(&mut self, at: [f32; 3]) {
         self.vm.place_far_moved(self.pawn, at.into(), Encroachment::Ignored).unwrap();
-        self.vm.set(self.pawn, "Velocity", Value::Vector(p2_math::Vector::ZERO));
+        self.vm.store.set(self.pawn, "Velocity", Value::Vector(p2_math::Vector::ZERO));
         self.frames(30, &[]);
     }
 
     fn blocking_actor(&self, at: [f32; 3], direction: [f32; 3], length: f32) -> Option<ObjectId> {
         let [radius, _, height] = self.extent();
-        let flag = |a: ObjectId, name: &str| self.vm.get(a, name) == Some(Value::Bool(true));
-        let size = |a: ObjectId, name: &str| match self.vm.get(a, name) {
+        let flag = |a: ObjectId, name: &str| self.vm.store.get(a, name) == Some(Value::Bool(true));
+        let size = |a: ObjectId, name: &str| match self.vm.store.get(a, name) {
             Some(Value::Float(v)) => v,
             _ => 0.0,
         };
-        self.vm.actors().filter(|&a| a != self.pawn && !self.vm.is_deleted(a) && flag(a, "bCollideActors") && flag(a, "bBlockActors")).find(|&a| {
+        self.vm.actors().filter(|&a| a != self.pawn && !self.vm.store.is_deleted(a) && flag(a, "bCollideActors") && flag(a, "bBlockActors")).find(|&a| {
             let centre = vector(&self.vm, a, "Location");
             let offset = add(centre, scale(at, -1.0));
             let along = dot(offset, direction).clamp(0.0, length);
@@ -200,10 +200,10 @@ fn church_run_stop_walk_crouch_jump() {
     player.face(yaw);
     player.frames(40, &["Ctrl", "W"]);
     let crouched = flat(player.vector("Velocity"));
-    assert_eq!(player.vm.get(player.pawn, "bIsCrouched"), Some(Value::Bool(true)));
+    assert_eq!(player.vm.store.get(player.pawn, "bIsCrouched"), Some(Value::Bool(true)));
     assert!((crouched - ground_speed * player.float("WalkingPct")).abs() < 0.5, "crouched speed {crouched}");
     player.frames(60, &[]);
-    assert_eq!(player.vm.get(player.pawn, "bIsCrouched"), Some(Value::Bool(false)));
+    assert_eq!(player.vm.store.get(player.pawn, "bIsCrouched"), Some(Value::Bool(false)));
 
     player.place(start);
     let at = player.vector("Location");
@@ -246,7 +246,7 @@ fn church_view_bob_and_eye_height() {
     let Some(dir) = game_dir() else { return };
     let (loader, id) = load(&dir, "Church");
     let mut player = Player::start(&loader, &dir, id);
-    assert_eq!(player.vm.get(player.pawn, "bUpdateEyeheight"), Some(Value::Bool(true)));
+    assert_eq!(player.vm.store.get(player.pawn, "bUpdateEyeheight"), Some(Value::Bool(true)));
     let yaw = (0..32).map(|i| i * 2048).find(|&yaw| player.clear_run(heading(yaw), 800.0)).expect("no open direction");
     player.face(yaw);
     let base = player.float("BaseEyeHeight");
@@ -298,7 +298,7 @@ impl Player<'_> {
             eye_height: self.float("EyeHeight"),
             bob: self.vector("WalkBob"),
             physics,
-            just_landed: self.vm.get(self.pawn, "bJustLanded") == Some(Value::Bool(true)),
+            just_landed: self.vm.store.get(self.pawn, "bJustLanded") == Some(Value::Bool(true)),
             sweep: self.vm.move_check(self.pawn, location.into(), [0.0, 0.0, -37.0].into()).map(|(t, n, _)| (t * 37.0, n[2])),
         }
     }
@@ -537,7 +537,7 @@ fn church_movers_block_with_their_mesh() {
     let (loader, id) = load(&dir, "Church");
     let mut player = Player::start(&loader, &dir, id);
     let extent = player.extent();
-    let movers: Vec<ObjectId> = player.vm.actors().filter(|&a| player.vm.is_a(a, "Mover") && !player.vm.is_deleted(a)).collect();
+    let movers: Vec<ObjectId> = player.vm.actors().filter(|&a| player.vm.store.is_a(a, "Mover") && !player.vm.store.is_deleted(a)).collect();
     let mut passes = Vec::new();
     for &mover in &movers {
         let centre = vector(&player.vm, mover, "Location");
@@ -562,7 +562,7 @@ fn church_movers_block_with_their_mesh() {
                 closest = closest.min(flat(add(at, scale(centre, -1.0))));
             }
             let moved = flat(add(player.vector("Location"), scale(start, -1.0)));
-            passes.push((player.vm.object(mover).path.clone(), yaw, closest, moved));
+            passes.push((player.vm.store.object(mover).path.clone(), yaw, closest, moved));
             if passes.len() >= 6 {
                 break;
             }

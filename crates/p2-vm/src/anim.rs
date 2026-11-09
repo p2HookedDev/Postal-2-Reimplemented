@@ -132,10 +132,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn set_twist_look(&mut self, pawn: ObjectId, look: i32) {
-        if !self.flag_of(pawn, Prop::bDoTorsoTwist) {
+        if !self.store.flag_of(pawn, Prop::bDoTorsoTwist) {
             return;
         }
-        let bones = [Prop::HeadBone, Prop::SpineBone1, Prop::SpineBone2].map(|p| match self.get(pawn, p) {
+        let bones = [Prop::HeadBone, Prop::SpineBone1, Prop::SpineBone2].map(|p| match self.store.get(pawn, p) {
             Some(Value::Name(name)) => name,
             _ => NameId::NONE,
         });
@@ -282,10 +282,10 @@ impl<L: LoaderRef> Vm<L> {
             }
             let mut remaining = delta;
             for _ in 0..MAX_PASSES {
-                if remaining <= 0.0 || self.is_deleted(actor) || !self.is_animating(actor, index as i32) {
+                if remaining <= 0.0 || self.store.is_deleted(actor) || !self.is_animating(actor, index as i32) {
                     break;
                 }
-                let velocity = self.vec3_of(actor, Prop::Velocity);
+                let velocity = self.store.vec3_of(actor, Prop::Velocity);
                 let Some(state) = self.channel_mut(actor, index as i32) else { break };
                 let old = state.frame;
                 let notify_disabled = state.notify_disabled;
@@ -350,8 +350,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn finish_anim(&mut self, this: ObjectId, channel: i32) {
-        let target = if self.is_a(this, Kind::Controller) {
-            let Some(pawn) = self.object_of(this, Prop::Pawn) else { return };
+        let target = if self.store.is_a(this, Kind::Controller) {
+            let Some(pawn) = self.store.object_of(this, Prop::Pawn) else { return };
             pawn
         } else {
             this
@@ -372,12 +372,12 @@ impl<L: LoaderRef> Vm<L> {
             return false;
         }
         let Some((animation, (frames, own_rate, has_notifies))) = self.find_sequence_with(actor, sequence, |s| (s.frames, s.rate, s.has_notifies)) else {
-            let mesh = self.object_of(actor, Prop::Mesh).map_or_else(String::new, |mesh| self.object(mesh).path.clone());
-            self.diagnostics.log.push(format!("PlayAnim: Sequence '{}' not found for mesh '{mesh}'", self.name(sequence)));
+            let mesh = self.store.object_of(actor, Prop::Mesh).map_or_else(String::new, |mesh| self.store.object(mesh).path.clone());
+            self.diagnostics.log.push(format!("PlayAnim: Sequence '{}' not found for mesh '{mesh}'", self.store.name(sequence)));
             return false;
         };
         let animating = self.is_animating(actor, channel);
-        let velocity = self.vec3_of(actor, Prop::Velocity);
+        let velocity = self.store.vec3_of(actor, Prop::Velocity);
         let keeps_looping = looping && animating && self.channel(actor, channel).is_some_and(|state| state.looping && state.sequence == sequence);
         let from = if !keeps_looping && (tween > 0.0 || tween == -1.0 || frames <= 1.0) { self.kept_pose(actor) } else { None };
         let Some(state) = self.valid_channel(actor, channel) else { return false };
@@ -440,11 +440,11 @@ impl<L: LoaderRef> Vm<L> {
 
     fn notify_anim_end(&mut self, actor: ObjectId, channel: usize) -> Result<(), Error> {
         let mut target = actor;
-        if self.is_a(actor, Kind::Pawn) {
+        if self.store.is_a(actor, Kind::Pawn) {
             if channel == 0 {
-                self.set(actor, Prop::AnimAction, Value::Name(NameId::NONE));
+                self.store.set(actor, Prop::AnimAction, Value::Name(NameId::NONE));
             }
-            if let Some(controller) = self.object_of(actor, Prop::Controller)
+            if let Some(controller) = self.store.object_of(actor, Prop::Controller)
                 && self.is_probing(controller, PROBE_ANIM_END)?
             {
                 target = controller;
@@ -482,58 +482,58 @@ impl<L: LoaderRef> Vm<L> {
     /// `bExpireParticles` emitters are destroyed here; retail lets their particles die out (unverified).
     /// Unattached bone effects use the owner's placement; rotation adds `OffsetRotation` (unverified).
     fn run_notify(&mut self, owner: ObjectId, notify: ObjectId) -> Result<(), Error> {
-        let name_of = |vm: &Self, property: Prop| match vm.get(notify, property) {
+        let name_of = |vm: &Self, property: Prop| match vm.store.get(notify, property) {
             Some(Value::Name(name)) => name,
             _ => NameId::NONE,
         };
         let names = &self.script.lookups.class_names;
         let (scripted, script, sound, destroy_effect, effect) =
             (names.anim_notify_scripted, names.anim_notify_script, names.anim_notify_sound, names.anim_notify_destroy_effect, names.anim_notify_effect);
-        if self.is_a(notify, scripted) {
+        if self.store.is_a(notify, scripted) {
             return self.event(notify, "Notify", [Value::Object(Some(owner))]);
         }
-        if self.is_a(notify, script) {
+        if self.store.is_a(notify, script) {
             let function = name_of(self, Prop::NotifyName);
             if function != NameId::NONE {
-                let function = self.name(function).to_owned();
+                let function = self.store.name(function).to_owned();
                 self.event(owner, &function, Vec::new())?;
             }
             return Ok(());
         }
-        if self.is_a(notify, sound) {
-            if let Some(sound) = self.object_of(notify, Prop::Sound) {
-                let radius = match self.get(notify, Prop::Radius).as_ref().map_or(0, int) {
+        if self.store.is_a(notify, sound) {
+            if let Some(sound) = self.store.object_of(notify, Prop::Sound) {
+                let radius = match self.store.get(notify, Prop::Radius).as_ref().map_or(0, int) {
                     0 => AUDIO_DEFAULT_RADIUS,
                     radius => radius as f32,
                 };
-                let volume = (self.float_of(notify, Prop::Volume) * self.sound_volume()).clamp(0.0, 1.0);
-                let sound = self.object(sound).path.clone();
+                let volume = (self.store.float_of(notify, Prop::Volume) * self.sound_volume()).clamp(0.0, 1.0);
+                let sound = self.store.object(sound).path.clone();
                 self.subtitle_insert_sound(Some(owner), &sound);
                 self.host.commands.push(HostCommand::Sound(PlayedSound { actor: Some(owner), sound, slot: 0, volume, radius, pitch: 1.0, attenuate: true, no_override: false, flashbang: None }));
             }
             return Ok(());
         }
-        if self.is_a(notify, destroy_effect) {
+        if self.store.is_a(notify, destroy_effect) {
             let tag = name_of(self, Prop::DestroyTag);
             if tag == NameId::NONE {
                 return Ok(());
             }
             let owned: Vec<ObjectId> = self
                 .actors()
-                .filter(|&a| !self.is_deleted(a) && self.object_of(a, Prop::Owner) == Some(owner) && self.get(a, Prop::Tag) == Some(Value::Name(tag)))
+                .filter(|&a| !self.store.is_deleted(a) && self.store.object_of(a, Prop::Owner) == Some(owner) && self.store.get(a, Prop::Tag) == Some(Value::Name(tag)))
                 .collect();
             for actor in owned.into_iter().rev() {
                 self.destroy(actor)?;
             }
             return Ok(());
         }
-        if self.is_a(notify, effect) {
-            let Some(class) = self.object_of(notify, Prop::EffectClass) else { return Ok(()) };
+        if self.store.is_a(notify, effect) {
+            let Some(class) = self.store.object_of(notify, Prop::EffectClass) else { return Ok(()) };
             let Some(class) = self.class_of_object(class)? else { return Ok(()) };
-            let (location, rotation) = (self.vector(owner, Prop::Location), self.rotator_of(owner, Prop::Rotation));
-            let (offset, turn) = (self.vector(notify, Prop::OffsetLocation), self.rotator_of(notify, Prop::OffsetRotation));
+            let (location, rotation) = (self.store.vector(owner, Prop::Location), self.store.rotator_of(owner, Prop::Rotation));
+            let (offset, turn) = (self.store.vector(notify, Prop::OffsetLocation), self.store.rotator_of(notify, Prop::OffsetRotation));
             let bone = name_of(self, Prop::Bone);
-            let attach = bone != NameId::NONE && self.flag_of(notify, Prop::Attach);
+            let attach = bone != NameId::NONE && self.store.flag_of(notify, Prop::Attach);
             let (at, facing) = if attach {
                 (location, rotation)
             } else {
@@ -542,25 +542,25 @@ impl<L: LoaderRef> Vm<L> {
             let Some(effect) = self.spawn(class, Some(owner), [Some(Value::Vector(at)), Some(Value::Rotator(facing))])? else { return Ok(()) };
             let tag = name_of(self, Prop::Tag);
             if tag != NameId::NONE {
-                self.set(effect, Prop::Tag, Value::Name(tag));
+                self.store.set(effect, Prop::Tag, Value::Name(tag));
             }
             for property in ["DrawScale", "DrawScale3D"] {
-                if let Some(value) = self.get(notify, property) {
-                    self.set(effect, property, value);
+                if let Some(value) = self.store.get(notify, property) {
+                    self.store.set(effect, property, value);
                 }
             }
             if attach {
                 self.call_native("AttachToBone", Some(owner), &mut [Value::Object(Some(effect)), Value::Name(bone)])?;
-                self.set(effect, Prop::RelativeLocation, Value::Vector(offset));
-                self.set(effect, Prop::RelativeRotation, Value::Rotator(turn));
+                self.store.set(effect, Prop::RelativeLocation, Value::Vector(offset));
+                self.store.set(effect, Prop::RelativeRotation, Value::Rotator(turn));
             }
         }
         Ok(())
     }
 
     pub(crate) fn is_probing(&mut self, object: ObjectId, bit: u32) -> Result<bool, Error> {
-        let Some(class) = self.object(object).class else { return Ok(false) };
-        let class = (self.class(class).package, self.class(class).export);
+        let Some(class) = self.store.object(object).class else { return Ok(false) };
+        let class = (self.store.class(class).package, self.store.class(class).export);
         let node = self.script.states.objects.get(&object).map_or(class, |s| s.state);
         let (class_probe, _) = self.probe_masks(class)?;
         let (probe, ignore) = self.probe_masks(node)?;
@@ -664,7 +664,7 @@ impl<L: LoaderRef> Vm<L> {
             return cached.clone();
         }
         let phase = self.profile_start();
-        let (loader, path) = (self.loader.clone(), self.object(animation).path.clone());
+        let (loader, path) = (self.loader.clone(), self.store.object(animation).path.clone());
         let read = loader.loaded_export_by_path_of_class(&path, "MeshAnimation").and_then(|(id, export)| {
             let loaded = loader.package(id);
             let pkg = &loaded.package;
@@ -701,7 +701,7 @@ impl<L: LoaderRef> Vm<L> {
             return cached;
         }
         let phase = self.profile_start();
-        let (loader, path) = (self.loader.clone(), self.object(mesh).path.clone());
+        let (loader, path) = (self.loader.clone(), self.store.object(mesh).path.clone());
         let found = loader.loaded_export_by_path_of_class(&path, "SkeletalMesh").and_then(|(id, export)| {
             let loaded = loader.package(id);
             let entry = loaded.package.exports.get(export)?;
@@ -714,7 +714,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn skeletal_mesh(&self, actor: ObjectId) -> Option<ObjectId> {
-        let mesh = self.object_of(actor, Prop::Mesh)?;
+        let mesh = self.store.object_of(actor, Prop::Mesh)?;
         let skeletal = match self.media.anims.skeletal_meshes.get(&mesh) {
             Some(&known) => known,
             None => self.is_skeletal_mesh(mesh),
@@ -723,7 +723,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn skeletal_mesh_kept(&mut self, actor: ObjectId) -> Option<ObjectId> {
-        let mesh = self.object_of(actor, Prop::Mesh)?;
+        let mesh = self.store.object_of(actor, Prop::Mesh)?;
         let skeletal = match self.media.anims.skeletal_meshes.get(&mesh) {
             Some(&known) => known,
             None => {
@@ -737,11 +737,11 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Also true for a stub of class `Mesh` with a skeletal mesh export at its path.
     fn is_skeletal_mesh(&self, mesh: ObjectId) -> bool {
-        let object = self.object(mesh);
-        if self.name(object.class_name).eq_ignore_ascii_case("SkeletalMesh") {
+        let object = self.store.object(mesh);
+        if self.store.name(object.class_name).eq_ignore_ascii_case("SkeletalMesh") {
             return true;
         }
-        let general = ["Mesh", "LodMesh", "Primitive"].iter().any(|c| self.name(object.class_name).eq_ignore_ascii_case(c));
+        let general = ["Mesh", "LodMesh", "Primitive"].iter().any(|c| self.store.name(object.class_name).eq_ignore_ascii_case(c));
         general && self.loader.loaded_export_by_path_of_class(&object.path, "SkeletalMesh").is_some()
     }
 

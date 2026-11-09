@@ -329,27 +329,27 @@ impl<L: LoaderRef> Vm<L> {
         Ok(Some(match native {
             Native::FindPathToward => {
                 let Some(goal) = object(0) else {
-                    self.diagnostics.log.push(format!("Warning: No goal for FindPathToward by {}", self.object(this).path));
+                    self.diagnostics.log.push(format!("Warning: No goal for FindPathToward by {}", self.store.object(this).path));
                     return Ok(Some(Value::Object(None)));
                 };
                 Value::Object(self.find_path(this, Some(goal), Vector::ZERO)?)
             }
             Native::FindPathTo => Value::Object(self.find_path(this, None, vec3(args.first()))?),
             Native::FindRandomDest => {
-                let Some(pawn) = self.object_of(this, Prop::Pawn) else { return Ok(Some(Value::Object(None))) };
+                let Some(pawn) = self.store.object_of(this, Prop::Pawn) else { return Ok(Some(Value::Object(None))) };
                 let weight = self.find_path_toward(this, pawn, None, Vector::ZERO, Evaluator::Random)?;
-                let goal = self.object_of(this, Prop::RouteGoal).filter(|&g| weight > 0.0 && self.is_a(g, Kind::NavigationPoint));
+                let goal = self.store.object_of(this, Prop::RouteGoal).filter(|&g| weight > 0.0 && self.store.is_a(g, Kind::NavigationPoint));
                 Value::Object(goal)
             }
             Native::actorReachable => {
-                let reachable = match (self.object_of(this, Prop::Pawn), object(0)) {
+                let reachable = match (self.store.object_of(this, Prop::Pawn), object(0)) {
                     (Some(pawn), Some(target)) => self.actor_reachable(pawn, target, LineOfSight::Unknown, AnchorCheck::Checked),
                     _ => false,
                 };
                 Value::Bool(reachable)
             }
             Native::pointReachable => {
-                let reachable = match self.object_of(this, Prop::Pawn) {
+                let reachable = match self.store.object_of(this, Prop::Pawn) {
                     Some(pawn) => self.point_reachable(pawn, vec3(args.first()), false),
                     None => false,
                 };
@@ -365,16 +365,16 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn find_path(&mut self, controller: ObjectId, goal: Option<ObjectId>, location: Vector) -> Result<Option<ObjectId>, Error> {
-        let Some(pawn) = self.object_of(controller, Prop::Pawn) else {
-            self.diagnostics.log.push(format!("Warning: No pawn for FindPath by {}", self.object(controller).path));
+        let Some(pawn) = self.store.object_of(controller, Prop::Pawn) else {
+            self.diagnostics.log.push(format!("Warning: No pawn for FindPath by {}", self.store.object(controller).path));
             return Ok(None);
         };
-        self.set(controller, Prop::bPreparingMove, Value::Bool(false));
+        self.store.set(controller, Prop::bPreparingMove, Value::Bool(false));
         let weight = self.find_path_toward(controller, pawn, goal, location, Evaluator::EndPoint(None))?;
         if weight <= 0.0 {
             return Ok(None);
         }
-        Ok(match self.get(controller, Prop::RouteCache) {
+        Ok(match self.store.get(controller, Prop::RouteCache) {
             Some(Value::Array(cache)) => match cache.first() {
                 Some(&Value::Object(next)) => next,
                 _ => None,
@@ -388,22 +388,22 @@ impl<L: LoaderRef> Vm<L> {
         if self.graph().nodes.is_empty() {
             return Ok(0.0);
         }
-        self.set(pawn, Prop::NextPathRadius, Value::Float(0.0));
+        self.store.set(pawn, Prop::NextPathRadius, Value::Float(0.0));
         let specified_end = matches!(evaluator, Evaluator::EndPoint(_));
         let mut goal_location = goal_location;
         let mut end_anchor = None;
         let mut end_distance = 0.0;
         if let Some(goal) = goal {
-            goal_location = self.vector(goal, Prop::Location);
-            if self.physics_of(pawn) == Some(EPhysics::Walking) {
-                let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
+            goal_location = self.store.vector(goal, Prop::Location);
+            if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
+                let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
                 let hit = self.sweep(pawn, Sweep { start: goal_location, delta: [0.0, 0.0, -1000.0].into(), radius, height }, SweepAgainst::WORLD, None);
                 goal_location[2] -= 1000.0 * hit.time;
             }
             if let Some(&node) = self.graph().index.get(&goal) {
                 end_anchor = Some(node);
-            } else if self.is_a(goal, Kind::Pawn) && self.valid_anchor(goal) {
-                let anchor = self.object_of(goal, Prop::Anchor).and_then(|a| self.graph().index.get(&a).copied());
+            } else if self.store.is_a(goal, Kind::Pawn) && self.valid_anchor(goal) {
+                let anchor = self.store.object_of(goal, Prop::Anchor).and_then(|a| self.graph().index.get(&a).copied());
                 if let Some(anchor) = anchor {
                     end_anchor = Some(anchor);
                     end_distance = (self.graph().nodes[anchor].location - goal_location).size();
@@ -411,19 +411,19 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         if !self.valid_anchor(pawn) {
-            self.set(pawn, Prop::Anchor, Value::Object(None));
+            self.store.set(pawn, Prop::Anchor, Value::Object(None));
         }
-        let mut anchor = self.object_of(pawn, Prop::Anchor).and_then(|a| self.graph().index.get(&a).copied());
+        let mut anchor = self.store.object_of(pawn, Prop::Anchor).and_then(|a| self.graph().index.get(&a).copied());
         let mut start_distance = 0.0;
         if anchor.is_none() || (end_anchor.is_none() && specified_end) {
-            let location = self.vector(pawn, Prop::Location);
+            let location = self.store.vector(pawn, Prop::Location);
             if anchor.is_none() {
                 let Some(found) = self.find_start_anchor(pawn, location) else { return Ok(0.0) };
                 let node = &self.graph().nodes[found];
                 let (actor, node_location, node_radius) = (node.actor, node.location, node.radius);
-                self.set(pawn, Prop::Anchor, Value::Object(Some(actor)));
+                self.store.set(pawn, Prop::Anchor, Value::Object(Some(actor)));
                 start_distance = (node_location - location).size();
-                if start_distance <= node_radius + self.float_of(pawn, Prop::CollisionRadius) {
+                if start_distance <= node_radius + self.store.float_of(pawn, Prop::CollisionRadius) {
                     start_distance = 0.0;
                 }
                 anchor = Some(found);
@@ -455,7 +455,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn same_anchor_route(&mut self, controller: ObjectId, pawn: ObjectId, anchor: usize, goal: Option<ObjectId>, goal_location: Vector) -> f32 {
         let (node_actor, node_location) = (self.graph().nodes[anchor].actor, self.graph().nodes[anchor].location);
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         let first = if self.reached_destination(pawn, node_location - location, goal) {
             if goal.is_none() {
                 return 0.0;
@@ -468,12 +468,12 @@ impl<L: LoaderRef> Vm<L> {
         };
         let mut cache = vec![Value::Object(None); ROUTE_CACHE];
         cache[0] = Value::Object(first);
-        self.set(controller, Prop::RouteCache, Value::Array(cache));
+        self.store.set(controller, Prop::RouteCache, Value::Array(cache));
         (goal_location - location).size()
     }
 
     fn find_start_anchor(&mut self, pawn: ObjectId, location: Vector) -> Option<usize> {
-        let height = self.float_of(pawn, Prop::CollisionHeight);
+        let height = self.store.float_of(pawn, Prop::CollisionHeight);
         for candidate in self.nav_graph.as_ref().map_or_else(Vec::new, |graph| graph.nodes_near(&self.store, location)) {
             let node = &self.graph().nodes[candidate];
             let (actor, node_location, node_height) = (node.actor, node.location, node.height);
@@ -487,11 +487,11 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn find_end_anchor(&mut self, pawn: ObjectId, goal: Option<ObjectId>, goal_location: Vector) -> Option<usize> {
-        let height = self.float_of(pawn, Prop::CollisionHeight);
+        let height = self.store.float_of(pawn, Prop::CollisionHeight);
         for candidate in self.nav_graph.as_ref().map_or_else(Vec::new, |graph| graph.nodes_near(&self.store, goal_location)) {
             let node = &self.graph().nodes[candidate];
             let (node_location, node_height) = (node.location, node.height);
-            let goal_top = [goal_location[0], goal_location[1], goal_location[2] + goal.map_or(0.0, |g| self.float_of(g, Prop::CollisionHeight))];
+            let goal_top = [goal_location[0], goal_location[1], goal_location[2] + goal.map_or(0.0, |g| self.store.float_of(g, Prop::CollisionHeight))];
             let visible = self.trace_world(goal_location, node_location, Vector::ZERO).is_none()
                 || self.trace_world(goal_top.into(), Vector::new(node_location.x, node_location.y, node_location.z + node_height), Vector::ZERO).is_none();
             if !visible {
@@ -499,7 +499,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             let standing = [node_location.x, node_location.y, node_location.z + height - node_height];
             let reachable = match goal {
-                Some(goal) => self.walk_reachable(pawn, standing.into(), self.vector(goal, Prop::Location), Some(goal)),
+                Some(goal) => self.walk_reachable(pawn, standing.into(), self.store.vector(goal, Prop::Location), Some(goal)),
                 None => self.walk_reachable(pawn, standing.into(), goal_location, None),
             };
             if reachable {
@@ -510,9 +510,9 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn valid_anchor(&self, pawn: ObjectId) -> bool {
-        let Some(anchor) = self.object_of(pawn, Prop::Anchor) else { return false };
-        !self.flag_of(anchor, Prop::bBlocked)
-            && self.reached_destination(pawn, self.vector(anchor, Prop::Location) - self.vector(pawn, Prop::Location), Some(anchor))
+        let Some(anchor) = self.store.object_of(pawn, Prop::Anchor) else { return false };
+        !self.store.flag_of(anchor, Prop::bBlocked)
+            && self.reached_destination(pawn, self.store.vector(anchor, Prop::Location) - self.store.vector(pawn, Prop::Location), Some(anchor))
     }
 
     fn set_route_cache(&mut self, controller: ObjectId, pawn: ObjectId, found: &FoundRoute) {
@@ -521,7 +521,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(&(next, next_location)) = nodes.get(1) {
             first = 1;
             if found.start_distance > 0.0 {
-                let location = self.vector(pawn, Prop::Location);
+                let location = self.store.vector(pawn, Prop::Location);
                 let to_pawn = (location - next_location).size();
                 let along = (nodes[0].1 - next_location).size();
                 let skip = to_pawn < SKIP_ANCHOR_DISTANCE
@@ -535,28 +535,28 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn actor_reachable(&mut self, pawn: ObjectId, target: ObjectId, sight: LineOfSight, anchor: AnchorCheck) -> bool {
-        if self.is_deleted(target) {
+        if self.store.is_deleted(target) {
             return false;
         }
-        let location = self.vector(pawn, Prop::Location);
-        let there = self.vector(target, Prop::Location);
-        if anchor == AnchorCheck::Checked && self.object_of(pawn, Prop::Anchor) == Some(target) && self.valid_anchor(pawn) {
+        let location = self.store.vector(pawn, Prop::Location);
+        let there = self.store.vector(target, Prop::Location);
+        if anchor == AnchorCheck::Checked && self.store.object_of(pawn, Prop::Anchor) == Some(target) && self.valid_anchor(pawn) {
             return true;
         }
         let offset = there - location;
         let squared = offset.dot(offset);
-        if squared > REACH_DISTANCE_SQUARED || !(self.flag_of(pawn, Prop::bCanWalk) || self.flag_of(pawn, Prop::bCanFly)) {
+        if squared > REACH_DISTANCE_SQUARED || !(self.store.flag_of(pawn, Prop::bCanWalk) || self.store.flag_of(pawn, Prop::bCanFly)) {
             return false;
         }
         if sight == LineOfSight::Unknown {
-            let eyes = [location[0], location[1], location[2] + self.float_of(pawn, Prop::EyeHeight)];
+            let eyes = [location[0], location[1], location[2] + self.store.float_of(pawn, Prop::EyeHeight)];
             if self.trace_world(eyes.into(), there, Vector::ZERO).is_some() {
                 return false;
             }
         }
-        if self.is_a(target, Kind::Pawn) {
-            let radius = self.float_of(pawn, Prop::CollisionRadius);
-            let reach = radius + self.float_of(pawn, Prop::MeleeRange).min(radius * 1.5) + self.float_of(target, Prop::CollisionRadius);
+        if self.store.is_a(target, Kind::Pawn) {
+            let radius = self.store.float_of(pawn, Prop::CollisionRadius);
+            let reach = radius + self.store.float_of(pawn, Prop::MeleeRange).min(radius * 1.5) + self.store.float_of(target, Prop::CollisionRadius);
             if squared <= reach * reach {
                 return true;
             }
@@ -565,13 +565,13 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn point_reachable(&mut self, pawn: ObjectId, point: Vector, known_visible: bool) -> bool {
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         let (dx, dy) = (point[0] - location[0], point[1] - location[1]);
         if dx * dx + dy * dy > REACH_DISTANCE_SQUARED {
             return false;
         }
         if !known_visible {
-            let eyes = [location[0], location[1], location[2] + self.float_of(pawn, Prop::EyeHeight)];
+            let eyes = [location[0], location[1], location[2] + self.store.float_of(pawn, Prop::EyeHeight)];
             if self.trace_world(eyes.into(), point, Vector::ZERO).is_some() {
                 return false;
             }
@@ -580,7 +580,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
-        if self.physics_of(pawn) == Some(EPhysics::Flying) {
+        if self.store.physics_of(pawn) == Some(EPhysics::Flying) {
             return self.trace_world(from, to, Vector::ZERO).is_none();
         }
         self.walk_reachable(pawn, from, to, goal)
@@ -588,8 +588,8 @@ impl<L: LoaderRef> Vm<L> {
 
     /// A fall shortens the steps to 35 once; jumps are not tried (unverified).
     fn walk_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
-        let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
-        let mut step_size = radius.max(if self.flag_of(pawn, Prop::bCanJump) { 128.0 } else { 12.0 });
+        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let mut step_size = radius.max(if self.store.flag_of(pawn, Prop::bCanJump) { 128.0 } else { 12.0 });
         let mut location = from;
         for _ in 0..WALK_STEPS {
             let direction = to - location;
@@ -618,7 +618,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> WalkMove {
-        let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
+        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
         let go = |vm: &mut Self, at: &mut Vector, delta: Vector| {
             let hit = vm.sweep(pawn, Sweep { start: *at, delta, radius, height }, SweepAgainst::WORLD, None);
             *at += delta * hit.time;

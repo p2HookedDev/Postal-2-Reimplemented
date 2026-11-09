@@ -82,17 +82,17 @@ impl<L: LoaderRef> Vm<L> {
         let mut errors = self.karma_results();
         let (mut actors, mut ragdolls, mut flying) = (Vec::new(), Vec::new(), Vec::new());
         for o in self.actors() {
-            let list = match self.physics_of(o) {
+            let list = match self.store.physics_of(o) {
                 Some(EPhysics::Karma) => &mut actors,
                 Some(EPhysics::KarmaRagDoll) => &mut ragdolls,
                 Some(EPhysics::Projectile) => &mut flying,
                 _ => continue,
             };
-            if self.is_a(o, crate::Kind::Actor) && !self.is_deleted(o) {
+            if self.store.is_a(o, crate::Kind::Actor) && !self.store.is_deleted(o) {
                 list.push(o);
             }
         }
-        let gone: Vec<ObjectId> = self.karma.bodies.keys().filter(|&&a| self.is_deleted(a) || self.physics_of(a) != Some(EPhysics::Karma)).copied().collect();
+        let gone: Vec<ObjectId> = self.karma.bodies.keys().filter(|&&a| self.store.is_deleted(a) || self.store.physics_of(a) != Some(EPhysics::Karma)).copied().collect();
         for actor in gone {
             self.remove_karma_body(actor);
         }
@@ -121,20 +121,20 @@ impl<L: LoaderRef> Vm<L> {
         let bodies: Vec<(ObjectId, BodyId)> = self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id)).collect();
         for (actor, id) in bodies {
             if let Err(e) = self.follow_body(actor, id) {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
         }
         for impact in impacts {
             let Some(&actor) = self.karma.actors.get(&impact.body) else { continue };
-            let threshold = self.object_of(actor, Prop::KParams).map_or(f32::MAX, |k| self.float_of(k, Prop::KImpactThreshold));
+            let threshold = self.store.object_of(actor, Prop::KParams).map_or(f32::MAX, |k| self.store.float_of(k, Prop::KImpactThreshold));
             let speed = impact.velocity.size();
-            if self.is_deleted(actor) || speed <= threshold {
+            if self.store.is_deleted(actor) || speed <= threshold {
                 continue;
             }
             let other = impact.other.and_then(|other| self.karma.actors.get(&other).copied());
             let args = vec![Value::Object(other), Value::Vector(impact.position), Value::Vector(impact.velocity), Value::Vector(impact.normal)];
             if let Err(e) = self.event(actor, "KImpact", args) {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
         }
         errors
@@ -147,7 +147,7 @@ impl<L: LoaderRef> Vm<L> {
             self.remove_karma_body(actor);
         }
         self.ragdoll_physics_changed(actor, old);
-        if self.physics_of(actor) == Some(EPhysics::Karma) {
+        if self.store.physics_of(actor) == Some(EPhysics::Karma) {
             self.karma.failed.remove(&actor);
             self.karma_body(actor);
         }
@@ -159,13 +159,13 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(actor, Prop::Velocity, [0.0; 3].into());
             return Ok(());
         }
-        let max_speed = self.get(actor, Prop::KarmaMaxSpeed).as_ref().map_or(2500.0, float);
+        let max_speed = self.store.get(actor, Prop::KarmaMaxSpeed).as_ref().map_or(2500.0, float);
         let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return Ok(()) };
         world.limit_speed(id, max_speed);
         let (Some((location, quat)), Some(velocity)) = (world.pose(id), world.velocity(id)) else { return Ok(()) };
         let rotation = quat_to_rotator(quat);
         self.set_vector(actor, Prop::Location, location);
-        self.set(actor, Prop::Rotation, Value::Rotator(rotation));
+        self.store.set(actor, Prop::Rotation, Value::Rotator(rotation));
         self.relocate(actor);
         self.set_vector(actor, Prop::Velocity, velocity);
         let moved = self.karma.bodies.get_mut(&actor).is_some_and(|body| {
@@ -177,10 +177,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn karma_body(&mut self, actor: ObjectId) -> Option<BodyId> {
-        if self.physics_of(actor) != Some(EPhysics::Karma) || self.is_deleted(actor) || self.karma.failed.contains(&actor) {
+        if self.store.physics_of(actor) != Some(EPhysics::Karma) || self.store.is_deleted(actor) || self.karma.failed.contains(&actor) {
             return None;
         }
-        let (location, rotation) = (self.vector(actor, Prop::Location), self.rotator_of(actor, Prop::Rotation));
+        let (location, rotation) = (self.store.vector(actor, Prop::Location), self.store.rotator_of(actor, Prop::Rotation));
         if let Some(body) = self.karma.bodies.get_mut(&actor) {
             let id = body.id;
             if (body.location, body.rotation) != (location, rotation) {
@@ -193,7 +193,7 @@ impl<L: LoaderRef> Vm<L> {
             return Some(id);
         }
         let Some(params) = self.karma_params(actor) else {
-            self.diagnostics.log.push(format!("(Karma:) physKarma: Actor has no KParams: {}", self.object(actor).path));
+            self.diagnostics.log.push(format!("(Karma:) physKarma: Actor has no KParams: {}", self.store.object(actor).path));
             self.karma.failed.insert(actor);
             return None;
         };
@@ -226,7 +226,7 @@ impl<L: LoaderRef> Vm<L> {
             return;
         }
         let phase = self.profile_start();
-        let gravity = self.object_of(actor, Prop::PhysicsVolume).map_or(DEFAULT_GRAVITY, |v| self.vector(v, Prop::Gravity));
+        let gravity = self.store.object_of(actor, Prop::PhysicsVolume).map_or(DEFAULT_GRAVITY, |v| self.store.vector(v, Prop::Gravity));
         let mut world = p2_physics::World::new(gravity);
         for crate::world::LevelMesh { vertices, triangles } in self.level_meshes() {
             if let Err(e) = world.add_static_mesh(&vertices, triangles) {
@@ -257,15 +257,15 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn karma_params(&self, actor: ObjectId) -> Option<Params> {
-        let k = self.object_of(actor, Prop::KParams)?;
-        let or = |name: Prop, default: f32| self.get(k, name).as_ref().map_or(default, float);
+        let k = self.store.object_of(actor, Prop::KParams)?;
+        let or = |name: Prop, default: f32| self.store.get(k, name).as_ref().map_or(default, float);
         Some(Params {
             mass: or(Prop::KMass, 1.0).max(1e-3),
             linear_damping: or(Prop::KLinearDamping, 0.0),
             angular_damping: or(Prop::KAngularDamping, 0.0),
-            start_enabled: self.flag_of(k, Prop::KStartEnabled),
-            stay_upright: self.flag_of(k, Prop::bKStayUpright),
-            allow_rotate: self.flag_of(k, Prop::bKAllowRotate),
+            start_enabled: self.store.flag_of(k, Prop::KStartEnabled),
+            stay_upright: self.store.flag_of(k, Prop::bKStayUpright),
+            allow_rotate: self.store.flag_of(k, Prop::bKAllowRotate),
             friction: or(Prop::KFriction, 0.7),
             restitution: or(Prop::KRestitution, 0.3),
         })
@@ -275,12 +275,12 @@ impl<L: LoaderRef> Vm<L> {
     fn karma_static_shapes(&mut self) -> Vec<(Shape, Vector, [f32; 4])> {
         let actors: Vec<ObjectId> = self
             .actors()
-            .filter(|&a| !self.is_deleted(a) && self.flag_of(a, Prop::bStatic) && self.flag_of(a, Prop::bBlockKarma))
+            .filter(|&a| !self.store.is_deleted(a) && self.store.flag_of(a, Prop::bStatic) && self.store.flag_of(a, Prop::bBlockKarma))
             .filter(|&a| self.draw_type_of(a) == Some(crate::enums::EDrawType::StaticMesh))
             .collect();
         let mut placed = Vec::new();
         for actor in actors {
-            let Some(mesh) = self.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh)) else { continue };
+            let Some(mesh) = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh)) else { continue };
             let placement = self.drawn_placement(actor);
             let shapes = match (mesh.use_simple_collision, &mesh.props) {
                 (true, Some(props)) => shapes::mesh_shapes(Some(props), (mesh.min, mesh.max), placement.scale, placement.pre_pivot),
@@ -298,9 +298,9 @@ impl<L: LoaderRef> Vm<L> {
 
     fn karma_shapes(&mut self, actor: ObjectId) -> Vec<Shape> {
         let placement = self.drawn_placement(actor);
-        let mesh = self.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh));
+        let mesh = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh));
         let Some(mesh) = mesh else {
-            let (r, h) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+            let (r, h) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
             return vec![Shape::Box([r.max(1.0), r.max(1.0), h.max(1.0)].into())];
         };
         shapes::mesh_shapes(mesh.props.as_ref(), (mesh.min, mesh.max), placement.scale, placement.pre_pivot)
@@ -310,7 +310,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(shape) = self.karma.meshes.get(&mesh) {
             return shape.clone();
         }
-        let path = self.object(mesh).path.clone();
+        let path = self.store.object(mesh).path.clone();
         let read = |pkg: &Package, data: &[u8], export: usize| {
             let e = pkg.exports.get(export)?;
             let m = read_static_mesh(pkg, data, e).ok()?;
@@ -342,14 +342,14 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(result) = self.ragdoll_native(native, this, args) {
             return result;
         }
-        let params = self.object_of(this, Prop::KParams);
+        let params = self.store.object_of(this, Prop::KParams);
         let body = self.karma_body(this);
         if body_command(&mut self.karma.world, native, body, args) {
             return Ok(None);
         }
         match native {
             Native::KSetBlockKarma => {
-                self.set(this, Prop::bBlockKarma, Value::Bool(args.first().is_some_and(crate::interp::truthy)));
+                self.store.set(this, Prop::bBlockKarma, Value::Bool(args.first().is_some_and(crate::interp::truthy)));
             }
             Native::KEnableCollision | Native::KDisableCollision => {
                 let other = match args.first() {
@@ -366,7 +366,7 @@ impl<L: LoaderRef> Vm<L> {
                     (Some(w), Some(id)) => w.center_of_mass(id),
                     _ => None,
                 };
-                let centre = centre.unwrap_or_else(|| self.vector(this, Prop::Location));
+                let centre = centre.unwrap_or_else(|| self.store.vector(this, Prop::Location));
                 if let Some(out) = args.first_mut() {
                     *out = Value::Vector(centre);
                 }
@@ -379,10 +379,10 @@ impl<L: LoaderRef> Vm<L> {
     fn karma_params_native(&mut self, native: Native, params: Option<ObjectId>, body: Option<BodyId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let f = |n: usize| args.get(n).map_or(0.0, float);
         let b = |n: usize| args.get(n).is_some_and(crate::interp::truthy);
-        let param = |vm: &Self, name: Prop| params.map_or(0.0, |k| vm.float_of(k, name));
+        let param = |vm: &Self, name: Prop| params.map_or(0.0, |k| vm.store.float_of(k, name));
         let set_param = |vm: &mut Self, name: Prop, value: Value| {
             if let Some(k) = params {
-                vm.set(k, name, value);
+                vm.store.set(k, name, value);
             }
         };
         let world = &mut self.karma.world;

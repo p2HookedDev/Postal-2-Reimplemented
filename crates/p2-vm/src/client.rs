@@ -39,15 +39,15 @@ impl<L: LoaderRef> Vm<L> {
         self.host.client.master = Some(master);
         let console = self.add_interaction(master, "ini:Engine.Engine.Console", None)?;
         if console.is_some() {
-            self.set(master, Prop::Console, Value::Object(console));
+            self.store.set(master, Prop::Console, Value::Object(console));
         }
         let class = self.find_class("Engine", "Player")?;
         let viewport = self.new_object(class, None);
-        self.set(viewport, Prop::InteractionMaster, Value::Object(Some(master)));
+        self.store.set(viewport, Prop::InteractionMaster, Value::Object(Some(master)));
         self.host.client.viewport = Some(viewport);
         let menu = self.add_interaction(master, "ini:Engine.Engine.BaseMenu", Some(viewport))?;
         if menu.is_some() {
-            self.set(master, Prop::BaseMenu, Value::Object(menu));
+            self.store.set(master, Prop::BaseMenu, Value::Object(menu));
         }
         self.add_interaction(master, "ini:Engine.Engine.DefaultPlayerMenu", Some(viewport))?;
         Ok(())
@@ -60,9 +60,9 @@ impl<L: LoaderRef> Vm<L> {
     /// `UWindow` menus place their pointer from `WindowsMouseX` / `WindowsMouseY` while drawing; `x`, `y` are canvas pixels.
     pub fn set_mouse_position(&mut self, x: f32, y: f32) {
         let Some(viewport) = self.host.client.viewport else { return };
-        self.set(viewport, Prop::bWindowsMouseAvailable, Value::Bool(true));
-        self.set(viewport, Prop::WindowsMouseX, Value::Float(x));
-        self.set(viewport, Prop::WindowsMouseY, Value::Float(y));
+        self.store.set(viewport, Prop::bWindowsMouseAvailable, Value::Bool(true));
+        self.store.set(viewport, Prop::WindowsMouseX, Value::Float(x));
+        self.store.set(viewport, Prop::WindowsMouseY, Value::Float(y));
     }
 
     /// `Some(ratio)` while on. The host draws the level in a band `height / ratio` high, centred, the rest black; the HUD
@@ -73,7 +73,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn shows_mouse(&self) -> bool {
-        self.host.client.viewport.is_some_and(|viewport| self.flag_of(viewport, Prop::bShowWindowsMouse))
+        self.host.client.viewport.is_some_and(|viewport| self.store.flag_of(viewport, Prop::bShowWindowsMouse))
     }
 
     pub fn set_video_modes(&mut self, modes: &'static [VideoMode]) {
@@ -88,7 +88,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn add_interaction(&mut self, master: ObjectId, name: &str, owner: Option<ObjectId>) -> Result<Option<ObjectId>, Error> {
         let Some(function) = self.find_object_function(master, "AddInteraction")? else { return Ok(None) };
-        let Some(class) = self.object(master).class else { return Ok(None) };
+        let Some(class) = self.store.object(master).class else { return Ok(None) };
         let args = vec![Value::Str(name.to_owned()), Value::Object(owner)];
         Ok(match self.call(&function, Some(master), class, args)? {
             Some(Value::Object(interaction)) => interaction,
@@ -99,7 +99,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn interactions_key_event(&mut self, key: &str, action: u8, delta: f32) -> Result<bool, Error> {
         let (Some(master), Some(key)) = (self.host.client.master, self.input_key(key)) else { return Ok(false) };
         let Some(function) = self.find_object_function(master, "Process_KeyEvent")? else { return Ok(false) };
-        let Some(class) = self.object(master).class else { return Ok(false) };
+        let Some(class) = self.store.object(master).class else { return Ok(false) };
         for list in self.interaction_lists(master).into_iter().flatten() {
             let args = vec![list, Value::Byte(key), Value::Byte(action), Value::Float(delta)];
             if self.call(&function, Some(master), class, args)?.as_ref().is_some_and(crate::interp::truthy) {
@@ -113,7 +113,7 @@ impl<L: LoaderRef> Vm<L> {
     pub fn typed(&mut self, text: &str) -> Result<(), Error> {
         let Some(master) = self.host.client.master else { return Ok(()) };
         let Some(function) = self.find_object_function(master, "Process_KeyType")? else { return Ok(()) };
-        let Some(class) = self.object(master).class else { return Ok(()) };
+        let Some(class) = self.store.object(master).class else { return Ok(()) };
         for c in text.chars().filter(|c| !c.is_control()) {
             let key = u8::try_from(u32::from(c)).unwrap_or(0);
             for list in self.interaction_lists(master).into_iter().flatten() {
@@ -223,8 +223,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn interaction_lists(&self, master: ObjectId) -> [Option<Value>; 2] {
-        let global = self.get(master, Prop::GlobalInteractions);
-        let local = self.host.client.viewport.and_then(|viewport| self.get(viewport, Prop::LocalInteractions));
+        let global = self.store.get(master, Prop::GlobalInteractions);
+        let local = self.host.client.viewport.and_then(|viewport| self.store.get(viewport, Prop::LocalInteractions));
         [global, local]
     }
 

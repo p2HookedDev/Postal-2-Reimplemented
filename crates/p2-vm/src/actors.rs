@@ -79,7 +79,7 @@ impl DynamicActors {
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn dynamic_actors(&mut self) -> Vec<ObjectId> {
         let mut dynamic = std::mem::take(&mut self.store.dynamic_ids);
-        let actors = dynamic.walk(|actor| self.flag_of(actor, Prop::bStatic));
+        let actors = dynamic.walk(|actor| self.store.flag_of(actor, Prop::bStatic));
         self.store.dynamic_ids = dynamic;
         actors
     }
@@ -87,7 +87,7 @@ impl<L: LoaderRef> Vm<L> {
     fn next_destroy_walk_actor(&mut self, after: Option<ObjectId>) -> Option<ObjectId> {
         if !self.store.dynamic_ids.unsorted.is_empty() {
             let mut dynamic = std::mem::take(&mut self.store.dynamic_ids);
-            dynamic.sort_new(|actor| self.flag_of(actor, Prop::bStatic));
+            dynamic.sort_new(|actor| self.store.flag_of(actor, Prop::bStatic));
             self.store.dynamic_ids = dynamic;
         }
         self.store.dynamic_ids.next_after(after)
@@ -95,14 +95,14 @@ impl<L: LoaderRef> Vm<L> {
 
     fn list_linked_statics(&mut self) {
         if self.store.dynamic_ids.linked_statics.is_none() {
-            let holds_links = |actor: ObjectId| self.object_of(actor, Prop::Owner).is_some() || self.array_words(actor, Prop::Touching).is_some_and(|words| !words.is_empty());
-            let linked = self.actors().filter(|&actor| self.flag_of(actor, Prop::bStatic) && holds_links(actor)).collect();
+            let holds_links = |actor: ObjectId| self.store.object_of(actor, Prop::Owner).is_some() || self.store.array_words(actor, Prop::Touching).is_some_and(|words| !words.is_empty());
+            let linked = self.actors().filter(|&actor| self.store.flag_of(actor, Prop::bStatic) && holds_links(actor)).collect();
             self.store.dynamic_ids.linked_statics = Some(linked);
         }
     }
 
     fn link_static(&mut self, actor: ObjectId) {
-        let is_static = self.flag_of(actor, Prop::bStatic);
+        let is_static = self.store.flag_of(actor, Prop::bStatic);
         if is_static && let Some(list) = &mut self.store.dynamic_ids.linked_statics {
             list.insert(actor);
         }
@@ -132,8 +132,8 @@ impl<L: LoaderRef> Vm<L> {
         // Before the actor is constructed, `FindSpot` may move it, else the spawn fails with no object made.
         // A spawn without a location (the host's own) has none to fit.
         if let Some(value) = &placement[0] {
-            let default_flag = |vm: &Self, name: Prop| matches!(vm.default_value(class, name), Some(Value::Bool(true)));
-            let default_float = |vm: &Self, name: Prop| match vm.default_value(class, name) {
+            let default_flag = |vm: &Self, name: Prop| matches!(vm.store.default_value(class, name), Some(Value::Bool(true)));
+            let default_float = |vm: &Self, name: Prop| match vm.store.default_value(class, name) {
                 Some(Value::Float(value)) => value,
                 _ => 0.0,
             };
@@ -141,7 +141,7 @@ impl<L: LoaderRef> Vm<L> {
                 let (radius, height) = (default_float(self, Prop::CollisionRadius), default_float(self, Prop::CollisionHeight));
                 let mut location = crate::natives::vec3(Some(value));
                 if !crate::find_spot::find_spot(self, Vector::new(radius, radius, height), &mut location) {
-                    let name = self.name(self.class(class).name).to_owned();
+                    let name = self.store.name(self.store.class(class).name).to_owned();
                     self.diagnostics.log.push(format!("SpawnActor failed because {name} won't fit at the specified location"));
                     return Ok(None);
                 }
@@ -150,51 +150,51 @@ impl<L: LoaderRef> Vm<L> {
         }
         let actor = self.new_object(class, None);
         self.instance_emitters(actor);
-        if self.is_a(actor, self.script.lookups.class_names.hud) {
+        if self.store.is_a(actor, self.script.lookups.class_names.hud) {
             self.construct_hud_movies(actor)?;
         }
-        self.set(actor, Prop::Level, Value::Object(self.level));
-        self.set(actor, Prop::Tag, Value::Name(self.class(class).name));
+        self.store.set(actor, Prop::Level, Value::Object(self.level));
+        self.store.set(actor, Prop::Tag, Value::Name(self.store.class(class).name));
         for (property, value) in [Prop::Location, Prop::Rotation].into_iter().zip(placement) {
             if let Some(value @ (Value::Struct(_) | Value::Vector(_) | Value::Rotator(_))) = value {
-                self.set(actor, property, value);
+                self.store.set(actor, property, value);
             }
         }
         // Whether the hash add below comes before or after `GainedChild` is unverified.
         self.set_owner(actor, owner)?;
-        self.set(actor, Prop::Instigator, Value::Object(instigator));
+        self.store.set(actor, Prop::Instigator, Value::Object(instigator));
         self.relocate(actor);
         for event in SPAWN_EVENTS {
             self.event(actor, event, Vec::new())?;
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(None);
             }
         }
         self.set_zone(actor, ZoneEvents::Sent, OldZone::Level)?;
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(None);
         }
-        let at = self.vector(actor, Prop::Location);
+        let at = self.store.vector(actor, Prop::Location);
         if self.actor_encroachment(actor, at)? {
-            self.diagnostics.log.push(format!("SpawnActor failed because {} was encroaching", self.object(actor).path));
+            self.diagnostics.log.push(format!("SpawnActor failed because {} was encroaching", self.store.object(actor).path));
             self.destroy(actor)?;
             return Ok(None);
         }
         for event in BEGUN_EVENTS {
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(None);
             }
             self.event(actor, event, Vec::new())?;
         }
-        Ok((!self.is_deleted(actor)).then_some(actor))
+        Ok((!self.store.is_deleted(actor)).then_some(actor))
     }
 
     /// No check that the owner changed, nor for a destroy between.
     pub(crate) fn set_owner(&mut self, actor: ObjectId, owner: Option<ObjectId>) -> Result<(), Error> {
-        if let Some(old) = self.object_of(actor, Prop::Owner) {
+        if let Some(old) = self.store.object_of(actor, Prop::Owner) {
             self.event(old, "LostChild", [Value::Object(Some(actor))])?;
         }
-        self.set(actor, Prop::Owner, Value::Object(owner));
+        self.store.set(actor, Prop::Owner, Value::Object(owner));
         self.link_static(actor);
         if let Some(new) = owner {
             self.event(new, "GainedChild", [Value::Object(Some(actor))])?;
@@ -207,9 +207,9 @@ impl<L: LoaderRef> Vm<L> {
     fn actor_encroachment(&mut self, actor: ObjectId, at: Vector) -> Result<bool, Error> {
         let encroacher = self.is_encroacher(actor);
         let tested = encroachment_tested([
-            self.flag_of(actor, Prop::bCollideActors),
-            self.flag_of(actor, Prop::bBlockActors),
-            self.flag_of(actor, Prop::bBlockPlayers),
+            self.store.flag_of(actor, Prop::bCollideActors),
+            self.store.flag_of(actor, Prop::bBlockActors),
+            self.store.flag_of(actor, Prop::bBlockPlayers),
             encroacher,
         ]);
         if !tested {
@@ -221,11 +221,11 @@ impl<L: LoaderRef> Vm<L> {
             .filter(|&other| Some(other) != self.level && !self.is_based_on(other, actor))
             .collect();
         for &other in &found {
-            if self.is_deleted(other) || !self.is_blocked_by(actor, other) {
+            if self.store.is_deleted(other) || !self.is_blocked_by(actor, other) {
                 continue;
             }
             if encroacher && !self.is_encroacher(other) {
-                let still = self.at_location(actor, at, |vm| if vm.is_a(other, Kind::Volume) { vm.shapes_overlap(actor, other) } else { vm.primitive_overlaps(actor, other) });
+                let still = self.at_location(actor, at, |vm| if vm.store.is_a(other, Kind::Volume) { vm.shapes_overlap(actor, other) } else { vm.primitive_overlaps(actor, other) });
                 if !still {
                     continue;
                 }
@@ -236,10 +236,10 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.end_touches(actor)?;
         for other in found {
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 break;
             }
-            if self.is_deleted(other) {
+            if self.store.is_deleted(other) {
                 continue;
             }
             if self.is_blocked_by(actor, other) {
@@ -252,7 +252,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn at_location<T>(&mut self, actor: ObjectId, at: Vector, f: impl FnOnce(&mut Self) -> T) -> T {
-        let from = self.vector(actor, Prop::Location);
+        let from = self.store.vector(actor, Prop::Location);
         self.set_vector(actor, Prop::Location, at);
         let result = f(self);
         self.set_vector(actor, Prop::Location, from);
@@ -265,7 +265,7 @@ impl<L: LoaderRef> Vm<L> {
             .into_iter()
             .filter(|&other| {
                 self.should_trace(other, Some(actor), crate::world::trace::ALL_COLLIDING)
-                    && !(encroacher && self.flag_of(other, Prop::bWorldGeometry))
+                    && !(encroacher && self.store.flag_of(other, Prop::bWorldGeometry))
             })
             .collect()
     }
@@ -273,10 +273,10 @@ impl<L: LoaderRef> Vm<L> {
     /// `Emitters` is an `export editinline` object array: constructing an object at run time instances
     /// such subobjects (unverified), so one fire's script `+=` stays its own.
     fn instance_emitters(&mut self, actor: ObjectId) {
-        if !self.is_a(actor, Kind::Emitter) {
+        if !self.store.is_a(actor, Kind::Emitter) {
             return;
         }
-        let Some(Value::Array(templates)) = self.get(actor, Prop::Emitters) else { return };
+        let Some(Value::Array(templates)) = self.store.get(actor, Prop::Emitters) else { return };
         let emitters = templates
             .into_iter()
             .map(|template| match template {
@@ -284,29 +284,29 @@ impl<L: LoaderRef> Vm<L> {
                 other => other,
             })
             .collect();
-        self.set(actor, Prop::Emitters, Value::Array(emitters));
+        self.store.set(actor, Prop::Emitters, Value::Array(emitters));
     }
 
     pub(crate) fn encroached(&mut self, actor: ObjectId) -> Option<ObjectId> {
         let blocks = |vm: &Self, object: ObjectId| {
-            vm.flag_of(object, Prop::bCollideActors) && vm.flag_of(object, Prop::bBlockActors) && !vm.is_deleted(object)
+            vm.store.flag_of(object, Prop::bCollideActors) && vm.store.flag_of(object, Prop::bBlockActors) && !vm.store.is_deleted(object)
         };
         if !blocks(self, actor) {
             return None;
         }
-        let at = self.vector(actor, Prop::Location);
-        let nearby = self.colliders_near([at[0], at[1]], [at[0], at[1]], self.float_of(actor, Prop::CollisionRadius));
+        let at = self.store.vector(actor, Prop::Location);
+        let nearby = self.colliders_near([at[0], at[1]], [at[0], at[1]], self.store.float_of(actor, Prop::CollisionRadius));
         let found = nearby
             .iter()
             .map(|e| e.actor)
-            .find(|&other| other != actor && self.is_a(other, Kind::Actor) && blocks(self, other) && self.shapes_overlap(actor, other));
+            .find(|&other| other != actor && self.store.is_a(other, Kind::Actor) && blocks(self, other) && self.shapes_overlap(actor, other));
         self.give_entries(nearby);
         found
     }
 
     pub(crate) fn cylinders_overlap(&self, a: ObjectId, b: ObjectId) -> bool {
-        let float = |object: ObjectId, name: Prop| self.float_of(object, name);
-        let (here, there) = (self.vector(a, Prop::Location), self.vector(b, Prop::Location));
+        let float = |object: ObjectId, name: Prop| self.store.float_of(object, name);
+        let (here, there) = (self.store.vector(a, Prop::Location), self.store.vector(b, Prop::Location));
         cylinders_meet(
             here,
             there,
@@ -318,14 +318,14 @@ impl<L: LoaderRef> Vm<L> {
     /// `Encroachment::Ignored` is retail's `bIgnoreEncroachment`. No kill here: `EncroachedBy` and `EncroachingOn` are
     /// script's (`Pawn`: the telefrag, and `bWarping` refusing it).
     pub(crate) fn far_move_actor(&mut self, actor: ObjectId, location: Vector, encroachment: Encroachment) -> Result<bool, Error> {
-        if self.flag_of(actor, Prop::bStatic) || !self.flag_of(actor, Prop::bMovable) {
+        if self.store.flag_of(actor, Prop::bStatic) || !self.store.flag_of(actor, Prop::bMovable) {
             return Ok(false);
         }
-        let flags = [Prop::bCollideWorld, Prop::bCollideWhenPlacing, Prop::bSkipEncroachmentCheck].map(|name| self.flag_of(actor, name));
+        let flags = [Prop::bCollideWorld, Prop::bCollideWhenPlacing, Prop::bSkipEncroachmentCheck].map(|name| self.store.flag_of(actor, name));
         let (fit, encroach) = far_move_tests(encroachment, flags);
         let mut to = location;
         if fit {
-            let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+            let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
             if !crate::find_spot::find_spot(self, Vector::new(radius, radius, height), &mut to) {
                 return Ok(false);
             }
@@ -333,7 +333,7 @@ impl<L: LoaderRef> Vm<L> {
         if encroach && self.actor_encroachment(actor, to)? {
             return Ok(false);
         }
-        if !self.is_deleted(actor) {
+        if !self.store.is_deleted(actor) {
             self.place_far_moved(actor, to, encroachment)?;
         }
         Ok(true)
@@ -342,11 +342,11 @@ impl<L: LoaderRef> Vm<L> {
     /// `bJustTeleported` makes a warp zone's `ActorEntered` skip the actor, so one warped into the other
     /// side's zone is not sent back. `Attached` actors move on their own, result ignored; not turned.
     pub fn place_far_moved(&mut self, actor: ObjectId, location: Vector, encroachment: Encroachment) -> Result<(), Error> {
-        self.set(actor, Prop::bJustTeleported, Value::Bool(true));
-        let from = self.vector(actor, Prop::Location);
-        for other in self.object_list(actor, Prop::Attached) {
-            if !self.is_deleted(other) {
-                let to = (self.vector(other, Prop::Location) + location) - from;
+        self.store.set(actor, Prop::bJustTeleported, Value::Bool(true));
+        let from = self.store.vector(actor, Prop::Location);
+        for other in self.store.object_list(actor, Prop::Attached) {
+            if !self.store.is_deleted(other) {
+                let to = (self.store.vector(other, Prop::Location) + location) - from;
                 self.far_move_actor(other, to, encroachment)?;
             }
         }
@@ -358,11 +358,11 @@ impl<L: LoaderRef> Vm<L> {
 
     fn overlap_side(&self, actor: ObjectId) -> OverlapSide {
         OverlapSide {
-            brush: self.object_of(actor, Prop::Brush).is_some() && self.is_a(actor, Kind::Brush),
+            brush: self.store.object_of(actor, Prop::Brush).is_some() && self.store.is_a(actor, Kind::Brush),
             encroacher: self.is_encroacher(actor),
-            only_affect_pawns: self.flag_of(actor, Prop::bOnlyAffectPawns),
-            pawn: self.is_a(actor, Kind::Pawn),
-            blocks_extent: self.flag_of(actor, Prop::bBlockNonZeroExtentTraces),
+            only_affect_pawns: self.store.flag_of(actor, Prop::bOnlyAffectPawns),
+            pawn: self.store.is_a(actor, Kind::Pawn),
+            blocks_extent: self.store.flag_of(actor, Prop::bBlockNonZeroExtentTraces),
         }
     }
 
@@ -372,7 +372,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn may_overlap_from(&self, side: OverlapSide, actor: ObjectId, other: ObjectId) -> bool {
         overlap_allowed(side, self.overlap_side(other), false)
-            && self.object_of(actor, Prop::Owner) != Some(other)
+            && self.store.object_of(actor, Prop::Owner) != Some(other)
             && actor != other
             && !self.is_based_on(actor, other)
             && !self.is_based_on(other, actor)
@@ -381,23 +381,23 @@ impl<L: LoaderRef> Vm<L> {
     /// Begins and ends touches for `actor` where it stands; both blocking, they bump instead. Both actors
     /// get the event, `actor` first. An unchanged touched set writes nothing and builds no lists.
     pub fn update_touching(&mut self, actor: ObjectId) -> Result<(), Error> {
-        let flag = |vm: &Self, object: ObjectId, name: Prop| vm.flag_of(object, name);
-        let touching = |vm: &Self, object: ObjectId| vm.object_list(object, Prop::Touching);
-        let collides = flag(self, actor, Prop::bCollideActors) && !self.is_deleted(actor);
+        let flag = |vm: &Self, object: ObjectId, name: Prop| vm.store.flag_of(object, name);
+        let touching = |vm: &Self, object: ObjectId| vm.store.object_list(object, Prop::Touching);
+        let collides = flag(self, actor, Prop::bCollideActors) && !self.store.is_deleted(actor);
         let now: Vec<ObjectId> = if collides {
-            let at = self.vector(actor, Prop::Location);
-            let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+            let at = self.store.vector(actor, Prop::Location);
+            let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
             let blocks = flag(self, actor, Prop::bBlockActors);
             let side = self.overlap_side(actor);
             let by_primitive = self.overlaps_by_primitive(actor);
             let cylinders = |vm: &Self, other: ObjectId| {
-                let (r, h) = (vm.float_of(other, Prop::CollisionRadius), vm.float_of(other, Prop::CollisionHeight));
-                cylinders_meet(at, vm.vector(other, Prop::Location), radius + r, height + h)
+                let (r, h) = (vm.store.float_of(other, Prop::CollisionRadius), vm.store.float_of(other, Prop::CollisionHeight));
+                cylinders_meet(at, vm.store.vector(other, Prop::Location), radius + r, height + h)
             };
             let can_touch = |vm: &Self, other: ObjectId| {
                 other != actor
-                    && !vm.is_deleted(other)
-                    && vm.is_a(other, Kind::Actor)
+                    && !vm.store.is_deleted(other)
+                    && vm.store.is_a(other, Kind::Actor)
                     && flag(vm, other, Prop::bCollideActors)
                     && !(blocks && flag(vm, other, Prop::bBlockActors))
                     && (by_primitive || cylinders(vm, other) || vm.overlaps_by_primitive(other))
@@ -413,7 +413,7 @@ impl<L: LoaderRef> Vm<L> {
             Vec::new()
         };
         let unchanged = self
-            .array_words(actor, Prop::Touching)
+            .store.array_words(actor, Prop::Touching)
             .map_or(now.is_empty(), |words| same_members(words.iter().filter_map(|&w| crate::memory::object(w)), &now));
         if unchanged {
             return Ok(());
@@ -430,12 +430,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn touches(&self, actor: ObjectId, other: ObjectId) -> bool {
-        self.array_words(actor, Prop::Touching).is_some_and(|words| words.iter().any(|&w| crate::memory::object(w) == Some(other)))
+        self.store.array_words(actor, Prop::Touching).is_some_and(|words| words.iter().any(|&w| crate::memory::object(w) == Some(other)))
     }
 
     fn drop_touching(&mut self, actor: ObjectId, other: ObjectId) {
-        let kept = self.object_list(actor, Prop::Touching).into_iter().filter(|&o| o != other).map(|o| Value::Object(Some(o))).collect();
-        self.set(actor, Prop::Touching, Value::Array(kept));
+        let kept = self.store.object_list(actor, Prop::Touching).into_iter().filter(|&o| o != other).map(|o| Value::Object(Some(o))).collect();
+        self.store.set(actor, Prop::Touching, Value::Array(kept));
     }
 
     fn end_touch(&mut self, actor: ObjectId, other: ObjectId) -> Result<(), Error> {
@@ -451,8 +451,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn end_touches(&mut self, actor: ObjectId) -> Result<(), Error> {
-        for other in self.object_list(actor, Prop::Touching) {
-            if self.is_deleted(other) || !self.may_overlap(actor, other) || !self.shapes_overlap(actor, other) {
+        for other in self.store.object_list(actor, Prop::Touching) {
+            if self.store.is_deleted(other) || !self.may_overlap(actor, other) || !self.shapes_overlap(actor, other) {
                 self.end_touch(actor, other)?;
             }
         }
@@ -462,7 +462,7 @@ impl<L: LoaderRef> Vm<L> {
     /// `other`'s side runs only if `other` is still on `actor`'s list afterwards, as retail. An `other`
     /// destroyed during `actor`'s `Touch` gets none: its destroy emptied the lists.
     pub(crate) fn begin_touch(&mut self, actor: ObjectId, other: ObjectId) -> Result<(), Error> {
-        if self.touch_side(actor, other)? && !self.is_deleted(other) {
+        if self.touch_side(actor, other)? && !self.store.is_deleted(other) {
             self.touch_side(other, actor)?;
         }
         Ok(())
@@ -472,29 +472,29 @@ impl<L: LoaderRef> Vm<L> {
         if self.touches(actor, other) {
             return Ok(true);
         }
-        let mut list = match self.get(actor, Prop::Touching) {
+        let mut list = match self.store.get(actor, Prop::Touching) {
             Some(Value::Array(list)) => list,
             _ => Vec::new(),
         };
         list.push(Value::Object(Some(other)));
-        self.set(actor, Prop::Touching, Value::Array(list));
+        self.store.set(actor, Prop::Touching, Value::Array(list));
         self.link_static(actor);
         self.event(actor, "Touch", [Value::Object(Some(other))])?;
-        Ok(!self.is_deleted(actor) && self.touches(actor, other))
+        Ok(!self.store.is_deleted(actor) && self.touches(actor, other))
     }
 
     /// Overlap test as the hash query would find them (the query's own filter is unverified).
     fn overlapping(&mut self, actor: ObjectId) -> Vec<ObjectId> {
-        let at = self.vector(actor, Prop::Location);
-        let nearby = self.colliders_near([at[0], at[1]], [at[0], at[1]], self.float_of(actor, Prop::CollisionRadius));
+        let at = self.store.vector(actor, Prop::Location);
+        let nearby = self.colliders_near([at[0], at[1]], [at[0], at[1]], self.store.float_of(actor, Prop::CollisionRadius));
         let overlapping = nearby
             .iter()
             .map(|e| e.actor)
             .filter(|&other| {
                 other != actor
-                    && self.is_a(other, Kind::Actor)
-                    && !self.is_deleted(other)
-                    && self.flag_of(other, Prop::bCollideActors)
+                    && self.store.is_a(other, Kind::Actor)
+                    && !self.store.is_deleted(other)
+                    && self.store.flag_of(other, Prop::bCollideActors)
                     && self.may_overlap(actor, other)
                     && self.shapes_overlap(actor, other)
             })
@@ -505,7 +505,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn touch_overlapped(&mut self, actor: ObjectId) -> Result<(), Error> {
         for other in self.overlapping(actor) {
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 break;
             }
             if !self.is_blocked_by(actor, other) {
@@ -517,7 +517,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn set_collision_before(&mut self, actor: ObjectId, was: bool, now: bool) -> Result<(), Error> {
         if was && !now {
-            for other in self.object_list(actor, Prop::Touching) {
+            for other in self.store.object_list(actor, Prop::Touching) {
                 self.end_touch(other, actor)?;
             }
         }
@@ -534,19 +534,19 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn mark_rendered(&mut self, actor: ObjectId) -> Result<(), Error> {
         let Some(level) = self.level else { return Ok(()) };
-        let time = self.get(level, Prop::TimeSeconds).unwrap_or(Value::Float(0.0));
-        self.set(actor, Prop::LastRenderTime, time);
+        let time = self.store.get(level, Prop::TimeSeconds).unwrap_or(Value::Float(0.0));
+        self.store.set(actor, Prop::LastRenderTime, time);
         Ok(())
     }
 
     /// `axes` in world directions. No touch events: bone attachments move only when their base is drawn,
     /// so scripts read where they were last drawn (a `Head`'s `Location` for head shots).
     pub fn place_attachment(&mut self, actor: ObjectId, location: Vector, axes: [Vector; 3]) {
-        if self.is_deleted(actor) || self.object_of(actor, Prop::Base).is_none() || !self.on_bone(actor) {
+        if self.store.is_deleted(actor) || self.store.object_of(actor, Prop::Base).is_none() || !self.on_bone(actor) {
             return;
         }
-        self.set(actor, Prop::Location, Value::Vector(location));
-        self.set(actor, Prop::Rotation, Value::Rotator(crate::natives::orthogonal_rotation(axes[0], axes[1], axes[2])));
+        self.store.set(actor, Prop::Location, Value::Vector(location));
+        self.store.set(actor, Prop::Rotation, Value::Rotator(crate::natives::orthogonal_rotation(axes[0], axes[1], axes[2])));
         self.volume_moved(actor);
         self.relocate(actor);
     }
@@ -554,31 +554,31 @@ impl<L: LoaderRef> Vm<L> {
     /// In retail order. `Attached` detach by a live index walk, so retail skips every other one. After
     /// every event a nested destroy that finished ends this one. The object and its lists stay, as retail.
     pub fn destroy(&mut self, actor: ObjectId) -> Result<bool, Error> {
-        if self.flag_of(actor, Prop::bStatic) || self.flag_of(actor, Prop::bNoDelete) {
+        if self.store.flag_of(actor, Prop::bStatic) || self.store.flag_of(actor, Prop::bNoDelete) {
             return Ok(false);
         }
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(true);
         }
         self.event(actor, "EndState", Vec::new())?;
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(true);
         }
         self.event(actor, "Destroyed", Vec::new())?;
-        if self.object_of(actor, Prop::Base).is_some() {
+        if self.store.object_of(actor, Prop::Base).is_some() {
             self.set_base(actor, None, [0.0, 0.0, 1.0].into())?;
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(true);
             }
         }
         let mut i = 0;
-        while let Some(word) = self.array_words(actor, Prop::Attached).and_then(|words| words.get(i).copied()) {
+        while let Some(word) = self.store.array_words(actor, Prop::Attached).and_then(|words| words.get(i).copied()) {
             if let Some(attached) = crate::memory::object(word) {
                 self.set_base(attached, None, [0.0, 0.0, 1.0].into())?;
             }
             i += 1;
         }
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(true);
         }
         // The walk sees actors spawned during its events (retail's list grows at the end).
@@ -586,10 +586,10 @@ impl<L: LoaderRef> Vm<L> {
         let mut at = None;
         while let Some(other) = self.next_destroy_walk_actor(at) {
             at = Some(other);
-            if self.object_of(other, Prop::Owner) == Some(actor) {
+            if self.store.object_of(other, Prop::Owner) == Some(actor) {
                 self.event(actor, "LostChild", [Value::Object(Some(other))])?;
-                self.set(other, Prop::Owner, Value::Object(None));
-                if self.is_deleted(actor) {
+                self.store.set(other, Prop::Owner, Value::Object(None));
+                if self.store.is_deleted(actor) {
                     return Ok(true);
                 }
             }
@@ -597,19 +597,19 @@ impl<L: LoaderRef> Vm<L> {
                 self.drop_touching(actor, other);
                 self.event(other, "UnTouch", [Value::Object(Some(actor))])?;
                 self.drop_touching(other, actor);
-                if self.is_deleted(actor) {
+                if self.store.is_deleted(actor) {
                     return Ok(true);
                 }
             }
         }
-        if let Some(owner) = self.object_of(actor, Prop::Owner) {
+        if let Some(owner) = self.store.object_of(actor, Prop::Owner) {
             self.event(owner, "LostChild", [Value::Object(Some(actor))])?;
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(true);
             }
         }
         self.script.states.leave(actor);
-        self.set(actor, Prop::bDeleteMe, Value::Bool(true));
+        self.store.set(actor, Prop::bDeleteMe, Value::Bool(true));
         self.store.actor_ids.remove(&actor);
         self.store.dynamic_ids.removed(actor);
         self.relocate(actor);
@@ -627,14 +627,9 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    #[inline]
-    pub fn is_deleted(&self, actor: ObjectId) -> bool {
-        self.store.is_deleted(actor)
-    }
-
     /// In retail's order: animation, `Tick` event, state code, timer and `LifeSpan`, physics.
     pub fn tick_actor(&mut self, actor: ObjectId, delta: f32) -> Result<(), Error> {
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(());
         }
         if self.rests(actor)? {
@@ -645,12 +640,12 @@ impl<L: LoaderRef> Vm<L> {
         let phase = self.profile_start();
         self.update_animation(actor, delta)?;
         self.profile_phase("phase: animation", phase);
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(());
         }
         // A player controller gets no `Tick` event; the local player's reads input and gets `PlayerTick`.
         let phase = self.profile_start();
-        if !self.is_a(actor, Kind::PlayerController) {
+        if !self.store.is_a(actor, Kind::PlayerController) {
             self.event(actor, "Tick", [Value::Float(delta)])?;
         } else if self.player() == Some(actor) {
             self.player_tick(actor, delta)?;
@@ -660,69 +655,69 @@ impl<L: LoaderRef> Vm<L> {
         self.tick(actor, delta)?;
         self.profile_phase("phase: state code", phase);
         // An actor whose `LifeSpan` runs out is destroyed without its physics this frame.
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(());
         }
-        if let Some(Value::Float(rate)) = self.get(actor, Prop::TimerRate)
+        if let Some(Value::Float(rate)) = self.store.get(actor, Prop::TimerRate)
             && rate > 0.0
         {
-            let counter = match self.get(actor, Prop::TimerCounter) {
+            let counter = match self.store.get(actor, Prop::TimerCounter) {
                 Some(Value::Float(counter)) => counter + delta,
                 _ => delta,
             };
             if counter >= rate {
-                if self.flag_of(actor, Prop::bTimerLoop) {
-                    self.set(actor, Prop::TimerCounter, Value::Float(counter - rate));
+                if self.store.flag_of(actor, Prop::bTimerLoop) {
+                    self.store.set(actor, Prop::TimerCounter, Value::Float(counter - rate));
                 } else {
-                    self.set(actor, Prop::TimerRate, Value::Float(0.0));
-                    self.set(actor, Prop::TimerCounter, Value::Float(0.0));
+                    self.store.set(actor, Prop::TimerRate, Value::Float(0.0));
+                    self.store.set(actor, Prop::TimerCounter, Value::Float(0.0));
                 }
                 self.event(actor, "Timer", Vec::new())?;
             } else {
-                self.set(actor, Prop::TimerCounter, Value::Float(counter));
+                self.store.set(actor, Prop::TimerCounter, Value::Float(counter));
             }
         }
-        if self.age(actor, delta)? || self.is_deleted(actor) {
+        if self.age(actor, delta)? || self.store.is_deleted(actor) {
             return Ok(());
         }
-        if self.is_a(actor, Kind::Pawn) {
+        if self.store.is_a(actor, Kind::Pawn) {
             let phase = self.profile_start();
             let result = self.pawn_physics(actor, delta);
             self.profile_phase("phase: pawn physics", phase);
             result?;
-            if self.physics_of(actor) != Some(EPhysics::None) {
-                let acceleration = self.vector(actor, Prop::Acceleration);
+            if self.store.physics_of(actor) != Some(EPhysics::None) {
+                let acceleration = self.store.vector(actor, Prop::Acceleration);
                 self.set_vector(actor, Prop::OldAcceleration, acceleration);
             }
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(());
             }
             let phase = self.profile_start();
             let result = self.pawn_tick_special(actor, delta);
             self.profile_phase("phase: movement animation", phase);
             result
-        } else if self.is_a(actor, Kind::Mover) {
+        } else if self.store.is_a(actor, Kind::Mover) {
             // Retail's mover physics turns movers too, after their move.
             self.mover_physics(actor, delta)?;
             self.actor_rotation(actor, delta)
         } else {
             let phase = self.profile_start();
             self.actor_physics(actor, delta)?;
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(());
             }
             self.actor_rotation(actor, delta)?;
             self.profile_phase("phase: actor physics", phase);
-            if self.is_a(actor, Kind::Controller) {
+            if self.store.is_a(actor, Kind::Controller) {
                 let phase = self.profile_start();
-                if self.is_a(actor, Kind::PlayerController) {
+                if self.store.is_a(actor, Kind::PlayerController) {
                     self.player_sight(actor, delta)?;
                 } else {
                     self.controller_tick(actor, delta)?;
                 }
                 self.profile_phase("phase: controller tick", phase);
             }
-            if self.is_a(actor, Kind::SceneManager) {
+            if self.store.is_a(actor, Kind::SceneManager) {
                 self.scene_tick(actor, delta)?;
             }
             Ok(())
@@ -730,12 +725,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn age(&mut self, actor: ObjectId, delta: f32) -> Result<bool, Error> {
-        let life = self.float_of(actor, Prop::LifeSpan);
+        let life = self.store.float_of(actor, Prop::LifeSpan);
         if life == 0.0 {
             return Ok(false);
         }
         let left = life - delta;
-        self.set(actor, Prop::LifeSpan, Value::Float(left));
+        self.store.set(actor, Prop::LifeSpan, Value::Float(left));
         if left > 1e-4 {
             return Ok(false);
         }
@@ -744,10 +739,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn rests(&mut self, actor: ObjectId) -> Result<bool, Error> {
-        if [Kind::Pawn, Kind::Controller, Kind::Mover, Kind::SceneManager].into_iter().any(|kind| self.is_a(actor, kind))
+        if [Kind::Pawn, Kind::Controller, Kind::Mover, Kind::SceneManager].into_iter().any(|kind| self.store.is_a(actor, kind))
             || self.has_animation(actor)
-            || self.physics_of(actor) != Some(EPhysics::None)
-            || self.float_of(actor, Prop::TimerRate) > 0.0
+            || self.store.physics_of(actor) != Some(EPhysics::None)
+            || self.store.float_of(actor, Prop::TimerRate) > 0.0
         {
             return Ok(false);
         }
@@ -760,9 +755,9 @@ impl<L: LoaderRef> Vm<L> {
         {
             return Ok(false);
         }
-        if self.rotator_of(actor, Prop::RotationRate) != [0; 3].into()
-            && !self.flag_of(actor, Prop::bInterpolating)
-            && (self.flag_of(actor, Prop::bRotateToDesired) || self.flag_of(actor, Prop::bFixedRotationDir))
+        if self.store.rotator_of(actor, Prop::RotationRate) != [0; 3].into()
+            && !self.store.flag_of(actor, Prop::bInterpolating)
+            && (self.store.flag_of(actor, Prop::bRotateToDesired) || self.store.flag_of(actor, Prop::bFixedRotationDir))
         {
             return Ok(false);
         }
@@ -772,35 +767,35 @@ impl<L: LoaderRef> Vm<L> {
     /// Runs before the stock tick. Pawns owned by a player's controller, or with `bIgnoreTimeDilation`,
     /// tick in real time (`delta / TimeDilation`). `None`: the controller stays in stasis, no tick.
     fn fps_pawn_tick(&mut self, pawn: ObjectId, delta: f32) -> Result<Option<f32>, Error> {
-        if !self.is_a(pawn, Kind::FPSPawn) {
+        if !self.store.is_a(pawn, Kind::FPSPawn) {
             return Ok(Some(delta));
         }
-        let now = self.level.map_or(0.0, |level| self.float_of(level, Prop::TimeSeconds));
-        let rendered = self.float_of(pawn, Prop::LastRenderTime);
-        if let Some(controller) = self.object_of(pawn, Prop::Controller) {
-            if self.flag_of(controller, Prop::bStasis) {
-                if !self.flag_of(pawn, Prop::bSliderStasis) && rendered + delta >= now {
+        let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));
+        let rendered = self.store.float_of(pawn, Prop::LastRenderTime);
+        if let Some(controller) = self.store.object_of(pawn, Prop::Controller) {
+            if self.store.flag_of(controller, Prop::bStasis) {
+                if !self.store.flag_of(pawn, Prop::bSliderStasis) && rendered + delta >= now {
                     self.event(controller, "ComeOutOfStasis", [Value::Bool(false)])?;
                 }
             } else {
-                let wait = self.float_of(pawn, Prop::TimeTillStasis);
-                if self.flag_of(pawn, Prop::bAllowStasis) && wait > 0.0 && now - rendered > wait && !self.flag_of(controller, Prop::bPendingStasis) {
-                    self.set(controller, Prop::bPendingStasis, Value::Bool(true));
+                let wait = self.store.float_of(pawn, Prop::TimeTillStasis);
+                if self.store.flag_of(pawn, Prop::bAllowStasis) && wait > 0.0 && now - rendered > wait && !self.store.flag_of(controller, Prop::bPendingStasis) {
+                    self.store.set(controller, Prop::bPendingStasis, Value::Bool(true));
                 }
             }
-            if self.flag_of(controller, Prop::bStasis) {
+            if self.store.flag_of(controller, Prop::bStasis) {
                 return Ok(None);
             }
         }
-        let owner = self.object_of(pawn, Prop::Owner);
-        let real_time = self.flag_of(pawn, Prop::bIgnoreTimeDilation) || owner.is_some_and(|o| self.is_a(o, Kind::PlayerController) || self.is_player(o));
-        let dilation = self.level.map_or(1.0, |level| self.float_of(level, Prop::TimeDilation));
+        let owner = self.store.object_of(pawn, Prop::Owner);
+        let real_time = self.store.flag_of(pawn, Prop::bIgnoreTimeDilation) || owner.is_some_and(|o| self.store.is_a(o, Kind::PlayerController) || self.is_player(o));
+        let dilation = self.level.map_or(1.0, |level| self.store.float_of(level, Prop::TimeDilation));
         Ok(Some(if real_time && dilation > 0.0 { delta / dilation } else { delta }))
     }
 
     pub fn tick_actors(&mut self, delta: f32) -> Result<(), Error> {
         self.world.frame += 1;
-        let actors: Vec<ObjectId> = self.actors().filter(|&o| self.is_a(o, Kind::Actor)).collect();
+        let actors: Vec<ObjectId> = self.actors().filter(|&o| self.store.is_a(o, Kind::Actor)).collect();
         for actor in actors {
             self.tick_actor(actor, delta)?;
         }
@@ -811,8 +806,8 @@ impl<L: LoaderRef> Vm<L> {
     /// options of `User.ini` it lacks are added (`Name=` is how `Login` finds a saved game's player).
     pub fn login(&mut self, options: &str) -> Result<Option<(ObjectId, Option<ObjectId>)>, Error> {
         let Some(level) = self.level() else { return Ok(None) };
-        let Some(Value::Object(Some(game))) = self.get(level, Prop::Game) else { return Ok(None) };
-        let Some(class) = self.object(game).class else { return Ok(None) };
+        let Some(Value::Object(Some(game))) = self.store.get(level, Prop::Game) else { return Ok(None) };
+        let Some(class) = self.store.object(game).class else { return Ok(None) };
         let Some(login) = self.find_object_function(game, "Login")? else { return Ok(None) };
         let mut url = crate::travel::TravelUrl::parse(options);
         self.add_default_player_options(&mut url);
@@ -822,7 +817,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(post_login) = self.find_object_function(game, "PostLogin")? {
             self.call(&post_login, Some(game), class, vec![Value::Object(Some(player))])?;
         }
-        let pawn = match self.get(player, Prop::Pawn) {
+        let pawn = match self.store.get(player, Prop::Pawn) {
             Some(Value::Object(pawn)) => pawn,
             _ => None,
         };
@@ -844,13 +839,13 @@ impl<L: LoaderRef> Vm<L> {
         let mut actors = Vec::new();
         for export in 0..self.loader.package(map).package.exports.len() {
             let object = self.load_object(map, export)?;
-            if self.is_a(object, Kind::LevelInfo) && self.level.is_none() {
+            if self.store.is_a(object, Kind::LevelInfo) && self.level.is_none() {
                 self.level = Some(object);
             }
-            if self.is_a(object, Kind::Actor) {
+            if self.store.is_a(object, Kind::Actor) {
                 actors.push(object);
             }
-            if self.is_a(object, Kind::SceneManager) {
+            if self.store.is_a(object, Kind::SceneManager) {
                 self.construct_scene_manager(object);
             }
         }
@@ -872,40 +867,40 @@ impl<L: LoaderRef> Vm<L> {
         let mut errors = Vec::new();
         // `LevelInfo.bStartup` is set while the map's actors begin play (pawns placed in the map spawn their
         // controllers in `PostBeginPlay` only then).
-        self.set(level, Prop::bStartup, Value::Bool(true));
+        self.store.set(level, Prop::bStartup, Value::Bool(true));
         let game = self.spawn(game_class, None, [None, None])?;
-        self.set(level, Prop::Game, Value::Object(game));
+        self.store.set(level, Prop::Game, Value::Object(game));
         if let Some(game) = game
             && let Err(e) = self.event(game, "InitGame", [Value::Str(options.to_owned()), Value::Str(String::new())])
         {
-            errors.push((self.object(game).path.clone(), "InitGame", e));
+            errors.push((self.store.object(game).path.clone(), "InitGame", e));
         }
         for event in ["PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState"] {
             if event == "PostBeginPlay" {
                 for &actor in &actors {
                     if let Err(e) = self.set_zone(actor, ZoneEvents::Silent, OldZone::Level) {
-                        errors.push((self.object(actor).path.clone(), "SetZone", e));
+                        errors.push((self.store.object(actor).path.clone(), "SetZone", e));
                     }
                 }
             }
             for &actor in &actors {
-                if self.is_deleted(actor) {
+                if self.store.is_deleted(actor) {
                     continue;
                 }
                 if let Err(e) = self.event(actor, event, Vec::new()) {
-                    errors.push((self.object(actor).path.clone(), event, e));
+                    errors.push((self.store.object(actor).path.clone(), event, e));
                 }
-                if event == "PostBeginPlay" && self.is_a(actor, Kind::SceneManager) && !self.is_deleted(actor) {
+                if event == "PostBeginPlay" && self.store.is_a(actor, Kind::SceneManager) && !self.store.is_deleted(actor) {
                     self.prepare_path(actor);
                 }
             }
         }
-        self.set(level, Prop::bStartup, Value::Bool(false));
+        self.store.set(level, Prop::bStartup, Value::Bool(false));
         Ok(errors)
     }
 
     pub fn paused(&self) -> bool {
-        self.level.is_some_and(|level| matches!(self.get(level, Prop::Pauser), Some(Value::Object(Some(_)))))
+        self.level.is_some_and(|level| matches!(self.store.get(level, Prop::Pauser), Some(Value::Object(Some(_)))))
     }
 
     pub fn tick_level(&mut self, real: f32) -> Vec<(String, Error)> {
@@ -915,34 +910,34 @@ impl<L: LoaderRef> Vm<L> {
         let mut paused = false;
         if let Some(level) = self.level {
             crate::natives::update_time(self, level);
-            let dilation = match self.get(level, Prop::TimeDilation) {
+            let dilation = match self.store.get(level, Prop::TimeDilation) {
                 Some(Value::Float(dilation)) => dilation,
                 _ => 1.0,
             };
             delta = real * dilation;
-            paused = self.object_of(level, Prop::Pauser).is_some();
+            paused = self.store.object_of(level, Prop::Pauser).is_some();
             if !paused {
-                self.set(level, Prop::TimeSeconds, Value::Float(self.float_of(level, Prop::TimeSeconds) + delta));
+                self.store.set(level, Prop::TimeSeconds, Value::Float(self.store.float_of(level, Prop::TimeSeconds) + delta));
             }
-            self.set(level, Prop::TimeSecondsAlways, Value::Float(self.float_of(level, Prop::TimeSecondsAlways) + delta));
+            self.store.set(level, Prop::TimeSecondsAlways, Value::Float(self.store.float_of(level, Prop::TimeSecondsAlways) + delta));
             // `ServerTravel` set `NextURL`: the host travels, from `Vm::travel`, once `NextSwitchCountdown` runs out.
-            if let Some(Value::Str(url)) = self.get(level, Prop::NextURL)
+            if let Some(Value::Str(url)) = self.store.get(level, Prop::NextURL)
                 && !url.is_empty()
             {
-                let countdown = match self.get(level, Prop::NextSwitchCountdown) {
+                let countdown = match self.store.get(level, Prop::NextSwitchCountdown) {
                     Some(Value::Float(countdown)) => countdown - delta,
                     _ => 0.0,
                 };
-                self.set(level, Prop::NextSwitchCountdown, Value::Float(countdown));
+                self.store.set(level, Prop::NextSwitchCountdown, Value::Float(countdown));
                 if countdown <= 0.0 {
                     self.host.commands.push(HostCommand::Travel(url));
-                    self.set(level, Prop::NextURL, Value::Str(String::new()));
+                    self.store.set(level, Prop::NextURL, Value::Str(String::new()));
                 }
             }
         }
         let phase = self.profile_start();
         let dynamic = self.dynamic_actors();
-        let actors = if paused { dynamic.into_iter().filter(|&o| self.flag_of(o, Prop::bAlwaysTick)).collect() } else { dynamic };
+        let actors = if paused { dynamic.into_iter().filter(|&o| self.store.flag_of(o, Prop::bAlwaysTick)).collect() } else { dynamic };
         self.profile_phase("actor list", phase);
         let delta = delta.clamp(MIN_TICK, MAX_TICK);
         let phase = self.profile_start();
@@ -951,10 +946,10 @@ impl<L: LoaderRef> Vm<L> {
         for actor in actors {
             let started = self.profile_start();
             if let Err(e) = self.tick_actor(actor, delta) {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
             if let Some(started) = started {
-                let class = self.store.names[self.object(actor).class_name.0 as usize].as_str();
+                let class = self.store.names[self.store.object(actor).class_name.0 as usize].as_str();
                 add_time(self.diagnostics.tick_profile.get_or_insert_default(), class, started.elapsed());
             }
         }
@@ -973,7 +968,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(&class) = self.script.lookups.class_objects.get(&object) {
             return Ok(class);
         }
-        let Some((package, name)) = self.object(object).path.split_once('.') else { return Ok(None) };
+        let Some((package, name)) = self.store.object(object).path.split_once('.') else { return Ok(None) };
         let (package, name) = (package.to_owned(), name.to_owned());
         // Not found is kept too (each miss scanned the package's exports by name, ~18 us a `ClassIsChildOf`): the
         // loaded packages only change with the loader, which clears the cache (`travel.rs`).

@@ -167,30 +167,6 @@ pub(crate) enum Bases {
 }
 
 impl<L: LoaderRef> Vm<L> {
-    #[inline]
-    pub(crate) fn float_of(&self, object: ObjectId, property: impl PropertyName) -> f32 {
-        self.store.float_of(object, property)
-    }
-
-    #[inline]
-    pub(crate) fn flag_of(&self, object: ObjectId, property: impl PropertyName) -> bool {
-        self.store.flag_of(object, property)
-    }
-
-    #[inline]
-    pub(crate) fn object_of(&self, object: ObjectId, property: impl PropertyName) -> Option<ObjectId> {
-        self.store.object_of(object, property)
-    }
-
-    #[inline]
-    pub(crate) fn byte_of(&self, object: ObjectId, property: impl PropertyName) -> u8 {
-        self.store.byte_of(object, property)
-    }
-
-    #[inline]
-    pub(crate) fn rotator_of(&self, object: ObjectId, property: impl PropertyName) -> Rotator {
-        self.store.rotator_of(object, property)
-    }
 
     #[inline]
     pub(crate) fn set_vector(&mut self, object: ObjectId, property: impl PropertyName, value: Vector) {
@@ -204,7 +180,7 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(false);
         }
         let Some(function) = self.find_object_function(object, name)? else { return Ok(false) };
-        let Some(class) = self.object(object).class else { return Ok(false) };
+        let Some(class) = self.store.object(object).class else { return Ok(false) };
         Ok(self.call(&function, Some(object), class, args)?.as_ref().is_some_and(crate::interp::truthy))
     }
 
@@ -239,7 +215,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(hit) = boxes {
             consider(hit.time, hit.normal, level);
         }
-        if actors && self.flag_of(mover, Prop::bCollideActors) {
+        if actors && self.store.flag_of(mover, Prop::bCollideActors) {
             let (low, high) = ([0, 1, 2].map(|i| start[i].min(end[i])), [0, 1, 2].map(|i| start[i].max(end[i])));
             let nearby = self.colliders_near([low[0], low[1]], [high[0], high[1]], radius);
             self.count(crate::profiling::Work::Sweep);
@@ -256,9 +232,9 @@ impl<L: LoaderRef> Vm<L> {
                     let grow = Vector::new(radius + 1.0, radius + 1.0, height + 1.0);
                     (min - grow, max + grow)
                 } else {
-                    let centre = self.vector(other, Prop::Location);
-                    let r = radius + self.float_of(other, Prop::CollisionRadius) + 1.0;
-                    let h = height + self.float_of(other, Prop::CollisionHeight) + 1.0;
+                    let centre = self.store.vector(other, Prop::Location);
+                    let r = radius + self.store.float_of(other, Prop::CollisionRadius) + 1.0;
+                    let h = height + self.store.float_of(other, Prop::CollisionHeight) + 1.0;
                     let grow = Vector::new(r, r, h);
                     (centre - grow, centre + grow)
                 };
@@ -267,11 +243,11 @@ impl<L: LoaderRef> Vm<L> {
                     continue;
                 }
                 if self.in_owner_chain(mover, other)
-                    || self.is_deleted(other)
-                    || !self.flag_of(other, Prop::bCollideActors)
-                    || !self.flag_of(other, Prop::bBlockNonZeroExtentTraces)
-                    || self.object_of(other, Prop::Base) == Some(mover)
-                    || self.object_of(other, Prop::Owner) == Some(mover)
+                    || self.store.is_deleted(other)
+                    || !self.store.flag_of(other, Prop::bCollideActors)
+                    || !self.store.flag_of(other, Prop::bBlockNonZeroExtentTraces)
+                    || self.store.object_of(other, Prop::Base) == Some(mover)
+                    || self.store.object_of(other, Prop::Owner) == Some(mover)
                     || (ignore_bases && self.is_based_on(mover, other))
                 {
                     continue;
@@ -286,8 +262,8 @@ impl<L: LoaderRef> Vm<L> {
                     let back = pull_back_units(primitive, length) / length;
                     mesh_box_check([&*shape.boxes], start, end, extent).map(|hit| ((hit.time - back).clamp(0.0, 1.0), hit.normal))
                 } else {
-                    let centre = self.vector(other, Prop::Location);
-                    let (r, h) = (radius + self.float_of(other, Prop::CollisionRadius), height + self.float_of(other, Prop::CollisionHeight));
+                    let centre = self.store.vector(other, Prop::Location);
+                    let (r, h) = (radius + self.store.float_of(other, Prop::CollisionRadius), height + self.store.float_of(other, Prop::CollisionHeight));
                     let inside = (start[0] - centre[0]).hypot(start[1] - centre[1]) < r && (start[2] - centre[2]).abs() < h;
                     if inside { None } else { segment_cylinder(start, end, centre, r, h).map(|hit| ((hit.time - CYLINDER_PULL_BACK).max(0.0), hit.normal)) }
                 };
@@ -305,7 +281,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn move_check(&mut self, actor: ObjectId, start: Vector, delta: Vector) -> Option<(f32, Vector, Option<ObjectId>)> {
-        let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
         let hit = self.sweep(actor, Sweep { start, delta, radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         (hit.time < 1.0).then_some((hit.time, hit.normal, hit.actor))
     }
@@ -313,19 +289,19 @@ impl<L: LoaderRef> Vm<L> {
     /// A blocked move stops `MOVE_TEST_ADJUST` short of the hit, so a moved actor keeps a gap.
     /// Of a bump, the hit actor is notified first (unverified).
     pub(crate) fn move_actor(&mut self, actor: ObjectId, delta: Vector, bases: Bases) -> Result<MoveHit, Error> {
-        let start = self.vector(actor, Prop::Location);
+        let start = self.store.vector(actor, Prop::Location);
         if nearly_zero(delta) {
             self.set_vector(actor, Prop::Location, start + delta);
             self.relocate(actor);
             self.volume_moved(actor);
             return Ok(MoveHit::NONE);
         }
-        let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
         let length = delta.size();
         let direction = delta * (1.0 / length);
         let test = delta + (direction * MOVE_TEST_ADJUST);
-        let collides = self.flag_of(actor, Prop::bCollideActors);
-        let world = self.flag_of(actor, Prop::bCollideWorld);
+        let collides = self.store.flag_of(actor, Prop::bCollideActors);
+        let world = self.store.flag_of(actor, Prop::bCollideWorld);
         let mut touches = Vec::new();
         let block = self.sweep(
             actor,
@@ -347,14 +323,14 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.set_vector(actor, Prop::Location, start + moved);
         self.relocate(actor);
-        let rotation = self.rotator_of(actor, Prop::Rotation);
+        let rotation = self.store.rotator_of(actor, Prop::Rotation);
         if !self.carry_attached(actor, start, moved, rotation, rotation)? {
             return Ok(MoveHit { time: 0.0, ..hit });
         }
         self.update_relative_location(actor);
         if let Some(other) = hit.actor
             && Some(other) != self.level
-            && !self.flag_of(other, Prop::bWorldGeometry)
+            && !self.store.flag_of(other, Prop::bWorldGeometry)
             && !self.is_based_on(actor, other)
         {
             self.notify_bump(actor, other)?;
@@ -362,14 +338,14 @@ impl<L: LoaderRef> Vm<L> {
         }
         touches.sort_by(|a, b| a.time.total_cmp(&b.time));
         for touch in touches.into_iter().filter(|t| t.time <= block.time) {
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 break;
             }
             if let Some(other) = touch.actor {
                 self.begin_touch(actor, other)?;
             }
         }
-        if collides && !self.is_deleted(actor) {
+        if collides && !self.store.is_deleted(actor) {
             self.end_touches(actor)?;
         }
         self.set_zone(actor, ZoneEvents::Sent, OldZone::Region)?;
@@ -379,32 +355,32 @@ impl<L: LoaderRef> Vm<L> {
     /// Retail reads neither `AttachmentBone` nor `bHardAttach` here, nor the base's `bCollideActors`.
     /// A refusal moves actors carried before it back by `delta`, not turned back; it stays where it went.
     pub(crate) fn carry_attached(&mut self, base: ObjectId, old_location: Vector, delta: Vector, old_rotation: Rotator, rotation: Rotator) -> Result<bool, Error> {
-        let attached = self.object_list(base, Prop::Attached);
+        let attached = self.store.object_list(base, Prop::Attached);
         let turn = attached_turn(old_rotation, rotation);
         for (i, &other) in attached.iter().enumerate() {
-            if self.is_deleted(other) {
+            if self.store.is_deleted(other) {
                 continue;
             }
             if rotation != old_rotation
-                && let Some(controller) = self.object_of(other, Prop::Controller).filter(|_| self.is_a(other, Kind::Pawn))
+                && let Some(controller) = self.store.object_of(other, Prop::Controller).filter(|_| self.store.is_a(other, Kind::Pawn))
             {
-                let view = self.rotator_of(controller, Prop::Rotation);
+                let view = self.store.rotator_of(controller, Prop::Rotation);
                 let mut swung = [0, 1, 2].map(|c| view[c].wrapping_add(turn[c]));
-                if !self.flag_of(other, Prop::bCrawler) {
+                if !self.store.flag_of(other, Prop::bCrawler) {
                     swung[2] = view.roll;
                 }
-                self.set(controller, Prop::Rotation, Value::Rotator(swung.into()));
+                self.store.set(controller, Prop::Rotation, Value::Rotator(swung.into()));
             }
-            let motion = carried_motion(delta, old_rotation, rotation, self.vector(other, Prop::RelativeLocation));
-            let own = self.rotator_of(other, Prop::Rotation);
-            self.set(other, Prop::Rotation, Value::Rotator([0, 1, 2].map(|c| own[c].wrapping_add(turn[c])).into()));
+            let motion = carried_motion(delta, old_rotation, rotation, self.store.vector(other, Prop::RelativeLocation));
+            let own = self.store.rotator_of(other, Prop::Rotation);
+            self.store.set(other, Prop::Rotation, Value::Rotator([0, 1, 2].map(|c| own[c].wrapping_add(turn[c])).into()));
             self.move_actor(other, motion, Bases::Ignore)?;
             if self.is_blocked_by(other, base)
                 && self.primitive_overlaps(base, other)
                 && self.event_bool(base, "EncroachingOn", [Value::Object(Some(other))])?
             {
                 self.set_vector(base, Prop::Location, old_location);
-                self.set(base, Prop::Rotation, Value::Rotator(old_rotation));
+                self.store.set(base, Prop::Rotation, Value::Rotator(old_rotation));
                 self.relocate(base);
                 for &earlier in &attached[..i] {
                     self.move_actor(earlier, delta * (-1.0), Bases::Ignore)?;
@@ -416,10 +392,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn update_relative_location(&mut self, actor: ObjectId) {
-        if let Some(base) = self.object_of(actor, Prop::Base)
+        if let Some(base) = self.store.object_of(actor, Prop::Base)
             && !self.on_bone(actor)
         {
-            let offset = self.vector(actor, Prop::Location) - self.vector(base, Prop::Location);
+            let offset = self.store.vector(actor, Prop::Location) - self.store.vector(base, Prop::Location);
             self.set_vector(actor, Prop::RelativeLocation, offset);
         }
     }
@@ -427,14 +403,14 @@ impl<L: LoaderRef> Vm<L> {
     /// Retail's `SetRotation` is a zero-delta move; with nothing attached it only sets the rotation.
     /// An encroacher's encroachment check on this path is not modelled.
     pub(crate) fn turn_attached(&mut self, actor: ObjectId, old_rotation: Rotator) -> Result<(), Error> {
-        if self.object_list(actor, Prop::Attached).is_empty() {
+        if self.store.object_list(actor, Prop::Attached).is_empty() {
             return Ok(());
         }
-        let (location, rotation) = (self.vector(actor, Prop::Location), self.rotator_of(actor, Prop::Rotation));
+        let (location, rotation) = (self.store.vector(actor, Prop::Location), self.store.rotator_of(actor, Prop::Rotation));
         if !self.carry_attached(actor, location, Vector::ZERO, old_rotation, rotation)? {
             return Ok(());
         }
-        if self.flag_of(actor, Prop::bCollideActors) && !self.is_deleted(actor) {
+        if self.store.flag_of(actor, Prop::bCollideActors) && !self.store.is_deleted(actor) {
             self.end_touches(actor)?;
         }
         self.set_zone(actor, ZoneEvents::Sent, OldZone::Region)?;
@@ -442,60 +418,60 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn is_based_on(&self, actor: ObjectId, other: ObjectId) -> bool {
-        std::iter::successors(self.object_of(actor, Prop::Base), |&b| self.object_of(b, Prop::Base)).take(MAX_BASE_CHAIN).any(|b| b == other)
+        std::iter::successors(self.store.object_of(actor, Prop::Base), |&b| self.store.object_of(b, Prop::Base)).take(MAX_BASE_CHAIN).any(|b| b == other)
     }
 
     fn in_owner_chain(&self, actor: ObjectId, other: ObjectId) -> bool {
-        std::iter::successors(self.object_of(actor, Prop::Owner), |&o| self.object_of(o, Prop::Owner)).take(MAX_OWNER_CHAIN).any(|o| o == other)
+        std::iter::successors(self.store.object_of(actor, Prop::Owner), |&o| self.store.object_of(o, Prop::Owner)).take(MAX_OWNER_CHAIN).any(|o| o == other)
     }
 
     fn is_human_controlled(&self, pawn: ObjectId) -> bool {
-        self.object_of(pawn, Prop::Controller).is_some_and(|c| self.is_a(c, Kind::PlayerController))
+        self.store.object_of(pawn, Prop::Controller).is_some_and(|c| self.store.is_a(c, Kind::PlayerController))
     }
 
     /// Relative rotation is not updated. Without a base, or on world geometry, the actor leaves any bone.
     pub(crate) fn set_base(&mut self, actor: ObjectId, base: Option<ObjectId>, floor: Vector) -> Result<(), Error> {
-        if self.is_a(actor, Kind::Pawn) {
+        if self.store.is_a(actor, Kind::Pawn) {
             self.set_vector(actor, Prop::Floor, floor);
         }
         if base == Some(actor) || base.is_some_and(|b| self.is_based_on(b, actor)) {
             return Ok(());
         }
-        let old = self.object_of(actor, Prop::Base);
-        let world = |vm: &Self, b: ObjectId| Some(b) == vm.level || vm.flag_of(b, Prop::bWorldGeometry);
+        let old = self.store.object_of(actor, Prop::Base);
+        let world = |vm: &Self, b: ObjectId| Some(b) == vm.level || vm.store.flag_of(b, Prop::bWorldGeometry);
         if old != base {
             if let Some(old) = old.filter(|&o| !world(self, o)) {
-                if let Some(Value::Array(attached)) = self.get(old, Prop::Attached) {
+                if let Some(Value::Array(attached)) = self.store.get(old, Prop::Attached) {
                     let kept = attached.into_iter().filter(|a| *a != Value::Object(Some(actor))).collect();
-                    self.set(old, Prop::Attached, Value::Array(kept));
+                    self.store.set(old, Prop::Attached, Value::Array(kept));
                 }
                 self.event(old, "Detach", [Value::Object(Some(actor))])?;
             }
-            self.set(actor, Prop::Base, Value::Object(base));
+            self.store.set(actor, Prop::Base, Value::Object(base));
             if let Some(new) = base
                 && !self.on_bone(actor)
             {
-                let offset = self.vector(actor, Prop::Location) - self.vector(new, Prop::Location);
+                let offset = self.store.vector(actor, Prop::Location) - self.store.vector(new, Prop::Location);
                 self.set_vector(actor, Prop::RelativeLocation, offset);
             }
             if let Some(new) = base.filter(|&b| !world(self, b)) {
-                if let Some(Value::Array(mut attached)) = self.get(new, Prop::Attached) {
+                if let Some(Value::Array(mut attached)) = self.store.get(new, Prop::Attached) {
                     attached.push(Value::Object(Some(actor)));
-                    self.set(new, Prop::Attached, Value::Array(attached));
+                    self.store.set(new, Prop::Attached, Value::Array(attached));
                 }
                 self.event(new, "Attach", [Value::Object(Some(actor))])?;
             }
             self.event(actor, "BaseChange", Vec::new())?;
         }
-        let base = self.object_of(actor, Prop::Base);
+        let base = self.store.object_of(actor, Prop::Base);
         if base.is_none_or(|b| world(self, b)) && self.on_bone(actor) {
-            self.set(actor, Prop::AttachmentBone, Value::Name(crate::NameId::NONE));
+            self.store.set(actor, Prop::AttachmentBone, Value::Name(crate::NameId::NONE));
         }
         Ok(())
     }
 
     pub(crate) fn on_bone(&self, actor: ObjectId) -> bool {
-        matches!(self.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE)
+        matches!(self.store.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE)
     }
 
     /// Also for actors on a bone or `bHardAttach`: one put on a bone and then set to a base-keeping mode
@@ -505,49 +481,49 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn set_physics_byte(&mut self, actor: ObjectId, physics: u8, floor: Option<(Option<ObjectId>, Vector)>) -> Result<(), Error> {
-        let old = self.byte_of(actor, Prop::Physics);
+        let old = self.store.byte_of(actor, Prop::Physics);
         if old == physics {
             return Ok(());
         }
-        self.set(actor, Prop::Physics, Value::Byte(physics));
+        self.store.set(actor, Prop::Physics, Value::Byte(physics));
         self.karma_physics_changed(actor, EPhysics::from_byte(old));
         let mode = EPhysics::from_byte(physics);
         if mode.is_some_and(keeps_base) {
             match floor {
                 Some((Some(base), normal)) => {
-                    if self.object_of(actor, Prop::Base) != Some(base) {
+                    if self.store.object_of(actor, Prop::Base) != Some(base) {
                         self.set_base(actor, Some(base), normal)?;
                     }
                 }
                 _ => self.find_base(actor)?,
             }
-        } else if self.object_of(actor, Prop::Base).is_some() {
+        } else if self.store.object_of(actor, Prop::Base).is_some() {
             self.set_base(actor, None, [0.0, 0.0, 1.0].into())?;
         }
         if mode.is_some_and(stops) {
             self.set_vector(actor, Prop::Velocity, Vector::ZERO);
             self.set_vector(actor, Prop::Acceleration, Vector::ZERO);
         }
-        if let Some(volume) = self.object_of(actor, Prop::PhysicsVolume).filter(|&v| self.object(v).class.is_some()) {
+        if let Some(volume) = self.store.object_of(actor, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some()) {
             self.event(volume, "PhysicsChangedFor", [Value::Object(Some(actor))])?;
         }
         Ok(())
     }
 
     fn find_base(&mut self, actor: ObjectId) -> Result<(), Error> {
-        let at = self.vector(actor, Prop::Location);
-        let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
+        let at = self.store.vector(actor, Prop::Location);
+        let (radius, height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
         let hit = self.sweep(actor, Sweep { start: at, delta: [0.0, 0.0, -FIND_BASE_DEPTH].into(), radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         let base = hit.actor;
-        if self.object_of(actor, Prop::Base) != base {
+        if self.store.object_of(actor, Prop::Base) != base {
             self.set_base(actor, base, hit.normal)?;
         }
         Ok(())
     }
 
     fn notify_bump(&mut self, actor: ObjectId, other: ObjectId) -> Result<(), Error> {
-        if self.is_a(actor, Kind::Pawn)
-            && let Some(controller) = self.object_of(actor, Prop::Controller)
+        if self.store.is_a(actor, Kind::Pawn)
+            && let Some(controller) = self.store.object_of(actor, Prop::Controller)
             && self.event_bool(controller, "NotifyBump", [Value::Object(Some(other))])?
         {
             return Ok(());
@@ -567,12 +543,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn volume(&self, pawn: ObjectId) -> VolumeProps {
-        match self.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.object(v).class.is_some()) {
+        match self.store.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some()) {
             Some(v) => VolumeProps {
-                gravity: self.vector(v, Prop::Gravity),
-                ground_friction: self.float_of(v, Prop::GroundFriction),
-                terminal_velocity: self.float_of(v, Prop::TerminalVelocity),
-                zone_velocity: self.vector(v, Prop::ZoneVelocity),
+                gravity: self.store.vector(v, Prop::Gravity),
+                ground_friction: self.store.float_of(v, Prop::GroundFriction),
+                terminal_velocity: self.store.float_of(v, Prop::TerminalVelocity),
+                zone_velocity: self.store.vector(v, Prop::ZoneVelocity),
             },
             None => VolumeProps {
                 gravity: DEFAULT_GRAVITY,
@@ -584,82 +560,82 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn gravity_of(&self, pawn: ObjectId) -> Vector {
-        match self.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.object(v).class.is_some()) {
-            Some(v) => self.vector(v, Prop::Gravity),
+        match self.store.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some()) {
+            Some(v) => self.store.vector(v, Prop::Gravity),
             None => DEFAULT_GRAVITY,
         }
     }
 
     pub(crate) fn kill_z(&self, actor: ObjectId, walking: bool) -> Option<f32> {
         let zone = self.region_of(actor).and_then(|(zone, _, _)| zone).or(self.level)?;
-        let kill_z = self.float_of(zone, Prop::KillZ);
-        Some(if self.flag_of(zone, Prop::bSoftKillZ) && !walking { kill_z - SOFT_KILL_Z_GRACE } else { kill_z })
+        let kill_z = self.store.float_of(zone, Prop::KillZ);
+        Some(if self.store.flag_of(zone, Prop::bSoftKillZ) && !walking { kill_z - SOFT_KILL_Z_GRACE } else { kill_z })
     }
 
     /// Zone number 0 and no `bIgnoreOutOfWorld`; a level without zones has no outside here,
     /// while retail would count all of it as zone 0.
     pub(crate) fn out_of_world(&self, actor: ObjectId) -> bool {
         let zone_zero = self.region_of(actor).is_some_and(|(_, _, number)| number == 0);
-        zone_zero && self.has_zones() && !self.flag_of(actor, Prop::bIgnoreOutOfWorld)
+        zone_zero && self.has_zones() && !self.store.flag_of(actor, Prop::bIgnoreOutOfWorld)
     }
 
     pub(crate) fn pawn_physics(&mut self, pawn: ObjectId, delta: f32) -> Result<(), Error> {
-        let physics = self.physics_of(pawn);
+        let physics = self.store.physics_of(pawn);
         if matches!(physics, Some(EPhysics::Karma | EPhysics::KarmaRagDoll)) {
             return Ok(());
         }
-        let controller = self.object_of(pawn, Prop::Controller);
+        let controller = self.store.object_of(pawn, Prop::Controller);
         if controller.is_some() && controller == self.player() && !self.options.player_physics {
             return Ok(());
         }
-        let start = self.vector(pawn, Prop::Location);
+        let start = self.store.vector(pawn, Prop::Location);
         if controller.is_some()
             && self.kill_z(pawn, physics == Some(EPhysics::Walking)).is_some_and(|kill_z| start[2] < kill_z)
         {
             self.event(pawn, "FellOutOfWorld", Vec::new())?;
-            if self.is_deleted(pawn) {
+            if self.store.is_deleted(pawn) {
                 return Ok(());
             }
         }
-        if self.flag_of(pawn, Prop::bCollideWorld) && self.out_of_world(pawn) {
+        if self.store.flag_of(pawn, Prop::bCollideWorld) && self.out_of_world(pawn) {
             self.event(pawn, "FellOutOfWorld", Vec::new())?;
             return Ok(());
         }
-        self.set(pawn, Prop::OldZ, Value::Float(start[2]));
-        if self.flag_of(pawn, Prop::bWantsToCrouch) {
-            if !self.flag_of(pawn, Prop::bIsCrouched) {
+        self.store.set(pawn, Prop::OldZ, Value::Float(start[2]));
+        if self.store.flag_of(pawn, Prop::bWantsToCrouch) {
+            if !self.store.flag_of(pawn, Prop::bIsCrouched) {
                 self.crouch(pawn)?;
-            } else if self.flag_of(pawn, Prop::bTryToUncrouch) {
-                let left = self.float_of(pawn, Prop::UncrouchTime) - delta;
-                self.set(pawn, Prop::UncrouchTime, Value::Float(left));
+            } else if self.store.flag_of(pawn, Prop::bTryToUncrouch) {
+                let left = self.store.float_of(pawn, Prop::UncrouchTime) - delta;
+                self.store.set(pawn, Prop::UncrouchTime, Value::Float(left));
                 if left <= 0.0 {
-                    self.set(pawn, Prop::bWantsToCrouch, Value::Bool(false));
-                    self.set(pawn, Prop::bTryToUncrouch, Value::Bool(false));
+                    self.store.set(pawn, Prop::bWantsToCrouch, Value::Bool(false));
+                    self.store.set(pawn, Prop::bTryToUncrouch, Value::Bool(false));
                 }
             }
         }
         self.start_new_physics(pawn, delta, 0)?;
-        if self.is_deleted(pawn) {
+        if self.store.is_deleted(pawn) {
             return Ok(());
         }
-        if self.flag_of(pawn, Prop::bIsCrouched) && !self.flag_of(pawn, Prop::bWantsToCrouch) {
+        if self.store.flag_of(pawn, Prop::bIsCrouched) && !self.store.flag_of(pawn, Prop::bWantsToCrouch) {
             self.uncrouch(pawn)?;
         }
-        if let Some(controller) = self.object_of(pawn, Prop::Controller) {
-            let timer = self.float_of(controller, Prop::MoveTimer) - delta;
-            self.set(controller, Prop::MoveTimer, Value::Float(timer));
-            let physics = self.physics_of(pawn);
-            let turning = self.flag_of(pawn, Prop::bCrawler)
-                || self.rotator_of(pawn, Prop::Rotation) != self.rotator_of(pawn, Prop::DesiredRotation)
-                || self.rotator_of(pawn, Prop::RotationRate).roll > 0
+        if let Some(controller) = self.store.object_of(pawn, Prop::Controller) {
+            let timer = self.store.float_of(controller, Prop::MoveTimer) - delta;
+            self.store.set(controller, Prop::MoveTimer, Value::Float(timer));
+            let physics = self.store.physics_of(pawn);
+            let turning = self.store.flag_of(pawn, Prop::bCrawler)
+                || self.store.rotator_of(pawn, Prop::Rotation) != self.store.rotator_of(pawn, Prop::DesiredRotation)
+                || self.store.rotator_of(pawn, Prop::RotationRate).roll > 0
                 || self.is_human_controlled(pawn);
-            if !self.flag_of(pawn, Prop::bInterpolating) && !matches!(physics, Some(EPhysics::Karma | EPhysics::KarmaRagDoll)) && turning {
+            if !self.store.flag_of(pawn, Prop::bInterpolating) && !matches!(physics, Some(EPhysics::Karma | EPhysics::KarmaRagDoll)) && turning {
                 self.pawn_rotation(pawn, delta);
             }
         }
-        let average = self.float_of(pawn, Prop::AvgPhysicsTime) * 0.8 + delta * 0.2;
-        self.set(pawn, Prop::AvgPhysicsTime, Value::Float(average));
-        if self.vector(pawn, Prop::Location) != start {
+        let average = self.store.float_of(pawn, Prop::AvgPhysicsTime) * 0.8 + delta * 0.2;
+        self.store.set(pawn, Prop::AvgPhysicsTime, Value::Float(average));
+        if self.store.vector(pawn, Prop::Location) != start {
             let phase = self.profile_start();
             self.update_touching(pawn)?;
             self.profile_phase("touching", phase);
@@ -668,50 +644,50 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn crouch(&mut self, pawn: ObjectId) -> Result<(), Error> {
-        let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
-        let (crouch_radius, crouch_height) = (self.float_of(pawn, Prop::CrouchRadius), self.float_of(pawn, Prop::CrouchHeight));
+        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let (crouch_radius, crouch_height) = (self.store.float_of(pawn, Prop::CrouchRadius), self.store.float_of(pawn, Prop::CrouchHeight));
         if radius == crouch_radius && height == crouch_height {
             return Ok(());
         }
-        self.set(pawn, Prop::CollisionRadius, Value::Float(crouch_radius));
-        self.set(pawn, Prop::CollisionHeight, Value::Float(crouch_height));
+        self.store.set(pawn, Prop::CollisionRadius, Value::Float(crouch_radius));
+        self.store.set(pawn, Prop::CollisionHeight, Value::Float(crouch_height));
         let adjust = height - crouch_height;
         if (crouch_radius > radius || crouch_height > height) && self.encroached(pawn).is_some() {
-            self.set(pawn, Prop::CollisionRadius, Value::Float(radius));
-            self.set(pawn, Prop::CollisionHeight, Value::Float(height));
+            self.store.set(pawn, Prop::CollisionRadius, Value::Float(radius));
+            self.store.set(pawn, Prop::CollisionHeight, Value::Float(height));
             return Ok(());
         }
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         self.set_vector(pawn, Prop::Location, [location[0], location[1], location[2] - adjust].into());
         self.relocate(pawn);
         self.set_vector(pawn, Prop::PrePivot, [0.0, 0.0, adjust].into());
-        self.set(pawn, Prop::bIsCrouched, Value::Bool(true));
+        self.store.set(pawn, Prop::bIsCrouched, Value::Bool(true));
         self.event(pawn, "StartCrouch", [Value::Float(adjust)])
     }
 
     fn uncrouch(&mut self, pawn: ObjectId) -> Result<(), Error> {
-        let Some(class) = self.object(pawn).class else { return Ok(()) };
-        let default = |vm: &Self, name: Prop| vm.default_value(class, name).as_ref().map_or(0.0, float);
+        let Some(class) = self.store.object(pawn).class else { return Ok(()) };
+        let default = |vm: &Self, name: Prop| vm.store.default_value(class, name).as_ref().map_or(0.0, float);
         let (radius, height) = (default(self, Prop::CollisionRadius), default(self, Prop::CollisionHeight));
-        let (crouch_radius, crouch_height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
+        let (crouch_radius, crouch_height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
         let adjust = height - crouch_height;
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         let up = Vector::new(location.x, location.y, location.z + 2.0 * adjust);
         let blocked_above = self.trace_world(location, up, [crouch_radius, crouch_radius, crouch_height].into()).is_some();
-        self.set(pawn, Prop::CollisionRadius, Value::Float(radius));
-        self.set(pawn, Prop::CollisionHeight, Value::Float(height));
+        self.store.set(pawn, Prop::CollisionRadius, Value::Float(radius));
+        self.store.set(pawn, Prop::CollisionHeight, Value::Float(height));
         self.set_vector(pawn, Prop::Location, [location[0], location[1], location[2] + adjust].into());
         if blocked_above || self.encroached(pawn).is_some() {
             self.set_vector(pawn, Prop::Location, location);
-            self.set(pawn, Prop::CollisionRadius, Value::Float(crouch_radius));
-            self.set(pawn, Prop::CollisionHeight, Value::Float(crouch_height));
+            self.store.set(pawn, Prop::CollisionRadius, Value::Float(crouch_radius));
+            self.store.set(pawn, Prop::CollisionHeight, Value::Float(crouch_height));
             return Ok(());
         }
         // The size and place tried above are kept: the pawn's hash entry follows (the encroachment test skips the
         // pawn itself, so a tried and undone size needs none).
         self.relocate(pawn);
         self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
-        self.set(pawn, Prop::bIsCrouched, Value::Bool(false));
+        self.store.set(pawn, Prop::bIsCrouched, Value::Bool(false));
         self.event(pawn, "EndCrouch", [Value::Float(adjust)])
     }
 
@@ -719,7 +695,7 @@ impl<L: LoaderRef> Vm<L> {
         if delta < 0.0003 || iterations >= MAX_ITERATIONS {
             return Ok(());
         }
-        match self.physics_of(pawn) {
+        match self.store.physics_of(pawn) {
             Some(EPhysics::Walking) => self.phys_walking(pawn, delta, iterations),
             Some(EPhysics::Falling) => self.phys_falling(pawn, delta, iterations),
             Some(EPhysics::Swimming) => self.phys_swimming(pawn, delta, iterations),
@@ -735,17 +711,17 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn velocity_caps(&self, pawn: ObjectId, max_speed: f32) -> (f32, f32) {
-        let walking = self.flag_of(pawn, Prop::bIsWalking) || self.flag_of(pawn, Prop::bIsCrouched) || self.flag_of(pawn, Prop::bIsDeathCrawling);
-        let walking_pct = self.float_of(pawn, Prop::WalkingPct);
-        let accel_rate = self.float_of(pawn, Prop::AccelRate);
-        let max_speed = if self.is_human_controlled(pawn) { max_speed } else { max_speed * self.float_of(pawn, Prop::DesiredSpeed) };
+        let walking = self.store.flag_of(pawn, Prop::bIsWalking) || self.store.flag_of(pawn, Prop::bIsCrouched) || self.store.flag_of(pawn, Prop::bIsDeathCrawling);
+        let walking_pct = self.store.float_of(pawn, Prop::WalkingPct);
+        let accel_rate = self.store.float_of(pawn, Prop::AccelRate);
+        let max_speed = if self.is_human_controlled(pawn) { max_speed } else { max_speed * self.store.float_of(pawn, Prop::DesiredSpeed) };
         if walking { (walking_pct * accel_rate, walking_pct * max_speed) } else { (accel_rate, max_speed) }
     }
 
     fn calc_velocity(&mut self, pawn: ObjectId, accel_dir: Vector, delta: f32, max_speed: f32, friction: f32) {
         let (accel_limit, speed_limit) = self.velocity_caps(pawn, max_speed);
-        let mut velocity = self.vector(pawn, Prop::Velocity);
-        let mut acceleration = self.vector(pawn, Prop::Acceleration);
+        let mut velocity = self.store.vector(pawn, Prop::Velocity);
+        let mut acceleration = self.store.vector(pawn, Prop::Acceleration);
         if acceleration == Vector::ZERO {
             let old = velocity;
             let mut sum = Vector::ZERO;
@@ -780,36 +756,36 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn max_speed(&self, pawn: ObjectId) -> f32 {
-        match self.physics_of(pawn) {
-            Some(EPhysics::Flying) => self.float_of(pawn, Prop::AirSpeed),
-            Some(EPhysics::Swimming) => self.float_of(pawn, Prop::WaterSpeed),
-            _ => self.float_of(pawn, Prop::GroundSpeed),
+        match self.store.physics_of(pawn) {
+            Some(EPhysics::Flying) => self.store.float_of(pawn, Prop::AirSpeed),
+            Some(EPhysics::Swimming) => self.store.float_of(pawn, Prop::WaterSpeed),
+            _ => self.store.float_of(pawn, Prop::GroundSpeed),
         }
     }
 
     /// Walking AI does not step off ledges: the move is dropped (unverified).
     /// A move that leaves the pawn swimming ends in `start_swimming`, with the frame's start and velocity.
     fn phys_walking(&mut self, pawn: ObjectId, delta: f32, mut iterations: u32) -> Result<(), Error> {
-        let Some(controller) = self.object_of(pawn, Prop::Controller) else { return Ok(()) };
+        let Some(controller) = self.store.object_of(pawn, Prop::Controller) else { return Ok(()) };
         let VolumeProps { gravity, ground_friction, .. } = self.volume(pawn);
-        let friction = if ground_friction == DEFAULT_GROUND_FRICTION { self.float_of(pawn, Prop::WalkFriction) } else { ground_friction };
+        let friction = if ground_friction == DEFAULT_GROUND_FRICTION { self.store.float_of(pawn, Prop::WalkFriction) } else { ground_friction };
         let desired_move = self.walking_velocity(pawn, delta, friction);
         let grav_dir = gravity_direction(gravity);
         let down = grav_dir * FLOOR_CHECK;
-        let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
-        let start = WalkStart { location: self.vector(pawn, Prop::Location), floor: self.vector(pawn, Prop::Floor), base: self.object_of(pawn, Prop::Base) };
-        self.set(pawn, Prop::bJustTeleported, Value::Bool(false));
-        let avoids_ledges = (self.flag_of(pawn, Prop::bIsWalking) || self.flag_of(pawn, Prop::bIsCrouched))
-            && !self.flag_of(pawn, Prop::bCanFly)
-            && !self.flag_of(pawn, Prop::bCanWalkOffLedges);
+        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
+        let start = WalkStart { location: self.store.vector(pawn, Prop::Location), floor: self.store.vector(pawn, Prop::Floor), base: self.store.object_of(pawn, Prop::Base) };
+        self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
+        let avoids_ledges = (self.store.flag_of(pawn, Prop::bIsWalking) || self.store.flag_of(pawn, Prop::bIsCrouched))
+            && !self.store.flag_of(pawn, Prop::bCanFly)
+            && !self.store.flag_of(pawn, Prop::bCanWalkOffLedges);
         let mut checked_fall = false;
         let mut remaining = delta;
-        while remaining > 0.0 && iterations < MAX_ITERATIONS && self.object_of(pawn, Prop::Controller).is_some() {
+        while remaining > 0.0 && iterations < MAX_ITERATIONS && self.store.object_of(pawn, Prop::Controller).is_some() {
             iterations += 1;
             let tick = substep(remaining);
             remaining -= tick;
             let mut step = desired_move * tick;
-            let sub_location = self.vector(pawn, Prop::Location);
+            let sub_location = self.store.vector(pawn, Prop::Location);
             if nearly_zero(step) {
                 remaining = 0.0;
             } else {
@@ -824,26 +800,26 @@ impl<L: LoaderRef> Vm<L> {
                 if hit.time < 1.0 {
                     let length = step.size();
                     self.step_up(pawn, grav_dir, step * (1.0 / length), step * (1.0 - hit.time), hit, 0)?;
-                    if self.physics_of(pawn) == Some(EPhysics::Falling) {
-                        let done = horizontal_size(self.vector(pawn, Prop::Location) - sub_location);
+                    if self.store.physics_of(pawn) == Some(EPhysics::Falling) {
+                        let done = horizontal_size(self.store.vector(pawn, Prop::Location) - sub_location);
                         let left = (1.0 - (done / length).min(1.0)) * tick + remaining;
                         self.event(pawn, "Falling", Vec::new())?;
                         return self.start_new_physics(pawn, left, iterations);
                     }
                 }
             }
-            if self.is_deleted(pawn) {
+            if self.store.is_deleted(pawn) {
                 return Ok(());
             }
-            if self.physics_of(pawn) == Some(EPhysics::Swimming) {
-                return self.start_swimming(pawn, start.location, self.vector(pawn, Prop::Velocity), tick, remaining, iterations);
+            if self.store.physics_of(pawn) == Some(EPhysics::Swimming) {
+                return self.start_swimming(pawn, start.location, self.store.vector(pawn, Prop::Velocity), tick, remaining, iterations);
             }
             let floor = self.settle_on_floor(pawn, step, down, radius, height)?;
-            if self.is_deleted(pawn) {
+            if self.store.is_deleted(pawn) {
                 return Ok(());
             }
-            if self.physics_of(pawn) == Some(EPhysics::Swimming) {
-                return self.start_swimming(pawn, start.location, self.vector(pawn, Prop::Velocity), tick, remaining, iterations);
+            if self.store.physics_of(pawn) == Some(EPhysics::Swimming) {
+                return self.start_swimming(pawn, start.location, self.store.vector(pawn, Prop::Velocity), tick, remaining, iterations);
             }
             if floor.time < 1.0 && floor.normal[2] >= MIN_FLOOR_Z {
                 if floor.normal[2] < 1.0 && floor.normal[2] * friction < SLOPE_SLIDE_FRICTION {
@@ -851,8 +827,8 @@ impl<L: LoaderRef> Vm<L> {
                     let slip = slide - (floor.normal * slide.dot(floor.normal));
                     if slip.dot(slide) >= 0.0 {
                         self.move_actor(pawn, slip, Bases::Block)?;
-                        if !self.is_deleted(pawn) && self.physics_of(pawn) == Some(EPhysics::Swimming) {
-                            return self.start_swimming(pawn, start.location, self.vector(pawn, Prop::Velocity), tick, remaining, iterations);
+                        if !self.store.is_deleted(pawn) && self.store.physics_of(pawn) == Some(EPhysics::Swimming) {
+                            return self.start_swimming(pawn, start.location, self.store.vector(pawn, Prop::Velocity), tick, remaining, iterations);
                         }
                     }
                 }
@@ -865,53 +841,53 @@ impl<L: LoaderRef> Vm<L> {
             let left = if length == 0.0 {
                 0.0
             } else {
-                let done = horizontal_size(self.vector(pawn, Prop::Location) - sub_location);
+                let done = horizontal_size(self.store.vector(pawn, Prop::Location) - sub_location);
                 (1.0 - (done / length).min(1.0)) * tick + remaining
             };
             return self.walk_off_ledge(pawn, left, iterations);
         }
-        let mut velocity = if !self.flag_of(pawn, Prop::bJustTeleported) && !self.flag_of(pawn, Prop::bNoVelocityUpdate) {
-            (self.vector(pawn, Prop::Location) - start.location) * (1.0 / delta)
+        let mut velocity = if !self.store.flag_of(pawn, Prop::bJustTeleported) && !self.store.flag_of(pawn, Prop::bNoVelocityUpdate) {
+            (self.store.vector(pawn, Prop::Location) - start.location) * (1.0 / delta)
         } else {
-            self.vector(pawn, Prop::Velocity)
+            self.store.vector(pawn, Prop::Velocity)
         };
-        self.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(false));
+        self.store.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(false));
         velocity[2] = 0.0;
         self.set_vector(pawn, Prop::Velocity, velocity);
         Ok(())
     }
 
     fn walking_velocity(&mut self, pawn: ObjectId, delta: f32, friction: f32) -> Vector {
-        let mut velocity = self.vector(pawn, Prop::Velocity);
+        let mut velocity = self.store.vector(pawn, Prop::Velocity);
         velocity[2] = 0.0;
         self.set_vector(pawn, Prop::Velocity, velocity);
-        let mut acceleration = self.vector(pawn, Prop::Acceleration);
+        let mut acceleration = self.store.vector(pawn, Prop::Acceleration);
         acceleration[2] = 0.0;
         self.set_vector(pawn, Prop::Acceleration, acceleration);
         let accel_dir = acceleration.safe_normal();
         self.calc_velocity(pawn, accel_dir, delta, self.max_speed(pawn), friction);
-        let mut desired_move = self.vector(pawn, Prop::Velocity);
+        let mut desired_move = self.store.vector(pawn, Prop::Velocity);
         desired_move += self.zone_push(pawn, 25.0 * delta);
         desired_move[2] = 0.0;
         desired_move
     }
 
     fn settle_on_floor(&mut self, pawn: ObjectId, step: Vector, down: Vector, radius: f32, height: f32) -> Result<MoveHit, Error> {
-        let location = self.vector(pawn, Prop::Location);
+        let location = self.store.vector(pawn, Prop::Location);
         let mut floor = self.sweep(pawn, Sweep { start: location, delta: down, radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         let floor_distance = floor.time * FLOOR_CHECK;
         self.set_vector(pawn, Prop::Floor, floor.normal);
-        let walking = |vm: &Self| vm.physics_of(pawn) == Some(EPhysics::Walking);
+        let walking = |vm: &Self| vm.store.physics_of(pawn) == Some(EPhysics::Walking);
         if floor.normal[2] < MIN_FLOOR_Z && !nearly_zero(step) && step.dot(floor.normal) < 0.0 {
             let up = Vector::new(0.0, 0.0, MAX_STEP_HEIGHT);
             let slide = up - (floor.normal * up.dot(floor.normal));
             floor = self.move_actor(pawn, slide * (-1.0), Bases::Block)?;
-            if floor.actor != self.object_of(pawn, Prop::Base) && walking(self) {
+            if floor.actor != self.store.object_of(pawn, Prop::Base) && walking(self) {
                 self.set_base(pawn, floor.actor, floor.normal)?;
             }
-        } else if floor.time < 1.0 && (floor.actor != self.object_of(pawn, Prop::Base) || floor_distance > MAX_FLOOR_DIST) {
+        } else if floor.time < 1.0 && (floor.actor != self.store.object_of(pawn, Prop::Base) || floor_distance > MAX_FLOOR_DIST) {
             floor = self.move_actor(pawn, down, Bases::Block)?;
-            if floor.actor != self.object_of(pawn, Prop::Base) && walking(self) {
+            if floor.actor != self.store.object_of(pawn, Prop::Base) && walking(self) {
                 self.set_base(pawn, floor.actor, floor.normal)?;
             }
         } else if floor_distance < MIN_FLOOR_DIST {
@@ -921,12 +897,12 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn ledge_stops(&mut self, pawn: ObjectId, controller: ObjectId, checked_fall: bool, start: WalkStart) -> Result<bool, Error> {
-        if self.flag_of(pawn, Prop::bCanJump) && !checked_fall {
+        if self.store.flag_of(pawn, Prop::bCanJump) && !checked_fall {
             self.event(controller, "MayFall", Vec::new())?;
         }
-        let stops = !self.flag_of(pawn, Prop::bCanJump)
-            || (!self.flag_of(pawn, Prop::bCanWalkOffLedges) && (self.flag_of(pawn, Prop::bIsWalking) || self.flag_of(pawn, Prop::bIsCrouched)));
-        if self.flag_of(pawn, Prop::bJustTeleported) || !stops {
+        let stops = !self.store.flag_of(pawn, Prop::bCanJump)
+            || (!self.store.flag_of(pawn, Prop::bCanWalkOffLedges) && (self.store.flag_of(pawn, Prop::bIsWalking) || self.store.flag_of(pawn, Prop::bIsCrouched)));
+        if self.store.flag_of(pawn, Prop::bJustTeleported) || !stops {
             return Ok(false);
         }
         self.set_vector(pawn, Prop::Velocity, Vector::ZERO);
@@ -934,20 +910,20 @@ impl<L: LoaderRef> Vm<L> {
         self.set_vector(pawn, Prop::Location, start.location);
         self.relocate(pawn);
         if let Some(base) = start.base
-            && (self.flag_of(base, Prop::bStatic) || self.flag_of(base, Prop::bWorldGeometry) || !self.flag_of(base, Prop::bMovable))
+            && (self.store.flag_of(base, Prop::bStatic) || self.store.flag_of(base, Prop::bWorldGeometry) || !self.store.flag_of(base, Prop::bMovable))
         {
             self.set_base(pawn, Some(base), start.floor)?;
         }
-        self.set(controller, Prop::MoveTimer, Value::Float(-1.0));
+        self.store.set(controller, Prop::MoveTimer, Value::Float(-1.0));
         Ok(true)
     }
 
     fn walk_off_ledge(&mut self, pawn: ObjectId, left: f32, iterations: u32) -> Result<(), Error> {
-        let mut velocity = self.vector(pawn, Prop::Velocity);
+        let mut velocity = self.store.vector(pawn, Prop::Velocity);
         velocity[2] = 0.0;
         self.set_vector(pawn, Prop::Velocity, velocity);
         self.event(pawn, "Falling", Vec::new())?;
-        if self.physics_of(pawn) == Some(EPhysics::Walking) {
+        if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
             self.set_physics(pawn, EPhysics::Falling, None)?;
         }
         self.start_new_physics(pawn, left, iterations)
@@ -958,23 +934,23 @@ impl<L: LoaderRef> Vm<L> {
         if hit.normal[2].abs() < MAX_STEP_SIDE_Z {
             self.move_actor(pawn, down * (-1.0), Bases::Block)?;
             hit = self.move_actor(pawn, step, Bases::Block)?;
-        } else if hit.normal[2] >= MIN_FLOOR_Z || self.physics_of(pawn) != Some(EPhysics::Walking) {
+        } else if hit.normal[2] >= MIN_FLOOR_Z || self.store.physics_of(pawn) != Some(EPhysics::Walking) {
             let climb = step + [0.0, 0.0, step.size() * hit.normal[2]].into();
             hit = self.move_actor(pawn, climb, Bases::Block)?;
         }
         if hit.time < 1.0 {
             let pushed = hit.actor.filter(|&d| {
-                self.is_human_controlled(pawn) && self.is_a(d, Kind::Decoration) && self.flag_of(d, Prop::bPushable) && hit.normal.dot(desired_dir) < -0.9
+                self.is_human_controlled(pawn) && self.store.is_a(d, Kind::Decoration) && self.store.flag_of(d, Prop::bPushable) && hit.normal.dot(desired_dir) < -0.9
             });
             if let Some(decoration) = pushed {
-                self.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(true));
-                let mass = self.float_of(pawn, Prop::Mass);
-                let share = mass / (mass + self.float_of(decoration, Prop::Mass));
+                self.store.set(pawn, Prop::bNoVelocityUpdate, Value::Bool(true));
+                let mass = self.store.float_of(pawn, Prop::Mass);
+                let share = mass / (mass + self.store.float_of(decoration, Prop::Mass));
                 if share.is_finite() {
-                    self.set_vector(pawn, Prop::Velocity, self.vector(pawn, Prop::Velocity) * share);
+                    self.set_vector(pawn, Prop::Velocity, self.store.vector(pawn, Prop::Velocity) * share);
                 }
                 self.process_hit_wall(pawn, hit.normal, Some(decoration))?;
-                if self.physics_of(pawn) == Some(EPhysics::Falling) {
+                if self.store.physics_of(pawn) == Some(EPhysics::Falling) {
                     return Ok(());
                 }
             } else if hit.normal[2].abs() < MAX_STEP_SIDE_Z && step.dot(step) * hit.time > STEP_AGAIN_SQUARED && depth < 4 {
@@ -982,7 +958,7 @@ impl<L: LoaderRef> Vm<L> {
                 return self.step_up(pawn, grav_dir, desired_dir, step * (1.0 - landed.time), landed, depth + 1);
             }
             self.process_hit_wall(pawn, hit.normal, hit.actor)?;
-            if self.physics_of(pawn) == Some(EPhysics::Falling) {
+            if self.store.physics_of(pawn) == Some(EPhysics::Falling) {
                 return Ok(());
             }
             let wall = Vector::new(hit.normal[0], hit.normal[1], 0.0).safe_normal();
@@ -991,7 +967,7 @@ impl<L: LoaderRef> Vm<L> {
                 let again = self.move_actor(pawn, slide, Bases::Block)?;
                 if again.time < 1.0 {
                     self.process_hit_wall(pawn, again.normal, again.actor)?;
-                    if self.physics_of(pawn) == Some(EPhysics::Falling) {
+                    if self.store.physics_of(pawn) == Some(EPhysics::Falling) {
                         return Ok(());
                     }
                     slide = two_wall_adjust(desired_dir, slide, again.normal, wall, again.time);
@@ -1004,19 +980,19 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn process_hit_wall(&mut self, pawn: ObjectId, hit_normal: Vector, wall: Option<ObjectId>) -> Result<(), Error> {
-        let Some(wall) = wall.filter(|&w| !self.is_a(w, Kind::Pawn)) else { return Ok(()) };
+        let Some(wall) = wall.filter(|&w| !self.store.is_a(w, Kind::Pawn)) else { return Ok(()) };
         let args = [Value::Vector(hit_normal), Value::Object(Some(wall))];
-        let Some(controller) = self.object_of(pawn, Prop::Controller) else { return self.event(pawn, "HitWall", args) };
-        if self.vector(pawn, Prop::Acceleration) == Vector::ZERO {
+        let Some(controller) = self.store.object_of(pawn, Prop::Controller) else { return self.event(pawn, "HitWall", args) };
+        if self.store.vector(pawn, Prop::Acceleration) == Vector::ZERO {
             return Ok(());
         }
-        let mut direction = (self.vector(controller, Prop::Destination) - self.vector(pawn, Prop::Location)).safe_normal();
+        let mut direction = (self.store.vector(controller, Prop::Destination) - self.store.vector(pawn, Prop::Location)).safe_normal();
         let mut facing = hit_normal;
-        if self.physics_of(pawn) == Some(EPhysics::Walking) {
+        if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
             direction[2] = 0.0;
             facing[2] = 0.0;
         }
-        if direction.dot(facing) <= self.float_of(controller, Prop::MinHitWall)
+        if direction.dot(facing) <= self.store.float_of(controller, Prop::MinHitWall)
             && !self.event_bool(controller, "NotifyHitWall", args.clone())?
         {
             self.event(pawn, "HitWall", args)?;
@@ -1026,26 +1002,26 @@ impl<L: LoaderRef> Vm<L> {
 
     fn phys_falling(&mut self, pawn: ObjectId, delta: f32, mut iterations: u32) -> Result<(), Error> {
         let VolumeProps { gravity, terminal_velocity: terminal, zone_velocity, .. } = self.volume(pawn);
-        let mut real_acceleration = self.vector(pawn, Prop::Acceleration);
+        let mut real_acceleration = self.store.vector(pawn, Prop::Acceleration);
         let mut acceleration = real_acceleration;
         acceleration[2] = 0.0;
-        let mut air_control = self.float_of(pawn, Prop::AirControl);
-        let accel_rate = self.float_of(pawn, Prop::AccelRate);
-        let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
+        let mut air_control = self.store.float_of(pawn, Prop::AirControl);
+        let accel_rate = self.store.float_of(pawn, Prop::AccelRate);
+        let (radius, height) = (self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight));
         if air_control > MIN_AIR_CONTROL {
-            let mut test = ((acceleration.safe_normal() * (air_control * accel_rate)) + self.vector(pawn, Prop::Velocity)) * delta;
+            let mut test = ((acceleration.safe_normal() * (air_control * accel_rate)) + self.store.vector(pawn, Prop::Velocity)) * delta;
             test[2] = 0.0;
-            let at = self.vector(pawn, Prop::Location);
+            let at = self.store.vector(pawn, Prop::Location);
             if self.trace_world(at, at + test, [radius, radius, height].into()).is_some() {
                 air_control = 0.0;
             }
         }
-        let speed = horizontal_size(self.vector(pawn, Prop::Velocity));
+        let speed = horizontal_size(self.store.vector(pawn, Prop::Velocity));
         let mut max_accel = accel_rate * air_control;
         let mut bound_speed = 0.0;
         if speed < AIR_BURST_SPEED && air_control > 0.0 {
             max_accel += (AIR_BURST_SPEED - speed) / delta;
-        } else if speed >= self.float_of(pawn, Prop::GroundSpeed) {
+        } else if speed >= self.store.float_of(pawn, Prop::GroundSpeed) {
             if air_control <= MIN_AIR_CONTROL {
                 max_accel = 1.0;
             } else {
@@ -1056,16 +1032,16 @@ impl<L: LoaderRef> Vm<L> {
             acceleration = acceleration.safe_normal() * max_accel;
         }
         self.set_vector(pawn, Prop::Acceleration, acceleration);
-        let constant = self.vector(pawn, Prop::ConstantAcceleration);
-        let ai = self.object_of(pawn, Prop::Controller).is_some_and(|c| self.is_a(c, Kind::AIController));
+        let constant = self.store.vector(pawn, Prop::ConstantAcceleration);
+        let ai = self.store.object_of(pawn, Prop::Controller).is_some_and(|c| self.store.is_a(c, Kind::AIController));
         let mut remaining = delta;
         while remaining > 0.0 && iterations < MAX_ITERATIONS {
             iterations += 1;
             let tick = substep(remaining);
             remaining -= tick;
-            let old_location = self.vector(pawn, Prop::Location);
-            self.set(pawn, Prop::bJustTeleported, Value::Bool(false));
-            let mut old_velocity = self.vector(pawn, Prop::Velocity);
+            let old_location = self.store.vector(pawn, Prop::Location);
+            self.store.set(pawn, Prop::bJustTeleported, Value::Bool(false));
+            let mut old_velocity = self.store.vector(pawn, Prop::Velocity);
             let total = (acceleration + gravity) + constant;
             let mut velocity = old_velocity + (total * (0.5 * tick));
             if bound_speed != 0.0 && horizontal_size(velocity) > bound_speed {
@@ -1075,17 +1051,17 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(pawn, Prop::Velocity, velocity);
             let adjusted = (velocity + zone_velocity) * tick;
             let hit = self.move_actor(pawn, adjusted, Bases::Block)?;
-            if self.is_deleted(pawn) {
+            if self.store.is_deleted(pawn) {
                 return Ok(());
             }
-            if self.physics_of(pawn) == Some(EPhysics::Swimming) {
+            if self.store.physics_of(pawn) == Some(EPhysics::Swimming) {
                 return self.start_swimming(pawn, old_location, old_velocity, tick, (1.0 - hit.time) * tick + remaining, iterations);
             }
             if hit.time < 1.0 {
                 if hit.normal[2] >= MIN_FLOOR_Z {
                     let left = (1.0 - hit.time) * tick + remaining;
-                    if !self.flag_of(pawn, Prop::bJustTeleported) && hit.time > MIN_LANDING_TIME && hit.time * tick > MIN_LANDING_SECONDS {
-                        let moved = self.vector(pawn, Prop::Location) - old_location;
+                    if !self.store.flag_of(pawn, Prop::bJustTeleported) && hit.time > MIN_LANDING_TIME && hit.time * tick > MIN_LANDING_SECONDS {
+                        let moved = self.store.vector(pawn, Prop::Location) - old_location;
                         self.set_vector(pawn, Prop::Velocity, moved * (1.0 / (hit.time * tick)));
                     }
                     return self.process_landed(pawn, hit.normal, hit.actor, left, iterations);
@@ -1113,11 +1089,11 @@ impl<L: LoaderRef> Vm<L> {
                         }
                     }
                 }
-                let moved = (self.vector(pawn, Prop::Location) - old_location) * (1.0 / tick);
+                let moved = (self.store.vector(pawn, Prop::Location) - old_location) * (1.0 / tick);
                 old_velocity = [moved[0], moved[1], old_velocity[2]].into();
             }
-            if !self.flag_of(pawn, Prop::bJustTeleported) {
-                let moved = ((self.vector(pawn, Prop::Location) - old_location) * (1.0 / tick)) - zone_velocity;
+            if !self.store.flag_of(pawn, Prop::bJustTeleported) {
+                let moved = ((self.store.vector(pawn, Prop::Location) - old_location) * (1.0 / tick)) - zone_velocity;
                 let mut velocity = moved;
                 if moved[2] < old_velocity[2] || old_velocity[2] >= 0.0 {
                     velocity = (moved * 2.0) - old_velocity;
@@ -1134,16 +1110,16 @@ impl<L: LoaderRef> Vm<L> {
 
     fn process_landed(&mut self, pawn: ObjectId, hit_normal: Vector, floor: Option<ObjectId>, left: f32, iterations: u32) -> Result<(), Error> {
         self.set_vector(pawn, Prop::Floor, hit_normal);
-        if self.physics_of(pawn) == Some(EPhysics::Falling) {
-            let alive = self.get(pawn, Prop::Health).as_ref().map_or(1, int) > 0;
+        if self.store.physics_of(pawn) == Some(EPhysics::Falling) {
+            let alive = self.store.get(pawn, Prop::Health).as_ref().map_or(1, int) > 0;
             self.set_physics(pawn, if alive { EPhysics::Walking } else { EPhysics::None }, Some((floor, hit_normal)))?;
         }
-        if self.physics_of(pawn) == Some(EPhysics::Walking) {
-            let direction = self.vector(pawn, Prop::Acceleration).safe_normal();
+        if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
+            let direction = self.store.vector(pawn, Prop::Acceleration).safe_normal();
             self.set_vector(pawn, Prop::Acceleration, direction);
         }
         let args = [Value::Vector(hit_normal)];
-        let handled = match self.object_of(pawn, Prop::Controller) {
+        let handled = match self.store.object_of(pawn, Prop::Controller) {
             Some(controller) => self.event_bool(controller, "NotifyLanded", args.clone())?,
             None => false,
         };
@@ -1155,43 +1131,43 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Banking from velocity changes is not modelled. Human pawns use the pawn's rate, not retail's.
     fn pawn_rotation(&mut self, pawn: ObjectId, delta: f32) {
-        let controller = self.object_of(pawn, Prop::Controller);
-        let human = controller.is_some_and(|c| self.is_a(c, Kind::PlayerController));
+        let controller = self.store.object_of(pawn, Prop::Controller);
+        let human = controller.is_some_and(|c| self.store.is_a(c, Kind::PlayerController));
         let rotate = match controller {
-            Some(c) if human => self.flag_of(c, Prop::bRotateToDesired),
+            Some(c) if human => self.store.flag_of(c, Prop::bRotateToDesired),
             other => other.is_some(),
         };
-        self.set(pawn, Prop::bRotateToDesired, Value::Bool(rotate));
+        self.store.set(pawn, Prop::bRotateToDesired, Value::Bool(rotate));
         if let Some(c) = controller.filter(|_| human && rotate) {
-            let own = self.rotator_of(c, Prop::DesiredRotation);
-            let mut desired = self.rotator_of(pawn, Prop::DesiredRotation);
+            let own = self.store.rotator_of(c, Prop::DesiredRotation);
+            let mut desired = self.store.rotator_of(pawn, Prop::DesiredRotation);
             desired.pitch = own.pitch;
             desired.yaw = own.yaw;
-            self.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
+            self.store.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
         }
-        let physics = self.physics_of(pawn);
-        let fixed = self.flag_of(pawn, Prop::bFixedRotationDir);
-        let rate = self.rotator_of(pawn, Prop::RotationRate);
+        let physics = self.store.physics_of(pawn);
+        let fixed = self.store.flag_of(pawn, Prop::bFixedRotationDir);
+        let rate = self.store.rotator_of(pawn, Prop::RotationRate);
         let turn = (rate.yaw as f32 * delta).round() as i32;
-        let mut rotation = self.rotator_of(pawn, Prop::Rotation);
-        let mut desired = self.rotator_of(pawn, Prop::DesiredRotation);
+        let mut rotation = self.store.rotator_of(pawn, Prop::Rotation);
+        let mut desired = self.store.rotator_of(pawn, Prop::DesiredRotation);
         if let Some(controller) = controller.filter(|_| rotate) {
             if desired.yaw != rotation.yaw {
                 rotation.yaw = fixed_turn(rotation.yaw, desired.yaw, turn, Toward::Desired, fixed);
             }
             if matches!(physics, Some(EPhysics::Walking | EPhysics::Falling | EPhysics::Ladder)) && desired.pitch != 0 {
                 desired.pitch = 0;
-                self.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
+                self.store.set(pawn, Prop::DesiredRotation, Value::Rotator(desired));
             }
-            if !(self.flag_of(pawn, Prop::bCrawler) && physics == Some(EPhysics::Walking)) && desired.pitch != rotation.pitch {
+            if !(self.store.flag_of(pawn, Prop::bCrawler) && physics == Some(EPhysics::Walking)) && desired.pitch != rotation.pitch {
                 rotation.pitch = fixed_turn(rotation.pitch, desired.pitch, turn, Toward::Desired, fixed);
             }
-            if self.flag_of(controller, Prop::bRotateToDesired) {
-                let mut own = self.rotator_of(controller, Prop::Rotation);
+            if self.store.flag_of(controller, Prop::bRotateToDesired) {
+                let mut own = self.store.rotator_of(controller, Prop::Rotation);
                 own.yaw = rotation.yaw;
-                let own_desired = self.rotator_of(controller, Prop::DesiredRotation);
-                own.pitch = fixed_turn(own.pitch, own_desired.pitch, turn, Toward::Desired, self.flag_of(controller, Prop::bFixedRotationDir));
-                self.set(controller, Prop::Rotation, Value::Rotator(own));
+                let own_desired = self.store.rotator_of(controller, Prop::DesiredRotation);
+                own.pitch = fixed_turn(own.pitch, own_desired.pitch, turn, Toward::Desired, self.store.flag_of(controller, Prop::bFixedRotationDir));
+                self.store.set(controller, Prop::Rotation, Value::Rotator(own));
             }
         }
         if rate.roll < 1 {
@@ -1201,20 +1177,20 @@ impl<L: LoaderRef> Vm<L> {
             let roll = rotation.roll & 0xffff;
             rotation.roll = if roll < 0x8000 { ((1.0 - ease) * roll as f32) as i32 } else { (roll as f32 + (0x10000 - roll) as f32 * ease) as i32 };
         }
-        if rotation != self.rotator_of(pawn, Prop::Rotation) {
-            self.set(pawn, Prop::Rotation, Value::Rotator(rotation));
+        if rotation != self.store.rotator_of(pawn, Prop::Rotation) {
+            self.store.set(pawn, Prop::Rotation, Value::Rotator(rotation));
         }
     }
 
     pub(crate) fn actor_rotation(&mut self, actor: ObjectId, delta: f32) -> Result<(), Error> {
-        let rate = self.rotator_of(actor, Prop::RotationRate);
-        if rate == [0; 3].into() || self.flag_of(actor, Prop::bInterpolating) {
+        let rate = self.store.rotator_of(actor, Prop::RotationRate);
+        if rate == [0; 3].into() || self.store.flag_of(actor, Prop::bInterpolating) {
             return Ok(());
         }
-        let to_desired = self.flag_of(actor, Prop::bRotateToDesired);
-        let fixed = self.flag_of(actor, Prop::bFixedRotationDir);
-        let desired = self.rotator_of(actor, Prop::DesiredRotation);
-        let current = self.rotator_of(actor, Prop::Rotation);
+        let to_desired = self.store.flag_of(actor, Prop::bRotateToDesired);
+        let fixed = self.store.flag_of(actor, Prop::bFixedRotationDir);
+        let desired = self.store.rotator_of(actor, Prop::DesiredRotation);
+        let current = self.store.rotator_of(actor, Prop::Rotation);
         if (!to_desired && !fixed) || (to_desired && current == desired) {
             return Ok(());
         }
@@ -1226,7 +1202,7 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         if rotation != current {
-            self.set(actor, Prop::Rotation, Value::Rotator(rotation));
+            self.store.set(actor, Prop::Rotation, Value::Rotator(rotation));
             self.volume_moved(actor);
         }
         if to_desired && rotation == desired {

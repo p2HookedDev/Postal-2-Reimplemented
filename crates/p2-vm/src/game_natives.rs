@@ -81,17 +81,17 @@ impl<L: LoaderRef> Vm<L> {
         let f = |n: usize| args.get(n).map_or(0.0, crate::interp::float);
         match native {
             Native::ForceInit => {
-                self.set(emitter, Prop::ActiveParticles, Value::Int(0));
+                self.store.set(emitter, Prop::ActiveParticles, Value::Int(0));
                 self.initialize_projection_normal(emitter);
                 self.host.commands.push(HostCommand::Particle(ParticleCommand::Reset(emitter, ())));
             }
             Native::ForceSpawn => {
-                let offset = self.vector(emitter, Prop::StartLocationOffset);
+                let offset = self.store.vector(emitter, Prop::StartLocationOffset);
                 self.host.commands.push(HostCommand::Particle(ParticleCommand::Spawn { emitter, offset, line: None }));
-                let max = self.get(emitter, Prop::MaxParticles).as_ref().map_or(0, crate::interp::int);
-                let active = self.get(emitter, Prop::ActiveParticles).as_ref().map_or(0, crate::interp::int);
+                let max = self.store.get(emitter, Prop::MaxParticles).as_ref().map_or(0, crate::interp::int);
+                let active = self.store.get(emitter, Prop::ActiveParticles).as_ref().map_or(0, crate::interp::int);
                 if max > 0 {
-                    self.set(emitter, Prop::ActiveParticles, Value::Int((active + 1).min(max)));
+                    self.store.set(emitter, Prop::ActiveParticles, Value::Int((active + 1).min(max)));
                 }
             }
             Native::SetProjectionNormal => {
@@ -100,8 +100,8 @@ impl<L: LoaderRef> Vm<L> {
                 self.set_vector(emitter, Prop::RealProjectionNormal, value.safe_normal());
             }
             Native::SetMaxParticles => {
-                self.set(emitter, Prop::MaxParticles, args.first().cloned().unwrap_or(Value::Int(0)));
-                self.set(emitter, Prop::ActiveParticles, Value::Int(0));
+                self.store.set(emitter, Prop::MaxParticles, args.first().cloned().unwrap_or(Value::Int(0)));
+                self.store.set(emitter, Prop::ActiveParticles, Value::Int(0));
                 self.initialize_projection_normal(emitter);
                 self.host.commands.push(HostCommand::Particle(ParticleCommand::Reset(emitter, ())));
             }
@@ -112,7 +112,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn initialize_projection_normal(&mut self, emitter: ObjectId) {
-        let normal = self.vector(emitter, Prop::ProjectionNormal).safe_normal();
+        let normal = self.store.vector(emitter, Prop::ProjectionNormal).safe_normal();
         self.set_vector(emitter, Prop::RealProjectionNormal, normal);
     }
 
@@ -122,14 +122,14 @@ impl<L: LoaderRef> Vm<L> {
         let length = end - start;
         // As retail, a vector of squared size below 1e-8 is left unnormalized.
         let step = (if length.size_squared() < 1e-8 { length } else { length.safe_normal() }) * size_step;
-        let max = self.get(emitter, Prop::MaxParticles).as_ref().map_or(0, crate::interp::int);
-        let mut active = self.get(emitter, Prop::ActiveParticles).as_ref().map_or(0, crate::interp::int);
+        let max = self.store.get(emitter, Prop::MaxParticles).as_ref().map_or(0, crate::interp::int);
+        let mut active = self.store.get(emitter, Prop::ActiveParticles).as_ref().map_or(0, crate::interp::int);
         let mut offset = Vector::ZERO;
         let mut spawned = 0;
         while spawned < LENGTH_SPAWN_LIMIT && max > 0 && (offset - length).size() > size_step {
             self.set_vector(emitter, Prop::StartLocationOffset, offset);
-            let line_start = self.vector(emitter, Prop::LineStart);
-            let line = Some([line_start, self.vector(emitter, Prop::LineEnd)]);
+            let line_start = self.store.vector(emitter, Prop::LineStart);
+            let line = Some([line_start, self.store.vector(emitter, Prop::LineEnd)]);
             self.host.commands.push(HostCommand::Particle(ParticleCommand::Spawn { emitter, offset, line }));
             offset += step;
             self.set_vector(emitter, Prop::LineStart, line_start + step);
@@ -140,7 +140,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         if spawned > 0 {
             self.set_vector(emitter, Prop::LineEnd, end);
-            self.set(emitter, Prop::ActiveParticles, Value::Int(active));
+            self.store.set(emitter, Prop::ActiveParticles, Value::Int(active));
         }
         if max > 0 {
             self.host.commands.push(HostCommand::Particle(ParticleCommand::KeepAlive(emitter)));
@@ -148,36 +148,36 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn safe_to_go_into_stasis(&self, controller: ObjectId, min_player_distance: f32) -> bool {
-        let Some(pawn) = self.object_of(controller, Prop::Pawn) else { return true };
-        let at = self.vector(pawn, Prop::Location);
+        let Some(pawn) = self.store.object_of(controller, Prop::Pawn) else { return true };
+        let at = self.store.vector(pawn, Prop::Location);
         !self.any_controller(|other| {
-            self.flag_of(other, Prop::bIsPlayer)
-                && self.object_of(other, Prop::Pawn).is_some_and(|their| (at - self.vector(their, Prop::Location)).size() <= min_player_distance)
+            self.store.flag_of(other, Prop::bIsPlayer)
+                && self.store.object_of(other, Prop::Pawn).is_some_and(|their| (at - self.store.vector(their, Prop::Location)).size() <= min_player_distance)
         })
     }
 
     /// Retail damages every actor in reach when the class `FluidPuddle` cannot be loaded.
     fn fire_hurt_radius(&mut self, emitter: ObjectId, amount: f32, radius: f32, damage_type: Value, line: [Vector; 2], default_size: [f32; 2]) -> Result<(), Error> {
-        let centre = self.vector(emitter, Prop::Location);
+        let centre = self.store.vector(emitter, Prop::Location);
         let in_reach: Vec<ObjectId> = self
             .colliders_near([centre[0], centre[1]], [centre[0], centre[1]], radius)
             .into_iter()
             .map(|e| e.actor)
-            .filter(|&actor| actor != emitter && !self.is_deleted(actor) && self.flag_of(actor, Prop::bCollideActors))
+            .filter(|&actor| actor != emitter && !self.store.is_deleted(actor) && self.store.flag_of(actor, Prop::bCollideActors))
             .filter(|&actor| {
-                let offset = self.vector(actor, Prop::Location) - centre;
+                let offset = self.store.vector(actor, Prop::Location) - centre;
                 offset.dot(offset) < radius * radius
             })
             .collect();
-        let instigator = Value::Object(self.object_of(emitter, Prop::Instigator));
+        let instigator = Value::Object(self.store.object_of(emitter, Prop::Instigator));
         let damage = Value::Int((amount as i32).max(1));
         for actor in in_reach {
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 continue;
             }
-            let location = self.vector(actor, Prop::Location);
-            let (actor_radius, actor_height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
-            let hit = self.is_a(actor, Kind::FluidPuddle)
+            let location = self.store.vector(actor, Prop::Location);
+            let (actor_radius, actor_height) = (self.store.float_of(actor, Prop::CollisionRadius), self.store.float_of(actor, Prop::CollisionHeight));
+            let hit = self.store.is_a(actor, Kind::FluidPuddle)
                 || thick_line_cylinder_collide(line[0], line[1], default_size[0], default_size[1], location, actor_radius, actor_height);
             if hit {
                 let args = vec![damage.clone(), instigator.clone(), Value::Vector(location), Value::Vector(Vector::ZERO), damage_type.clone()];

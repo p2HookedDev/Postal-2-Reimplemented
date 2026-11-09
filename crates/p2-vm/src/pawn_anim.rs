@@ -72,44 +72,44 @@ impl FootTwist {
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn pawn_tick_special(&mut self, pawn: ObjectId, delta: f32) -> Result<(), Error> {
-        if !self.flag_of(pawn, Prop::bInterpolating) && self.flag_of(pawn, Prop::bPhysicsAnimUpdate) && self.object_of(pawn, Prop::Mesh).is_some() {
+        if !self.store.flag_of(pawn, Prop::bInterpolating) && self.store.flag_of(pawn, Prop::bPhysicsAnimUpdate) && self.store.object_of(pawn, Prop::Mesh).is_some() {
             self.update_movement_animation(pawn, delta)?;
         }
-        if let Some(weapon) = self.object_of(pawn, Prop::Weapon).filter(|&w| !self.is_deleted(w)) {
-            let controller = self.object_of(pawn, Prop::Controller);
+        if let Some(weapon) = self.store.object_of(pawn, Prop::Weapon).filter(|&w| !self.store.is_deleted(w)) {
+            let controller = self.store.object_of(pawn, Prop::Controller);
             let first_person = controller.is_some_and(|c| {
                 Some(c) == self.player()
-                    && self.is_a(c, Kind::PlayerController)
-                    && self.object_of(c, Prop::ViewTarget).unwrap_or(pawn) == pawn
-                    && !self.flag_of(c, Prop::bBehindView)
+                    && self.store.is_a(c, Kind::PlayerController)
+                    && self.store.object_of(c, Prop::ViewTarget).unwrap_or(pawn) == pawn
+                    && !self.store.flag_of(c, Prop::bBehindView)
             });
             if !first_person {
-                let location = self.vector(pawn, Prop::Location);
+                let location = self.store.vector(pawn, Prop::Location);
                 self.place_far_moved(weapon, location, Encroachment::Ignored)?;
             }
         }
-        if self.flag_of(pawn, Prop::bUpdateEyeheight) && self.is_probing(pawn, PROBE_UPDATE_EYE_HEIGHT)? {
+        if self.store.flag_of(pawn, Prop::bUpdateEyeheight) && self.is_probing(pawn, PROBE_UPDATE_EYE_HEIGHT)? {
             self.event(pawn, "UpdateEyeHeight", [Value::Float(delta)])?;
         }
-        let breath = self.float_of(pawn, Prop::BreathTime);
-        if self.byte_of(pawn, Prop::Role) == ROLE_AUTHORITY && breath > 0.0 {
+        let breath = self.store.float_of(pawn, Prop::BreathTime);
+        if self.store.byte_of(pawn, Prop::Role) == ROLE_AUTHORITY && breath > 0.0 {
             let left = breath - delta;
             if left < 0.001 {
-                self.set(pawn, Prop::BreathTime, Value::Float(0.0));
+                self.store.set(pawn, Prop::BreathTime, Value::Float(0.0));
                 self.event(pawn, "BreathTimer", Vec::new())?;
             } else {
-                self.set(pawn, Prop::BreathTime, Value::Float(left));
+                self.store.set(pawn, Prop::BreathTime, Value::Float(left));
             }
         }
         Ok(())
     }
 
     fn update_movement_animation(&mut self, pawn: ObjectId, delta: f32) -> Result<(), Error> {
-        if self.level.is_some_and(|level| self.byte_of(level, Prop::NetMode) == NM_DEDICATED_SERVER) || !self.ensure_instance(pawn) {
+        if self.level.is_some_and(|level| self.store.byte_of(level, Prop::NetMode) == NM_DEDICATED_SERVER) || !self.ensure_instance(pawn) {
             return Ok(());
         }
-        if !self.flag_of(pawn, Prop::bInitializeAnimation) {
-            self.set(pawn, Prop::bInitializeAnimation, Value::Bool(true));
+        if !self.store.flag_of(pawn, Prop::bInitializeAnimation) {
+            self.store.set(pawn, Prop::bInitializeAnimation, Value::Bool(true));
             let (right, left) = (self.name_of(pawn, Prop::TurnRightAnim), self.name_of(pawn, Prop::TurnLeftAnim));
             self.play(pawn, RIGHT_TURN_CHANNEL, right, 1.0, 0.1, Playback::Looping);
             self.play(pawn, LEFT_TURN_CHANNEL, left, 1.0, 0.1, Playback::Looping);
@@ -127,56 +127,56 @@ impl<L: LoaderRef> Vm<L> {
                 state.notify_disabled = false;
             }
         }
-        let step = delta / self.float_of(pawn, Prop::BlendChangeTime);
-        if self.flag_of(pawn, Prop::bTearOff) {
-            if !self.flag_of(pawn, Prop::bPlayedDeath) {
-                let args = ["HitDamageType", "TakeHitLocation"].map(|p| self.get(pawn, p).unwrap_or(Value::Object(None)));
+        let step = delta / self.store.float_of(pawn, Prop::BlendChangeTime);
+        if self.store.flag_of(pawn, Prop::bTearOff) {
+            if !self.store.flag_of(pawn, Prop::bPlayedDeath) {
+                let args = ["HitDamageType", "TakeHitLocation"].map(|p| self.store.get(pawn, p).unwrap_or(Value::Object(None)));
                 self.event(pawn, "PlayDying", args.to_vec())?;
             }
             self.zero_movement_alpha(pawn, RIGHT_TURN_CHANNEL, END_CHANNEL, step);
             return Ok(());
         }
-        let (crouched, walking) = (self.flag_of(pawn, Prop::bIsCrouched), self.flag_of(pawn, Prop::bIsWalking));
-        if crouched != self.flag_of(pawn, Prop::bWasCrouched) || walking != self.flag_of(pawn, Prop::bWasWalking) {
+        let (crouched, walking) = (self.store.flag_of(pawn, Prop::bIsCrouched), self.store.flag_of(pawn, Prop::bIsWalking));
+        if crouched != self.store.flag_of(pawn, Prop::bWasCrouched) || walking != self.store.flag_of(pawn, Prop::bWasWalking) {
             self.event(pawn, "ChangeAnimation", Vec::new())?;
-            self.set(pawn, Prop::bWasCrouched, Value::Bool(crouched));
-            self.set(pawn, Prop::bWasWalking, Value::Bool(walking));
+            self.store.set(pawn, Prop::bWasCrouched, Value::Bool(crouched));
+            self.store.set(pawn, Prop::bWasWalking, Value::Bool(walking));
         }
-        let old_physics = self.byte_of(pawn, Prop::OldPhysics);
-        if (old_physics == EPhysics::Falling as u8) != (self.physics_of(pawn) == Some(EPhysics::Falling)) {
-            let up = self.vector(pawn, Prop::Velocity)[2];
-            if self.physics_of(pawn) == Some(EPhysics::Walking) {
+        let old_physics = self.store.byte_of(pawn, Prop::OldPhysics);
+        if (old_physics == EPhysics::Falling as u8) != (self.store.physics_of(pawn) == Some(EPhysics::Falling)) {
+            let up = self.store.vector(pawn, Prop::Velocity)[2];
+            if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
                 self.event(pawn, "PlayLandingAnimation", [Value::Float(up)])?;
-            } else if self.flag_of(pawn, Prop::bWasOnGround) && up > 0.0 {
+            } else if self.store.flag_of(pawn, Prop::bWasOnGround) && up > 0.0 {
                 self.event(pawn, "PlayJump", Vec::new())?;
             } else {
                 self.event(pawn, "PlayFalling", Vec::new())?;
             }
         }
-        let physics = self.byte_of(pawn, Prop::Physics);
+        let physics = self.store.byte_of(pawn, Prop::Physics);
         if physics != old_physics && physics != EPhysics::Falling as u8 {
             self.event(pawn, "ChangeAnimation", Vec::new())?;
         }
-        let physics = self.byte_of(pawn, Prop::Physics);
-        self.set(pawn, Prop::OldPhysics, Value::Byte(physics));
+        let physics = self.store.byte_of(pawn, Prop::Physics);
+        self.store.set(pawn, Prop::OldPhysics, Value::Byte(physics));
         let physics = EPhysics::from_byte(physics);
-        self.set(pawn, Prop::bWasOnGround, Value::Bool(physics == Some(EPhysics::Walking)));
+        self.store.set(pawn, Prop::bWasOnGround, Value::Bool(physics == Some(EPhysics::Walking)));
 
-        let now = self.level.map_or(0.0, |level| self.float_of(level, Prop::TimeSeconds));
-        let acceleration = self.vector(pawn, Prop::Acceleration);
-        if physics == Some(EPhysics::Falling) || now < self.float_of(pawn, Prop::MovementBlendStartTime) {
+        let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));
+        let acceleration = self.store.vector(pawn, Prop::Acceleration);
+        if physics == Some(EPhysics::Falling) || now < self.store.float_of(pawn, Prop::MovementBlendStartTime) {
             self.zero_movement_alpha(pawn, RIGHT_TURN_CHANNEL, END_CHANNEL, step);
         } else if acceleration != Vector::ZERO {
             self.zero_movement_alpha(pawn, RIGHT_TURN_CHANNEL, FIRST_MOVEMENT_CHANNEL, step);
             self.blend_movement(pawn, physics, acceleration, step);
         } else {
-            if self.vector(pawn, Prop::OldAcceleration) != Vector::ZERO && self.physics_of(pawn) != Some(EPhysics::Falling) {
+            if self.store.vector(pawn, Prop::OldAcceleration) != Vector::ZERO && self.store.physics_of(pawn) != Some(EPhysics::Falling) {
                 self.event(pawn, "ChangeAnimation", Vec::new())?;
             }
             self.zero_movement_alpha(pawn, FIRST_MOVEMENT_CHANNEL, END_CHANNEL, step);
             self.turn_in_place(pawn, delta, step);
         }
-        if self.flag_of(pawn, Prop::bDoTorsoTwist) {
+        if self.store.flag_of(pawn, Prop::bDoTorsoTwist) {
             self.update_twist_look(pawn, delta);
         }
         Ok(())
@@ -184,40 +184,40 @@ impl<L: LoaderRef> Vm<L> {
 
     /// `ViewPitch` is a signed 16-bit rotation; the half turn stays positive.
     fn update_twist_look(&mut self, pawn: ObjectId, delta: f32) {
-        let yaw = self.rotator_of(pawn, Prop::Rotation).yaw;
-        let now = self.level.map_or(0.0, |level| self.float_of(level, Prop::TimeSeconds));
-        if now - self.float_of(pawn, Prop::LastRenderTime) > TWIST_DRAWN_SECONDS {
-            self.set(pawn, Prop::FootTurning, Value::Bool(false));
-            self.set(pawn, Prop::FootStill, Value::Bool(false));
-            self.set(pawn, Prop::FootRot, Value::Int(yaw));
+        let yaw = self.store.rotator_of(pawn, Prop::Rotation).yaw;
+        let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));
+        if now - self.store.float_of(pawn, Prop::LastRenderTime) > TWIST_DRAWN_SECONDS {
+            self.store.set(pawn, Prop::FootTurning, Value::Bool(false));
+            self.store.set(pawn, Prop::FootStill, Value::Bool(false));
+            self.store.set(pawn, Prop::FootRot, Value::Int(yaw));
             return;
         }
-        let int_of = |vm: &Self, property: Prop| vm.get(pawn, property).as_ref().map_or(0, int);
+        let int_of = |vm: &Self, property: Prop| vm.store.get(pawn, property).as_ref().map_or(0, int);
         let feet = FootTwist {
             rot: int_of(self, Prop::FootRot),
             turn_dir: int_of(self, Prop::TurnDir),
-            turning: self.flag_of(pawn, Prop::FootTurning),
-            still: self.flag_of(pawn, Prop::FootStill),
+            turning: self.store.flag_of(pawn, Prop::FootTurning),
+            still: self.store.flag_of(pawn, Prop::FootStill),
         };
-        let velocity = self.vector(pawn, Prop::Velocity);
-        let standing = velocity[0] * velocity[0] + velocity[1] * velocity[1] < TWIST_STILL_SPEED_SQUARED && self.physics_of(pawn) == Some(EPhysics::Walking);
+        let velocity = self.store.vector(pawn, Prop::Velocity);
+        let standing = velocity[0] * velocity[0] + velocity[1] * velocity[1] < TWIST_STILL_SPEED_SQUARED && self.store.physics_of(pawn) == Some(EPhysics::Walking);
         let feet = feet.step(yaw, standing, delta);
-        self.set(pawn, Prop::FootRot, Value::Int(feet.rot));
-        self.set(pawn, Prop::TurnDir, Value::Int(feet.turn_dir));
-        self.set(pawn, Prop::FootTurning, Value::Bool(feet.turning));
-        self.set(pawn, Prop::FootStill, Value::Bool(feet.still));
-        let look = i32::from(self.byte_of(pawn, Prop::ViewPitch)) * 256;
+        self.store.set(pawn, Prop::FootRot, Value::Int(feet.rot));
+        self.store.set(pawn, Prop::TurnDir, Value::Int(feet.turn_dir));
+        self.store.set(pawn, Prop::FootTurning, Value::Bool(feet.turning));
+        self.store.set(pawn, Prop::FootStill, Value::Bool(feet.still));
+        let look = i32::from(self.store.byte_of(pawn, Prop::ViewPitch)) * 256;
         self.set_twist_look(pawn, if look > 0x8000 { look - 0x10000 } else { look });
     }
 
     fn blend_movement(&mut self, pawn: ObjectId, physics: Option<EPhysics>, acceleration: Vector, step: f32) {
-        let mut look = self.rotator_of(pawn, Prop::Rotation).vector();
+        let mut look = self.store.rotator_of(pawn, Prop::Rotation).vector();
         if physics == Some(EPhysics::Walking) {
             look[2] = 0.0;
         } else if physics == Some(EPhysics::Ladder)
-            && let Some(ladder) = self.object_of(pawn, Prop::OnLadder)
+            && let Some(ladder) = self.store.object_of(pawn, Prop::OnLadder)
         {
-            look = self.vector(ladder, Prop::ClimbDir);
+            look = self.store.vector(ladder, Prop::ClimbDir);
         }
         let look = look.safe_normal();
         let direction = acceleration.safe_normal();
@@ -237,7 +237,7 @@ impl<L: LoaderRef> Vm<L> {
         if forward_weight > 0.0 {
             forward_weight = 1.0;
             if side_weight > MIN_BIASED_STRAFE {
-                let bias = self.float_of(pawn, if forward > 0.0 { Prop::ForwardStrafeBias } else { Prop::BackwardStrafeBias });
+                let bias = self.store.float_of(pawn, if forward > 0.0 { Prop::ForwardStrafeBias } else { Prop::BackwardStrafeBias });
                 side_weight += bias * (1.0 - side_weight);
             }
         }
@@ -254,7 +254,7 @@ impl<L: LoaderRef> Vm<L> {
         if count == 2 {
             frame_rate *= 0.5;
         }
-        let frame_rate = frame_rate * self.max_speed(pawn) / self.float_of(pawn, Prop::BaseMovementRate);
+        let frame_rate = frame_rate * self.max_speed(pawn) / self.store.float_of(pawn, Prop::BaseMovementRate);
         for i in 0..4 {
             let channel = FIRST_MOVEMENT_CHANNEL + i as i32;
             let wanted = self.movement_anim(pawn, i);
@@ -283,18 +283,18 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn turn_in_place(&mut self, pawn: ObjectId, delta: f32, step: f32) {
-        let Rotator { pitch, yaw, roll } = self.rotator_of(pawn, Prop::Rotation);
+        let Rotator { pitch, yaw, roll } = self.store.rotator_of(pawn, Prop::Rotation);
         if yaw & 0xffff != yaw {
-            self.set(pawn, Prop::Rotation, Value::Rotator([pitch, yaw & 0xffff, roll].into()));
+            self.store.set(pawn, Prop::Rotation, Value::Rotator([pitch, yaw & 0xffff, roll].into()));
         }
         let yaw = (yaw & 0xffff) as f32;
-        let mut old_yaw = self.float_of(pawn, Prop::OldRotYaw);
+        let mut old_yaw = self.store.float_of(pawn, Prop::OldRotYaw);
         if yaw - old_yaw > 32768.0 {
             old_yaw += 65536.0;
         } else if old_yaw - yaw > 32768.0 {
             old_yaw -= 65536.0;
         }
-        if self.physics_of(pawn) == Some(EPhysics::Walking) && self.byte_of(pawn, Prop::Role) > ROLE_SIMULATED_PROXY {
+        if self.store.physics_of(pawn) == Some(EPhysics::Walking) && self.store.byte_of(pawn, Prop::Role) > ROLE_SIMULATED_PROXY {
             let turn_rate = (yaw - old_yaw) / delta;
             for (channel, turning, anim) in [
                 (RIGHT_TURN_CHANNEL, turn_rate > MIN_TURN_RATE, Prop::TurnRightAnim),
@@ -310,7 +310,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
             }
         }
-        self.set(pawn, Prop::OldRotYaw, Value::Float(yaw));
+        self.store.set(pawn, Prop::OldRotYaw, Value::Float(yaw));
     }
 
     fn zero_movement_alpha(&mut self, pawn: ObjectId, start: i32, end: i32, step: f32) {
@@ -342,14 +342,14 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn movement_anim(&self, pawn: ObjectId, index: usize) -> NameId {
-        match self.element_of(pawn, Prop::MovementAnims, index) {
+        match self.store.element_of(pawn, Prop::MovementAnims, index) {
             Some(Value::Name(name)) => name,
             _ => NameId::NONE,
         }
     }
 
     fn name_of(&self, object: ObjectId, property: Prop) -> NameId {
-        match self.get(object, property) {
+        match self.store.get(object, property) {
             Some(Value::Name(name)) => name,
             _ => NameId::NONE,
         }

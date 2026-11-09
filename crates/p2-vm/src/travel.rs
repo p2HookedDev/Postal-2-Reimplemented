@@ -104,21 +104,21 @@ impl<L: LoaderRef> Vm<L> {
             self.event(player, "PreClientTravel", Vec::new())?;
             self.travelling = Vec::new();
             if self.travel_items
-                && let Some(pawn) = self.object_of(player, Prop::Pawn)
+                && let Some(pawn) = self.store.object_of(player, Prop::Pawn)
             {
                 let mut chain = vec![pawn];
-                let mut next = self.object_of(pawn, Prop::Inventory);
+                let mut next = self.store.object_of(pawn, Prop::Inventory);
                 while let Some(item) = next.filter(|item| !chain.contains(item)) {
                     chain.push(item);
-                    next = self.object_of(item, Prop::Inventory);
+                    next = self.store.object_of(item, Prop::Inventory);
                 }
-                chain.retain(|&a| !self.is_deleted(a) && (a == pawn || self.flag_of(a, Prop::bTravel)));
+                chain.retain(|&a| !self.store.is_deleted(a) && (a == pawn || self.store.flag_of(a, Prop::bTravel)));
                 for actor in chain {
-                    let Some(class) = self.object(actor).class else { continue };
-                    let layout = &self.class(class).layout;
+                    let Some(class) = self.store.object(actor).class else { continue };
+                    let layout = &self.store.class(class).layout;
                     let properties = (0..layout.properties.len())
                         .filter(|&i| layout.properties[i].flags & CPF_TRAVEL != 0)
-                        .filter_map(|i| self.property_at(actor, i).map(|v| (i, v)))
+                        .filter_map(|i| self.store.property_at(actor, i).map(|v| (i, v)))
                         .collect();
                     self.travelling.push(TravelActor { old: actor, class, properties });
                 }
@@ -128,11 +128,11 @@ impl<L: LoaderRef> Vm<L> {
         let map_prefix = format!("{}.", self.map_name.to_ascii_lowercase());
         let gone: HashSet<ObjectId> = self
             .object_ids()
-            .filter(|&o| self.is_a(o, Kind::Actor) || self.object(o).path.to_ascii_lowercase().starts_with(&map_prefix))
+            .filter(|&o| self.store.is_a(o, Kind::Actor) || self.store.object(o).path.to_ascii_lowercase().starts_with(&map_prefix))
             .collect();
-        let actors: HashSet<ObjectId> = gone.iter().copied().filter(|&o| self.is_a(o, Kind::Actor)).collect();
+        let actors: HashSet<ObjectId> = gone.iter().copied().filter(|&o| self.store.is_a(o, Kind::Actor)).collect();
         for &actor in &actors {
-            self.set(actor, Prop::bDeleteMe, Value::Bool(true));
+            self.store.set(actor, Prop::bDeleteMe, Value::Bool(true));
         }
         // The garbage collection after the unload clears every reference to a deleted actor (interactions, menus and
         // class defaults that pointed into the level now hold `None`).
@@ -192,7 +192,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some((first, items)) = travelling.split_first() else { return Ok(Vec::new()) };
         let mut map: HashMap<ObjectId, ObjectId> = HashMap::from([(first.old, pawn)]);
         let mut targets = vec![(pawn, first)];
-        let placement = [self.get(pawn, Prop::Location), self.get(pawn, Prop::Rotation)];
+        let placement = [self.store.get(pawn, Prop::Location), self.store.get(pawn, Prop::Rotation)];
         for item in items {
             let Some(actor) = self.spawn(item.class, Some(pawn), placement.clone())? else { continue };
             map.insert(item.old, actor);
@@ -201,8 +201,8 @@ impl<L: LoaderRef> Vm<L> {
         for (actor, travel) in &targets {
             for (index, value) in &travel.properties {
                 let value = self.remap(value, &map);
-                if let Some(class) = self.object(*actor).class
-                    && let Some(&field) = self.store.memory.get(self.class(class).mem).fields.get(*index)
+                if let Some(class) = self.store.object(*actor).class
+                    && let Some(&field) = self.store.memory.get(self.store.class(class).mem).fields.get(*index)
                 {
                     self.store.memory.write_field(&field, &mut self.store.objects[actor.0 as usize].mem, value);
                 }
@@ -215,7 +215,7 @@ impl<L: LoaderRef> Vm<L> {
         match value {
             &Value::Object(Some(old)) => match map.get(&old) {
                 Some(&new) => Value::Object(Some(new)),
-                None if self.is_a(old, Kind::Actor) => Value::Object(None),
+                None if self.store.is_a(old, Kind::Actor) => Value::Object(None),
                 None => Value::Object(Some(old)),
             },
             Value::Struct(members) => Value::Struct(members.iter().map(|m| self.remap(m, map)).collect()),

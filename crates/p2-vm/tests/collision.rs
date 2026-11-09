@@ -10,25 +10,25 @@ use p2_vm::{Encroachment, ObjectId, Value, Vm};
 const STEP: f32 = 4.0;
 
 fn flag(vm: &Vm<&Loader>, object: ObjectId, name: &str) -> bool {
-    vm.get(object, name) == Some(Value::Bool(true))
+    vm.store.get(object, name) == Some(Value::Bool(true))
 }
 
 fn float(vm: &Vm<&Loader>, object: ObjectId, name: &str) -> f32 {
-    match vm.get(object, name) {
+    match vm.store.get(object, name) {
         Some(Value::Float(v)) => v,
         _ => 0.0,
     }
 }
 
 fn object(vm: &Vm<&Loader>, object: ObjectId, name: &str) -> Option<ObjectId> {
-    match vm.get(object, name) {
+    match vm.store.get(object, name) {
         Some(Value::Object(found)) => found,
         _ => None,
     }
 }
 
 fn rotator(vm: &Vm<&Loader>, object: ObjectId, name: &str) -> [i32; 3] {
-    match vm.get(object, name) {
+    match vm.store.get(object, name) {
         Some(Value::Rotator(r)) => <[i32; 3]>::from(r),
         _ => [0; 3],
     }
@@ -58,7 +58,7 @@ struct Blocker {
 }
 
 fn model_local(vm: &Vm<&Loader>, loader: &Loader, model: ObjectId) -> Option<Vec<[[f32; 3]; 3]>> {
-    let (package, export) = loader.loaded_export_by_path_of_class(&vm.object(model).path, "Model")?;
+    let (package, export) = loader.loaded_export_by_path_of_class(&vm.store.object(model).path, "Model")?;
     let source = loader.package(package);
     read_model(&source.package, &source.data, &source.package.exports[export]).ok().map(|m| model_triangles(&m))
 }
@@ -67,7 +67,7 @@ fn reference_shape(vm: &Vm<&Loader>, loader: &Loader, actor: ObjectId) -> (Shape
     let cylinder = Shape::Cylinder(float(vm, actor, "CollisionRadius"), float(vm, actor, "CollisionHeight"));
     let scale = vector(vm, actor, "DrawScale3D").map(|s| s * float(vm, actor, "DrawScale"));
     let place = |local| MeshCollision::placed(local, vector(vm, actor, "Location").into(), rotator(vm, actor, "Rotation").into(), scale.into(), vector(vm, actor, "PrePivot").into());
-    if vm.is_a(actor, "Brush") {
+    if vm.store.is_a(actor, "Brush") {
         return match object(vm, actor, "Brush").and_then(|b| model_local(vm, loader, b)) {
             Some(local) => (Shape::Triangles(place(local)), false),
             None => (cylinder, false),
@@ -77,7 +77,7 @@ fn reference_shape(vm: &Vm<&Loader>, loader: &Loader, actor: ObjectId) -> (Shape
         return (cylinder, false);
     }
     let Some(mesh) = object(vm, actor, "StaticMesh") else { return (cylinder, false) };
-    let Some((package, export)) = loader.loaded_export_by_path_of_class(&vm.object(mesh).path, "StaticMesh") else { return (cylinder, false) };
+    let Some((package, export)) = loader.loaded_export_by_path_of_class(&vm.store.object(mesh).path, "StaticMesh") else { return (cylinder, false) };
     let source = loader.package(package);
     let Ok(read) = read_static_mesh(&source.package, &source.data, &source.package.exports[export]) else { return (cylinder, false) };
     let model = loader.resolve_loaded(package, read.collision_model).and_then(|found| {
@@ -89,22 +89,22 @@ fn reference_shape(vm: &Vm<&Loader>, loader: &Loader, actor: ObjectId) -> (Shape
 }
 
 fn is_encroacher(vm: &Vm<&Loader>, actor: ObjectId) -> bool {
-    let physics = match vm.get(actor, "Physics") {
+    let physics = match vm.store.get(actor, "Physics") {
         Some(Value::Byte(p)) => p,
         _ => 0,
     };
-    (vm.is_a(actor, "Mover") && object(vm, actor, "StaticMesh").is_some()) || physics == 14 || (physics == 13 && !vm.is_a(actor, "KConstraint"))
+    (vm.store.is_a(actor, "Mover") && object(vm, actor, "StaticMesh").is_some()) || physics == 14 || (physics == 13 && !vm.store.is_a(actor, "KConstraint"))
 }
 
 fn blockers(vm: &Vm<&Loader>, loader: &Loader, pawn: ObjectId) -> (Vec<Blocker>, usize) {
     let mut found = Vec::new();
     let mut class_blockers = 0;
-    let actors: Vec<ObjectId> = vm.actors().filter(|&a| a != pawn && !vm.is_deleted(a) && !vm.is_a(a, "Pawn")).collect();
+    let actors: Vec<ObjectId> = vm.actors().filter(|&a| a != pawn && !vm.store.is_deleted(a) && !vm.store.is_a(a, "Pawn")).collect();
     for actor in actors {
         if !blocks_player(vm, pawn, actor) {
             continue;
         }
-        if vm.is_a(actor, "BlockingVolume") && flag(vm, actor, "bClassBlocker") {
+        if vm.store.is_a(actor, "BlockingVolume") && flag(vm, actor, "bClassBlocker") {
             class_blockers += 1;
             continue;
         }
@@ -115,10 +115,10 @@ fn blockers(vm: &Vm<&Loader>, loader: &Loader, pawn: ObjectId) -> (Vec<Blocker>,
 }
 
 fn blocks_player(vm: &Vm<&Loader>, pawn: ObjectId, actor: ObjectId) -> bool {
-    if vm.is_deleted(actor) || !flag(vm, actor, "bCollideActors") || !flag(vm, actor, "bBlockNonZeroExtentTraces") {
+    if vm.store.is_deleted(actor) || !flag(vm, actor, "bCollideActors") || !flag(vm, actor, "bBlockNonZeroExtentTraces") {
         return false;
     }
-    let brush = vm.is_a(actor, "Brush") && object(vm, actor, "Brush").is_some();
+    let brush = vm.store.is_a(actor, "Brush") && object(vm, actor, "Brush").is_some();
     if flag(vm, actor, "bWorldGeometry") {
         flag(vm, pawn, "bCollideWorld")
     } else if brush || is_encroacher(vm, actor) {
@@ -129,7 +129,7 @@ fn blocks_player(vm: &Vm<&Loader>, pawn: ObjectId, actor: ObjectId) -> bool {
 }
 
 fn blocker_of(vm: &Vm<&Loader>, loader: &Loader, actor: ObjectId) -> Option<Blocker> {
-    let brush = vm.is_a(actor, "Brush") && object(vm, actor, "Brush").is_some();
+    let brush = vm.store.is_a(actor, "Brush") && object(vm, actor, "Brush").is_some();
     let (shape, simple) = reference_shape(vm, loader, actor);
     let (min, max) = match &shape {
         Shape::Triangles(mesh) => mesh.bounds(),
@@ -204,8 +204,8 @@ struct WalkSurvey {
 
 fn blocking_differences(vm: &Vm<&Loader>, loader: &Loader, map: &str) {
     let mut differences = std::collections::BTreeMap::<&str, usize>::new();
-    for actor in vm.actors().filter(|&a| !vm.is_a(a, "Pawn")).collect::<Vec<_>>() {
-        let static_mesh = object(vm, actor, "StaticMesh").is_some() && object(vm, actor, "Mesh").is_none() && !vm.is_a(actor, "Brush");
+    for actor in vm.actors().filter(|&a| !vm.store.is_a(a, "Pawn")).collect::<Vec<_>>() {
+        let static_mesh = object(vm, actor, "StaticMesh").is_some() && object(vm, actor, "Mesh").is_none() && !vm.store.is_a(actor, "Brush");
         let colliding = flag(vm, actor, "bCollideActors") && flag(vm, actor, "bBlockNonZeroExtentTraces");
         if static_mesh && colliding && flag(vm, actor, "bWorldGeometry") && !flag(vm, actor, "bBlockActors") {
             *differences.entry("world mesh without bBlockActors (blocks)").or_default() += 1;
@@ -222,7 +222,7 @@ fn blocking_differences(vm: &Vm<&Loader>, loader: &Loader, map: &str) {
         if static_mesh && colliding && flag(vm, actor, "bUseCylinderCollision") {
             *differences.entry("mesh with bUseCylinderCollision").or_default() += 1;
         }
-        if vm.is_a(actor, "BlockingVolume") {
+        if vm.store.is_a(actor, "BlockingVolume") {
             *differences.entry("BlockingVolume").or_default() += 1;
         }
         if static_mesh && colliding && let (Shape::Triangles(mesh), simple) = reference_shape(vm, loader, actor) {
@@ -273,7 +273,7 @@ fn sweep_survey(map: &str, vm: &mut Vm<&Loader>, player: Player, blockers: &[Blo
     eprintln!("{map}: {} blocking sweeps ({skipped_large} blockers over 4000 units skipped), {through} passed through", cases.len());
     for (kind, list) in &passed {
         let actors: std::collections::BTreeSet<ObjectId> = list.iter().map(|p| p.0).collect();
-        let examples: Vec<String> = list.iter().take(4).map(|(a, reach, made)| format!("{} (at {reach}, made {made:?})", vm.object(*a).path)).collect();
+        let examples: Vec<String> = list.iter().take(4).map(|(a, reach, made)| format!("{} (at {reach}, made {made:?})", vm.store.object(*a).path)).collect();
         eprintln!("  {kind:?}: {} sweeps, {} actors; {examples:?}", list.len(), actors.len());
     }
     let survey = SweepSurvey { blocking: cases.len(), through };
@@ -300,11 +300,11 @@ fn walk_survey(map: &str, vm: &mut Vm<&Loader>, loader: &Loader, player: Player,
         let Some(reach) = first_overlap(blocker, raised, case.d, case.reach + 64.0, wall_extent, location) else { continue };
         walks += 1;
         vm.place_far_moved(pawn, at.into(), Encroachment::Ignored).unwrap();
-        vm.set(pawn, "Velocity", Value::Vector(p2_math::Vector::ZERO));
+        vm.store.set(pawn, "Velocity", Value::Vector(p2_math::Vector::ZERO));
         let yaw = (case.d[1].atan2(case.d[0]) * 65536.0 / std::f32::consts::TAU).round() as i32;
         let rotation = Value::Rotator(p2_math::Rotator::new(0, yaw, 0));
-        vm.set(controller, "Rotation", rotation.clone());
-        vm.set(pawn, "Rotation", rotation);
+        vm.store.set(controller, "Rotation", rotation.clone());
+        vm.store.set(pawn, "Rotation", rotation);
         let frames = (((reach + 150.0) / 450.0 + 0.5) * 60.0) as usize;
         let shrunk = [radius - 2.0, radius - 2.0, height - 2.0];
         let placement = |vm: &Vm<&Loader>| (vector(vm, blocker.actor, "Location"), rotator(vm, blocker.actor, "Rotation"));
@@ -332,7 +332,7 @@ fn walk_survey(map: &str, vm: &mut Vm<&Loader>, loader: &Loader, player: Player,
             } else if placement(vm) != placed {
                 "moved into the pawn"
             } else {
-                entered.push(format!("{} {:?} frame {frame} at {now:?} (start {at:?}, wall at {reach})", vm.object(blocker.actor).path, blocker.kind));
+                entered.push(format!("{} {:?} frame {frame} at {now:?} (start {at:?}, wall at {reach})", vm.store.object(blocker.actor).path, blocker.kind));
                 "entered"
             };
             *excused.entry(why).or_default() += 1;
@@ -349,10 +349,10 @@ fn survey(map: &str) -> Option<(SweepSurvey, WalkSurvey)> {
     let (loader, id) = load(&dir, map);
     let (mut vm, controller, pawn) = start_single_player(&dir, &loader, id);
     let pawn = pawn.expect("no pawn");
-    let others: Vec<ObjectId> = vm.actors().filter(|&a| a != pawn && vm.is_a(a, "Pawn")).collect();
+    let others: Vec<ObjectId> = vm.actors().filter(|&a| a != pawn && vm.store.is_a(a, "Pawn")).collect();
     for other in others {
-        vm.set(other, "bCollideActors", Value::Bool(false));
-        vm.set(other, "bBlockActors", Value::Bool(false));
+        vm.store.set(other, "bCollideActors", Value::Bool(false));
+        vm.store.set(other, "bBlockActors", Value::Bool(false));
     }
     let player = Player { controller, pawn, radius: float(&vm, pawn, "CollisionRadius"), height: float(&vm, pawn, "CollisionHeight") };
     blocking_differences(&vm, &loader, map);

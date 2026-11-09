@@ -65,12 +65,12 @@ impl<L: LoaderRef> Vm<L> {
         self.karma.limbs.tick += 1;
         self.karma.limbs.step = delta;
         let gone: Vec<ObjectId> =
-            self.karma.limbs.live.keys().copied().filter(|&a| self.is_deleted(a) || self.flag_of(a, Prop::bHidden)).collect();
+            self.karma.limbs.live.keys().copied().filter(|&a| self.store.is_deleted(a) || self.store.flag_of(a, Prop::bHidden)).collect();
         for actor in gone {
             self.remove_limb(actor);
         }
         let resting: Vec<(ObjectId, BodyId)> =
-            self.karma.limbs.live.iter().filter(|&(&a, _)| self.physics_of(a) == Some(EPhysics::None)).map(|(&a, limb)| (a, limb.id)).collect();
+            self.karma.limbs.live.iter().filter(|&(&a, _)| self.store.physics_of(a) == Some(EPhysics::None)).map(|(&a, limb)| (a, limb.id)).collect();
         let knocked: Vec<ObjectId> = match self.karma.world.as_mut().and_then(Background::world) {
             Some(world) => resting.into_iter().filter(|&(_, id)| !world.is_sleeping(id)).map(|(a, _)| a).collect(),
             None => Vec::new(),
@@ -78,18 +78,18 @@ impl<L: LoaderRef> Vm<L> {
         for actor in knocked {
             match self.set_physics(actor, EPhysics::Projectile, None) {
                 Ok(()) => flying.push(actor),
-                Err(e) => errors.push((self.object(actor).path.clone(), e)),
+                Err(e) => errors.push((self.store.object(actor).path.clone(), e)),
             }
         }
         let (limb, bolton_part) = (self.script.lookups.class_names.limb, self.script.lookups.class_names.bolton_part);
         for actor in flying {
             // Dropped bolt-ons (`DropBoltons`: briefcase, purse, broom; `PeoplePart.GiveMomentum`) fly like cut limbs:
             // a body instead of the projectile arc (our choice; retail flies them as projectiles).
-            if self.flag_of(actor, Prop::bHidden) || !(self.is_a(actor, limb) || self.is_a(actor, bolton_part)) {
+            if self.store.flag_of(actor, Prop::bHidden) || !(self.store.is_a(actor, limb) || self.store.is_a(actor, bolton_part)) {
                 continue;
             }
             self.count(Work::LimbFlying);
-            let mesh = (self.draw_type_of(actor) == Some(EDrawType::StaticMesh)).then(|| self.object_of(actor, Prop::StaticMesh)).flatten();
+            let mesh = (self.draw_type_of(actor) == Some(EDrawType::StaticMesh)).then(|| self.store.object_of(actor, Prop::StaticMesh)).flatten();
             match (mesh, self.karma.limbs.live.get(&actor).map(|limb| limb.mesh)) {
                 (Some(mesh), Some(had)) if mesh == had => self.limb_motion(actor),
                 (Some(mesh), had) => {
@@ -116,7 +116,7 @@ impl<L: LoaderRef> Vm<L> {
             .limbs
             .live
             .iter()
-            .filter(|&(&a, _)| !self.is_deleted(a) && self.physics_of(a) == Some(EPhysics::Projectile))
+            .filter(|&(&a, _)| !self.store.is_deleted(a) && self.store.physics_of(a) == Some(EPhysics::Projectile))
             .map(|(&a, limb)| (a, limb.id))
             .collect();
         if driven.is_empty() {
@@ -134,7 +134,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut errors = Vec::new();
         for (actor, location, rotation, after, asleep) in moved {
             if let Err(e) = self.limb_moved(actor, location, rotation, after, asleep, gravity) {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
         }
         errors
@@ -144,23 +144,23 @@ impl<L: LoaderRef> Vm<L> {
         // A velocity or move the script gave since the last step (a kick's `GiveMomentum` on a settled limb) is the
         // limb's next motion: the step's result must not overwrite it, `limbs_before_step` hands it to the body.
         if let Some(limb) = self.karma.limbs.live.get(&actor) {
-            let (velocity, at) = (self.vector(actor, Prop::Velocity), self.vector(actor, Prop::Location));
+            let (velocity, at) = (self.store.vector(actor, Prop::Velocity), self.store.vector(actor, Prop::Location));
             if length([0, 1, 2].map(|i| velocity[i] - limb.wrote[i]).into()) > SCRIPT_WROTE || length([0, 1, 2].map(|i| at[i] - limb.at[i]).into()) > STRAY {
                 return Ok(());
             }
         }
-        if length([0, 1, 2].map(|i| location[i] - self.vector(actor, Prop::Location)[i]).into()) > 0.1 {
+        if length([0, 1, 2].map(|i| location[i] - self.store.vector(actor, Prop::Location)[i]).into()) > 0.1 {
             self.count(Work::LimbMoved);
         }
-        self.set(actor, Prop::bCollideWorld, Value::Bool(false));
+        self.store.set(actor, Prop::bCollideWorld, Value::Bool(false));
         self.set_vector(actor, Prop::Location, location);
-        self.set(actor, Prop::Rotation, Value::Rotator(rotation));
+        self.store.set(actor, Prop::Rotation, Value::Rotator(rotation));
         self.relocate(actor);
         let Some(limb) = self.karma.limbs.live.get_mut(&actor) else { return Ok(()) };
         limb.at = location;
         let before = limb.before;
         self.update_touching(actor)?;
-        if self.is_deleted(actor) {
+        if self.store.is_deleted(actor) {
             return Ok(());
         }
         let step = self.karma.limbs.step;
@@ -191,12 +191,12 @@ impl<L: LoaderRef> Vm<L> {
             self.count(Work::LimbImpact);
             self.set_vector(actor, Prop::Velocity, incoming);
             self.event(actor, "HitWall", [Value::Vector(normal), Value::Object(None)])?;
-            if self.is_deleted(actor) {
+            if self.store.is_deleted(actor) {
                 return Ok(());
             }
-            if self.physics_of(actor) == Some(EPhysics::None) {
+            if self.store.physics_of(actor) == Some(EPhysics::None) {
                 self.count(Work::LimbSettled);
-                self.set(actor, Prop::Rotation, Value::Rotator(rotation));
+                self.store.set(actor, Prop::Rotation, Value::Rotator(rotation));
                 wrote = [0.0; 3].into();
             }
         }
@@ -238,14 +238,14 @@ impl<L: LoaderRef> Vm<L> {
         let Some(limb) = self.karma.limbs.live.get_mut(&actor) else { return };
         let (id, wrote, at) = (limb.id, limb.wrote, limb.at);
         limb.before = wrote;
-        let velocity = self.vector(actor, Prop::Velocity);
+        let velocity = self.store.vector(actor, Prop::Velocity);
         if length([0, 1, 2].map(|i| velocity[i] - wrote[i]).into()) > SCRIPT_WROTE {
             self.count(Work::LimbThrown);
             self.take_limb_motion(actor);
         }
-        let location = self.vector(actor, Prop::Location);
+        let location = self.store.vector(actor, Prop::Location);
         if length([0, 1, 2].map(|i| location[i] - at[i]).into()) > STRAY {
-            let quat = rotator_to_quat(self.rotator_of(actor, Prop::Rotation));
+            let quat = rotator_to_quat(self.store.rotator_of(actor, Prop::Rotation));
             if let Some(world) = &mut self.karma.world {
                 world.change(move |w| w.set_pose(id, location, quat));
             }
@@ -256,9 +256,9 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn take_limb_motion(&mut self, actor: ObjectId) {
-        let velocity = self.vector(actor, Prop::Velocity);
-        let Rotator { pitch, yaw, roll } = self.rotator_of(actor, Prop::RotationRate);
-        self.set(actor, Prop::RotationRate, Value::Rotator([0; 3].into()));
+        let velocity = self.store.vector(actor, Prop::Velocity);
+        let Rotator { pitch, yaw, roll } = self.store.rotator_of(actor, Prop::RotationRate);
+        self.store.set(actor, Prop::RotationRate, Value::Rotator([0; 3].into()));
         let spin = [roll, pitch, yaw].map(|r| r as f32 * ROTATION_TO_RADIANS);
         let Some(limb) = self.karma.limbs.live.get_mut(&actor) else { return };
         (limb.wrote, limb.before) = (velocity, velocity);

@@ -23,13 +23,13 @@ pub(crate) enum OldZone {
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn default_physics_volume(&mut self) -> Result<Option<ObjectId>, Error> {
         let Some(level) = self.level else { return Ok(None) };
-        if let Some(volume) = self.object_of(level, Prop::PhysicsVolume) {
+        if let Some(volume) = self.store.object_of(level, Prop::PhysicsVolume) {
             return Ok(Some(volume));
         }
         let Ok(class) = self.find_class("Engine", "DefaultPhysicsVolume") else { return Ok(None) };
         let Some(volume) = self.spawn_actor(class, None, None, [None, None])? else { return Ok(None) };
-        self.set(volume, Prop::Priority, Value::Int(DEFAULT_VOLUME_PRIORITY));
-        self.set(level, Prop::PhysicsVolume, Value::Object(Some(volume)));
+        self.store.set(volume, Prop::Priority, Value::Int(DEFAULT_VOLUME_PRIORITY));
+        self.store.set(level, Prop::PhysicsVolume, Value::Object(Some(volume)));
         Ok(Some(volume))
     }
 
@@ -39,7 +39,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(default) = self.default_physics_volume()? else { return Ok(None) };
         self.refresh_volume_table();
         let default = (default, self.priority(default));
-        let candidate = |vm: &Self, v: ObjectId| (!vm.is_deleted(v) && (!use_touch || vm.flag_of(v, Prop::bCollideActors))).then(|| vm.priority(v));
+        let candidate = |vm: &Self, v: ObjectId| (!vm.store.is_deleted(v) && (!use_touch || vm.store.flag_of(v, Prop::bCollideActors))).then(|| vm.priority(v));
         let table = std::mem::take(&mut self.world.primitives.volume_table);
         let mut held = 0;
         let in_box = table
@@ -64,7 +64,7 @@ impl<L: LoaderRef> Vm<L> {
         let volumes = match &self.world.primitives.physics_volumes {
             Some(list) => Arc::clone(list),
             None => {
-                let mut list: Vec<ObjectId> = self.actors().filter(|&a| self.is_a(a, Kind::PhysicsVolume)).collect();
+                let mut list: Vec<ObjectId> = self.actors().filter(|&a| self.store.is_a(a, Kind::PhysicsVolume)).collect();
                 list.reverse();
                 let list: Arc<[ObjectId]> = list.into();
                 self.world.primitives.physics_volumes = Some(Arc::clone(&list));
@@ -74,7 +74,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut table = std::mem::take(&mut self.world.primitives.volume_table);
         table.clear();
         for &volume in volumes.iter() {
-            if !self.is_deleted(volume)
+            if !self.store.is_deleted(volume)
                 && self.check_volume_place(volume, frame)
                 && let Some(place) = self.world.primitives.volumes.get(&volume)
             {
@@ -86,7 +86,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn priority(&self, volume: ObjectId) -> i32 {
-        match self.get(volume, Prop::Priority) {
+        match self.store.get(volume, Prop::Priority) {
             Some(Value::Int(priority)) => priority,
             _ => 0,
         }
@@ -115,7 +115,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn check_volume_place(&mut self, volume: ObjectId, frame: u64) -> bool {
-        let Some(brush) = self.object_of(volume, Prop::Brush) else { return false };
+        let Some(brush) = self.store.object_of(volume, Prop::Brush) else { return false };
         let placement = self.placement(volume);
         if let Some(place) = self.world.primitives.volumes.get_mut(&volume)
             && place.brush == brush
@@ -143,7 +143,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut first: Option<(ObjectId, f32)> = None;
         for entry in &self.world.primitives.volume_table {
             let volume = entry.volume;
-            if self.is_deleted(volume) || !self.flag_of(volume, Prop::bWaterVolume) {
+            if self.store.is_deleted(volume) || !self.store.flag_of(volume, Prop::bWaterVolume) {
                 continue;
             }
             let Some(time) = self.world.primitives.volumes.get(&volume).and_then(|place| place.line_time(start, end)) else { continue };
@@ -162,16 +162,16 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn set_zone(&mut self, actor: ObjectId, events: ZoneEvents, zone_from: OldZone) -> Result<(), Error> {
-        if self.is_deleted(actor) || !self.is_a(actor, Kind::Actor) || self.is_a(actor, Kind::LevelInfo) {
+        if self.store.is_deleted(actor) || !self.store.is_a(actor, Kind::Actor) || self.store.is_a(actor, Kind::LevelInfo) {
             return Ok(());
         }
-        if self.is_a(actor, Kind::PhysicsVolume) {
+        if self.store.is_a(actor, Kind::PhysicsVolume) {
             self.volume_moved(actor);
-            self.set(actor, Prop::PhysicsVolume, Value::Object(Some(actor)));
+            self.store.set(actor, Prop::PhysicsVolume, Value::Object(Some(actor)));
             return Ok(());
         }
-        let use_touch = self.flag_of(actor, Prop::bCollideActors) && events == ZoneEvents::Sent && zone_from == OldZone::Region;
-        let location = self.vector(actor, Prop::Location);
+        let use_touch = self.store.flag_of(actor, Prop::bCollideActors) && events == ZoneEvents::Sent && zone_from == OldZone::Region;
+        let location = self.store.vector(actor, Prop::Location);
         let (zone, leaf, number) = self.region_at(location);
         let region = self.region_of(actor);
         let old_zone = if zone_from == OldZone::Level { self.level() } else { region.and_then(|(zone, _, _)| zone) };
@@ -183,32 +183,32 @@ impl<L: LoaderRef> Vm<L> {
             self.event(actor, "ZoneChange", [Value::Object(zone)])?;
         }
         if zone_changed || region != Some((zone, leaf, number)) {
-            self.set(actor, Prop::Region, Value::Struct(vec![Value::Object(zone), Value::Int(leaf), Value::Byte(number)]));
+            self.store.set(actor, Prop::Region, Value::Struct(vec![Value::Object(zone), Value::Int(leaf), Value::Byte(number)]));
         }
         if zone_changed && let Some(zone) = zone {
             self.event(zone, "ActorEntered", [Value::Object(Some(actor))])?;
         }
         // The volume part reads `Location` again: a warp zone's `ActorEntered` may have moved the actor.
-        let location = self.vector(actor, Prop::Location);
+        let location = self.store.vector(actor, Prop::Location);
         let new = self.physics_volume_at(location, use_touch)?;
-        let old = self.object_of(actor, Prop::PhysicsVolume);
+        let old = self.store.object_of(actor, Prop::PhysicsVolume);
         let object = |o: Option<ObjectId>| Value::Object(o);
-        if !self.is_a(actor, Kind::Pawn) {
+        if !self.store.is_a(actor, Kind::Pawn) {
             if events == ZoneEvents::Silent {
-                self.set(actor, Prop::PhysicsVolume, object(new));
+                self.store.set(actor, Prop::PhysicsVolume, object(new));
             } else if new != old {
                 if let Some(old) = old {
                     self.event(old, "ActorLeavingVolume", [object(Some(actor))])?;
                     self.event(actor, "PhysicsVolumeChange", [object(new)])?;
                 }
-                self.set(actor, Prop::PhysicsVolume, object(new));
+                self.store.set(actor, Prop::PhysicsVolume, object(new));
                 if let Some(new) = new {
                     self.event(new, "ActorEnteredVolume", [object(Some(actor))])?;
                 }
             }
             return Ok(());
         }
-        let eyes = [location[0], location[1], location[2] + self.float_of(actor, Prop::BaseEyeHeight)];
+        let eyes = [location[0], location[1], location[2] + self.store.float_of(actor, Prop::BaseEyeHeight)];
         let head = self.physics_volume_at(eyes.into(), use_touch)?;
         if new != old {
             if events == ZoneEvents::Sent {
@@ -216,18 +216,18 @@ impl<L: LoaderRef> Vm<L> {
                     self.event(old, "PawnLeavingVolume", [object(Some(actor))])?;
                     self.event(actor, "PhysicsVolumeChange", [object(new)])?;
                 }
-                if let Some(controller) = self.object_of(actor, Prop::Controller) {
+                if let Some(controller) = self.store.object_of(actor, Prop::Controller) {
                     self.event(controller, "NotifyPhysicsVolumeChange", [object(new)])?;
                 }
             }
-            self.set(actor, Prop::PhysicsVolume, object(new));
+            self.store.set(actor, Prop::PhysicsVolume, object(new));
             if events == ZoneEvents::Sent && let Some(new) = new {
                 self.event(new, "PawnEnteredVolume", [object(Some(actor))])?;
             }
         }
-        if head != self.object_of(actor, Prop::HeadVolume) {
+        if head != self.store.object_of(actor, Prop::HeadVolume) {
             if events == ZoneEvents::Sent {
-                let handled = match self.object_of(actor, Prop::Controller) {
+                let handled = match self.store.object_of(actor, Prop::Controller) {
                     Some(controller) => self.event_bool(controller, "NotifyHeadVolumeChange", [object(head)])?,
                     None => false,
                 };
@@ -235,7 +235,7 @@ impl<L: LoaderRef> Vm<L> {
                     self.event(actor, "HeadVolumeChange", [object(head)])?;
                 }
             }
-            self.set(actor, Prop::HeadVolume, object(head));
+            self.store.set(actor, Prop::HeadVolume, object(head));
         }
         Ok(())
     }

@@ -23,7 +23,7 @@ fn church_pawns_stand_on_floors() {
             if let Ok(object) = vm.load_object(map, index)
                 && let Some(actor) = skeletal_actor(&vm, object)
             {
-                let Some(p2_vm::Value::Float(height)) = vm.get(object, "CollisionHeight") else { continue };
+                let Some(p2_vm::Value::Float(height)) = vm.store.get(object, "CollisionHeight") else { continue };
                 actors.push((actor, height));
             }
         }

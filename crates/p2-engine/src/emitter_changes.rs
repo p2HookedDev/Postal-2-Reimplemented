@@ -19,7 +19,7 @@ impl EmitterValues {
         let call = self.calls;
         let mut changed = Vec::new();
         for &actor in watched {
-            if vm.is_deleted(actor) {
+            if vm.store.is_deleted(actor) {
                 continue;
             }
             for emitter in emitter_objects(vm, actor) {

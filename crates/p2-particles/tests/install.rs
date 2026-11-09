@@ -43,14 +43,14 @@ fn property(value: &Value) -> PropertyValue {
 }
 
 fn vector(vm: &Vm<&Loader>, object: ObjectId, name: &str) -> [f32; 3] {
-    match vm.get(object, name) {
+    match vm.store.get(object, name) {
         Some(Value::Vector(v)) => <[f32; 3]>::from(v),
         _ => [0.0; 3],
     }
 }
 
 fn rotator(vm: &Vm<&Loader>, object: ObjectId) -> [i32; 3] {
-    match vm.get(object, "Rotation") {
+    match vm.store.get(object, "Rotation") {
         Some(Value::Rotator(r)) => <[i32; 3]>::from(r),
         _ => [0; 3],
     }
@@ -76,18 +76,18 @@ fn simulate_map(map: &str) {
         vm.load_object(package, export).unwrap();
     }
     let actors: Vec<ObjectId> =
-        vm.object_ids().filter(|&id| matches!(vm.get(id, "Emitters"), Some(Value::Array(e)) if !e.is_empty())).collect();
+        vm.object_ids().filter(|&id| matches!(vm.store.get(id, "Emitters"), Some(Value::Array(e)) if !e.is_empty())).collect();
     let (mut emitter_count, mut triggered, mut size_checks, mut white_checks, mut live_total) = (0, 0, 0, 0, 0);
     let mut classes: BTreeMap<String, usize> = BTreeMap::new();
     for (seed, &actor) in actors.iter().enumerate() {
         let vm = &vm;
-        let lookup = |object: ObjectId| move |name: &str| vm.get(object, name).as_ref().map(property);
+        let lookup = |object: ObjectId| move |name: &str| vm.store.get(object, name).as_ref().map(property);
         let settings = EmitterSettings::from_lookup(lookup(actor));
-        let Some(Value::Array(entries)) = vm.get(actor, "Emitters") else { continue };
+        let Some(Value::Array(entries)) = vm.store.get(actor, "Emitters") else { continue };
         let mut props = Vec::new();
         for entry in entries {
             let Value::Object(Some(emitter)) = entry else { continue };
-            *classes.entry(vm.name(vm.object(emitter).class_name).to_owned()).or_default() += 1;
+            *classes.entry(vm.store.name(vm.store.object(emitter).class_name).to_owned()).or_default() += 1;
             props.push(EmitterProperties::from_lookup(lookup(emitter)));
         }
         emitter_count += props.len();
@@ -152,8 +152,8 @@ fn shatter_glass_shards_bounce_and_lie_on_the_floor() {
     let class = vm.find_class("FX", "ShatterGlass").unwrap();
     let actor = vm.new_object(class, None);
     let vm = &vm;
-    let lookup = |object: ObjectId| move |name: &str| vm.get(object, name).as_ref().map(property);
-    let Some(Value::Array(entries)) = vm.get(actor, "Emitters") else { panic!("no Emitters") };
+    let lookup = |object: ObjectId| move |name: &str| vm.store.get(object, name).as_ref().map(property);
+    let Some(Value::Array(entries)) = vm.store.get(actor, "Emitters") else { panic!("no Emitters") };
     let props: Vec<EmitterProperties> =
         entries.iter().filter_map(|e| if let &Value::Object(Some(e)) = e { Some(EmitterProperties::from_lookup(lookup(e))) } else { None }).collect();
     assert_eq!(props.len(), 2);

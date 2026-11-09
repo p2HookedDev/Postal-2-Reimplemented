@@ -114,7 +114,7 @@ pub(crate) enum Corpse {
 impl<L: LoaderRef> Vm<L> {
     pub fn ragdoll_pose(&mut self, actor: ObjectId) -> Option<Vec<Frame>> {
         let world = self.ragdoll_world_frames(actor)?;
-        let mesh = self.object_of(actor, Prop::Mesh).and_then(|m| self.posed_mesh(m))?;
+        let mesh = self.store.object_of(actor, Prop::Mesh).and_then(|m| self.posed_mesh(m))?;
         let to_mesh = self.mesh_to_world(actor, &mesh).inverse()?;
         Some(world.iter().map(|frame| to_mesh.then(frame)).collect())
     }
@@ -151,7 +151,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn scales_on_mesh(&self, scales: &[(NameId, f32)], mesh: &PosedMesh) -> Option<Vec<f32>> {
-        let scales: Vec<(String, f32)> = scales.iter().map(|&(bone, scale)| (self.name(bone).to_ascii_lowercase(), scale)).collect();
+        let scales: Vec<(String, f32)> = scales.iter().map(|&(bone, scale)| (self.store.name(bone).to_ascii_lowercase(), scale)).collect();
         (!scales.is_empty()).then(|| mesh.names.iter().map(|name| scales.iter().filter(|(n, _)| n == name).map(|(_, s)| s).product()).collect())
     }
 
@@ -161,7 +161,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn ragdoll_line_check(&self, actor: ObjectId, start: Vector, end: Vector) -> Option<Option<p2_collision::Hit>> {
-        if self.physics_of(actor) != Some(EPhysics::KarmaRagDoll) {
+        if self.store.physics_of(actor) != Some(EPhysics::KarmaRagDoll) {
             return None;
         }
         let Some(ragdoll) = self.karma.ragdolls.live.get(&actor) else { return Some(None) };
@@ -174,7 +174,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Now, so that `KSetSkelVel` and `KAddImpulse` right after it reach the bodies.
     pub(crate) fn ragdoll_physics_changed(&mut self, actor: ObjectId, old: Option<EPhysics>) {
-        let physics = self.physics_of(actor);
+        let physics = self.store.physics_of(actor);
         if old == Some(EPhysics::KarmaRagDoll) && physics != Some(EPhysics::KarmaRagDoll) {
             self.end_ragdoll(actor, Corpse::Kept);
         }
@@ -195,15 +195,15 @@ impl<L: LoaderRef> Vm<L> {
             .live
             .keys()
             .copied()
-            .filter(|&a| self.is_deleted(a) || self.physics_of(a) != Some(EPhysics::KarmaRagDoll))
+            .filter(|&a| self.store.is_deleted(a) || self.store.physics_of(a) != Some(EPhysics::KarmaRagDoll))
             .collect();
         for actor in gone {
-            let corpse = if self.is_deleted(actor) { Corpse::Gone } else { Corpse::Kept };
+            let corpse = if self.store.is_deleted(actor) { Corpse::Gone } else { Corpse::Kept };
             self.end_ragdoll(actor, corpse);
         }
         let ragdolls = &self.karma.ragdolls;
         let destroyed: Vec<ObjectId> =
-            ragdolls.kept.keys().chain(&ragdolls.frozen).chain(&ragdolls.failed).copied().filter(|&a| self.is_deleted(a)).collect();
+            ragdolls.kept.keys().chain(&ragdolls.frozen).chain(&ragdolls.failed).copied().filter(|&a| self.store.is_deleted(a)).collect();
         for actor in destroyed {
             let ragdolls = &mut self.karma.ragdolls;
             ragdolls.kept.remove(&actor);
@@ -274,14 +274,14 @@ impl<L: LoaderRef> Vm<L> {
         for actor in actors {
             let Some((location, velocity, torn)) = self.pose_ragdoll(actor) else { continue };
             self.set_vector(actor, Prop::Velocity, velocity);
-            self.set(actor, Prop::Rotation, Value::Rotator([0; 3].into()));
-            if self.vector(actor, Prop::Location) != location
+            self.store.set(actor, Prop::Rotation, Value::Rotator([0; 3].into()));
+            if self.store.vector(actor, Prop::Location) != location
                 && let Err(e) = self.place_far_moved(actor, location, Encroachment::Ignored).and_then(|()| self.update_touching(actor))
             {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
             if torn && let Err(e) = self.event(actor, "KExcessiveJointError", Vec::new()) {
-                errors.push((self.object(actor).path.clone(), e));
+                errors.push((self.store.object(actor).path.clone(), e));
             }
         }
         errors
@@ -332,14 +332,14 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn init_ragdoll(&mut self, actor: ObjectId, pose: Option<Vec<Frame>>) {
-        let params = self.object_of(actor, Prop::KParams).filter(|&k| self.is_a(k, Kind::KarmaParamsSkel));
+        let params = self.store.object_of(actor, Prop::KParams).filter(|&k| self.store.is_a(k, Kind::KarmaParamsSkel));
         let Some(params) = params else {
             self.diagnostics.log.push("(Karma): KInitSkeletonKarma: No KParams, or KParams is not a KarmaParamsSkel.".to_owned());
             self.karma.ragdolls.failed.insert(actor);
             return;
         };
-        let skeleton = match self.get(params, Prop::KSkeleton) {
-            Some(Value::Name(name)) => self.name(name).to_ascii_lowercase(),
+        let skeleton = match self.store.get(params, Prop::KSkeleton) {
+            Some(Value::Name(name)) => self.store.name(name).to_ascii_lowercase(),
             _ => String::new(),
         };
         let asset = self.karma_assets().get(&skeleton).cloned();
@@ -360,14 +360,14 @@ impl<L: LoaderRef> Vm<L> {
         };
         let own = self.bone_scale_factors(actor, &mesh);
         let cut = cut_of(own.as_deref(), &mesh.parents);
-        let k = |name: Prop, default: f32| self.get(params, name).as_ref().map_or(default, crate::interp::float);
+        let k = |name: Prop, default: f32| self.store.get(params, name).as_ref().map_or(default, crate::interp::float);
         let (linear_damping, angular_damping) = (k(Prop::KLinearDamping, 0.2), k(Prop::KAngularDamping, 0.2));
         // `KRestitution` made corpses hop.
         let (friction, restitution) = (CORPSE_FRICTION, 0.0);
-        let asleep = !self.flag_of(params, Prop::KStartEnabled);
-        let velocity = self.vector(actor, Prop::Velocity);
+        let asleep = !self.store.flag_of(params, Prop::KStartEnabled);
+        let velocity = self.store.vector(actor, Prop::Velocity);
         let Some(built) = build(&asset, &mesh, &frames, velocity, &cut) else {
-            self.diagnostics.log.push(format!("(Karma): KInitSkeletonKarma: no part of {} fits a bone of {}", asset.id, self.object(actor).path));
+            self.diagnostics.log.push(format!("(Karma): KInitSkeletonKarma: no part of {} fits a bone of {}", asset.id, self.store.object(actor).path));
             self.karma.ragdolls.failed.insert(actor);
             return;
         };
@@ -390,11 +390,11 @@ impl<L: LoaderRef> Vm<L> {
         self.karma.ragdolls.live.insert(actor, ragdoll);
         self.karma.ragdolls.kept.remove(&actor);
         for (property, value) in [("bCollideActors", true), ("bBlockActors", false), ("bBlockPlayers", false), ("bCollideWorld", false), ("bProjTarget", true)] {
-            self.set(actor, property, Value::Bool(value));
+            self.store.set(actor, property, Value::Bool(value));
         }
         self.relocate(actor);
         if let Err(e) = self.update_touching(actor) {
-            self.diagnostics.log.push(format!("{}: {e}", self.object(actor).path));
+            self.diagnostics.log.push(format!("{}: {e}", self.store.object(actor).path));
         }
     }
 
@@ -451,7 +451,7 @@ impl<L: LoaderRef> Vm<L> {
                 let at = crate::natives::vec3(args.get(1));
                 let named = match args.get(2) {
                     Some(&Value::Name(name)) if name != NameId::NONE => {
-                        let bone = self.name(name);
+                        let bone = self.store.name(name);
                         Some(self.karma.ragdolls.live.get(&this).and_then(|ragdoll| ragdoll.mesh.names.iter().position(|n| n.eq_ignore_ascii_case(bone))))
                     }
                     _ => None,
@@ -494,7 +494,7 @@ impl<L: LoaderRef> Vm<L> {
             _ => None,
         };
         let range = instigator.map(|by| {
-            let from = self.vector(by, Prop::Location);
+            let from = self.store.vector(by, Prop::Location);
             (0..3).map(|i| (from[i] - at[i]).powi(2)).sum::<f32>().sqrt()
         });
         let length = momentum.size();

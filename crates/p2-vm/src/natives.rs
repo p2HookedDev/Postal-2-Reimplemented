@@ -136,7 +136,7 @@ fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Obj
             return Ok(None);
         }
         Native::FindObject => {
-            let class = object_arg(args, 1).map(|class| vm.name(vm.object(class).name).to_owned()).unwrap_or_default();
+            let class = object_arg(args, 1).map(|class| vm.store.name(vm.store.object(class).name).to_owned()).unwrap_or_default();
             Value::Object(vm.find_object_by_path(str_arg(args, 0), &class))
         }
         Native::DynamicLoadObject => {
@@ -145,7 +145,7 @@ fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Obj
                 name => name,
             };
             let class_name = match args.get(1) {
-                Some(&Value::Object(Some(class))) => vm.name(vm.object(class).name).to_owned(),
+                Some(&Value::Object(Some(class))) => vm.store.name(vm.store.object(class).name).to_owned(),
                 _ => String::new(),
             };
             if class_name.eq_ignore_ascii_case("Class") {
@@ -180,7 +180,7 @@ fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Obj
         }
         Native::IsA => {
             let class = name_arg(args, 0);
-            Value::Bool(this.is_some_and(|this| vm.is_a(this, class)))
+            Value::Bool(this.is_some_and(|this| vm.store.is_a(this, class)))
         }
         Native::ClassIsChildOf => {
             let class = |vm: &mut Vm<L>, n: usize| match args.get(n) {
@@ -189,7 +189,7 @@ fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Obj
             };
             let (test, parent) = (class(vm, 0)?, class(vm, 1)?);
             Value::Bool(match (test, parent) {
-                (Some(test), Some(parent)) => vm.class_is_a(test, vm.class(parent).name),
+                (Some(test), Some(parent)) => vm.class_is_a(test, vm.store.class(parent).name),
                 _ => false,
             })
         }
@@ -225,15 +225,15 @@ fn state_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Objec
         }
         Native::SetTimer => {
             if let Some(this) = this {
-                vm.set(this, Prop::TimerRate, Value::Float(float_arg(args, 0)));
-                vm.set(this, Prop::TimerCounter, Value::Float(0.0));
-                vm.set(this, Prop::bTimerLoop, Value::Bool(bool_arg(args, 1)));
+                vm.store.set(this, Prop::TimerRate, Value::Float(float_arg(args, 0)));
+                vm.store.set(this, Prop::TimerCounter, Value::Float(0.0));
+                vm.store.set(this, Prop::bTimerLoop, Value::Bool(bool_arg(args, 1)));
             }
             return Ok(None);
         }
         Native::Disable | Native::Enable => {
             let (Some(this), Some(&Value::Name(probe))) = (this, args.first()) else { return Ok(None) };
-            let Some(bit) = crate::states::probe_bit(vm.name(probe)) else { return Ok(None) };
+            let Some(bit) = crate::states::probe_bit(vm.store.name(probe)) else { return Ok(None) };
             let disabled = vm.script.states.probes_disabled.entry(this).or_insert(0);
             if native == Native::Disable {
                 *disabled |= 1 << bit;
@@ -242,7 +242,7 @@ fn state_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Objec
             }
             return Ok(None);
         }
-        Native::Initialize if this.is_some_and(|this| vm.is_a(this, "Interaction")) => {
+        Native::Initialize if this.is_some_and(|this| vm.store.is_a(this, "Interaction")) => {
             if let Some(this) = this {
                 vm.event(this, "Initialized", Vec::new())?;
             }
@@ -271,12 +271,12 @@ fn lifetime_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Ob
             };
             let placement = [(3, Prop::Location), (4, Prop::Rotation)].map(|(index, property)| match args.get(index) {
                 Some(value) if is_struct_value(value) => Some(value.clone()),
-                _ => this.and_then(|this| vm.get(this, property)),
+                _ => this.and_then(|this| vm.store.get(this, property)),
             });
-            let instigator = this.and_then(|this| vm.object_of(this, Prop::Instigator));
+            let instigator = this.and_then(|this| vm.store.object_of(this, Prop::Instigator));
             let actor = vm.spawn_actor(class, owner, instigator, placement)?;
             if let (Some(actor), Some(tag @ Value::Name(_))) = (actor, args.get(2)) {
-                vm.set(actor, Prop::Tag, tag.clone());
+                vm.store.set(actor, Prop::Tag, tag.clone());
             }
             Value::Object(actor)
         }
@@ -337,23 +337,23 @@ fn placement_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<O
                 // Only attaches to a bone or alias of a skeletal mesh; a loose bolt-on is destroyed a second later.
                 // A mesh whose package is not loaded has its bones unknown, not missing, so only a read mesh refuses.
                 let bone = name_arg(args, 1);
-                let wanted = vm.name(bone).to_ascii_lowercase();
+                let wanted = vm.store.name(bone).to_ascii_lowercase();
                 let matched = vm.skeletal_mesh(this).is_some_and(|mesh| {
                     vm.posed_mesh(mesh).is_none_or(|mesh| mesh.match_ref_bone(&wanted).is_some())
                 });
-                if !matched || vm.is_deleted(attachment) {
+                if !matched || vm.store.is_deleted(attachment) {
                     return Ok(Some(Value::Bool(false)));
                 }
-                vm.set(attachment, Prop::AttachmentBone, Value::Name(bone));
+                vm.store.set(attachment, Prop::AttachmentBone, Value::Name(bone));
                 vm.set_base(attachment, Some(this), [0.0, 0.0, 1.0].into())?;
-            } else if vm.object_of(attachment, Prop::Base) == Some(this) {
+            } else if vm.store.object_of(attachment, Prop::Base) == Some(this) {
                 vm.set_base(attachment, None, [0.0, 0.0, 1.0].into())?;
             }
             Value::Bool(true)
         }
         Native::OnlyAffectPawns => {
             if let Some(this) = this {
-                vm.set(this, Prop::bOnlyAffectPawns, Value::Bool(bool_arg(args, 0)));
+                vm.store.set(this, Prop::bOnlyAffectPawns, Value::Bool(bool_arg(args, 0)));
             }
             return Ok(None);
         }
@@ -361,7 +361,7 @@ fn placement_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<O
             if let Some(this) = this
                 && args.len() >= 3
             {
-                let coords = crate::volumes::coords_of(vm.get(this, "WarpCoords").as_ref());
+                let coords = crate::volumes::coords_of(vm.store.get(this, "WarpCoords").as_ref());
                 let carry = if native == Native::Warp { crate::volumes::warp } else { crate::volumes::carry };
                 let (location, velocity, rotation) = carry(coords, vec3(args.first()), vec3(args.get(1)), rot3(args.get(2)));
                 args[0] = Value::Vector(location);
@@ -476,7 +476,7 @@ fn sense_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Objec
         Native::PlayerCanSeeMe => Value::Bool(this.is_some_and(|this| vm.player_can_see_me(this))),
         Native::Encompasses => Value::Bool(match (this, object_arg(args, 0)) {
             (Some(this), Some(other)) => {
-                let location = vm.vec3_of(other, Prop::Location);
+                let location = vm.store.vec3_of(other, Prop::Location);
                 vm.encompasses(this, location)
             }
             _ => false,
@@ -531,13 +531,13 @@ fn presentation_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Optio
         Native::SetViewTarget => {
             if let Some(this) = this {
                 let target = object_arg(args, 0).or(Some(this));
-                vm.set(this, Prop::ViewTarget, Value::Object(target));
+                vm.store.set(this, Prop::ViewTarget, Value::Object(target));
             }
             return Ok(None);
         }
         Native::ShowSubtitle => {
             if let Some(this) = this
-                && let Some(index) = crate::util_natives::subtitle_index(vm.get(this, "SubTag").as_ref(), str_arg(args, 0))
+                && let Some(index) = crate::util_natives::subtitle_index(vm.store.get(this, "SubTag").as_ref(), str_arg(args, 0))
                 && let Some(player) = vm.player()
             {
                 vm.event(player, "CallSubtitle", vec![Value::Object(None), Value::Int(index), Value::Int(-1), Value::Object(None)])?;
@@ -557,7 +557,7 @@ fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<Value,
     Ok(Value::Str(match command.to_ascii_lowercase().as_str() {
         "getping" | "getcurrentdisplaynumber" | "getrenderdeviceogl" => "0".to_owned(),
         "getcurrentres" => {
-            let size = |property, default| match vm.media.canvas.object.and_then(|canvas| vm.get(canvas, property)) {
+            let size = |property, default| match vm.media.canvas.object.and_then(|canvas| vm.store.get(canvas, property)) {
                 Some(Value::Int(size)) if size > 0 => size,
                 _ => default,
             };
@@ -621,7 +621,7 @@ fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<Value,
         }
         "showmouse" | "hidemouse" => {
             if let Some(viewport) = vm.viewport() {
-                vm.set(viewport, Prop::bShowWindowsMouse, Value::Bool(command.eq_ignore_ascii_case("showmouse")));
+                vm.store.set(viewport, Prop::bShowWindowsMouse, Value::Bool(command.eq_ignore_ascii_case("showmouse")));
             }
             String::new()
         }
@@ -675,9 +675,9 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
         _ => &[],
     };
     // Collision turned off untouches before the flags change, as retail.
-    let collided = (native == Native::SetCollision).then(|| vm.flag_of(this, Prop::bCollideActors));
+    let collided = (native == Native::SetCollision).then(|| vm.store.flag_of(this, Prop::bCollideActors));
     // As retail, `SetRotation` is a zero-delta move: the actors based on it turn with it.
-    let turned_from = (native == Native::SetRotation).then(|| vm.rotator_of(this, Prop::Rotation));
+    let turned_from = (native == Native::SetRotation).then(|| vm.store.rotator_of(this, Prop::Rotation));
     if let Some(was) = collided {
         let now = match args.first() {
             Some(Value::Bool(now)) => *now,
@@ -687,7 +687,7 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
     }
     for (&property, value) in properties.iter().zip(args) {
         if !matches!(value, Value::Map) {
-            vm.set(this, property, value.clone());
+            vm.store.set(this, property, value.clone());
         }
     }
     if matches!(native, Native::SetRotation | Native::SetDrawScale | Native::SetDrawScale3D) {
@@ -697,14 +697,14 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
     // theirs).
     let collision = matches!(native, Native::SetCollision | Native::SetCollisionSize);
     let reshaped = matches!(native, Native::SetDrawScale | Native::SetDrawScale3D | Native::SetStaticMesh | Native::SetDrawType | Native::SetRotation | Native::LinkMesh);
-    if collision || (reshaped && !vm.flag_of(this, Prop::bStatic)) {
+    if collision || (reshaped && !vm.store.flag_of(this, Prop::bStatic)) {
         vm.relocate(this);
     }
     if let Some(old_rotation) = turned_from {
         vm.turn_attached(this, old_rotation)?;
     }
     if let Some(was) = collided {
-        let now = vm.flag_of(this, Prop::bCollideActors);
+        let now = vm.store.flag_of(this, Prop::bCollideActors);
         vm.set_collision_after(this, was, now)?;
     } else if collision {
         vm.update_touching(this)?;
@@ -714,20 +714,20 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
 
 fn controller_list<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>) {
     let Some(this) = this else { return };
-    let Some(level) = vm.object_of(this, Prop::Level) else { return };
+    let Some(level) = vm.store.object_of(this, Prop::Level) else { return };
     let mut previous: Option<ObjectId> = None;
-    let mut current = vm.object_of(level, Prop::ControllerList);
+    let mut current = vm.store.object_of(level, Prop::ControllerList);
     let mut guard = 0;
     while let Some(controller) = current {
         guard += 1;
         if guard > 100_000 {
             break;
         }
-        let after = vm.object_of(controller, Prop::nextController);
+        let after = vm.store.object_of(controller, Prop::nextController);
         if controller == this {
             match previous {
-                Some(previous) => vm.set(previous, Prop::nextController, Value::Object(after)),
-                None => vm.set(level, Prop::ControllerList, Value::Object(after)),
+                Some(previous) => vm.store.set(previous, Prop::nextController, Value::Object(after)),
+                None => vm.store.set(level, Prop::ControllerList, Value::Object(after)),
             };
             break;
         }
@@ -735,11 +735,11 @@ fn controller_list<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<Ob
         current = after;
     }
     if native == Native::AddController {
-        let first = vm.object_of(level, Prop::ControllerList);
-        vm.set(this, Prop::nextController, Value::Object(first));
-        vm.set(level, Prop::ControllerList, Value::Object(Some(this)));
+        let first = vm.store.object_of(level, Prop::ControllerList);
+        vm.store.set(this, Prop::nextController, Value::Object(first));
+        vm.store.set(level, Prop::ControllerList, Value::Object(Some(this)));
     } else {
-        vm.set(this, Prop::nextController, Value::Object(None));
+        vm.store.set(this, Prop::nextController, Value::Object(None));
     }
 }
 
@@ -753,14 +753,14 @@ fn play_sound<L: LoaderRef>(vm: &mut Vm<L>, this: Option<ObjectId>, args: &[Valu
         0.0 => AUDIO_DEFAULT_RADIUS,
         radius => radius,
     };
-    let dilation = match vm.level().and_then(|level| vm.get(level, Prop::TimeDilation)) {
+    let dilation = match vm.level().and_then(|level| vm.store.get(level, Prop::TimeDilation)) {
         Some(Value::Float(dilation)) => dilation,
         _ => 1.0,
     };
     let pitch = if given(5) { f(5) } else { 1.0 } * dilation;
     let slot = if given(1) { args.get(1).map_or(0, int) as u8 } else { 1 };
     let attenuate = !given(6) || b(6);
-    let played = PlayedSound { actor: this, sound: vm.object(sound).path.clone(), slot, volume, radius, pitch, attenuate, no_override: given(3) && b(3), flashbang: None };
+    let played = PlayedSound { actor: this, sound: vm.store.object(sound).path.clone(), slot, volume, radius, pitch, attenuate, no_override: given(3) && b(3), flashbang: None };
     vm.subtitle_insert_sound(played.actor, &played.sound);
     vm.host.commands.push(HostCommand::Sound(played));
 }
@@ -796,7 +796,7 @@ fn play_music<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectI
 }
 
 fn actor_float<L: LoaderRef>(vm: &Vm<L>, this: Option<ObjectId>, property: Prop) -> f32 {
-    this.map_or(0.0, |this| vm.float_of(this, property))
+    this.map_or(0.0, |this| vm.store.float_of(this, property))
 }
 
 pub(crate) fn iterator_outs(name: &str) -> &'static [usize] {
@@ -814,7 +814,7 @@ pub(crate) fn walks_actor_list(name: &str) -> Option<&'static str> {
 
 pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<ObjectId>, args: &[Value]) -> Result<Vec<Value>, Error> {
     let class = match args.first() {
-        Some(&Value::Object(Some(class))) => vm.object(class).name,
+        Some(&Value::Object(Some(class))) => vm.store.object(class).name,
         _ => vm.script.lookups.class_names.object,
     };
     let all_objects = name == "AllObjects";
@@ -823,8 +823,8 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
         let mut tested = tested.borrow_mut();
         candidates
             .filter(|&object| {
-                let of_class = vm.object(object).class.is_some_and(|c| *tested.entry(c).or_insert_with(|| vm.class_has_name(c, class)));
-                of_class && !vm.is_deleted(object) && keep(object)
+                let of_class = vm.store.object(object).class.is_some_and(|c| *tested.entry(c).or_insert_with(|| vm.store.class_has_name(c, class)));
+                of_class && !vm.store.is_deleted(object) && keep(object)
             })
             .map(|object| Value::Object(Some(object)))
             .collect()
@@ -835,10 +835,10 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
     let radius = args.get(1).map_or(0.0, float);
     let centre = |vm: &Vm<L>| match args.get(2) {
         Some(location) if is_struct_value(location) => vec3(Some(location)),
-        _ => vec3(this.and_then(|this| vm.get(this, Prop::Location))),
+        _ => vec3(this.and_then(|this| vm.store.get(this, Prop::Location))),
     };
     let within = |vm: &Vm<L>, centre: Vector, object: ObjectId| {
-        let at = vm.vector(object, Prop::Location);
+        let at = vm.store.vector(object, Prop::Location);
         (0..3).map(|i| (at[i] - centre[i]).powi(2)).sum::<f32>() <= radius * radius
     };
     let items = match name {
@@ -848,28 +848,28 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
                 _ => None,
             };
             let dynamic = (name == "DynamicActors").then(|| vm.dynamic_actors());
-            let keep = |object: ObjectId| tag.is_none_or(|tag| vm.get(object, Prop::Tag) == Some(Value::Name(tag)));
+            let keep = |object: ObjectId| tag.is_none_or(|tag| vm.store.get(object, Prop::Tag) == Some(Value::Name(tag)));
             match dynamic {
                 Some(dynamic) => of_class(vm, &mut dynamic.into_iter(), &keep),
                 None => objects(vm, &keep),
             }
         }
         "TouchingActors" => {
-            let touching = match this.and_then(|this| vm.get(this, Prop::Touching)) {
+            let touching = match this.and_then(|this| vm.store.get(this, Prop::Touching)) {
                 Some(Value::Array(list)) => list,
                 _ => Vec::new(),
             };
-            touching.into_iter().filter(|v| matches!(v, &Value::Object(Some(o)) if vm.is_a(o, class))).collect()
+            touching.into_iter().filter(|v| matches!(v, &Value::Object(Some(o)) if vm.store.is_a(o, class))).collect()
         }
-        "ChildActors" => objects(vm, &|object| this.is_some() && vm.get(object, Prop::Owner) == Some(Value::Object(this))),
-        "BasedActors" => objects(vm, &|object| this.is_some() && vm.get(object, Prop::Base) == Some(Value::Object(this))),
+        "ChildActors" => objects(vm, &|object| this.is_some() && vm.store.get(object, Prop::Owner) == Some(Value::Object(this))),
+        "BasedActors" => objects(vm, &|object| this.is_some() && vm.store.get(object, Prop::Base) == Some(Value::Object(this))),
         // Centre strictly within `Radius` + the actor's own `CollisionRadius`
         // (a match of radius 5 finds a gas puddle of radius 100 around it).
         "RadiusActors" => {
             let centre = centre(vm);
             objects(vm, &|object| {
-                let radius = radius + vm.get(object, Prop::CollisionRadius).as_ref().map_or(0.0, float);
-                let at = vm.vec3_of(object, Prop::Location);
+                let radius = radius + vm.store.get(object, Prop::CollisionRadius).as_ref().map_or(0.0, float);
+                let at = vm.store.vec3_of(object, Prop::Location);
                 (0..3).map(|i| (at[i] - centre[i]).powi(2)).sum::<f32>() < radius * radius
             })
         }
@@ -879,7 +879,7 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
             let visible = name == "VisibleCollidingActors";
             let ignore_hidden = visible && args.get(3).is_some_and(truthy);
             let mut items = of_class(vm, &mut near.into_iter().map(|e| e.actor), &|object| {
-                vm.flag_of(object, Prop::bCollideActors) && !(ignore_hidden && vm.flag_of(object, Prop::bHidden)) && within(vm, at, object)
+                vm.store.flag_of(object, Prop::bCollideActors) && !(ignore_hidden && vm.store.flag_of(object, Prop::bHidden)) && within(vm, at, object)
             });
             if visible {
                 vm.keep_line_of_sight(this, at, &mut items);
@@ -889,8 +889,8 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<Obj
         "VisibleActors" => {
             let at = centre(vm);
             let mut items = objects(vm, &|object| {
-                let offset = vm.vector(object, Prop::Location) - at;
-                !vm.flag_of(object, Prop::bHidden) && (radius == 0.0 || offset.dot(offset) < radius * radius)
+                let offset = vm.store.vector(object, Prop::Location) - at;
+                !vm.store.flag_of(object, Prop::bHidden) && (radius == 0.0 || offset.dot(offset) < radius * radius)
             });
             vm.keep_line_of_sight(this, at, &mut items);
             items
@@ -1002,7 +1002,7 @@ pub(crate) fn system_time() -> [i32; 8] {
 pub(crate) fn update_time<L: LoaderRef>(vm: &mut Vm<L>, level: ObjectId) {
     let properties = [Prop::Year, Prop::Month, Prop::DayOfWeek, Prop::Day, Prop::Hour, Prop::Minute, Prop::Second, Prop::Millisecond];
     for (property, value) in properties.into_iter().zip(system_time()) {
-        vm.set(level, property, Value::Int(value));
+        vm.store.set(level, property, Value::Int(value));
     }
 }
 

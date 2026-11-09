@@ -128,7 +128,7 @@ impl<L: LoaderRef> Vm<L> {
         let (path, property) = (self.command_class_path(path), property.trim());
         let Some((package, class)) = path.split_once('.') else { return Ok(String::new()) };
         match self.find_class(package, class) {
-            Ok(class) => Ok(self.default_value(class, property).map_or_else(String::new, |value| self.value_text(&value))),
+            Ok(class) => Ok(self.store.default_value(class, property).map_or_else(String::new, |value| self.value_text(&value))),
             Err(_) => Ok(self.config_value(&path, property).unwrap_or_default()),
         }
     }
@@ -140,8 +140,8 @@ impl<L: LoaderRef> Vm<L> {
             Value::Float(value) => format!("{value:.6}"),
             Value::Byte(value) => value.to_string(),
             Value::Str(value) => value.clone(),
-            &Value::Name(name) => self.name(name).to_owned(),
-            &Value::Object(object) => object.map_or_else(|| "None".to_owned(), |o| self.object(o).path.clone()),
+            &Value::Name(name) => self.store.name(name).to_owned(),
+            &Value::Object(object) => object.map_or_else(|| "None".to_owned(), |o| self.store.object(o).path.clone()),
             _ => String::new(),
         }
     }
@@ -167,20 +167,20 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn property_text(&self, object: ObjectId, name: &str) -> String {
-        self.get(object, name).map_or_else(String::new, |value| self.value_text(&value))
+        self.store.get(object, name).map_or_else(String::new, |value| self.value_text(&value))
     }
 
     pub(crate) fn set_property_text(&mut self, object: ObjectId, name: &str, text: &str) {
-        let Some(class) = self.object(object).class else { return };
-        let Some(index) = self.property_index(class, name) else { return };
-        let ty = self.class(class).layout.properties[index].ty.clone();
+        let Some(class) = self.store.object(object).class else { return };
+        let Some(index) = self.store.property_index(class, name) else { return };
+        let ty = self.store.class(class).layout.properties[index].ty.clone();
         if let Some(value) = self.import(&ty, text) {
-            self.set(object, name, value);
+            self.store.set(object, name, value);
         }
     }
 
     pub(crate) fn enum_name(&mut self, enumeration: ObjectId, index: i32) -> NameId {
-        let path = self.object(enumeration).path.clone();
+        let path = self.store.object(enumeration).path.clone();
         let name = self.enum_names(&path).and_then(|names| names.get(usize::try_from(index).ok()?).cloned());
         name.map_or(NameId::NONE, |name| self.intern(&name))
     }
@@ -201,8 +201,8 @@ impl<L: LoaderRef> Vm<L> {
     /// The table holds the first object made at a path, without objects of a level that was left.
     /// Only when that one is of another class are the objects scanned for a later one.
     pub(crate) fn find_object_by_path(&mut self, path: &str, class: &str) -> Option<ObjectId> {
-        let same_path = |vm: &Self, o: ObjectId| vm.object(o).path.eq_ignore_ascii_case(path);
-        let of_class = |vm: &Self, o: ObjectId| class.is_empty() || vm.name(vm.object(o).class_name).eq_ignore_ascii_case(class) || vm.is_a(o, class) || vm.stub_is_a(o, class);
+        let same_path = |vm: &Self, o: ObjectId| vm.store.object(o).path.eq_ignore_ascii_case(path);
+        let of_class = |vm: &Self, o: ObjectId| class.is_empty() || vm.store.name(vm.store.object(o).class_name).eq_ignore_ascii_case(class) || vm.store.is_a(o, class) || vm.stub_is_a(o, class);
         if let Some(&first) = self.store.object_ids.get(&path.to_ascii_lowercase()) {
             if of_class(self, first) {
                 return Some(first);
@@ -225,14 +225,14 @@ impl<L: LoaderRef> Vm<L> {
         let mut owner = None;
         let mut class = from;
         while let Some(id) = class {
-            if self.class(id).layout.properties.iter().any(|f| f.name.eq_ignore_ascii_case(name)) {
+            if self.store.class(id).layout.properties.iter().any(|f| f.name.eq_ignore_ascii_case(name)) {
                 owner = Some(id);
             }
-            class = self.class(id).super_class;
+            class = self.store.class(id).super_class;
         }
         owner.map_or_else(
             || section.to_owned(),
-            |id| format!("{}.{}", self.loader.clone().package(self.class(id).package).name, self.name(self.class(id).name)),
+            |id| format!("{}.{}", self.loader.clone().package(self.store.class(id).package).name, self.store.name(self.store.class(id).name)),
         )
     }
 
@@ -309,16 +309,16 @@ impl<L: LoaderRef> Vm<L> {
             self.save_setting(&path, property, text);
             return;
         };
-        let Some(index) = self.property_index(class, property) else { return };
-        let field = &self.class(class).layout.properties[index];
+        let Some(index) = self.store.property_index(class, property) else { return };
+        let field = &self.store.class(class).layout.properties[index];
         let (ty, config) = (field.ty.clone(), field.flags & CPF_CONFIG != 0);
         let Some(value) = self.import(&ty, text) else { return };
-        let field = self.store.memory.get(self.class(class).mem).fields[index];
+        let field = self.store.memory.get(self.store.class(class).mem).fields[index];
         self.store.memory.write_field(&field, &mut self.store.classes[class.0 as usize].defaults, value.clone());
-        let class_name = self.name(self.class(class).name).to_owned();
-        let objects: Vec<_> = self.object_ids().filter(|&o| self.is_a(o, &class_name)).collect();
+        let class_name = self.store.name(self.store.class(class).name).to_owned();
+        let objects: Vec<_> = self.object_ids().filter(|&o| self.store.is_a(o, &class_name)).collect();
         for object in objects {
-            self.set(object, property, value.clone());
+            self.store.set(object, property, value.clone());
         }
         if property.eq_ignore_ascii_case("SubSound") {
             self.media.subtitle_sounds = crate::util_natives::SubtitleSounds::default();
@@ -377,11 +377,11 @@ impl<L: LoaderRef> Vm<L> {
 
     /// A `globalconfig` property goes to its declaring class's section, so every subclass reads one value.
     pub(crate) fn save_config(&mut self, object: ObjectId, defaults: bool) {
-        let Some(class) = self.object(object).class else { return };
-        let package = self.loader.clone().package(self.class(class).package).name.clone();
-        let own = format!("{package}.{}", self.name(self.class(class).name));
+        let Some(class) = self.store.object(object).class else { return };
+        let package = self.loader.clone().package(self.store.class(class).package).name.clone();
+        let own = format!("{package}.{}", self.store.name(self.store.class(class).name));
         let fields: Vec<_> = self
-            .class(class)
+            .store.class(class)
             .layout
             .properties
             .iter()
@@ -390,10 +390,10 @@ impl<L: LoaderRef> Vm<L> {
             .collect();
         let configured: Vec<ClassId> = (0..self.store.classes.len())
             .map(|index| ClassId(index as u32))
-            .filter(|&class| self.class(class).layout.properties.iter().any(|f| f.flags & CPF_CONFIG != 0))
+            .filter(|&class| self.store.class(class).layout.properties.iter().any(|f| f.flags & CPF_CONFIG != 0))
             .collect();
         for (name, dim, ty, section) in fields {
-            let value = if defaults { self.default_value(class, &name) } else { self.get(object, name.as_str()) };
+            let value = if defaults { self.store.default_value(class, &name) } else { self.store.get(object, name.as_str()) };
             // Retail `SaveConfig` then reloads the config of every loaded class under the object's config base
             // (unverified): the loaded classes that read this property from this section take the value.
             if let Some(value) = &value {
@@ -427,17 +427,17 @@ impl<L: LoaderRef> Vm<L> {
 
     fn refresh_config_defaults(&mut self, classes: &[ClassId], name: &str, section: &str, value: &Value) {
         for &class in classes {
-            let Some(field) = self.class(class).layout.properties.iter().position(|f| f.flags & CPF_CONFIG != 0 && f.name.eq_ignore_ascii_case(name))
+            let Some(field) = self.store.class(class).layout.properties.iter().position(|f| f.flags & CPF_CONFIG != 0 && f.name.eq_ignore_ascii_case(name))
             else {
                 continue;
             };
-            let flags = self.class(class).layout.properties[field].flags;
-            let package = self.loader.clone().package(self.class(class).package).name.clone();
-            let own = format!("{package}.{}", self.name(self.class(class).name));
+            let flags = self.store.class(class).layout.properties[field].flags;
+            let package = self.loader.clone().package(self.store.class(class).package).name.clone();
+            let own = format!("{package}.{}", self.store.name(self.store.class(class).name));
             if !self.config_section(Some(class), name, flags, &own).eq_ignore_ascii_case(section) {
                 continue;
             }
-            let slot = self.store.memory.get(self.class(class).mem).fields[field];
+            let slot = self.store.memory.get(self.store.class(class).mem).fields[field];
             self.store.memory.write_field(&slot, &mut self.store.classes[class.0 as usize].defaults, value.clone());
         }
     }
@@ -559,8 +559,8 @@ mod tests {
         let loader = Loader::new(&empty, &[]).unwrap();
         let mut vm = Vm::new(&loader);
         let Some(Value::Object(Some(sound))) = vm.import(&Type::Object, "Sound'Pack.Line'") else { panic!("no object") };
-        assert_eq!(vm.object(sound).path, "Pack.Line");
-        assert_eq!(vm.name(vm.object(sound).class_name), "Sound");
+        assert_eq!(vm.store.object(sound).path, "Pack.Line");
+        assert_eq!(vm.store.name(vm.store.object(sound).class_name), "Sound");
     }
 
     #[test]

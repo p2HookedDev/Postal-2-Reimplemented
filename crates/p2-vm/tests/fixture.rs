@@ -21,18 +21,18 @@ fn class_with_a_parent_loads_its_defaults() {
     let mut vm = load_fixture(&package, "defaults");
     let class = vm.find_class("Fixture", "Derived").unwrap();
     let object = vm.new_object(class, None);
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(9)));
-    assert_eq!(vm.get(object, "Limit"), Some(Value::Int(2)));
-    assert_eq!(vm.get(object, "Extra"), Some(Value::Int(3)));
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(9)));
+    assert_eq!(vm.store.get(object, "Limit"), Some(Value::Int(2)));
+    assert_eq!(vm.store.get(object, "Extra"), Some(Value::Int(3)));
 
-    assert!(vm.set(object, "Count", Value::Int(11)));
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(11)));
-    assert_eq!(vm.default_value(class, "Count"), Some(Value::Int(9)));
+    assert!(vm.store.set(object, "Count", Value::Int(11)));
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(11)));
+    assert_eq!(vm.store.default_value(class, "Count"), Some(Value::Int(9)));
 
     let base = vm.find_class("Fixture", "Base").unwrap();
     let object = vm.new_object(base, None);
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(7)));
-    assert_eq!(vm.get(object, "Extra"), None);
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(7)));
+    assert_eq!(vm.store.get(object, "Extra"), None);
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn functions_return_a_constant_and_set_a_property() {
     assert_eq!(vm.call(&function, Some(object), class, []).unwrap(), Some(Value::Int(42)));
 
     vm.event(object, "SetCount", [Value::Int(5)]).unwrap();
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(5)));
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(5)));
 }
 
 #[test]
@@ -74,12 +74,12 @@ fn state_code_runs_on_tick_until_it_stops() {
     let object = vm.new_object(class, None);
     let active = vm.intern("Active");
     vm.goto_state(object, active, NameId::NONE).unwrap();
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(1)));
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(1)));
 
     vm.tick(object, 0.1).unwrap();
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(6)));
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(6)));
 
-    assert!(vm.set(object, "Count", Value::Int(8)));
+    assert!(vm.store.set(object, "Count", Value::Int(8)));
     vm.tick(object, 0.1).unwrap();
-    assert_eq!(vm.get(object, "Count"), Some(Value::Int(8)));
+    assert_eq!(vm.store.get(object, "Count"), Some(Value::Int(8)));
 }

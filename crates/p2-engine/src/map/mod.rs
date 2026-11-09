@@ -343,7 +343,7 @@ fn start_vm(
         None
     });
     if save.is_some() {
-        let path = |object: Option<ObjectId>| object.map(|o| vm.object(o).path.clone());
+        let path = |object: Option<ObjectId>| object.map(|o| vm.store.object(o).path.clone());
         bevy::log::info!("load: login gave controller {:?}, pawn {:?}", path(player.map(|p| p.0)), path(player.and_then(|p| p.1)));
         for (actor, error) in vm.post_load_game() {
             bevy::log::warn!("PostLoadGame {actor}: {error}");

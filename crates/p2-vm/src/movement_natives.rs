@@ -63,26 +63,26 @@ pub(crate) fn suggest_jump_velocity(to: Vector, mut xy_speed: f32, base_z: f32, 
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn find_stair_rotation(&mut self, controller: ObjectId, pawn: Option<ObjectId>, delta: f32) -> i32 {
-        let mut rotation = self.rotator_of(controller, Prop::Rotation);
+        let mut rotation = self.store.rotator_of(controller, Prop::Rotation);
         let Some(pawn) = pawn.filter(|_| f64::from(delta) <= STAIR_MAX_FRAME) else { return rotation.pitch };
         rotation.pitch = signed_pitch(rotation.pitch);
-        self.set(controller, Prop::Rotation, Value::Rotator(rotation));
+        self.store.set(controller, Prop::Rotation, Value::Rotator(rotation));
         let stair = self.stair_pitch(controller, pawn, rotation);
-        let now = self.level.map_or(0.0, |level| self.float_of(level, Prop::TimeSeconds));
-        let since = now - self.float_of(controller, Prop::GroundPitchTime);
+        let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));
+        let since = now - self.store.float_of(controller, Prop::GroundPitchTime);
         let (pitch, restart) = stair_step(rotation.pitch, stair, delta, since);
         if restart {
-            self.set(controller, Prop::GroundPitchTime, Value::Float(now));
+            self.store.set(controller, Prop::GroundPitchTime, Value::Float(now));
         }
         pitch
     }
 
     fn stair_pitch(&mut self, controller: ObjectId, pawn: ObjectId, rotation: Rotator) -> i32 {
-        let location = self.vector(pawn, Prop::Location);
-        let eye_height = self.float_of(pawn, Prop::BaseEyeHeight);
+        let location = self.store.vector(pawn, Prop::Location);
+        let eye_height = self.store.float_of(pawn, Prop::BaseEyeHeight);
         let eyes = location + Vector::new(0.0, 0.0, eye_height);
-        let height = self.float_of(pawn, Prop::CollisionHeight) + eye_height;
-        let radius = self.float_of(pawn, Prop::CollisionRadius);
+        let height = self.store.float_of(pawn, Prop::CollisionHeight) + eye_height;
+        let radius = self.store.float_of(pawn, Prop::CollisionRadius);
         let extent = Vector::new(radius, radius, 1.0);
         let direction = Rotator::new(0, rotation.yaw, rotation.roll).vector();
         let source = Some(controller);
@@ -120,10 +120,10 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn end_climb_ladder(&mut self, controller: ObjectId, pawn: Option<ObjectId>) {
         let moving = self.script.states.objects.get(&controller).and_then(|s| s.latent_move) == Some(LatentMove::MoveToward);
-        let target = self.object_of(controller, Prop::MoveTarget).filter(|&target| self.is_a(target, "Ladder"));
+        let target = self.store.object_of(controller, Prop::MoveTarget).filter(|&target| self.store.is_a(target, "Ladder"));
         let (true, Some(pawn), Some(target)) = (moving, pawn, target) else { return };
         if self.may_overlap(pawn, target) && self.shapes_overlap(pawn, target) {
-            self.set(pawn, Prop::Anchor, Value::Object(Some(target)));
+            self.store.set(pawn, Prop::Anchor, Value::Object(Some(target)));
         }
         if let Some(entry) = self.script.states.objects.get_mut(&controller) {
             entry.latent_move = None;
@@ -134,7 +134,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(entry) = self.script.states.objects.get_mut(&controller) else { return };
         if entry.sleep > 0.0 {
             entry.sleep = 0.0;
-            self.set(controller, Prop::LatentFloat, Value::Float(-1.0));
+            self.store.set(controller, Prop::LatentFloat, Value::Float(-1.0));
         }
     }
 }

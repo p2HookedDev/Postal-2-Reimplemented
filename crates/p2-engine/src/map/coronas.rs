@@ -29,15 +29,15 @@ pub struct CoronaActor {
 }
 
 fn corona_texture(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<ObjectId> {
-    let flag = |property: Prop| vm.get(actor, property) == Some(Value::Bool(true));
-    let lit = matches!(vm.get(actor, Prop::LightType), Some(Value::Byte(light_type)) if light_type != 0);
-    if !flag(Prop::bCorona) || !lit || flag(Prop::bDeleteMe) || vm.is_deleted(actor) {
+    let flag = |property: Prop| vm.store.get(actor, property) == Some(Value::Bool(true));
+    let lit = matches!(vm.store.get(actor, Prop::LightType), Some(Value::Byte(light_type)) if light_type != 0);
+    if !flag(Prop::bCorona) || !lit || flag(Prop::bDeleteMe) || vm.store.is_deleted(actor) {
         return None;
     }
-    let Some(Value::Array(skins)) = vm.get(actor, Prop::Skins) else { return None };
+    let Some(Value::Array(skins)) = vm.store.get(actor, Prop::Skins) else { return None };
     let Some(&Value::Object(Some(texture))) = skins.first() else { return None };
     // Textures are mostly stubs (known by reference, no class loaded): `is_a` alone rejected every corona.
-    if !vm.is_a(texture, "Texture") && !vm.stub_is_a(texture, "Texture") {
+    if !vm.store.is_a(texture, "Texture") && !vm.stub_is_a(texture, "Texture") {
         return None;
     }
     Some(texture)
@@ -49,25 +49,25 @@ pub fn is_corona(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> bool {
 
 pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaActor> {
     let texture = corona_texture(vm, actor)?;
-    let byte = |name: &str| match vm.get(actor, name) {
+    let byte = |name: &str| match vm.store.get(actor, name) {
         Some(Value::Byte(value)) => value,
         _ => 0,
     };
-    let float = |name: &str, default: f32| match vm.get(actor, name) {
+    let float = |name: &str, default: f32| match vm.store.get(actor, name) {
         Some(Value::Float(value)) => value,
         _ => default,
     };
     let (location, rotation) = location_rotation(vm, actor);
     Some(CoronaActor {
         object: actor,
-        texture: vm.object(texture).path.clone(),
+        texture: vm.store.object(texture).path.clone(),
         location,
         rotation,
         draw_scale: float("DrawScale", 1.0),
         draw_scale3d: crate::actors::vector(vm, actor, "DrawScale3D").into(),
         hue: byte("LightHue"),
         saturation: byte("LightSaturation"),
-        sizes: vm.is_a(actor, "Light").then(|| (float("MinCoronaSize", 0.0), float("MaxCoronaSize", 0.0))),
+        sizes: vm.store.is_a(actor, "Light").then(|| (float("MinCoronaSize", 0.0), float("MaxCoronaSize", 0.0))),
         light_radius: float("LightRadius", 0.0),
     })
 }
