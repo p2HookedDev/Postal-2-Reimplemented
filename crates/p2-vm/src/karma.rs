@@ -39,6 +39,7 @@ pub(crate) struct Karma {
     pub(crate) boltons: crate::bolton::Boltons,
     failed: FxHashSet<ObjectId>,
     meshes: FxHashMap<ObjectId, Option<Arc<MeshShape>>>,
+    movers: FxHashMap<ObjectId, Option<Body>>,
 }
 
 impl Karma {
@@ -47,6 +48,7 @@ impl Karma {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Body {
     id: BodyId,
     location: Vector,
@@ -103,6 +105,7 @@ impl<L: LoaderRef> Vm<L> {
         self.ragdolls_before_step(ragdolls);
         self.ragdoll_leftover_hits();
         errors.extend(self.limbs_before_step(flying, delta.min(MAX_KARMA_TICK)));
+        self.karma_movers_tick();
         if let Some(world) = &mut self.karma.world
             && (!self.karma.bodies.is_empty() || !self.karma.ragdolls.is_empty() || !self.karma.limbs.is_empty())
         {
@@ -244,7 +247,60 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         self.karma.world = Some(Background::new(world));
+        self.karma.movers = self.actors().filter(|&a| self.store.is_a(a, crate::Kind::Mover) && !self.store.is_deleted(a)).map(|a| (a, None)).collect();
         self.profile_phase("load: karma world", phase);
+    }
+
+    /// Unlike retail, every mover that blocks actors blocks Karma bodies, not only those with `bBlockKarma`.
+    fn karma_movers_tick(&mut self) {
+        let movers: Vec<ObjectId> = self.karma.movers.keys().copied().collect();
+        for mover in movers {
+            let deleted = self.store.is_deleted(mover);
+            let blocks = !deleted && self.store.flag_of(mover, Prop::bCollideActors) && self.store.flag_of(mover, Prop::bBlockActors);
+            let (location, rotation) = (self.store.vector(mover, Prop::Location), self.store.rotator_of(mover, Prop::Rotation));
+            let body = match (self.karma.movers.get(&mover).copied().flatten(), blocks) {
+                (Some(body), false) => {
+                    if let Some(world) = &mut self.karma.world {
+                        world.change(move |w| w.remove_body(body.id));
+                    }
+                    None
+                }
+                (Some(body), true) => {
+                    if (body.location, body.rotation) != (location, rotation)
+                        && let Some(world) = &mut self.karma.world
+                    {
+                        let quat = matrix_to_quat(rotation.axes().map(Vector::from));
+                        world.change(move |w| w.move_mover(body.id, location, quat));
+                    }
+                    Some(Body { id: body.id, location, rotation })
+                }
+                (None, true) => {
+                    let Some(body) = self.karma_mover_body(mover) else {
+                        self.karma.movers.remove(&mover);
+                        continue;
+                    };
+                    Some(body)
+                }
+                (None, false) => None,
+            };
+            if deleted {
+                self.karma.movers.remove(&mover);
+            } else {
+                self.karma.movers.insert(mover, body);
+            }
+        }
+    }
+
+    fn karma_mover_body(&mut self, mover: ObjectId) -> Option<Body> {
+        let (shapes, location, quat) = self.karma_placed_shapes(mover)?;
+        let added = self.karma.world.as_mut()?.world()?.add_mover(&shapes, location, quat);
+        match added {
+            Ok(id) => Some(Body { id, location, rotation: self.store.rotator_of(mover, Prop::Rotation) }),
+            Err(e) => {
+                self.diagnostics.log.push(format!("Karma mover {}: {e}", self.store.object(mover).path));
+                None
+            }
+        }
     }
 
     fn remove_karma_body(&mut self, actor: ObjectId) {
@@ -271,7 +327,6 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    /// As retail, never by triangles: `KPhysicsProps` shapes with simple collision, otherwise one convex hull.
     fn karma_static_shapes(&mut self) -> Vec<(Shape, Vector, [f32; 4])> {
         let actors: Vec<ObjectId> = self
             .actors()
@@ -280,20 +335,29 @@ impl<L: LoaderRef> Vm<L> {
             .collect();
         let mut placed = Vec::new();
         for actor in actors {
-            let Some(mesh) = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh)) else { continue };
-            let placement = self.drawn_placement(actor);
-            let shapes = match (mesh.use_simple_collision, &mesh.props) {
-                (true, Some(props)) => shapes::mesh_shapes(Some(props), (mesh.min, mesh.max), placement.scale, placement.pre_pivot),
-                (true, None) => continue,
-                (false, _) => {
-                    let place = |p: &[f32; 3]| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i]);
-                    vec![Shape::Hull(mesh.points.iter().map(place).collect())]
-                }
-            };
-            let rotation = matrix_to_quat(placement.rotation.axes().map(Vector::from));
-            placed.extend(shapes.into_iter().map(|shape| (shape, placement.location, rotation)));
+            let Some((shapes, location, rotation)) = self.karma_placed_shapes(actor) else { continue };
+            placed.extend(shapes.into_iter().map(|shape| (shape, location, rotation)));
         }
         placed
+    }
+
+    /// As retail, never by triangles: `KPhysicsProps` shapes with simple collision, otherwise one convex hull.
+    /// A brush is one hull of its corners, so a concave brush is filled in.
+    fn karma_placed_shapes(&mut self, actor: ObjectId) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
+        let placement = self.drawn_placement(actor);
+        let place = |p: &[f32; 3]| [0, 1, 2].map(|i| (p[i] - placement.pre_pivot[i]) * placement.scale[i]);
+        let shapes = if self.draw_type_of(actor) == Some(crate::enums::EDrawType::StaticMesh) {
+            let mesh = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh))?;
+            match (mesh.use_simple_collision, &mesh.props) {
+                (true, Some(props)) => shapes::mesh_shapes(Some(props), (mesh.min, mesh.max), placement.scale, placement.pre_pivot),
+                (true, None) => return None,
+                (false, _) => vec![Shape::Hull(mesh.points.iter().map(place).collect())],
+            }
+        } else {
+            let model = self.store.object_of(actor, Prop::Brush).and_then(|brush| self.brush_model(brush))?;
+            vec![Shape::Hull(crate::world::brush_corners(&model).map(|p| place(&p)).collect())]
+        };
+        Some((shapes, placement.location, matrix_to_quat(placement.rotation.axes().map(Vector::from))))
     }
 
     fn karma_shapes(&mut self, actor: ObjectId) -> Vec<Shape> {

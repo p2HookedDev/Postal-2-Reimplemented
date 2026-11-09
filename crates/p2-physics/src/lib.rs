@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use rapier3d::prelude::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 mod background;
 mod hit;
@@ -29,6 +29,8 @@ fn substeps(dt: f32) -> (u32, f32) {
 /// Pairs multiply their coefficients, so the level leaves a body's own values in charge.
 const LEVEL_FRICTION: f32 = 1.0;
 const LEVEL_RESTITUTION: f32 = 1.0;
+/// Unreal units past a mover's swept bounds within which its move wakes resting bodies.
+const MOVER_REACH: f32 = 16.0;
 
 fn to_rapier(v: p2_math::Vector) -> Vector {
     Vector::from_array(v.into())
@@ -116,6 +118,7 @@ struct Hooks {
     started: Mutex<Vec<Started>>,
     disabled: FxHashSet<(RigidBodyHandle, RigidBodyHandle)>,
     level_only: FxHashSet<RigidBodyHandle>,
+    movers: FxHashSet<RigidBodyHandle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +152,8 @@ impl EventHandler for Hooks {
 impl PhysicsHooks for Hooks {
     fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
         if let (Some(a), Some(b)) = (context.rigid_body1, context.rigid_body2)
-            && (self.disabled.contains(&body_pair(a, b)) || self.level_only.contains(&a) || self.level_only.contains(&b))
+            && (self.disabled.contains(&body_pair(a, b))
+                || (!self.movers.contains(&a) && !self.movers.contains(&b) && (self.level_only.contains(&a) || self.level_only.contains(&b))))
         {
             return None;
         }
@@ -182,6 +186,8 @@ pub struct World {
     forced: Vec<RigidBodyHandle>,
     level: Vec<ColliderHandle>,
     started: Vec<Started>,
+    /// Where each mover must be at the end of the next step.
+    moving: FxHashMap<RigidBodyHandle, Pose>,
 }
 
 impl World {
@@ -208,6 +214,7 @@ impl World {
             forced: Vec::new(),
             level: Vec::new(),
             started: Vec::new(),
+            moving: FxHashMap::default(),
         }
     }
 
@@ -275,9 +282,32 @@ impl World {
         BodyId(handle)
     }
 
+    /// Kinematic: pushes and carries bodies, never pushed back. Even ragdolls touching only the level touch it.
+    pub fn add_mover(&mut self, shapes: &[Shape], location: p2_math::Vector, rotation: [f32; 4]) -> Result<BodyId, Error> {
+        let builders: Vec<ColliderBuilder> = shapes.iter().filter_map(collider).collect();
+        if builders.is_empty() {
+            return Err(Error::Mesh("no mover shape".to_owned()));
+        }
+        let handle = self.bodies.insert(RigidBodyBuilder::kinematic_position_based().pose(pose(location, rotation)).build());
+        for builder in builders {
+            self.colliders.insert_with_parent(with_material(builder, LEVEL_FRICTION, LEVEL_RESTITUTION), handle, &mut self.bodies);
+        }
+        self.hooks.movers.insert(handle);
+        Ok(BodyId(handle))
+    }
+
+    /// The mover travels there over the next step, so what it touches gets its speed.
+    pub fn move_mover(&mut self, id: BodyId, location: p2_math::Vector, rotation: [f32; 4]) {
+        if self.hooks.movers.contains(&id.0) {
+            self.moving.insert(id.0, pose(location, rotation));
+        }
+    }
+
     pub fn remove_body(&mut self, id: BodyId) {
         self.hooks.disabled.retain(|&(a, b)| a != id.0 && b != id.0);
         self.hooks.level_only.remove(&id.0);
+        self.hooks.movers.remove(&id.0);
+        self.moving.remove(&id.0);
         self.take_out_body(id);
     }
 
@@ -429,7 +459,14 @@ impl World {
         }
         let (steps, step) = substeps(dt);
         self.parameters.dt = step;
-        for _ in 0..steps {
+        let moves: Vec<(RigidBodyHandle, Pose, Pose)> = self.moving.drain().filter_map(|(handle, to)| Some((handle, *self.bodies.get(handle)?.position(), to))).collect();
+        self.wake_near_movers(&moves);
+        for substep in 1..=steps {
+            for &(handle, from, to) in &moves {
+                if let Some(body) = self.bodies.get_mut(handle) {
+                    body.set_next_kinematic_position(from.lerp(&to, substep as f32 / steps as f32));
+                }
+            }
             self.pipeline.step(
                 self.gravity,
                 &self.parameters,
@@ -475,6 +512,31 @@ impl World {
                 body.reset_forces(false);
                 body.reset_torques(false);
             }
+        }
+    }
+
+    /// A kinematic body makes no contacts with dormant (fixed) bodies and may not wake sleeping ones.
+    fn wake_near_movers(&mut self, moves: &[(RigidBodyHandle, Pose, Pose)]) {
+        let colliders = &self.colliders;
+        let reach: Vec<Aabb> = moves
+            .iter()
+            .filter_map(|&(handle, _, to)| {
+                let swept = |c: &Collider| Some(c.compute_aabb().merged(&c.shape().compute_aabb(&(to * *c.position_wrt_parent()?))).loosened(MOVER_REACH));
+                self.bodies.get(handle)?.colliders().iter().filter_map(|&c| colliders.get(c)).filter_map(swept).reduce(|a, b| a.merged(&b))
+            })
+            .collect();
+        if reach.is_empty() {
+            return;
+        }
+        let near: Vec<RigidBodyHandle> = self
+            .bodies
+            .iter()
+            .filter(|&(handle, body)| self.dormant.contains(&handle) || (body.is_dynamic() && body.is_sleeping()))
+            .filter(|(_, body)| body.colliders().iter().filter_map(|&c| colliders.get(c)).any(|c| reach.iter().any(|r| r.intersects(&c.compute_aabb()))))
+            .map(|(handle, _)| handle)
+            .collect();
+        for handle in near {
+            self.wake(BodyId(handle));
         }
     }
 
@@ -641,6 +703,23 @@ mod tests {
         assert!((z - 16.0).abs() < 2.0 && x.abs() < 1.0 && y.abs() < 1.0, "rests at {x} {y} {z}");
         let hit = impacts.first().expect("impact");
         assert!(hit.body == body && hit.other.is_none() && hit.velocity[2] < -300.0 && hit.normal[2] > 0.9, "{hit:?}");
+    }
+
+    #[test]
+    fn a_box_on_a_rising_mover_rises_with_it() {
+        let mut world = World::new([0.0, 0.0, -950.0].into());
+        let lift = world.add_mover(&[Shape::Box([64.0, 64.0, 8.0].into())], [0.0; 3].into(), [0.0, 0.0, 0.0, 1.0]).unwrap();
+        let body = world.add_body(&crate_box([0.0, 0.0, 24.0].into()));
+        for _ in 0..60 {
+            world.step(1.0 / 60.0);
+        }
+        for frame in 1..=60 {
+            world.move_mover(lift, [0.0, 0.0, frame as f32 * 2.0].into(), [0.0, 0.0, 0.0, 1.0]);
+            world.step(1.0 / 60.0);
+        }
+        let (location, _) = world.pose(body).unwrap();
+        assert!((location[2] - 144.0).abs() < 4.0 && location[0].abs() < 1.0, "{location:?}");
+        assert!((world.pose(lift).unwrap().0[2] - 120.0).abs() < 0.01);
     }
 
     #[test]

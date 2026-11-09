@@ -112,6 +112,10 @@ impl<L: LoaderRef> Vm<L> {
         Some(actors)
     }
 
+    pub fn projector_mover(&self, projector: ObjectId) -> Option<ObjectId> {
+        self.actor_fx.projected.iter().find(|&&(p, actor)| p == projector && self.store.is_a(actor, Kind::Mover)).map(|&(_, actor)| actor)
+    }
+
     pub(crate) fn attach_static_meshes(&mut self, projector: ObjectId) {
         if self.store.get(projector, "bProjectStaticMesh") != Some(Value::Bool(true)) {
             return;

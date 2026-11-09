@@ -183,6 +183,8 @@ pub struct Session {
     /// them.
     left_canvas_actors: Vec<Entity>,
     dynamic_decals: FxHashMap<ObjectId, Entity>,
+    mover_decals: FxHashMap<ObjectId, spawned::MoverDecal>,
+    decal_movers: FxHashSet<ObjectId>,
     projector_actors: FxHashSet<ObjectId>,
     decal_images: FxHashMap<String, Option<(Handle<Image>, Vec2, Option<p2_assets::FinalBlend>)>>,
     switch_images: HashMap<(PackageId, usize), Vec<scene::SwitchImage>>,
@@ -398,6 +400,8 @@ impl Session {
             failed_canvas_meshes: FxHashSet::default(),
             left_canvas_actors: Vec::new(),
             dynamic_decals: FxHashMap::default(),
+            mover_decals: FxHashMap::default(),
+            decal_movers: FxHashSet::default(),
             projector_actors: FxHashSet::default(),
             decal_images: FxHashMap::default(),
             switch_images: HashMap::new(),
@@ -446,6 +450,8 @@ impl Session {
         for (_, entity) in self.dynamic_decals.drain() {
             t.commands.entity(entity).despawn();
         }
+        self.mover_decals.clear();
+        self.decal_movers.clear();
         for (entity, _, preview) in &t.models.actor_models {
             if !preview {
                 t.commands.entity(entity).despawn();

@@ -2,6 +2,7 @@ use super::*;
 use crate::map::particles::attach_late_pools;
 use crate::mesh_view::ActorMaterialKey;
 use super::scene::{PendingAssets, VmAnimations};
+use bevy::math::Affine3A;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -109,9 +110,38 @@ fn build_skeletal_model(
 
 const NO_PROJECTORS_TAG: u32 = 1;
 const ATTACHED_TAG: u32 = 2;
+/// A static mesh lit as an actor (a mover relit as it moves) still takes static mesh projectors.
+const STATIC_MESH_TAG: u32 = 4;
+const MOVER_TAG: u32 = 8;
+/// In a projector's tag: the decal follows a mover and draws on movers only. Frame buffer blends stop at 6, so bit 7 is free.
+const MOVER_ONLY_TAG: u32 = 1 << 7;
 
-fn projector_mesh_tag(actor: Option<ObjectId>, attached: &FxHashSet<ObjectId>) -> u32 {
-    if actor.is_some_and(|actor| attached.contains(&actor)) { ATTACHED_TAG } else { NO_PROJECTORS_TAG }
+fn projector_mesh_tag((follow, bone): (Option<&FollowActor>, Option<&FollowBone>), attached: &FxHashSet<ObjectId>, movers: &FxHashSet<ObjectId>) -> u32 {
+    let Some(actor) = follow.map(|f| f.actor).or(bone.map(|b| b.actor)).filter(|actor| attached.contains(actor)) else { return NO_PROJECTORS_TAG };
+    let static_mesh = if follow.is_some_and(|f| f.skeletal.is_none()) { STATIC_MESH_TAG } else { 0 };
+    let mover = if movers.contains(&actor) { MOVER_TAG } else { 0 };
+    ATTACHED_TAG | static_mesh | mover
+}
+
+/// A decal following the mover it was cast on (our choice: retail is thought to leave it where it was cast, unverified).
+pub(super) struct MoverDecal {
+    mover: ObjectId,
+    on_mover: Affine3A,
+}
+
+impl MoverDecal {
+    fn new(mover: ObjectId, mover_pose: Transform, decal: Transform) -> Self {
+        Self { mover, on_mover: mover_pose.compute_affine().inverse() * decal.compute_affine() }
+    }
+
+    fn place(&self, mover_pose: Transform) -> Transform {
+        Transform::from_matrix(Mat4::from(mover_pose.compute_affine() * self.on_mover))
+    }
+}
+
+/// Rigid: the mover's scale does not reach its decals.
+fn mover_pose(origin: Vec3, location: p2_math::Vector, rotation: p2_math::Rotator) -> Transform {
+    Transform::from_translation(origin) * unreal_transform(location, rotation, p2_math::Vector::new(1.0, 1.0, 1.0), p2_math::Vector::ZERO)
 }
 
 pub(super) struct SpawnedActor {
@@ -359,29 +389,49 @@ impl Session {
             let gone = world.is_gone(actor);
             if gone {
                 world.unwatch(actor);
+                self.mover_decals.remove(&actor);
                 t.commands.entity(entity).despawn();
             }
             !gone
         });
+        let origin = world.origin();
+        self.mover_decals.retain(|projector, decal| {
+            let Some(frame) = world.actor(decal.mover).filter(|frame| !frame.gone) else {
+                if let Some(entity) = self.dynamic_decals.remove(projector) {
+                    t.commands.entity(entity).despawn();
+                }
+                world.unwatch(*projector);
+                return false;
+            };
+            if world.changed(decal.mover)
+                && let Some(&entity) = self.dynamic_decals.get(projector)
+            {
+                t.commands.entity(entity).try_insert(decal.place(mover_pose(origin, frame.location, frame.rotation)));
+            }
+            true
+        });
+        let mut changed: FxHashSet<ObjectId> = FxHashSet::default();
         if let Some(actors) = world.take_projector_actors() {
-            let changed: FxHashSet<ObjectId> = actors.symmetric_difference(&self.projector_actors).copied().collect();
+            changed.extend(actors.symmetric_difference(&self.projector_actors));
             self.projector_actors = actors;
-            for (entity, (follow, bone), _) in &t.models.followers {
-                let actor = follow.map(|f| f.actor).or(bone.map(|b| b.actor));
-                if actor.is_some_and(|actor| changed.contains(&actor)) {
-                    t.commands.entity(entity).try_insert(MeshTag::new(projector_mesh_tag(actor, &self.projector_actors)));
+        }
+        let movers: FxHashSet<ObjectId> = self.mover_decals.values().map(|decal| decal.mover).collect();
+        changed.extend(movers.symmetric_difference(&self.decal_movers));
+        self.decal_movers = movers;
+        if !changed.is_empty() {
+            for (entity, follow, _) in &t.models.followers {
+                if follow.0.map(|f| f.actor).or(follow.1.map(|b| b.actor)).is_some_and(|actor| changed.contains(&actor)) {
+                    t.commands.entity(entity).try_insert(MeshTag::new(projector_mesh_tag(follow, &self.projector_actors, &self.decal_movers)));
                 }
             }
         }
-        for (entity, (follow, bone)) in &t.models.untagged {
-            let actor = follow.map(|f| f.actor).or(bone.map(|b| b.actor));
-            t.commands.entity(entity).try_insert(MeshTag::new(projector_mesh_tag(actor, &self.projector_actors)));
+        for (entity, follow) in &t.models.untagged {
+            t.commands.entity(entity).try_insert(MeshTag::new(projector_mesh_tag(follow, &self.projector_actors, &self.decal_movers)));
         }
         let events = world.take_projections();
         if events.is_empty() {
             return;
         }
-        let origin = world.origin();
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         for (event, projector) in events {
             match event {
@@ -396,7 +446,12 @@ impl Session {
                         }
                     };
                     let Some((image, size, final_blend)) = found else { continue };
-                    let tag = projector_tag(&projector, final_blend);
+                    let transform = Transform::from_translation(origin) * projector_transform(&projector, size);
+                    let mover = projector.mover.and_then(|mover| {
+                        let frame = t.play.world()?.actor(mover).filter(|frame| !frame.gone)?;
+                        Some(MoverDecal::new(mover, mover_pose(origin, frame.location, frame.rotation), transform))
+                    });
+                    let tag = projector_tag(&projector, final_blend) | if mover.is_some() { MOVER_ONLY_TAG } else { 0 };
                     bevy::log::debug!(
                         "projector {actor:?} attached: {}, targets {:#x}, blending {:?}/{:?}, tag {tag:x}",
                         projector.texture,
@@ -405,16 +460,20 @@ impl Session {
                         projector.material_blending
                     );
                     let decal = ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() };
-                    let transform = Transform::from_translation(origin) * projector_transform(&projector, size);
                     let entity = t.commands.spawn((decal, transform)).id();
                     if let Some(old) = self.dynamic_decals.insert(actor, entity) {
                         t.commands.entity(old).despawn();
                     }
+                    match mover {
+                        Some(mover) => self.mover_decals.insert(actor, mover),
+                        None => self.mover_decals.remove(&actor),
+                    };
                     if let Some(world) = t.play.world_mut() {
                         world.watch(actor);
                     }
                 }
                 ProjectorEvent::Detach(actor) => {
+                    self.mover_decals.remove(&actor);
                     if let Some(entity) = self.dynamic_decals.remove(&actor) {
                         t.commands.entity(entity).despawn();
                     }
@@ -604,8 +663,26 @@ mod tests {
     fn a_section_takes_projectors_only_while_its_actor_is_attached() {
         let (attached, other) = (ObjectId::from_index(1), ObjectId::from_index(2));
         let list: FxHashSet<ObjectId> = [attached].into_iter().collect();
-        assert_eq!(projector_mesh_tag(Some(attached), &list), ATTACHED_TAG);
-        assert_eq!(projector_mesh_tag(Some(other), &list), NO_PROJECTORS_TAG);
-        assert_eq!(projector_mesh_tag(None, &list), NO_PROJECTORS_TAG);
+        let follow = |actor, skeletal| FollowActor { actor, scale: p2_math::Vector::new(1.0, 1.0, 1.0), pre_pivot: p2_math::Vector::ZERO, skeletal };
+        let skinned = follow(attached, Some((p2_math::Vector::new(1.0, 1.0, 1.0), p2_math::Vector::ZERO, p2_math::Rotator::default())));
+        let none = FxHashSet::default();
+        assert_eq!(projector_mesh_tag((Some(&skinned), None), &list, &none), ATTACHED_TAG);
+        assert_eq!(projector_mesh_tag((Some(&follow(attached, None)), None), &list, &none), ATTACHED_TAG | STATIC_MESH_TAG);
+        assert_eq!(projector_mesh_tag((Some(&follow(attached, None)), None), &list, &list), ATTACHED_TAG | STATIC_MESH_TAG | MOVER_TAG);
+        assert_eq!(projector_mesh_tag((Some(&follow(other, None)), None), &list, &list), NO_PROJECTORS_TAG);
+        assert_eq!(projector_mesh_tag((None, None), &list, &none), NO_PROJECTORS_TAG);
+    }
+
+    #[test]
+    fn a_decal_moves_and_turns_with_its_mover() {
+        let mover = ObjectId::from_index(1);
+        let decal = Transform::from_xyz(12.0, 1.0, 0.0).with_scale(Vec3::new(4.0, 4.0, 2.0));
+        let on_mover = MoverDecal::new(mover, Transform::from_xyz(10.0, 0.0, 0.0), decal);
+        let turned = Transform::from_xyz(10.0, 5.0, 0.0).with_rotation(bevy::math::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+        let placed = on_mover.place(turned);
+        assert!(placed.translation.abs_diff_eq(Vec3::new(10.0, 6.0, -2.0), 1e-4));
+        assert!(placed.rotation.abs_diff_eq(turned.rotation, 1e-4));
+        assert!(placed.scale.abs_diff_eq(decal.scale, 1e-4));
+        assert!(on_mover.place(Transform::from_xyz(10.0, 0.0, 0.0)).translation.abs_diff_eq(decal.translation, 1e-4));
     }
 }

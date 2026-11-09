@@ -197,7 +197,7 @@ fn face_along(positions: &[[f32; 3]], triangles: &mut [[u32; 3]], normal: Vector
     }
 }
 
-fn brush_corners(model: &Model) -> impl Iterator<Item = [f32; 3]> + '_ {
+pub(crate) fn brush_corners(model: &Model) -> impl Iterator<Item = [f32; 3]> + '_ {
     model.nodes.iter().flat_map(move |node| {
         (node.vert_pool..node.vert_pool + usize::from(node.num_vertices)).filter_map(move |i| model.verts.get(i).and_then(|v| model.points.get(v.point)).copied())
     })

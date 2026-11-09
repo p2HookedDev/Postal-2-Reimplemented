@@ -42,16 +42,28 @@ const TAGGED: u32 = 0x40000000u;
 // static meshes, whose actors all accept and carry no tag a projector aims at.
 const NO_PROJECTORS: u32 = 1u;
 const ATTACHED: u32 = 2u;
+// A static mesh lit as an actor still takes static mesh projectors.
+const STATIC_MESH: u32 = 4u;
+const MOVER: u32 = 8u;
+// In a projector's tag: it follows a mover and draws on movers only; in a surface: it is a mover.
+const ON_MOVER: u32 = 0x80u;
 
 fn section_target(instance_index: u32, kind: u32) -> u32 {
     let tag = get_tag(instance_index);
     if (tag & NO_PROJECTORS) != 0u {
         return 0u;
     }
-    if (tag & ATTACHED) != 0u {
-        return kind | TAGGED;
+    var surface = kind;
+    if (tag & STATIC_MESH) != 0u {
+        surface = TARGET_MESH;
     }
-    return kind;
+    if (tag & ATTACHED) != 0u {
+        surface |= TAGGED;
+    }
+    if (tag & MOVER) != 0u {
+        surface |= ON_MOVER;
+    }
+    return surface;
 }
 
 fn mesh_target(instance_index: u32) -> u32 {
@@ -122,6 +134,9 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
         if (iterator.tag & TAGGED) != 0u && (surface & TARGET_MESH) != 0u && (surface & TAGGED) == 0u {
             continue;
         }
+        if (iterator.tag & ON_MOVER) != 0u && (surface & ON_MOVER) == 0u {
+            continue;
+        }
         // Only BSP's unlit flag means retail's (a surface without a lightmap, mesh_view); terrain and meshes are
         // flagged unlit because their shaders light them themselves, which hid every projector on them.
         if surface == TARGET_BSP && (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) != 0u && (iterator.tag & ON_UNLIT) == 0u {
@@ -149,7 +164,7 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
         } else if material == PB_ADD {
             src = min(projected + base, vec3(1.0));
         }
-        switch iterator.tag & 0xffu {
+        switch iterator.tag & 0x7fu {
             case FB_OVERWRITE: { frame = src; }
             case FB_MODULATE: { frame = 2.0 * src * frame; }
             case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }

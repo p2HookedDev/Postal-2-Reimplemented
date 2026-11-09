@@ -502,6 +502,7 @@ fn projector_tag_takes_the_innermost_final_blend() {
         material_blending,
         targets: crate::actors::ProjectTargets(0),
         tagged: false,
+        mover: None,
     };
     let splat = Some(FinalBlend { blending: p2_assets::FrameBufferBlending::AlphaBlend, alpha_ref: Some(10) });
     assert_eq!(projector_tag(&projector(ProjectorBlending::None), splat), PROJECTOR_TAG | ALPHA_TEST_TAG | 10 << 22 | 2);
