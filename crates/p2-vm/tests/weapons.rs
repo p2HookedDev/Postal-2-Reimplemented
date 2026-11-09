@@ -3,7 +3,7 @@ mod common;
 use common::{Dude, game_dir, load_suburbs, object_of};
 
 use p2_package::Loader;
-use p2_vm::{HostCommand, ObjectId, Value, Vm};
+use p2_vm::{Encroachment, HostCommand, ObjectId, Value, Vm};
 
 impl Dude<'_> {
     fn weapon(&self) -> Option<ObjectId> {
@@ -77,7 +77,7 @@ impl Dude<'_> {
         self.look(yaw);
         let d = direction(yaw);
         let at = [me[0] + d[0] * distance, me[1] + d[1] * distance, me[2]];
-        self.vm.set_location(pawn, at.into()).unwrap();
+        self.vm.place_far_moved(pawn, at.into(), Encroachment::Ignored).unwrap();
         let facing = Value::Rotator(p2_math::Rotator::new(0, yaw + 32768, 0));
         self.vm.set(pawn, "Rotation", facing);
         self.vm.mark_rendered(pawn).unwrap();
@@ -217,7 +217,7 @@ fn grenade_and_molotov_fly_and_explode() {
             far = far.max(((at[0] - start[0]).powi(2) + (at[1] - start[1]).powi(2)).sqrt());
             if class == "GrenadeWeapon" && dude.vm.get(projectile, "Physics") == Some(Value::Byte(0)) {
                 let height = dude.float(victim, "CollisionHeight");
-                dude.vm.set_location(victim, [at[0] + 50.0, at[1], at[2] + height].into()).unwrap();
+                dude.vm.place_far_moved(victim, [at[0] + 50.0, at[1], at[2] + height].into(), Encroachment::Ignored).unwrap();
             }
         }
         let projectile = projectile.unwrap_or_else(|| panic!("{class}: nothing thrown"));

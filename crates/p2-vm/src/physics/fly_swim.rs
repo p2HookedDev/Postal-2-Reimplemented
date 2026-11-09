@@ -1,7 +1,7 @@
 //! Not modelled (unverified): `find_water_line` beyond water volumes and level geometry,
 //! and buoyancy depth: a pawn in water counts as fully in it.
 
-use super::{DEFAULT_GRAVITY, MoveHit, gravity_direction, horizontal_size, turned_velocity, two_wall_adjust};
+use super::{Bases, DEFAULT_GRAVITY, MoveHit, gravity_direction, horizontal_size, turned_velocity, two_wall_adjust};
 use p2_math::Vector;
 use crate::enums::EPhysics;
 use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
@@ -45,12 +45,12 @@ impl<L: LoaderRef> Vm<L> {
         self.set(pawn, Prop::bJustTeleported, Value::Bool(false));
         let zone = self.zone_push(pawn, 1.0);
         let adjusted = (self.vector(pawn, Prop::Velocity) + zone) * delta;
-        let hit = self.move_actor(pawn, adjusted)?;
+        let hit = self.move_actor(pawn, adjusted, Bases::Block)?;
         if self.is_deleted(pawn) {
             return Ok(());
         }
         if hit.time < 1.0 {
-            self.blocked_move(pawn, adjusted, hit, &mut old_location, |vm, step| Ok((1.0, vm.move_actor(pawn, step)?)))?;
+            self.blocked_move(pawn, adjusted, hit, &mut old_location, |vm, step| Ok((1.0, vm.move_actor(pawn, step, Bases::Block)?)))?;
         } else {
             self.set_vector(pawn, Prop::Floor, [0.0, 0.0, 1.0].into());
         }
@@ -130,7 +130,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut time_left = remaining;
         if line != location {
             time_left += (line - location).size() * tick / (location - old_location).size();
-            self.move_actor(pawn, line - location)?;
+            self.move_actor(pawn, line - location, Bases::Block)?;
             if self.is_deleted(pawn) {
                 return Ok(());
             }
@@ -190,7 +190,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn swim(&mut self, pawn: ObjectId, step: Vector) -> Result<(f32, MoveHit), Error> {
         let start = self.vector(pawn, Prop::Location);
-        let hit = self.move_actor(pawn, step)?;
+        let hit = self.move_actor(pawn, step, Bases::Block)?;
         if self.is_deleted(pawn) || self.water(pawn).0 {
             return Ok((0.0, hit));
         }
@@ -201,7 +201,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let back = line - location;
         let fraction = if (location - start).dot(back) > 0.0 { 0.0 } else { back.size() / step.size() };
-        Ok((fraction, self.move_actor(pawn, back)?))
+        Ok((fraction, self.move_actor(pawn, back, Bases::Block)?))
     }
 
     fn water(&self, pawn: ObjectId) -> (bool, f32) {

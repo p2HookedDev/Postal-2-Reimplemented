@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::native_id::Native;
 use crate::Prop;
 use crate::interp::{float, truthy};
-use crate::{Error, LoaderRef, ObjectId, ObjectStore, Value, Vm};
+use crate::{Error, InteractionOrder, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const CHAR_WIDTH: f32 = 8.0;
 const CHAR_HEIGHT: f32 = 16.0;
@@ -55,11 +55,11 @@ impl<L: LoaderRef> Vm<L> {
             self.set(canvas, Prop::Viewport, Value::Object(Some(viewport)));
         }
         self.media.canvas.items.clear();
-        self.render_interactions("Process_PreRender", canvas)?;
+        self.process_interactions("Process_PreRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         if let Some(hud) = hud {
             self.event(hud, "PostRender", [Value::Object(Some(canvas))])?;
         }
-        self.render_interactions("Process_PostRender", canvas)?;
+        self.process_interactions("Process_PostRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         let next = Vec::with_capacity(self.media.canvas.items.len());
         Ok(std::mem::replace(&mut self.media.canvas.items, next))
     }

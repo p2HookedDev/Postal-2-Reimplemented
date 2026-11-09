@@ -73,7 +73,7 @@ pub(super) fn build_static_model<S: SceneAssets>(game: &mut Game, t: &mut S, pat
             None => (mesh_id, materials.get(i).copied().unwrap_or(0)),
         })
         .collect();
-    let sections = static_mesh_sections(&mesh, t, |t, i| {
+    let sections = sections_of_static_mesh(&mesh, t, SectionChunks::Whole, |t, i| {
         let &(package, material) = refs.get(i)?;
         material_images(game, t, package, material)
     });
@@ -237,7 +237,7 @@ fn spawned_material(
     mesh_lit: &mut Assets<MeshLitMaterial>,
     section: &SectionView,
 ) -> SectionMaterial {
-    crate::mesh_view::cached_actor_material(shared, section, materials, mesh_lit, || crate::mesh_view::actor_standard(section, true))
+    crate::mesh_view::cached_actor_material(shared, section, materials, mesh_lit, || crate::mesh_view::actor_standard(section, crate::mesh_view::SceneLights::Ignored))
 }
 
 fn material_images<S: SceneAssets>(game: &mut Game, t: &mut S, package: PackageId, material: i32) -> Option<MaterialImages> {
@@ -573,7 +573,7 @@ impl Session {
         let parent = t.commands.spawn((Transform::from_translation(origin), Visibility::default())).id();
         let materials = &mut t.assets.materials;
         let material = |section: &SectionView| {
-            SectionMaterial::Standard(materials.add(crate::mesh_view::actor_standard(section, true)))
+            SectionMaterial::Standard(materials.add(crate::mesh_view::actor_standard(section, crate::mesh_view::SceneLights::Ignored)))
         };
         let lighting = ActorLighting { unlit: false, glow: 0, max_lights: DEFAULT_MAX_LIGHTS };
         let lit = ActorLit::skeletal(actor, &mesh, follow.scale, &lighting);

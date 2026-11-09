@@ -271,9 +271,9 @@ mod tests {
         let extent = v(20.0, 20.0, 40.0);
         assert!(terrain_box_check(&terrain, above, below, extent).is_some());
         assert!(terrain_box_check(&terrain, below, above, extent).is_none());
-        assert!(crate::terrain_front_line_check(&terrain, above, below).is_some());
-        assert!(crate::terrain_front_line_check(&terrain, below, above).is_none());
-        assert!(crate::terrain_line_check(&terrain, below, above).is_some());
+        assert!(crate::terrain_line_check(&terrain, above, below, crate::Sides::FrontOnly).is_some());
+        assert!(crate::terrain_line_check(&terrain, below, above, crate::Sides::FrontOnly).is_none());
+        assert!(crate::terrain_line_check(&terrain, below, above, crate::Sides::Both).is_some());
         terrain.inverted = true;
         assert!(terrain_box_check(&terrain, below, above, extent).is_some());
         assert!(terrain_box_check(&terrain, above, below, extent).is_none());

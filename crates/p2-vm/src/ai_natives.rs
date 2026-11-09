@@ -2,7 +2,7 @@ use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::natives::vec3;
-use crate::physics::MoveHit;
+use crate::physics::{Bases, MoveHit};
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
 const VISIBILITY_SCALE: f32 = 1.0 / 128.0;
@@ -161,7 +161,7 @@ impl<L: LoaderRef> Vm<L> {
     /// `two_wall_adjust` is approximated, wall hits are not modelled, and gravity is taken as -Z.
     /// Retail also clears an actor flag, not modelled (unverified). Returns whether the first move moved.
     pub(crate) fn move_smooth(&mut self, actor: ObjectId, delta: Vector) -> Result<bool, Error> {
-        let step = |vm: &mut Self, by: Vector| -> Result<MoveHit, Error> { vm.move_actor(actor, by) };
+        let step = |vm: &mut Self, by: Vector| -> Result<MoveHit, Error> { vm.move_actor(actor, by, Bases::Block) };
         let hit = step(self, delta)?;
         if hit.time < 1.0 {
             let up = -delta.safe_normal()[2];

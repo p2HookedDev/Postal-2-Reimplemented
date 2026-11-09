@@ -1,7 +1,7 @@
 //! The viewer's walk mode (`G`): a simple body for looking around a map at eye height. Not the game's player: the game
 //! moves its pawn by the VM's physics. Unreal units and coordinates.
 
-use p2_collision::{Hit, box_check, line_check, mesh_line_check, terrain_line_check};
+use p2_collision::{Hit, Sides, box_check, line_check, mesh_line_check, terrain_line_check};
 use p2_engine::map::StaticCollision;
 use p2_math::Vector;
 
@@ -24,7 +24,7 @@ pub struct Body {
 
 fn trace(world: &StaticCollision, start: Vector, end: Vector) -> Option<Hit> {
     let bsp = line_check(&world.model, start, end);
-    let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end));
+    let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end, Sides::Both));
     let mesh = mesh_line_check(&world.meshes, start, end);
     bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
 }
@@ -37,7 +37,7 @@ fn sweep(world: &StaticCollision, start: Vector, end: Vector) -> Option<Hit> {
     let bsp = box_check(&world.model, start + raise, end + raise, extent);
     let knee = Vector::new(0.0, 0.0, STEP - HALF_HEIGHT);
     let (from, to) = (start + knee, end + knee);
-    let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, from, to));
+    let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, from, to, Sides::Both));
     let mesh = mesh_line_check(&world.meshes, from, to);
     bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
 }

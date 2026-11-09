@@ -95,6 +95,12 @@ pub struct PlayWorld {
     pub(super) seconds: f32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobThread {
+    Main,
+    Worker,
+}
+
 impl PlayWorld {
     pub fn new(
         vm: Vm<Arc<Loader>>,
@@ -199,7 +205,8 @@ impl PlayWorld {
         }
     }
 
-    pub(super) fn start(&mut self, job: Job, threaded: bool) {
+    pub(super) fn start(&mut self, job: Job, thread: JobThread) {
+        let threaded = thread == JobThread::Worker;
         let sim = match std::mem::replace(&mut self.sim, Slot::Away) {
             Slot::Here(sim) => sim,
             other => {

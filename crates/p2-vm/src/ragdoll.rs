@@ -12,7 +12,7 @@ use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::bones::PosedMesh;
 use crate::karma::{IMPULSE_SCALE, matrix_to_quat};
-use crate::{ClassId, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
+use crate::{ClassId, Encroachment, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
 
 const MAX_SPEED: f32 = 1000.0;
 /// In place of `KFriction` (0.7 on a pawn): Karma corpses slide 200-500 units to rest (unverified).
@@ -270,7 +270,7 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(actor, Prop::Velocity, velocity);
             self.set(actor, Prop::Rotation, Value::Rotator([0; 3].into()));
             if self.vector(actor, Prop::Location) != location
-                && let Err(e) = self.set_location(actor, location).and_then(|()| self.update_touching(actor))
+                && let Err(e) = self.place_far_moved(actor, location, Encroachment::Ignored).and_then(|()| self.update_touching(actor))
             {
                 errors.push((self.object(actor).path.clone(), e));
             }

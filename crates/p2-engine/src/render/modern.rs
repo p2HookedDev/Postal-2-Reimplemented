@@ -31,7 +31,7 @@ use crate::render::actor_light::{ActorLitMaterial, HardwareLighting};
 use crate::components::FollowBone;
 use crate::render::blended::{OpaqueDecals, TerrainLayerMaterial};
 use p2_render_cpu::LE_SUNLIGHT;
-use crate::display::Settings;
+use crate::display::{MODERN_AO, MODERN_CONTACT_SHADOWS, MODERN_POST, MODERN_RELIEF, MODERN_SHADOWS, MODERN_SPECULAR, Settings};
 use crate::render::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::render::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::render::particle_material::ParticleMaterial;
@@ -78,7 +78,7 @@ pub fn modern_flag(settings: &Settings) -> u8 {
         return 0;
     }
     let off = |on: bool, bit: u8| if on { 0 } else { bit };
-    MODERN_ON | off(settings.modern_relief(), NO_RELIEF) | off(settings.modern_specular(), NO_GLOSS)
+    MODERN_ON | off(settings.modern_effect(MODERN_RELIEF), NO_RELIEF) | off(settings.modern_effect(MODERN_SPECULAR), NO_GLOSS)
 }
 
 trait ModernFlagged: Asset {
@@ -154,8 +154,8 @@ fn apply(
         With<Camera3d>,
     >,
 ) {
-    let post = settings.modern_post();
-    let contact = settings.modern_contact_shadows();
+    let post = settings.modern_effect(MODERN_POST);
+    let contact = settings.modern_effect(MODERN_CONTACT_SHADOWS);
     for (camera, view, hdr, contact_now, ssao_now, culled, layers) in &cameras {
         let mut camera = commands.entity(camera);
         if hdr != post {
@@ -178,7 +178,7 @@ fn apply(
                 camera.remove::<ContactShadows>();
             }
         }
-        let ssao_wanted = settings.modern_ao();
+        let ssao_wanted = settings.modern_effect(MODERN_AO);
         if ssao_wanted != ssao_now {
             if ssao_wanted {
                 camera.insert(ssao());
@@ -190,7 +190,7 @@ fn apply(
             camera.remove::<DepthPrepass>();
         }
         let current = layers.cloned().unwrap_or_default();
-        let wanted = if settings.modern_shadows() || contact { current.clone().with(SUN_VIEW_LAYER) } else { current.clone().without(SUN_VIEW_LAYER) };
+        let wanted = if settings.modern_effect(MODERN_SHADOWS) || contact { current.clone().with(SUN_VIEW_LAYER) } else { current.clone().without(SUN_VIEW_LAYER) };
         if wanted != current {
             camera.insert(wanted);
         }
@@ -285,7 +285,7 @@ fn sun_shadows(
     mut suns: Query<(Entity, &mut DirectionalLight, &mut Transform), With<SunShadow>>,
     mut logged: Local<Option<[f32; 3]>>,
 ) {
-    let (shadows, contact) = (settings.modern_shadows(), settings.modern_contact_shadows());
+    let (shadows, contact) = (settings.modern_effect(MODERN_SHADOWS), settings.modern_effect(MODERN_CONTACT_SHADOWS));
     let environment = shown.as_deref().and_then(|shown| shown.lighting.as_deref()).filter(|_| shadows || contact);
     let Some(environment) = environment else {
         for (entity, ..) in &suns {
@@ -339,7 +339,7 @@ fn sun_casters(
         ),
     >,
 ) {
-    let on = settings.modern_shadows();
+    let on = settings.modern_effect(MODERN_SHADOWS);
     let flipped = std::mem::replace(&mut *on_before, on) != on;
     if !on && !flipped {
         return;
@@ -468,7 +468,6 @@ mod tests {
 
     #[test]
     fn the_modern_flag_holds_each_effect_and_round_trips() {
-        use crate::display::{MODERN_RELIEF, MODERN_SPECULAR};
         let settings = |master: &str, relief: &str, specular: &str| {
             Settings::read(|query| match query {
                 MODERN_GRAPHICS => master.to_owned(),

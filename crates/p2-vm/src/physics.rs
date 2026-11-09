@@ -1,4 +1,4 @@
-use p2_collision::{mesh_box_check, pull_back_units, segment_cylinder};
+use p2_collision::{Primitive, mesh_box_check, pull_back_units, segment_cylinder};
 
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
@@ -134,18 +134,29 @@ struct WalkStart {
 }
 
 #[derive(Clone, Copy)]
-struct Sweep {
-    start: Vector,
-    delta: Vector,
-    radius: f32,
-    height: f32,
+pub(crate) struct Sweep {
+    pub(crate) start: Vector,
+    pub(crate) delta: Vector,
+    pub(crate) radius: f32,
+    pub(crate) height: f32,
 }
 
 #[derive(Clone, Copy)]
-struct SweepAgainst {
-    world: bool,
-    actors: bool,
-    ignore_bases: bool,
+pub(crate) struct SweepAgainst {
+    pub(crate) world: bool,
+    pub(crate) actors: bool,
+    pub(crate) ignore_bases: bool,
+}
+
+impl SweepAgainst {
+    pub(crate) const WORLD: Self = Self { world: true, actors: false, ignore_bases: false };
+    pub(crate) const WORLD_AND_ACTORS: Self = Self { world: true, actors: true, ignore_bases: false };
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bases {
+    Block,
+    Ignore,
 }
 
 impl<L: LoaderRef> Vm<L> {
@@ -192,11 +203,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Each primitive pulls its hit back as retail: BSP 0.1 of the sweep, 0.1 to 4 units; static meshes
     /// 0.1 to 1 unit; terrain 0.5 units; cylinders 0.001 of the sweep.
-    pub(crate) fn sweep(&mut self, mover: ObjectId, start: Vector, delta: Vector, radius: f32, height: f32, actors: bool) -> MoveHit {
-        self.sweep_with(mover, Sweep { start, delta, radius, height }, SweepAgainst { world: true, actors, ignore_bases: false }, None)
-    }
-
-    fn sweep_with(&mut self, mover: ObjectId, sweep: Sweep, against: SweepAgainst, mut touches: Option<&mut Vec<MoveHit>>) -> MoveHit {
+    pub(crate) fn sweep(&mut self, mover: ObjectId, sweep: Sweep, against: SweepAgainst, mut touches: Option<&mut Vec<MoveHit>>) -> MoveHit {
         let Sweep { start, delta, radius, height } = sweep;
         let SweepAgainst { world, actors, ignore_bases } = against;
         let length = delta.size();
@@ -268,7 +275,8 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 self.count(crate::profiling::Work::SweepTested);
                 let hit = if let Some(shape) = shape {
-                    let back = pull_back_units(shape.model, length) / length;
+                    let primitive = if shape.model { Primitive::Brush } else { Primitive::StaticMesh };
+                    let back = pull_back_units(primitive, length) / length;
                     mesh_box_check([&*shape.boxes], start, end, extent).map(|hit| ((hit.time - back).clamp(0.0, 1.0), hit.normal))
                 } else {
                     let centre = self.vector(other, Prop::Location);
@@ -291,17 +299,13 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn move_check(&mut self, actor: ObjectId, start: Vector, delta: Vector) -> Option<(f32, Vector, Option<ObjectId>)> {
         let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
-        let hit = self.sweep(actor, start, delta, radius, height, true);
+        let hit = self.sweep(actor, Sweep { start, delta, radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         (hit.time < 1.0).then_some((hit.time, hit.normal, hit.actor))
     }
 
     /// A blocked move stops `MOVE_TEST_ADJUST` short of the hit, so a moved actor keeps a gap.
     /// Of a bump, the hit actor is notified first (unverified).
-    pub(crate) fn move_actor(&mut self, actor: ObjectId, delta: Vector) -> Result<MoveHit, Error> {
-        self.move_actor_with(actor, delta, false)
-    }
-
-    pub(crate) fn move_actor_with(&mut self, actor: ObjectId, delta: Vector, ignore_bases: bool) -> Result<MoveHit, Error> {
+    pub(crate) fn move_actor(&mut self, actor: ObjectId, delta: Vector, bases: Bases) -> Result<MoveHit, Error> {
         let start = self.vector(actor, Prop::Location);
         if nearly_zero(delta) {
             self.set_vector(actor, Prop::Location, start + delta);
@@ -316,10 +320,10 @@ impl<L: LoaderRef> Vm<L> {
         let collides = self.flag_of(actor, Prop::bCollideActors);
         let world = self.flag_of(actor, Prop::bCollideWorld);
         let mut touches = Vec::new();
-        let block = self.sweep_with(
+        let block = self.sweep(
             actor,
             Sweep { start, delta: test, radius, height },
-            SweepAgainst { world, actors: true, ignore_bases },
+            SweepAgainst { world, actors: true, ignore_bases: bases == Bases::Ignore },
             collides.then_some(&mut touches),
         );
         let mut hit = block;
@@ -387,7 +391,7 @@ impl<L: LoaderRef> Vm<L> {
             let motion = carried_motion(delta, old_rotation, rotation, self.vector(other, Prop::RelativeLocation));
             let own = self.rotator_of(other, Prop::Rotation);
             self.set(other, Prop::Rotation, Value::Rotator([0, 1, 2].map(|c| own[c].wrapping_add(turn[c])).into()));
-            self.move_actor_with(other, motion, true)?;
+            self.move_actor(other, motion, Bases::Ignore)?;
             if self.is_blocked_by(other, base)
                 && self.primitive_overlaps(base, other)
                 && self.event_bool(base, "EncroachingOn", [Value::Object(Some(other))])?
@@ -396,7 +400,7 @@ impl<L: LoaderRef> Vm<L> {
                 self.set(base, Prop::Rotation, Value::Rotator(old_rotation));
                 self.relocate(base);
                 for &earlier in &attached[..i] {
-                    self.move_actor_with(earlier, delta * (-1.0), true)?;
+                    self.move_actor(earlier, delta * (-1.0), Bases::Ignore)?;
                 }
                 return Ok(false);
             }
@@ -526,7 +530,7 @@ impl<L: LoaderRef> Vm<L> {
     fn find_base(&mut self, actor: ObjectId) -> Result<(), Error> {
         let at = self.vector(actor, Prop::Location);
         let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
-        let hit = self.sweep(actor, at, [0.0, 0.0, -FIND_BASE_DEPTH].into(), radius, height, true);
+        let hit = self.sweep(actor, Sweep { start: at, delta: [0.0, 0.0, -FIND_BASE_DEPTH].into(), radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         let base = hit.actor;
         if self.object_of(actor, Prop::Base) != base {
             self.set_base(actor, base, hit.normal)?;
@@ -551,7 +555,7 @@ impl<L: LoaderRef> Vm<L> {
         {
             return Some(Floor { distance: hit.location[2] - bottom, normal: hit.normal });
         }
-        let hit = self.sweep(pawn, start, [0.0, 0.0, -reach].into(), radius, height, true);
+        let hit = self.sweep(pawn, Sweep { start, delta: [0.0, 0.0, -reach].into(), radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         (hit.time < 1.0).then_some(Floor { distance: hit.time * reach, normal: hit.normal })
     }
 
@@ -809,7 +813,7 @@ impl<L: LoaderRef> Vm<L> {
                         checked_fall = true;
                     }
                 }
-                let hit = self.move_actor(pawn, step)?;
+                let hit = self.move_actor(pawn, step, Bases::Block)?;
                 if hit.time < 1.0 {
                     let length = step.size();
                     self.step_up(pawn, grav_dir, step * (1.0 / length), step * (1.0 - hit.time), hit, 0)?;
@@ -839,7 +843,7 @@ impl<L: LoaderRef> Vm<L> {
                     let slide = gravity * (delta * delta / (2.0 * friction.max(MIN_SLOPE_FRICTION)));
                     let slip = slide - (floor.normal * slide.dot(floor.normal));
                     if slip.dot(slide) >= 0.0 {
-                        self.move_actor(pawn, slip)?;
+                        self.move_actor(pawn, slip, Bases::Block)?;
                         if !self.is_deleted(pawn) && self.physics_of(pawn) == Some(EPhysics::Swimming) {
                             return self.start_swimming(pawn, start.location, self.vector(pawn, Prop::Velocity), tick, remaining, iterations);
                         }
@@ -887,24 +891,24 @@ impl<L: LoaderRef> Vm<L> {
 
     fn settle_on_floor(&mut self, pawn: ObjectId, step: Vector, down: Vector, radius: f32, height: f32) -> Result<MoveHit, Error> {
         let location = self.vector(pawn, Prop::Location);
-        let mut floor = self.sweep(pawn, location, down, radius, height, true);
+        let mut floor = self.sweep(pawn, Sweep { start: location, delta: down, radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
         let floor_distance = floor.time * FLOOR_CHECK;
         self.set_vector(pawn, Prop::Floor, floor.normal);
         let walking = |vm: &Self| vm.physics_of(pawn) == Some(EPhysics::Walking);
         if floor.normal[2] < MIN_FLOOR_Z && !nearly_zero(step) && step.dot(floor.normal) < 0.0 {
             let up = Vector::new(0.0, 0.0, MAX_STEP_HEIGHT);
             let slide = up - (floor.normal * up.dot(floor.normal));
-            floor = self.move_actor(pawn, slide * (-1.0))?;
+            floor = self.move_actor(pawn, slide * (-1.0), Bases::Block)?;
             if floor.actor != self.object_of(pawn, Prop::Base) && walking(self) {
                 self.set_base(pawn, floor.actor, floor.normal)?;
             }
         } else if floor.time < 1.0 && (floor.actor != self.object_of(pawn, Prop::Base) || floor_distance > MAX_FLOOR_DIST) {
-            floor = self.move_actor(pawn, down)?;
+            floor = self.move_actor(pawn, down, Bases::Block)?;
             if floor.actor != self.object_of(pawn, Prop::Base) && walking(self) {
                 self.set_base(pawn, floor.actor, floor.normal)?;
             }
         } else if floor_distance < MIN_FLOOR_DIST {
-            self.move_actor(pawn, [0.0, 0.0, 0.5 * (MIN_FLOOR_DIST + MAX_FLOOR_DIST) - floor_distance].into())?;
+            self.move_actor(pawn, [0.0, 0.0, 0.5 * (MIN_FLOOR_DIST + MAX_FLOOR_DIST) - floor_distance].into(), Bases::Block)?;
         }
         Ok(floor)
     }
@@ -945,11 +949,11 @@ impl<L: LoaderRef> Vm<L> {
     fn step_up(&mut self, pawn: ObjectId, grav_dir: Vector, desired_dir: Vector, step: Vector, mut hit: MoveHit, depth: u32) -> Result<(), Error> {
         let down = grav_dir * MAX_STEP_HEIGHT;
         if hit.normal[2].abs() < MAX_STEP_SIDE_Z {
-            self.move_actor(pawn, down * (-1.0))?;
-            hit = self.move_actor(pawn, step)?;
+            self.move_actor(pawn, down * (-1.0), Bases::Block)?;
+            hit = self.move_actor(pawn, step, Bases::Block)?;
         } else if hit.normal[2] >= MIN_FLOOR_Z || self.physics_of(pawn) != Some(EPhysics::Walking) {
             let climb = step + [0.0, 0.0, step.size() * hit.normal[2]].into();
-            hit = self.move_actor(pawn, climb)?;
+            hit = self.move_actor(pawn, climb, Bases::Block)?;
         }
         if hit.time < 1.0 {
             let pushed = hit.actor.filter(|&d| {
@@ -967,7 +971,7 @@ impl<L: LoaderRef> Vm<L> {
                     return Ok(());
                 }
             } else if hit.normal[2].abs() < MAX_STEP_SIDE_Z && step.dot(step) * hit.time > STEP_AGAIN_SQUARED && depth < 4 {
-                let landed = self.move_actor(pawn, down)?;
+                let landed = self.move_actor(pawn, down, Bases::Block)?;
                 return self.step_up(pawn, grav_dir, desired_dir, step * (1.0 - landed.time), landed, depth + 1);
             }
             self.process_hit_wall(pawn, hit.normal, hit.actor)?;
@@ -977,18 +981,18 @@ impl<L: LoaderRef> Vm<L> {
             let wall = Vector::new(hit.normal[0], hit.normal[1], 0.0).safe_normal();
             let mut slide = (step - (wall * step.dot(wall))) * (1.0 - hit.time);
             if slide.dot(step) >= 0.0 {
-                let again = self.move_actor(pawn, slide)?;
+                let again = self.move_actor(pawn, slide, Bases::Block)?;
                 if again.time < 1.0 {
                     self.process_hit_wall(pawn, again.normal, again.actor)?;
                     if self.physics_of(pawn) == Some(EPhysics::Falling) {
                         return Ok(());
                     }
                     slide = two_wall_adjust(desired_dir, slide, again.normal, wall, again.time);
-                    self.move_actor(pawn, slide)?;
+                    self.move_actor(pawn, slide, Bases::Block)?;
                 }
             }
         }
-        self.move_actor(pawn, down)?;
+        self.move_actor(pawn, down, Bases::Block)?;
         Ok(())
     }
 
@@ -1063,7 +1067,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             self.set_vector(pawn, Prop::Velocity, velocity);
             let adjusted = (velocity + zone_velocity) * tick;
-            let hit = self.move_actor(pawn, adjusted)?;
+            let hit = self.move_actor(pawn, adjusted, Bases::Block)?;
             if self.is_deleted(pawn) {
                 return Ok(());
             }
@@ -1088,7 +1092,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 let mut slide = (adjusted - (hit.normal * adjusted.dot(hit.normal))) * (1.0 - hit.time);
                 if slide.dot(adjusted) >= 0.0 {
-                    let again = self.move_actor(pawn, slide)?;
+                    let again = self.move_actor(pawn, slide, Bases::Block)?;
                     if again.time < 1.0 {
                         if again.normal[2] >= MIN_FLOOR_Z {
                             return self.process_landed(pawn, again.normal, again.actor, 0.0, iterations);
@@ -1096,7 +1100,7 @@ impl<L: LoaderRef> Vm<L> {
                         self.process_hit_wall(pawn, again.normal, again.actor)?;
                         slide = two_wall_adjust(adjusted.safe_normal(), slide, again.normal, hit.normal, again.time);
                         let ditch = hit.normal[2] > 0.0 && again.normal[2] > 0.0 && slide[2] == 0.0 && again.normal.dot(hit.normal) < 0.0;
-                        let last = self.move_actor(pawn, slide)?;
+                        let last = self.move_actor(pawn, slide, Bases::Block)?;
                         if ditch || last.normal[2] >= MIN_FLOOR_Z {
                             return self.process_landed(pawn, last.normal, last.actor, 0.0, iterations);
                         }

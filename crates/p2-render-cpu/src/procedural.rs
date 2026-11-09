@@ -55,6 +55,12 @@ const DROP_DRIPPY_TAP: u8 = 0x13;
 const DROP_WHIRLY_THING_BACK: u8 = 0x40;
 const DROP_BIG_WHIRLY_BACK: u8 = 0x41;
 
+#[derive(Clone, Copy)]
+enum Step {
+    Even,
+    Odd,
+}
+
 impl WaterSim {
     pub fn new(width: u32, height: u32, params: &WetParams) -> Option<Self> {
         let valid = |n: u32| n >= 8 && n.is_power_of_two();
@@ -134,15 +140,15 @@ impl WaterSim {
         for y in 0..h {
             for x in 0..w {
                 if even {
-                    let (g00, gm0) = (self.gradient(true, x, y), self.gradient(true, x - 1, y));
-                    let (g0m, gmm) = (self.gradient(true, x, y - 1), self.gradient(true, x - 1, y - 1));
+                    let (g00, gm0) = (self.gradient(Step::Even, x, y), self.gradient(Step::Even, x - 1, y));
+                    let (g0m, gmm) = (self.gradient(Step::Even, x, y - 1), self.gradient(Step::Even, x - 1, y - 1));
                     self.put(2 * x, 2 * y, 2 * g00);
                     self.put(2 * x - 1, 2 * y, g00 + gm0);
                     self.put(2 * x, 2 * y - 1, g00 + g0m);
                     self.put(2 * x - 1, 2 * y - 1, (g00 + gm0 + g0m + gmm) / 2);
                 } else {
-                    let (g00, gm0) = (self.gradient(false, x, y), self.gradient(false, x - 1, y));
-                    let (g01, gm1) = (self.gradient(false, x, y + 1), self.gradient(false, x - 1, y + 1));
+                    let (g00, gm0) = (self.gradient(Step::Odd, x, y), self.gradient(Step::Odd, x - 1, y));
+                    let (g01, gm1) = (self.gradient(Step::Odd, x, y + 1), self.gradient(Step::Odd, x - 1, y + 1));
                     self.put(2 * x + 1, 2 * y + 1, 2 * g01);
                     self.put(2 * x, 2 * y + 1, g01 + gm1);
                     self.put(2 * x + 1, 2 * y, g00 + g01);
@@ -153,11 +159,10 @@ impl WaterSim {
     }
 
     /// Horizontal gradient of the field that was not updated: field B after an even step, A after an odd one.
-    fn gradient(&self, even: bool, x: isize, y: isize) -> i32 {
-        if even {
-            i32::from(self.b(x, y)) - i32::from(self.b(x - 2, y))
-        } else {
-            i32::from(self.a(x + 1, y)) - i32::from(self.a(x - 1, y))
+    fn gradient(&self, step: Step, x: isize, y: isize) -> i32 {
+        match step {
+            Step::Even => i32::from(self.b(x, y)) - i32::from(self.b(x - 2, y)),
+            Step::Odd => i32::from(self.a(x + 1, y)) - i32::from(self.a(x - 1, y)),
         }
     }
 

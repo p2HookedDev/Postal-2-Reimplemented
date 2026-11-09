@@ -160,10 +160,6 @@ impl MeshLight {
         25.0 * (self.radius as i32 + 1) as f32
     }
 
-    fn direction(&self) -> Vector {
-        self.rotation.vector()
-    }
-
     pub fn sample_intensity(&self, position: Vector, normal: Vector) -> f32 {
         let to_light = self.location - position;
         let distance_squared = to_light.dot(to_light);
@@ -174,7 +170,7 @@ impl MeshLight {
         let distance = distance_squared.sqrt();
         match self.effect {
             LE_SUNLIGHT => {
-                let d = self.direction().dot(normal);
+                let d = self.rotation.vector().dot(normal);
                 if d < 0.0 { d * -2.0 } else { 0.0 }
             }
             LE_CYLINDER if distance < radius => {
@@ -189,7 +185,7 @@ impl MeshLight {
                 }
                 let sine = 1.0 - f32::from(self.cone) / 256.0;
                 let rsine = 1.0 / (1.0 - sine);
-                let along = -to_light.dot(self.direction());
+                let along = -to_light.dot(self.rotation.vector());
                 if along > 0.0 && along * along > sine * sine * distance_squared {
                     let falloff = along * rsine / distance - sine * rsine;
                     falloff * falloff * base
@@ -293,7 +289,7 @@ impl HardwareLight {
         let mut out = Self {
             kind,
             position: light.location,
-            direction: light.direction(),
+            direction: light.rotation.vector(),
             color: color.map(|c| c * scale),
             range: light.world_radius(),
             attenuation: [1.0, 0.0],
@@ -354,7 +350,7 @@ pub fn relevant_lights<'a>(candidates: impl IntoIterator<Item = &'a MeshLight>, 
                 LE_SUNLIGHT => f32::MAX,
                 LE_SPOTLIGHT | LE_STATIC_SPOT => {
                     let length = to_center.dot(to_center).sqrt().max(1e-6);
-                    let along = to_center.dot(light.direction()) / length;
+                    let along = to_center.dot(light.rotation.vector()) / length;
                     // The list's limit is squared, so wider than `sample_intensity`'s cone (unverified).
                     let cone = 1.0 - f32::from(light.cone) / 256.0;
                     if along > 0.0 && along > cone * cone { (1.0 - to_center.dot(to_center) / (reach * reach)) * light.brightness } else { 0.0 }

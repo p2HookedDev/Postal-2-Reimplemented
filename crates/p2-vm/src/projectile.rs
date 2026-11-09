@@ -1,8 +1,8 @@
 use p2_math::{Rotator, Vector};
 
 use crate::enums::{EDrawType, EPhysics};
-use crate::physics::{MAX_ITERATIONS, MIN_FLOOR_Z, MIN_LANDING_SECONDS, MIN_LANDING_TIME, MoveHit, VolumeProps, nearly_zero, substep, two_wall_adjust};
-use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop, Kind};
+use crate::physics::{Bases, MAX_ITERATIONS, MIN_FLOOR_Z, MIN_LANDING_SECONDS, MIN_LANDING_TIME, MoveHit, VolumeProps, nearly_zero, substep, two_wall_adjust};
+use crate::{Encroachment, Error, LoaderRef, ObjectId, Value, Vm, Prop, Kind};
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn actor_physics(&mut self, actor: ObjectId, delta: f32) -> Result<(), Error> {
@@ -36,12 +36,12 @@ impl<L: LoaderRef> Vm<L> {
             } else {
                 owner_location
             };
-            return self.set_location(actor, to);
+            return self.place_far_moved(actor, to, Encroachment::Ignored);
         }
         if draw_type == Some(EDrawType::Particle) && same_rotation {
-            return self.set_location(actor, behind);
+            return self.place_far_moved(actor, behind, Encroachment::Ignored);
         }
-        self.set_location(actor, owner_location)?;
+        self.place_far_moved(actor, owner_location, Encroachment::Ignored)?;
         let rotation = if same_rotation {
             self.rotator_of(owner, Prop::Rotation)
         } else {
@@ -89,7 +89,7 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(actor, Prop::Velocity, velocity);
             let tick = remaining;
             remaining = 0.0;
-            let hit = self.move_actor(actor, velocity * delta)?;
+            let hit = self.move_actor(actor, velocity * delta, Bases::Block)?;
             if hit.time < 1.0 && !self.is_deleted(actor) && !self.flag_of(actor, Prop::bJustTeleported) {
                 self.event(actor, "HitWall", [Value::Vector(hit.normal), Value::Object(hit.actor)])?;
                 if self.flag_of(actor, Prop::bBounce) {
@@ -132,7 +132,7 @@ impl<L: LoaderRef> Vm<L> {
             let velocity = old_velocity + ((acceleration + gravity) * (0.5 * tick));
             self.set_vector(actor, Prop::Velocity, velocity);
             let adjusted = (velocity + zone_velocity) * tick;
-            let hit = self.move_actor(actor, adjusted)?;
+            let hit = self.move_actor(actor, adjusted, Bases::Block)?;
             if self.is_deleted(actor) {
                 return Ok(());
             }
@@ -160,7 +160,7 @@ impl<L: LoaderRef> Vm<L> {
                         if slide[2] > 0.0 {
                             slide *= 0.5;
                         }
-                        let second = self.move_actor(actor, slide)?;
+                        let second = self.move_actor(actor, slide, Bases::Block)?;
                         if second.time < 1.0 {
                             if second.normal[2] >= MIN_FLOOR_Z {
                                 return self.actor_landed(actor, second);
@@ -169,7 +169,7 @@ impl<L: LoaderRef> Vm<L> {
                             let desired = adjusted.safe_normal();
                             let along = two_wall_adjust(desired, slide, second.normal, old_normal, second.time);
                             let ditch = old_normal[2] > 0.0 && second.normal[2] > 0.0 && along[2] == 0.0 && second.normal.dot(old_normal) < 0.0;
-                            let third = self.move_actor(actor, along)?;
+                            let third = self.move_actor(actor, along, Bases::Block)?;
                             if ditch || (third.time < 1.0 && third.normal[2] >= MIN_FLOOR_Z) {
                                 return self.actor_landed(actor, if third.time < 1.0 { third } else { second });
                             }

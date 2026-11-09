@@ -48,7 +48,7 @@ use crate::render::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::render::modern::{CASTER_LAYER, SunShadow};
 use crate::render::shader_layers::Layers;
 use crate::render::terrain_material::{TerrainLayers, TerrainMaterial, TerrainPassLayer};
-use crate::display::Settings;
+use crate::display::{MODERN_AO, Settings};
 use crate::level_collision::{LevelCollision, StaticCollision};
 use p2_render_cpu::{AntiportalActor, Plane, VisibleZones, ZonePortals};
 use p2_vm::ObjectId;
@@ -138,7 +138,7 @@ fn steady_decal_order(settings: Option<ResMut<GlobalClusterSettings>>) {
 /// depth prepass included); a host without settings (the asset viewer) keeps it off. Ambient occlusion needs it off.
 fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera3d>>) {
     let Some(settings) = settings.filter(|settings| settings.is_changed()) else { return };
-    let wanted = if settings.modern_ao() { Msaa::Off } else { Msaa::from_samples(settings.msaa_samples()) };
+    let wanted = if settings.modern_effect(MODERN_AO) { Msaa::Off } else { Msaa::from_samples(settings.msaa_samples()) };
     for mut msaa in &mut cameras {
         msaa.set_if_neq(wanted);
     }
@@ -250,7 +250,13 @@ pub struct SkinJoint {
     pub bone: usize,
 }
 
-pub(crate) fn actor_standard(section: &SectionView, unlit: bool) -> StandardMaterial {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SceneLights {
+    Used,
+    Ignored,
+}
+
+pub(crate) fn actor_standard(section: &SectionView, lights: SceneLights) -> StandardMaterial {
     let [r, g, b, a] = section.tint;
     StandardMaterial {
         base_color: Color::linear_rgba(r, g, b, a),
@@ -258,7 +264,7 @@ pub(crate) fn actor_standard(section: &SectionView, unlit: bool) -> StandardMate
         emissive: section.emissive(),
         emissive_texture: section.glow.clone(),
         alpha_mode: section.alpha_mode,
-        unlit,
+        unlit: lights == SceneLights::Ignored,
         cull_mode: if section.two_sided { None } else { Some(Face::Back) },
         double_sided: section.two_sided,
         ..Default::default()
@@ -305,7 +311,7 @@ pub fn follower_material(
     mesh_lit: &mut Assets<MeshLitMaterial>,
     cache: &mut HashMap<ActorMaterialKey, SectionMaterial>,
 ) -> SectionMaterial {
-    cached_actor_material(cache, section, materials, mesh_lit, || StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, section.no_scene_lights) })
+    cached_actor_material(cache, section, materials, mesh_lit, || StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, if section.no_scene_lights { SceneLights::Ignored } else { SceneLights::Used }) })
 }
 
 #[expect(clippy::too_many_arguments, reason = "one call per kind of actor model; the parts differ per caller")]

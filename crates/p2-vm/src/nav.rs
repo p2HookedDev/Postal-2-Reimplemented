@@ -7,7 +7,7 @@ use crate::native_id::Native;
 use crate::Prop;
 use crate::interp::{float, int};
 use crate::natives::vec3;
-use crate::physics::{MAX_STEP_HEIGHT, MIN_FLOOR_Z};
+use crate::physics::{MAX_STEP_HEIGHT, MIN_FLOOR_Z, Sweep, SweepAgainst};
 use crate::{ClassNames, Error, Kind, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const UNVISITED: i32 = 10_000_000;
@@ -385,7 +385,7 @@ impl<L: LoaderRef> Vm<L> {
             goal_location = self.vector(goal, Prop::Location);
             if self.physics_of(pawn) == Some(EPhysics::Walking) {
                 let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
-                let hit = self.sweep(pawn, goal_location, [0.0, 0.0, -1000.0].into(), radius, height, false);
+                let hit = self.sweep(pawn, Sweep { start: goal_location, delta: [0.0, 0.0, -1000.0].into(), radius, height }, SweepAgainst::WORLD, None);
                 goal_location[2] -= 1000.0 * hit.time;
             }
             if let Some(&node) = self.graph().index.get(&goal) {
@@ -608,7 +608,7 @@ impl<L: LoaderRef> Vm<L> {
     fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> WalkMove {
         let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
         let go = |vm: &mut Self, at: &mut Vector, delta: Vector| {
-            let hit = vm.sweep(pawn, *at, delta, radius, height, false);
+            let hit = vm.sweep(pawn, Sweep { start: *at, delta, radius, height }, SweepAgainst::WORLD, None);
             *at += delta * hit.time;
             hit
         };

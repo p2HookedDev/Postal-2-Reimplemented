@@ -2,7 +2,7 @@ use p2_math::{Rotator, Vector};
 use crate::interp::{float, int};
 use crate::natives::vec3;
 
-use crate::{Error, Kind, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
+use crate::{Encroachment, Error, Kind, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
 
 const SAMPLES: usize = 100;
 const LAST_SAMPLE: i32 = SAMPLES as i32 - 1;
@@ -445,7 +445,7 @@ impl<L: LoaderRef> Vm<L> {
         self.set(scene, Prop::CurrentAction, Value::Object(action));
         if let Some(action) = action {
             let location = self.scene_location(scene, action, pct);
-            self.set_location(viewer, location)?;
+            self.place_far_moved(viewer, location, Encroachment::Ignored)?;
         }
         self.set_vector(scene, Prop::CameraShake, Vector::ZERO);
         for sub_action in self.objects_in(scene, Prop::SubActions) {

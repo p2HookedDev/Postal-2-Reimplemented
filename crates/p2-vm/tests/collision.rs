@@ -5,7 +5,7 @@ use common::{add, game_dir, load, scale, start_single_player, vector};
 use p2_assets::{read_model, read_static_mesh};
 use p2_collision::{MeshCollision, box_overlaps_triangle, model_triangles, static_mesh_collision};
 use p2_package::Loader;
-use p2_vm::{ObjectId, Value, Vm};
+use p2_vm::{Encroachment, ObjectId, Value, Vm};
 
 const STEP: f32 = 4.0;
 
@@ -299,7 +299,7 @@ fn walk_survey(map: &str, vm: &mut Vm<&Loader>, loader: &Loader, player: Player,
         let raised = [at[0], at[1], at[2] + 18.0 + 1.0];
         let Some(reach) = first_overlap(blocker, raised, case.d, case.reach + 64.0, wall_extent, location) else { continue };
         walks += 1;
-        vm.set_location(pawn, at.into()).unwrap();
+        vm.place_far_moved(pawn, at.into(), Encroachment::Ignored).unwrap();
         vm.set(pawn, "Velocity", Value::Vector(p2_math::Vector::ZERO));
         let yaw = (case.d[1].atan2(case.d[0]) * 65536.0 / std::f32::consts::TAU).round() as i32;
         let rotation = Value::Rotator(p2_math::Rotator::new(0, yaw, 0));

@@ -334,7 +334,7 @@ fn transposed([origin, x, y, z]: [Vector; 4]) -> [Vector; 4] {
     [-along(origin, [x, y, z]), column(0), column(1), column(2)]
 }
 
-fn carry(coords: [Vector; 4], location: Vector, velocity: Vector, rotation: Rotator) -> (Vector, Vector, Rotator) {
+pub(crate) fn carry(coords: [Vector; 4], location: Vector, velocity: Vector, rotation: Rotator) -> (Vector, Vector, Rotator) {
     let [origin, axes @ ..] = coords;
     let [x, y, z] = rotation.axes().map(|axis| along(axis, axes));
     (along(location - origin, axes), along(velocity, axes), crate::natives::orthogonal_rotation(x, y, z))
@@ -344,12 +344,8 @@ pub(crate) fn warp(coords: [Vector; 4], location: Vector, velocity: Vector, rota
     carry(transposed(coords), location, velocity, rotation)
 }
 
-pub(crate) fn unwarp(coords: [Vector; 4], location: Vector, velocity: Vector, rotation: Rotator) -> (Vector, Vector, Rotator) {
-    carry(coords, location, velocity, rotation)
-}
-
 pub fn warp_view(this_side: [Vector; 4], other_side: [Vector; 4], location: Vector, rotation: Rotator) -> (Vector, Rotator) {
-    let (location, _, rotation) = unwarp(this_side, location, Vector::ZERO, rotation);
+    let (location, _, rotation) = carry(this_side, location, Vector::ZERO, rotation);
     let (location, _, rotation) = warp(other_side, location, Vector::ZERO, rotation);
     (location, rotation)
 }
@@ -491,7 +487,7 @@ mod tests {
 
     #[test]
     fn unwarp_measures_location_velocity_and_rotation_in_the_portal_frame() {
-        let carried = unwarp(turned_frame(), Vector::new(100.0, 50.0, 7.0), Vector::new(0.0, 10.0, -3.0), Rotator::new(0, 16384, 0));
+        let carried = carry(turned_frame(), Vector::new(100.0, 50.0, 7.0), Vector::new(0.0, 10.0, -3.0), Rotator::new(0, 16384, 0));
         assert_near(carried, ([50.0, 0.0, 7.0], [10.0, 0.0, -3.0], [0, 0, 0]));
     }
 
@@ -507,7 +503,7 @@ mod tests {
     #[test]
     fn warp_undoes_unwarp_through_the_same_frame() {
         let (location, velocity, rotation) = (Vector::new(-30.0, 220.0, 64.0), Vector::new(5.0, -8.0, 2.0), Rotator::new(2000, -12000, 300));
-        let (l, v, r) = unwarp(turned_frame(), location, velocity, rotation);
+        let (l, v, r) = carry(turned_frame(), location, velocity, rotation);
         assert_near(warp(turned_frame(), l, v, r), ([-30.0, 220.0, 64.0], [5.0, -8.0, 2.0], [2000, -12000, 300]));
     }
 

@@ -1,6 +1,6 @@
 use p2_math::Vector;
 use crate::enums::EPhysics;
-use crate::{ClassId, Error, HostCommand, Kind, ObjectId, LoaderRef, Prop, Value, Vm};
+use crate::{ClassId, Error, HostCommand, InteractionOrder, Kind, ObjectId, LoaderRef, Prop, Value, Vm};
 
 fn add_time(profile: &mut std::collections::HashMap<String, std::time::Duration>, name: &str, time: std::time::Duration) {
     match profile.get_mut(name) {
@@ -314,20 +314,14 @@ impl<L: LoaderRef> Vm<L> {
         )
     }
 
-    /// For the engine's own moves: tests off, never refused, touches nothing. Script's `SetLocation` is
-    /// [`Vm::far_move_actor`].
-    pub fn set_location(&mut self, actor: ObjectId, location: Vector) -> Result<(), Error> {
-        self.place_far_moved(actor, location, true)
-    }
-
-    /// `no_check` is retail's `bIgnoreEncroachment`. No kill here: `EncroachedBy` and `EncroachingOn` are
+    /// `Encroachment::Ignored` is retail's `bIgnoreEncroachment`. No kill here: `EncroachedBy` and `EncroachingOn` are
     /// script's (`Pawn`: the telefrag, and `bWarping` refusing it).
-    pub(crate) fn far_move_actor(&mut self, actor: ObjectId, location: Vector, no_check: bool) -> Result<bool, Error> {
+    pub(crate) fn far_move_actor(&mut self, actor: ObjectId, location: Vector, encroachment: Encroachment) -> Result<bool, Error> {
         if self.flag_of(actor, Prop::bStatic) || !self.flag_of(actor, Prop::bMovable) {
             return Ok(false);
         }
         let flags = [Prop::bCollideWorld, Prop::bCollideWhenPlacing, Prop::bSkipEncroachmentCheck].map(|name| self.flag_of(actor, name));
-        let (fit, encroach) = far_move_tests(no_check, flags);
+        let (fit, encroach) = far_move_tests(encroachment, flags);
         let mut to = location;
         if fit {
             let (radius, height) = (self.float_of(actor, Prop::CollisionRadius), self.float_of(actor, Prop::CollisionHeight));
@@ -339,20 +333,20 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(false);
         }
         if !self.is_deleted(actor) {
-            self.place_far_moved(actor, to, no_check)?;
+            self.place_far_moved(actor, to, encroachment)?;
         }
         Ok(true)
     }
 
     /// `bJustTeleported` makes a warp zone's `ActorEntered` skip the actor, so one warped into the other
     /// side's zone is not sent back. `Attached` actors move on their own, result ignored; not turned.
-    fn place_far_moved(&mut self, actor: ObjectId, location: Vector, no_check: bool) -> Result<(), Error> {
+    pub fn place_far_moved(&mut self, actor: ObjectId, location: Vector, encroachment: Encroachment) -> Result<(), Error> {
         self.set(actor, Prop::bJustTeleported, Value::Bool(true));
         let from = self.vector(actor, Prop::Location);
         for other in self.object_list(actor, Prop::Attached) {
             if !self.is_deleted(other) {
                 let to = (self.vector(other, Prop::Location) + location) - from;
-                self.far_move_actor(other, to, no_check)?;
+                self.far_move_actor(other, to, encroachment)?;
             }
         }
         self.set_vector(actor, Prop::Location, location);
@@ -967,7 +961,7 @@ impl<L: LoaderRef> Vm<L> {
             errors.push(("subtitles".to_owned(), e));
         }
         let phase = self.profile_start();
-        if let Err(e) = self.client_tick(delta) {
+        if let Err(e) = self.process_interactions("Process_Tick", Value::Float(delta), InteractionOrder::GlobalFirst) {
             errors.push(("interactions".to_owned(), e));
         }
         self.profile_phase("interactions", phase);
@@ -1037,8 +1031,15 @@ fn same_members(before: impl Iterator<Item = ObjectId> + Clone, now: &[ObjectId]
 
 /// What a far move tests, given `bCollideWorld`, `bCollideWhenPlacing` and `bSkipEncroachmentCheck`
 /// (the first two names unverified).
-fn far_move_tests(no_check: bool, [collide_world, collide_when_placing, skip_encroachment]: [bool; 3]) -> (bool, bool) {
-    (!no_check && (collide_world || collide_when_placing), !no_check && !skip_encroachment)
+fn far_move_tests(encroachment: Encroachment, [collide_world, collide_when_placing, skip_encroachment]: [bool; 3]) -> (bool, bool) {
+    let checked = encroachment == Encroachment::Checked;
+    (checked && (collide_world || collide_when_placing), checked && !skip_encroachment)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encroachment {
+    Checked,
+    Ignored,
 }
 
 #[cfg(test)]
@@ -1068,10 +1069,10 @@ mod tests {
 
     #[test]
     fn far_move_test_gate() {
-        assert_eq!(super::far_move_tests(true, [true, true, false]), (false, false));
-        assert_eq!(super::far_move_tests(false, [false, false, false]), (false, true));
-        assert_eq!(super::far_move_tests(false, [true, false, false]), (true, true));
-        assert_eq!(super::far_move_tests(false, [false, true, true]), (true, false));
+        assert_eq!(super::far_move_tests(super::Encroachment::Ignored, [true, true, false]), (false, false));
+        assert_eq!(super::far_move_tests(super::Encroachment::Checked, [false, false, false]), (false, true));
+        assert_eq!(super::far_move_tests(super::Encroachment::Checked, [true, false, false]), (true, true));
+        assert_eq!(super::far_move_tests(super::Encroachment::Checked, [false, true, true]), (true, false));
     }
 
     #[test]

@@ -37,7 +37,7 @@ use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::display::Settings;
+use crate::display::{MODERN_AO, MODERN_CONTACT_SHADOWS, MODERN_POST, MODERN_RELIEF, MODERN_SHADOWS, MODERN_SPECULAR, Settings};
 use crate::map::SessionHolder;
 use crate::components::{FollowActor, FollowBone};
 use crate::mesh_view::SceneView;
@@ -530,12 +530,12 @@ fn log_scene_counts(
         bevy::log::info!(
             "settings: modern {}, sun shadows {}, contact {}, ao {}, relief {}, specular {}, post {}, msaa {}",
             settings.modern_graphics(),
-            settings.modern_shadows(),
-            settings.modern_contact_shadows(),
-            settings.modern_ao(),
-            settings.modern_relief(),
-            settings.modern_specular(),
-            settings.modern_post(),
+            settings.modern_effect(MODERN_SHADOWS),
+            settings.modern_effect(MODERN_CONTACT_SHADOWS),
+            settings.modern_effect(MODERN_AO),
+            settings.modern_effect(MODERN_RELIEF),
+            settings.modern_effect(MODERN_SPECULAR),
+            settings.modern_effect(MODERN_POST),
             settings.msaa_samples()
         );
     }

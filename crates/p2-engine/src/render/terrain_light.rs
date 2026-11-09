@@ -13,7 +13,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use p2_math::Vector;
 use p2_render_cpu::MeshLight;
 
-use crate::display::Settings;
+use crate::display::{MODERN_SHADOWS, Settings};
 use crate::level_collision::LevelCollision;
 use crate::shown_scene::ShownScene;
 
@@ -103,7 +103,7 @@ pub(crate) fn light_terrain(
         .sun
         .as_ref()
         .map(|(sun, _)| *sun)
-        .filter(|sun| !sun.dynamic && settings.as_deref().is_some_and(Settings::modern_shadows));
+        .filter(|sun| !sun.dynamic && settings.as_deref().is_some_and(|s| s.modern_effect(MODERN_SHADOWS)));
     let want = sun.is_some();
     let reset = shown.is_changed() || collision.is_changed();
     if reset {

@@ -1,5 +1,5 @@
 use p2_assets::{Model, Terrain, poly_flags};
-use p2_collision::{MeshCollision, line_check, line_check_node, mesh_line_check, terrain_line_check};
+use p2_collision::{MeshCollision, Sides, line_check, line_check_node, mesh_line_check, terrain_line_check};
 use p2_math::Vector;
 
 pub(crate) const SUN_DISTANCE: f32 = 65536.0;
@@ -25,6 +25,12 @@ pub(crate) struct Scene<'a> {
     terrains: &'a [Terrain],
     meshes: &'a [MeshCollision],
     tree: Vec<TreeNode>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MeshHit {
+    Earliest,
+    Any,
 }
 
 impl<'a> Scene<'a> {
@@ -67,8 +73,7 @@ impl<'a> Scene<'a> {
         at
     }
 
-    /// The earliest time a mesh is hit, or with `any` the first one found.
-    fn mesh_time(&self, start: Vector, end: Vector, any: bool) -> Option<f32> {
+    fn mesh_time(&self, start: Vector, end: Vector, wanted: MeshHit) -> Option<f32> {
         if self.tree.is_empty() {
             return None;
         }
@@ -92,7 +97,7 @@ impl<'a> Scene<'a> {
                     if let Some(hit) = mesh_line_check(std::iter::once(&self.meshes[node.mesh as usize]), start, end)
                         && best.is_none_or(|time| hit.time < time)
                     {
-                        if any {
+                        if wanted == MeshHit::Any {
                             return Some(hit.time);
                         }
                         best = Some(hit.time);
@@ -104,7 +109,7 @@ impl<'a> Scene<'a> {
     }
 
     fn other_blocks(&self, start: Vector, end: Vector) -> bool {
-        self.mesh_time(start, end, true).is_some() || self.terrains.iter().any(|terrain| terrain_line_check(terrain, start, end).is_some())
+        self.mesh_time(start, end, MeshHit::Any).is_some() || self.terrains.iter().any(|terrain| terrain_line_check(terrain, start, end, Sides::Both).is_some())
     }
 
     pub(crate) fn blocked(&self, start: Vector, end: Vector) -> bool {
@@ -130,8 +135,8 @@ impl<'a> Scene<'a> {
         let other = self
             .terrains
             .iter()
-            .filter_map(|terrain| terrain_line_check(terrain, start, end).map(|hit| hit.time))
-            .chain(self.mesh_time(start, end, false))
+            .filter_map(|terrain| terrain_line_check(terrain, start, end, Sides::Both).map(|hit| hit.time))
+            .chain(self.mesh_time(start, end, MeshHit::Earliest))
             .fold(f32::MAX, f32::min);
         if other < stop {
             return Seen::Other { time: other };
@@ -187,7 +192,7 @@ mod tests {
         let scene = Scene::new(&model, &[], &meshes);
         let (start, end) = (Vector::new(-16.0, 1.0, 1.0), Vector::new(2000.0, 1.0, 1.0));
         let full = mesh_line_check(&meshes, start, end).map(|hit| hit.time);
-        assert_eq!(scene.mesh_time(start, end, false), full);
+        assert_eq!(scene.mesh_time(start, end, MeshHit::Earliest), full);
         assert!(scene.blocked(start, end));
         assert!(!scene.blocked(Vector::new(-16.0, 50.0, 1.0), Vector::new(2000.0, 50.0, 1.0)));
         assert!(!scene.blocked(Vector::new(-16.0, 1.0, 1.0), Vector::new(-8.0, 1.0, 1.0)));

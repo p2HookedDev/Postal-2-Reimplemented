@@ -3,7 +3,7 @@
 
 use p2_math::Vector;
 use crate::enums::EPhysics;
-use crate::physics::{MAX_ITERATIONS, MAX_STEP_HEIGHT, MAX_SUBSTEP, MoveHit, STEP_AGAIN_SQUARED, gravity_direction, nearly_zero, two_wall_adjust};
+use crate::physics::{Bases, MAX_ITERATIONS, MAX_STEP_HEIGHT, MAX_SUBSTEP, MoveHit, STEP_AGAIN_SQUARED, Sweep, SweepAgainst, gravity_direction, nearly_zero, two_wall_adjust};
 use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
 
 const SPIDER_FLOOR_CHECK: f32 = MAX_STEP_HEIGHT + 2.0;
@@ -43,7 +43,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut remaining = delta;
         if physical && climb_up {
             self.set_vector(pawn, Prop::Velocity, look * ground_speed);
-            let hit = self.move_actor(pawn, look * (remaining * ground_speed))?;
+            let hit = self.move_actor(pawn, look * (remaining * ground_speed), Bases::Block)?;
             remaining *= 1.0 - hit.time;
             if self.is_deleted(pawn) {
                 return Ok(true);
@@ -63,7 +63,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.set_vector(pawn, Prop::Velocity, velocity);
         let move_dir = velocity * remaining;
-        let hit = self.move_actor(pawn, move_dir)?;
+        let hit = self.move_actor(pawn, move_dir, Bases::Block)?;
         remaining *= 1.0 - hit.time;
         if self.is_deleted(pawn) {
             return Ok(true);
@@ -75,10 +75,10 @@ impl<L: LoaderRef> Vm<L> {
             }
             let (radius, height) = (self.float_of(pawn, Prop::CollisionRadius), self.float_of(pawn, Prop::CollisionHeight));
             let out = move_dir.safe_normal() * (1.1 * height);
-            self.move_actor(pawn, out)?;
-            self.move_actor(pawn, look * (0.5 * radius))?;
-            self.move_actor(pawn, (out + move_dir) * (-1.0))?;
-            self.move_actor(pawn, look * (3.0 - 0.5 * radius))?;
+            self.move_actor(pawn, out, Bases::Block)?;
+            self.move_actor(pawn, look * (0.5 * radius), Bases::Block)?;
+            self.move_actor(pawn, (out + move_dir) * (-1.0), Bases::Block)?;
+            self.move_actor(pawn, look * (3.0 - 0.5 * radius), Bases::Block)?;
             if self.is_deleted(pawn) {
                 return Ok(true);
             }
@@ -94,7 +94,7 @@ impl<L: LoaderRef> Vm<L> {
             if !climb_up {
                 step *= -1.0;
             }
-            let ground = self.move_actor(pawn, step)?;
+            let ground = self.move_actor(pawn, step, Bases::Block)?;
             if ground.time < 1.0 {
                 self.step_up(pawn, gravity_direction(self.gravity_of(pawn)), step.safe_normal(), step, ground, 0)?;
                 if self.object_of(pawn, Prop::OnLadder).is_some() && self.physics_of(pawn) != Some(EPhysics::Ladder) {
@@ -104,12 +104,12 @@ impl<L: LoaderRef> Vm<L> {
             let moved = self.vector(pawn, Prop::Location) - old_location;
             self.set_vector(pawn, Prop::Velocity, moved * (1.0 / remaining));
         } else if physical && !climb_up {
-            let down = self.move_actor(pawn, climb * (-MAX_STEP_HEIGHT))?;
+            let down = self.move_actor(pawn, climb * (-MAX_STEP_HEIGHT), Bases::Block)?;
             let distance = down.time * MAX_STEP_HEIGHT;
             if down.time == 1.0 {
-                self.move_actor(pawn, look * (delta * ground_speed))?;
+                self.move_actor(pawn, look * (delta * ground_speed), Bases::Block)?;
             }
-            self.move_actor(pawn, climb * distance)?;
+            self.move_actor(pawn, climb * distance, Bases::Block)?;
             if !self.is_deleted(pawn) && self.object_of(pawn, Prop::OnLadder).is_none() {
                 self.off_ladder(pawn)?;
             }
@@ -179,7 +179,7 @@ impl<L: LoaderRef> Vm<L> {
                 self.object_of(pawn, Prop::Base) != actor || !(SPIDER_MIN_FLOOR_DIST..=SPIDER_MAX_FLOOR_DIST).contains(&distance)
             } else {
                 let step_start = self.vector(pawn, Prop::Location);
-                let hit = self.move_actor(pawn, step)?;
+                let hit = self.move_actor(pawn, step, Bases::Block)?;
                 if hit.time < 1.0 {
                     self.spider_step_up(pawn, step.safe_normal(), step * (1.0 - hit.time), hit, 0)?;
                 }
@@ -195,15 +195,15 @@ impl<L: LoaderRef> Vm<L> {
                 continue;
             }
             let (floor, location) = (self.vector(pawn, Prop::Floor), self.vector(pawn, Prop::Location));
-            let below = self.sweep(pawn, location, floor * (-SPIDER_FLOOR_CHECK), radius, height, true);
+            let below = self.sweep(pawn, Sweep { start: location, delta: floor * (-SPIDER_FLOOR_CHECK), radius, height }, SweepAgainst::WORLD_AND_ACTORS, None);
             if below.time < 1.0 {
                 self.set_vector(pawn, Prop::Floor, below.normal);
-                let landed = self.move_actor(pawn, below.normal * (-SPIDER_FLOOR_CHECK))?;
+                let landed = self.move_actor(pawn, below.normal * (-SPIDER_FLOOR_CHECK), Bases::Block)?;
                 if landed.actor != self.object_of(pawn, Prop::Base) {
                     self.set_base(pawn, landed.actor, landed.normal)?;
                 }
             } else {
-                self.move_actor(pawn, floor * (-SPIDER_LOST_FLOOR))?;
+                self.move_actor(pawn, floor * (-SPIDER_LOST_FLOOR), Bases::Block)?;
                 if !self.find_new_floor(pawn, delta, iterations)? {
                     return Ok(());
                 }
@@ -246,16 +246,16 @@ impl<L: LoaderRef> Vm<L> {
     fn spider_step_up(&mut self, pawn: ObjectId, desired_dir: Vector, delta: Vector, mut hit: MoveHit, depth: u32) -> Result<(), Error> {
         let mut floor = self.vector(pawn, Prop::Floor);
         if floor.dot(hit.normal) < SPIDER_WALL_DOT {
-            self.move_actor(pawn, floor * MAX_STEP_HEIGHT)?;
-            hit = self.move_actor(pawn, delta)?;
+            self.move_actor(pawn, floor * MAX_STEP_HEIGHT, Bases::Block)?;
+            hit = self.move_actor(pawn, delta, Bases::Block)?;
         } else {
             floor = hit.normal;
             self.set_vector(pawn, Prop::Floor, floor);
-            hit = self.move_actor(pawn, delta + [0.0, 0.0, delta.size() * hit.normal[2]].into())?;
+            hit = self.move_actor(pawn, delta + [0.0, 0.0, delta.size() * hit.normal[2]].into(), Bases::Block)?;
         }
         if hit.time < 1.0 {
             if floor.dot(hit.normal) < SPIDER_WALL_DOT && hit.time * delta.dot(delta) > STEP_AGAIN_SQUARED && depth < 4 {
-                let landed = self.move_actor(pawn, floor * (-MAX_STEP_HEIGHT))?;
+                let landed = self.move_actor(pawn, floor * (-MAX_STEP_HEIGHT), Bases::Block)?;
                 return self.spider_step_up(pawn, desired_dir, delta * (1.0 - landed.time), landed, depth + 1);
             }
             let old_floor = floor;
@@ -267,18 +267,18 @@ impl<L: LoaderRef> Vm<L> {
             let (y, z) = (cross_y.dot(delta), old_floor.dot(delta));
             let along = ((cross_y.cross(floor) * x) + (cross_y * y)) + (floor * z);
             if along.dot(delta) >= 0.0 {
-                let again = self.move_actor(pawn, along)?;
+                let again = self.move_actor(pawn, along, Bases::Block)?;
                 if again.time < 1.0 {
                     self.process_hit_wall(pawn, again.normal, again.actor)?;
                     if self.physics_of(pawn) == Some(EPhysics::Falling) {
                         return Ok(());
                     }
                     let adjusted = two_wall_adjust(desired_dir, along, again.normal, wall, again.time);
-                    self.move_actor(pawn, adjusted)?;
+                    self.move_actor(pawn, adjusted, Bases::Block)?;
                 }
             }
         }
-        self.move_actor(pawn, floor * (-MAX_STEP_HEIGHT))?;
+        self.move_actor(pawn, floor * (-MAX_STEP_HEIGHT), Bases::Block)?;
         Ok(())
     }
 }

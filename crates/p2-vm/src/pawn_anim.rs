@@ -2,7 +2,7 @@ use p2_math::{Rotator, Vector};
 
 use crate::enums::EPhysics;
 use crate::interp::int;
-use crate::{Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
+use crate::{Encroachment, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
 
 /// Channels: turning right / left in place, then `MovementAnims` forward, back, left, right; the four after those
 /// hold the previous movement set while it blends out.
@@ -84,7 +84,7 @@ impl<L: LoaderRef> Vm<L> {
             });
             if !first_person {
                 let location = self.vector(pawn, Prop::Location);
-                self.set_location(weapon, location)?;
+                self.place_far_moved(weapon, location, Encroachment::Ignored)?;
             }
         }
         if self.flag_of(pawn, Prop::bUpdateEyeheight) && self.is_probing(pawn, PROBE_UPDATE_EYE_HEIGHT)? {

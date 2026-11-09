@@ -13,6 +13,12 @@ use p2_script::{Objects, Source};
 
 const MAX_HOPS: usize = 16;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TextureDecode {
+    Keep,
+    Rgba,
+}
+
 #[derive(Default)]
 pub struct Library {
     games: HashMap<PathBuf, Game>,
@@ -277,13 +283,13 @@ impl Game {
 
     pub fn material_texture(&mut self, id: PackageId, material: i32) -> Option<SectionTexture> {
         let (source, state) = self.material_source(id, material)?;
-        let decoded = state.darken;
-        self.section_texture(source, state, decoded)
+        let decode = if state.darken { TextureDecode::Rgba } else { TextureDecode::Keep };
+        self.section_texture(source, state, decode)
     }
 
     pub fn material_texture_rgba(&mut self, id: PackageId, material: i32) -> Option<SectionTexture> {
         let (source, state) = self.material_source(id, material)?;
-        self.section_texture(source, state, true)
+        self.section_texture(source, state, TextureDecode::Rgba)
     }
 
 
@@ -308,7 +314,7 @@ impl Game {
         let specular = SpecularSource { image: cube, combine: None, cube: true, env_map: cube_state.env_map, mask: SpecularMask::None, tint: None };
         let base = base.as_ref();
         let source = TextureSource { texture: base.and_then(|base| base.texture), opacity: None, wet: base.and_then(|base| base.wet), combine: None, glow: None, detail: None, specular: Some(specular), switch: None };
-        let mut texture = self.section_texture(source, base_state, false)?;
+        let mut texture = self.section_texture(source, base_state, TextureDecode::Keep)?;
         if combiner.ops.color == p2_assets::ColorOperation::Multiply
             && let Some((_, params)) = &mut texture.specular
         {
@@ -334,11 +340,11 @@ impl Game {
         })
     }
 
-    fn section_texture(&mut self, source: TextureSource, state: RenderState, decoded: bool) -> Option<SectionTexture> {
+    fn section_texture(&mut self, source: TextureSource, state: RenderState, decode: TextureDecode) -> Option<SectionTexture> {
         let (mut image, glow) = match self.glow_bake(source) {
             Some((image, glow)) if source.opacity.is_none() => (image, Some(glow)),
-            Some((_, glow)) => (self.source_image(source, decoded)?, Some(glow)),
-            None => (self.source_image(source, decoded)?, self.glow_image(source)),
+            Some((_, glow)) => (self.source_image(source, decode)?, Some(glow)),
+            None => (self.source_image(source, decode)?, self.glow_image(source)),
         };
         if state.darken {
             invert_color(&mut image);
@@ -517,7 +523,7 @@ impl Game {
         Some(WetSource { sim, texture: Texture { mips, ..texture }, palette })
     }
 
-    pub fn source_image(&mut self, source: TextureSource, decoded: bool) -> Option<Image> {
+    pub fn source_image(&mut self, source: TextureSource, decode: TextureDecode) -> Option<Image> {
         if source.opacity.is_none()
             && let Some((image, _)) = self.glow_bake(source)
         {
@@ -548,7 +554,7 @@ impl Game {
             Some((mask, mask_palette)) => texture_with_opacity(&texture, palette.as_deref(), &mask, mask_palette.as_deref()),
             None => None,
         };
-        let convert = if decoded { texture_to_rgba_image } else { texture_to_image };
+        let convert = if decode == TextureDecode::Rgba { texture_to_rgba_image } else { texture_to_image };
         image.or_else(|| convert(&texture, palette.as_deref()))
     }
 

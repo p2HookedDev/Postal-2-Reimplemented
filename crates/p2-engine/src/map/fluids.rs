@@ -2,7 +2,7 @@ use super::*;
 use p2_math::Vector;
 use p2_particles::{Beam, FluidOscillator, FluidSettings, FluidSurface, StripPoint, View};
 use p2_assets::{UvModifier, uv_matrix};
-use crate::mesh_view::{MaterialImages, SectionMaterial, SectionView, actor_standard, section_material, set_uv_transform};
+use crate::mesh_view::{MaterialImages, SceneLights, SectionMaterial, SectionView, actor_standard, section_material, set_uv_transform};
 
 pub(super) fn camera_view(camera: &Transform, origin: Vec3) -> View {
     let unreal = |v: Vec3| Vector::from(to_bevy(v.to_array()));
@@ -275,7 +275,7 @@ impl Session {
             let mut section = SectionView::textured(mesh.clone(), Some(found));
             section.no_scene_lights = true;
             section.two_sided = true;
-            let material = section_material(&section, actor_standard(&section, true), &mut t.assets.materials, &mut t.assets.mesh_lit);
+            let material = section_material(&section, actor_standard(&section, SceneLights::Ignored), &mut t.assets.materials, &mut t.assets.mesh_lit);
             let shown = if fluid.hidden { Visibility::Hidden } else { Visibility::Inherited };
             let parent = t.commands.spawn((ActorModel(fluid.object), Transform::from_translation(origin), Visibility::default())).id();
             let mut spawned = t.commands.spawn((Mesh3d(mesh.clone()), Transform::default(), shown, NoFrustumCulling, ChildOf(parent)));

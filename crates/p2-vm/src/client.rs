@@ -96,14 +96,6 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    pub fn client_tick(&mut self, delta: f32) -> Result<(), Error> {
-        self.process_interactions("Process_Tick", Value::Float(delta), false)
-    }
-
-    pub(crate) fn render_interactions(&mut self, event: &str, canvas: ObjectId) -> Result<(), Error> {
-        self.process_interactions(event, Value::Object(Some(canvas)), true)
-    }
-
     pub(crate) fn interactions_key_event(&mut self, key: &str, action: u8, delta: f32) -> Result<bool, Error> {
         let (Some(master), Some(key)) = (self.host.client.master, self.input_key(key)) else { return Ok(false) };
         let Some(function) = self.find_object_function(master, "Process_KeyEvent")? else { return Ok(false) };
@@ -236,15 +228,24 @@ impl<L: LoaderRef> Vm<L> {
         [global, local]
     }
 
-    fn process_interactions(&mut self, event: &str, argument: Value, local_first: bool) -> Result<(), Error> {
+    pub fn process_interactions(&mut self, event: &str, argument: Value, order: InteractionOrder) -> Result<(), Error> {
         let Some(master) = self.host.client.master else { return Ok(()) };
         let [global, local] = self.interaction_lists(master);
-        let lists = if local_first { [local, global] } else { [global, local] };
+        let lists = match order {
+            InteractionOrder::LocalFirst => [local, global],
+            InteractionOrder::GlobalFirst => [global, local],
+        };
         for list in lists.into_iter().flatten() {
             self.event(master, event, [list, argument.clone()])?;
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractionOrder {
+    GlobalFirst,
+    LocalFirst,
 }
 
 #[cfg(test)]

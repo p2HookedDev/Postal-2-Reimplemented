@@ -14,7 +14,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use p2_assets::{Model, poly_flags};
 use p2_math::Vector;
 
-use crate::display::Settings;
+use crate::display::{MODERN_BAKE, MODERN_SHADOWS, Settings};
 use crate::game_dir::config_folder;
 use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::render::actor_light::LightEnvironment;
@@ -42,7 +42,7 @@ pub(crate) fn sun_reaches(collision: &StaticCollision, direction: Vector, positi
         Some(_) => return false,
     };
     p2_collision::mesh_line_check(&collision.meshes, start, end).is_none()
-        && collision.terrains.iter().all(|terrain| p2_collision::terrain_line_check(terrain, start, end).is_none())
+        && collision.terrains.iter().all(|terrain| p2_collision::terrain_line_check(terrain, start, end, p2_collision::Sides::Both).is_none())
 }
 
 fn sky(model: &Model, node: usize) -> bool {
@@ -192,8 +192,8 @@ pub fn sun_mask(
         .as_deref()
         .and_then(|e| e.sun.as_ref().map(|(_, hardware)| hardware.direction));
     let environment = shown.lighting.clone();
-    let bake = settings.modern_bake() && environment.is_some();
-    let wanted = level.0.as_ref().filter(lit).filter(|_| bake || (settings.modern_shadows() && sun.is_some()));
+    let bake = settings.modern_effect(MODERN_BAKE) && environment.is_some();
+    let wanted = level.0.as_ref().filter(lit).filter(|_| bake || (settings.modern_effect(MODERN_SHADOWS) && sun.is_some()));
     let key = wanted.map(|collision| (Arc::as_ptr(collision).addr(), bake));
     if mask.key() != key {
         match std::mem::take(&mut mask.job) {

@@ -4,7 +4,7 @@ use common::{game_dir, ini, loader, object_of, system_ini};
 
 use p2_math::Rotator;
 use p2_package::Loader;
-use p2_vm::{HostCommand, NameId, ObjectId, ParticleCommand, PlayedSound, Value, Vm};
+use p2_vm::{Encroachment, HostCommand, InteractionOrder, NameId, ObjectId, ParticleCommand, PlayedSound, Value, Vm};
 
 const ANIM_NATIVES: [&str; 17] = [
     "PlayAnim", "PlayAnimAt", "LoopAnim", "TweenAnim", "IsAnimating", "FinishAnim", "HasAnim", "StopAnimating",
@@ -841,7 +841,7 @@ fn startup_client_interactions() {
     vm.typed("Dude 1").unwrap();
     let mut items = Vec::new();
     for _ in 0..20 {
-        vm.client_tick(0.05).unwrap();
+        vm.process_interactions("Process_Tick", Value::Float(0.05), InteractionOrder::GlobalFirst).unwrap();
         items = vm.render_hud(player, 1024.0, 768.0).unwrap();
     }
     let texts: Vec<&str> = items.iter().filter_map(|i| if let p2_vm::CanvasItem::Text { text, .. } = i { Some(text.as_str()) } else { None }).collect();
@@ -1132,7 +1132,7 @@ fn church_find_path_toward_takes_a_cheapest_route() {
         .unwrap();
     let at = vector_of(&vm, start, "Location", None);
     let lift = float_of(&vm, pawn, &["CollisionHeight"]) - float_of(&vm, start, &["CollisionHeight"]);
-    vm.set_location(pawn, [at[0], at[1], at[2] + lift].into()).unwrap();
+    vm.place_far_moved(pawn, [at[0], at[1], at[2] + lift].into(), Encroachment::Ignored).unwrap();
     vm.set(pawn, "Anchor", Value::Object(Some(start)));
     let mut args = vec![Value::Object(Some(goal)), Value::Map];
     let Some(Value::Object(Some(next))) = vm.call_native("FindPathToward", Some(controller), &mut args).unwrap() else { panic!("no path") };

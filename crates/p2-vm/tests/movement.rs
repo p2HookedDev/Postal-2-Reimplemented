@@ -4,7 +4,7 @@ use common::{add, game_dir, load, scale, start_single_player, vector};
 use std::path::Path;
 
 use p2_package::{Loader, PackageId};
-use p2_vm::{ObjectId, Value, Vm};
+use p2_vm::{Encroachment, ObjectId, Value, Vm};
 
 const DT: f32 = 1.0 / 60.0;
 const GRAVITY: f32 = 1500.0;
@@ -69,7 +69,7 @@ impl<'a> Player<'a> {
     }
 
     fn place(&mut self, at: [f32; 3]) {
-        self.vm.set_location(self.pawn, at.into()).unwrap();
+        self.vm.place_far_moved(self.pawn, at.into(), Encroachment::Ignored).unwrap();
         self.vm.set(self.pawn, "Velocity", Value::Vector(p2_math::Vector::ZERO));
         self.frames(30, &[]);
     }

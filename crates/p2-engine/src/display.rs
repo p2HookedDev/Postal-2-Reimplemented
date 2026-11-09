@@ -124,6 +124,7 @@ pub const MODERN_RELIEF: &str = "ini:Engine.Engine.RenderDevice ModernRelief";
 pub const MODERN_SPECULAR: &str = "ini:Engine.Engine.RenderDevice ModernSpecular";
 pub const MODERN_POST: &str = "ini:Engine.Engine.RenderDevice ModernPost";
 pub const MODERN_BAKE: &str = "ini:Engine.Engine.RenderDevice ModernBake";
+const MODERN_OFF_BY_DEFAULT: [&str; 1] = [MODERN_AO];
 
 /// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
 /// changing.
@@ -175,36 +176,9 @@ impl Settings {
         self.flag(MODERN_GRAPHICS)
     }
 
-    fn modern_effect(&self, query: &str, default: bool) -> bool {
+    pub fn modern_effect(&self, query: &str) -> bool {
+        let default = !MODERN_OFF_BY_DEFAULT.contains(&query);
         self.modern_graphics() && if self.text(query).trim().is_empty() { default } else { self.flag(query) }
-    }
-
-    pub fn modern_shadows(&self) -> bool {
-        self.modern_effect(MODERN_SHADOWS, true)
-    }
-
-    pub fn modern_contact_shadows(&self) -> bool {
-        self.modern_effect(MODERN_CONTACT_SHADOWS, true)
-    }
-
-    pub fn modern_ao(&self) -> bool {
-        self.modern_effect(MODERN_AO, false)
-    }
-
-    pub fn modern_relief(&self) -> bool {
-        self.modern_effect(MODERN_RELIEF, true)
-    }
-
-    pub fn modern_specular(&self) -> bool {
-        self.modern_effect(MODERN_SPECULAR, true)
-    }
-
-    pub fn modern_post(&self) -> bool {
-        self.modern_effect(MODERN_POST, true)
-    }
-
-    pub fn modern_bake(&self) -> bool {
-        self.modern_effect(MODERN_BAKE, true)
     }
 }
 
@@ -290,15 +264,7 @@ mod tests {
     }
 
     fn effects(settings: &Settings) -> [bool; 7] {
-        [
-            settings.modern_shadows(),
-            settings.modern_contact_shadows(),
-            settings.modern_ao(),
-            settings.modern_relief(),
-            settings.modern_specular(),
-            settings.modern_post(),
-            settings.modern_bake(),
-        ]
+        EFFECTS.map(|key| settings.modern_effect(key))
     }
 
     const EFFECTS: [&str; 7] =

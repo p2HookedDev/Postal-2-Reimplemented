@@ -6,7 +6,7 @@ mod primitive;
 mod sweep;
 mod tree;
 pub use extent::{box_check, point_check};
-pub use primitive::{pull_back, pull_back_units, segment_cylinder, world_to_local};
+pub use primitive::{Primitive, pull_back, pull_back_units, segment_cylinder, world_to_local};
 pub use sweep::{box_overlaps_triangle, mesh_box_check, mesh_box_overlaps, terrain_box_check};
 /// `NF_NotCsg | NF_IsNew`: nodes with these flags do not divide solid from empty space.
 const NOT_CSG: u8 = 0x21;
@@ -133,24 +133,22 @@ fn check(model: &Model, index: usize, outside: bool, a: LinePoint, b: LinePoint,
     descend(near_front, a, mid, entry).or_else(|| descend(!near_front, mid, b, crossing))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sides {
+    Both,
+    FrontOnly,
+}
+
 fn terrain_ready(terrain: &Terrain) -> bool {
     terrain.vertices.len() == terrain.width * terrain.height && terrain.width >= 2 && terrain.height >= 2
 }
 
 /// `terrain.vertices` must be filled (rebuilt from the heightmap if the saved ones were stale). Of hits at the same time,
 /// the quad first in heightmap order (row, then column, then triangle) wins.
-pub fn terrain_line_check(terrain: &Terrain, start: Vector, end: Vector) -> Option<Hit> {
-    terrain_segment_check(terrain, start, end, false)
-}
-
-pub fn terrain_front_line_check(terrain: &Terrain, start: Vector, end: Vector) -> Option<Hit> {
-    terrain_segment_check(terrain, start, end, true)
-}
-
-fn terrain_segment_check(terrain: &Terrain, start: Vector, end: Vector, front_only: bool) -> Option<Hit> {
+pub fn terrain_line_check(terrain: &Terrain, start: Vector, end: Vector, sides: Sides) -> Option<Hit> {
     terrain_first_hit(terrain, start, end, [0.0; 2], TIE_SLACK, |triangle| {
         let [a, b, c] = triangle.map(|i| Vector::from(terrain.vertices[i]));
-        if front_only && !terrain_front(terrain, [a, b, c], end - start) {
+        if sides == Sides::FrontOnly && !terrain_front(terrain, [a, b, c], end - start) {
             return None;
         }
         let t = segment_triangle(start, end, a, b, c)?;
@@ -557,7 +555,7 @@ pub(crate) mod tests {
         let terrain = test_terrain();
         let mut hits = 0;
         for (i, (start, end)) in test_segments(4000).into_iter().enumerate() {
-            let (walk, scan) = (terrain_line_check(&terrain, start, end), terrain_line_check_scan(&terrain, start, end));
+            let (walk, scan) = (terrain_line_check(&terrain, start, end, Sides::Both), terrain_line_check_scan(&terrain, start, end));
             match (walk, scan) {
                 (None, None) => {}
                 (Some(w), Some(s)) if (w.time - s.time).abs() < 1e-5 && w.normal == s.normal => hits += 1,

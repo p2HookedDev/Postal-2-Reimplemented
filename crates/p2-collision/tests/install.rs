@@ -4,7 +4,7 @@ use p2_assets::{
     read_actor_location, read_level, read_mesh_actor, read_model, read_static_mesh, read_terrain, read_texture, texture_heights,
 };
 use p2_collision::{
-    MeshCollision, box_check, line_check, mesh_line_check, point_check, point_zone, terrain_line_check,
+    MeshCollision, Sides, box_check, line_check, mesh_line_check, point_check, point_zone, terrain_line_check,
 };
 use p2_math::Vector;
 use p2_package::{LoadedPackage, Loader, Package, Resolved};
@@ -216,7 +216,7 @@ fn church_start_stands_on_terrain() {
         .map(|i| read_actor_location(&mut Objects::new(&loader), source, i).unwrap())
         .unwrap();
     let below = start - Vector::new(0.0, 0.0, 2000.0);
-    let hit = terrains.iter().find_map(|terrain| terrain_line_check(terrain, start, below)).expect("terrain below");
+    let hit = terrains.iter().find_map(|terrain| terrain_line_check(terrain, start, below, Sides::Both)).expect("terrain below");
     let distance = hit.time * 2000.0;
     assert!(distance > 0.0 && distance < 300.0);
     assert!(hit.normal.z > 0.7);

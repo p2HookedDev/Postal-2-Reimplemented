@@ -5,7 +5,8 @@ use p2_collision::mesh_box_overlaps;
 use p2_math::{Rotator, Vector};
 use crate::enums::EPhysics;
 use crate::interp::{float, int};
-use crate::{Error, Kind, LoaderRef, ObjectId, Value, Vm, Prop};
+use crate::physics::Bases;
+use crate::{Encroachment, Error, Kind, LoaderRef, ObjectId, Value, Vm, Prop};
 
 const MV_GLIDE_BY_TIME: u8 = 1;
 const KEY_COUNT: usize = 8;
@@ -46,9 +47,9 @@ impl<L: LoaderRef> Vm<L> {
             let moved = if self.is_encroacher(mover) {
                 self.move_encroacher(mover, location.into(), rotation.into())?
             } else {
-                self.set_location(mover, location.into())?;
+                self.place_far_moved(mover, location.into(), Encroachment::Ignored)?;
                 self.set(mover, Prop::Rotation, Value::Rotator(rotation.into()));
-                // Retail's move touches; `set_location` does not, so the touch update is here.
+                // Retail's move touches; `place_far_moved` does not, so the touch update is here.
                 self.update_touching(mover)?;
                 true
             };
@@ -115,7 +116,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 self.move_smooth(other, push)?;
                 if !self.posed(mover, location, rotation, |vm| vm.primitive_overlaps(mover, other)) {
-                    self.posed(mover, location, rotation, |vm| vm.move_actor(other, push * (-1.0)))?;
+                    self.posed(mover, location, rotation, |vm| vm.move_actor(other, push * (-1.0), Bases::Block))?;
                     continue;
                 }
             }

@@ -1,7 +1,8 @@
 use p2_math::{Rotator, Vector};
 use crate::interp::{float, int, truthy};
 use crate::native_id::{Native, NativeGroup};
-use crate::{Error, HostCommand, LoaderRef, MusicCommand, NameId, ObjectId, PlayedSound, Prop, ProjectorEvent, Value, Vm};
+use crate::physics::Bases;
+use crate::{Encroachment, Error, HostCommand, LoaderRef, MusicCommand, NameId, ObjectId, PlayedSound, Prop, ProjectorEvent, Value, Vm};
 
 pub const AUDIO_DEFAULT_RADIUS: f32 = 80.0;
 
@@ -290,12 +291,12 @@ fn placement_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<O
             if matches!(args.first(), Some(Value::Map)) {
                 Value::Bool(true)
             } else {
-                Value::Bool(vm.far_move_actor(this, vec3(args.first()), matches!(args.get(1), Some(Value::Bool(true))))?)
+                Value::Bool(vm.far_move_actor(this, vec3(args.first()), if matches!(args.get(1), Some(Value::Bool(true))) { Encroachment::Ignored } else { Encroachment::Checked })?)
             }
         }
         Native::Move => {
             let Some(this) = this else { return Ok(Some(Value::Bool(false))) };
-            vm.move_actor(this, vec3(args.first()))?;
+            vm.move_actor(this, vec3(args.first()), Bases::Block)?;
             Value::Bool(true)
         }
         Native::SetBase => {
@@ -360,7 +361,7 @@ fn placement_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<O
                 && args.len() >= 3
             {
                 let coords = crate::volumes::coords_of(vm.get(this, "WarpCoords").as_ref());
-                let carry = if native == Native::Warp { crate::volumes::warp } else { crate::volumes::unwarp };
+                let carry = if native == Native::Warp { crate::volumes::warp } else { crate::volumes::carry };
                 let (location, velocity, rotation) = carry(coords, vec3(args.first()), vec3(args.get(1)), rot3(args.get(2)));
                 args[0] = Value::Vector(location);
                 args[1] = Value::Vector(velocity);

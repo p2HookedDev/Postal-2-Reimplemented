@@ -25,7 +25,7 @@ use p2_engine::animation::{Animated, AnimationSystems};
 use p2_engine::game_dir_form::GameDirForm;
 use p2_engine::library::{Library, SectionTexture};
 use p2_engine::map::{
-    AssetStores, SceneTargets, Session, SessionHolder, animate_mesh_with, present_session, skeletal_mesh_sections, static_mesh_sections, travel_package,
+    AssetStores, SceneTargets, SectionChunks, Session, SessionHolder, animate_mesh_with, present_session, sections_of_static_mesh, skeletal_mesh_sections, travel_package,
 };
 use p2_engine::mesh_view::{MaterialImages, ModelView, Scene};
 use p2_engine::play::{PlaySystems, PlayWorld};
@@ -356,7 +356,7 @@ fn show_static_mesh(open: &OpenPackage, index: usize, library: &mut Library, roo
 
     let materials = read_static_mesh_materials(pkg, &open.data, export).unwrap_or_default();
     let mut game = library.open(root, path);
-    let sections = static_mesh_sections(&mesh, &mut t.scene.assets, |t, i| {
+    let sections = sections_of_static_mesh(&mesh, &mut t.scene.assets, SectionChunks::Whole, |t, i| {
         let material = *materials.get(i)?;
         let (game, id) = game.as_mut().ok()?;
         let texture = game.material_texture(*id, material)?;

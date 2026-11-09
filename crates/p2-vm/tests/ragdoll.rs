@@ -2,7 +2,7 @@ mod common;
 
 use common::{DT, Dude, game_dir, load_suburbs, object_of};
 
-use p2_vm::{ObjectId, Value};
+use p2_vm::{Encroachment, ObjectId, Value};
 
 const PHYS_KARMA_RAGDOLL: u8 = 14;
 
@@ -57,7 +57,7 @@ impl Dude<'_> {
         self.vm.set(self.controller, "Rotation", rotation.clone());
         self.vm.set(self.pawn, "Rotation", rotation);
         let d = direction(yaw);
-        self.vm.set_location(pawn, [me[0] + d[0] * distance, me[1] + d[1] * distance, me[2]].into()).unwrap();
+        self.vm.place_far_moved(pawn, [me[0] + d[0] * distance, me[1] + d[1] * distance, me[2]].into(), Encroachment::Ignored).unwrap();
         self.vm.set(pawn, "Rotation", Value::Rotator(p2_math::Rotator::new(0, yaw + 32768, 0)));
         self.vm.mark_rendered(pawn).unwrap();
         (pawn, d)

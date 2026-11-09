@@ -1,6 +1,6 @@
 use crate::actors::ProjectorBlending;
 use super::*;
-use crate::library::{LoadError, TextureSource};
+use crate::library::{LoadError, TextureDecode, TextureSource};
 use bevy::asset::{AssetHandleProvider, AssetId};
 use p2_assets::FinalBlend;
 use p2_math::{Rotator, Vector};
@@ -203,18 +203,20 @@ pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option
     Some(location_rotation(vm, sky))
 }
 
-pub fn static_mesh_sections<S: SceneAssets>(mesh: &StaticMesh, t: &mut S, texture: impl FnMut(&mut S, usize) -> Option<MaterialImages>) -> Vec<SectionView> {
-    sections_of_static_mesh(mesh, t, false, texture)
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SectionChunks {
+    Whole,
+    Chunked,
 }
 
-fn sections_of_static_mesh<S: SceneAssets>(mesh: &StaticMesh, t: &mut S, chunked: bool, mut texture: impl FnMut(&mut S, usize) -> Option<MaterialImages>) -> Vec<SectionView> {
+pub fn sections_of_static_mesh<S: SceneAssets>(mesh: &StaticMesh, t: &mut S, chunks: SectionChunks, mut texture: impl FnMut(&mut S, usize) -> Option<MaterialImages>) -> Vec<SectionView> {
     static_mesh_to_meshes(mesh)
         .into_iter()
         .enumerate()
         .map(|(i, mut section)| {
             let found = texture(t, i);
             use_uv_stream(&mut section, mesh, found.as_ref());
-            let chunks = if chunked { crate::render::world_pass::chunks_of(&mut section) } else { None };
+            let chunks = if chunks == SectionChunks::Chunked { crate::render::world_pass::chunks_of(&mut section) } else { None };
             SectionView { chunks, ..SectionView::textured(t.add_mesh(section), found) }
         })
         .collect()
@@ -468,7 +470,7 @@ impl Session {
             let Some(surfaces) = self.switch_images.get_mut(&key) else { continue };
             let Some((package, export)) = material.and_then(|path| game.export_by_path(&path)) else { continue };
             let Some((source, state)) = game.material_source(package, export_reference(export)) else { continue };
-            let Some(mut image) = game.source_image(source, false) else { continue };
+            let Some(mut image) = game.source_image(source, TextureDecode::Keep) else { continue };
             // Uploaded as a new texture with all its mips: Bevy rewrites a texture of the same descriptor with
             // `COPY_DST` in place, mip 0 only, so the smaller mips kept the old picture past some distance from the
             // camera. Without `COPY_DST` the descriptor differs; wgpu adds it for the upload itself.
@@ -561,7 +563,7 @@ impl PreparedScene {
                 .or_insert_with(|| {
                     let (source, state) = game.material_source(package, material)?;
                     let image = images.entry(source).or_insert_with(|| {
-                        let handle = t.add_image(game.source_image(source, false)?);
+                        let handle = t.add_image(game.source_image(source, TextureDecode::Keep)?);
                         let glow = game.glow_image(source).map(|glow| t.add_image(glow));
                         let detail = game.detail_image(source).map(|detail| t.add_image(detail));
                         let specular = game.specular_layer(source).map(|(cube, params)| (t.add_image(cube), params));
@@ -896,7 +898,7 @@ fn decoration_models(
         let export = &pkg.exports[mesh_export];
         (read_static_mesh(pkg, file, export).ok()?, read_static_mesh_materials(pkg, file, export).unwrap_or_default())
     };
-    let sections = sections_of_static_mesh(&mesh, t, true, |t, i| texture(game, t, mesh_id, *materials.get(i)?));
+    let sections = sections_of_static_mesh(&mesh, t, SectionChunks::Chunked, |t, i| texture(game, t, mesh_id, *materials.get(i)?));
     let radius = mesh.positions.iter().map(|&p| Vector::from(p).size_squared()).fold(0.0_f32, f32::max).sqrt();
     let mut by_color: HashMap<([u8; 3], [i32; 2]), (Vec<Transform>, [f32; 3], [f32; 3])> = HashMap::new();
     for d in &placements {

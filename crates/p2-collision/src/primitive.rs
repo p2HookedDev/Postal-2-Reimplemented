@@ -10,8 +10,14 @@ pub fn pull_back(start: Vector, end: Vector, hit: Hit, units: f32) -> Hit {
 
 /// How far (units) a primitive pulls back the hit of a box check of `length`: 0.1 of it,
 /// at least 0.1 and at most 4 for a model or 1 for a static mesh.
-pub fn pull_back_units(model: bool, length: f32) -> f32 {
-    (0.1 * length).clamp(0.1, if model { 4.0 } else { 1.0 })
+pub fn pull_back_units(primitive: Primitive, length: f32) -> f32 {
+    (0.1 * length).clamp(0.1, if primitive == Primitive::Brush { 4.0 } else { 1.0 })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Primitive {
+    Brush,
+    StaticMesh,
 }
 
 pub fn segment_cylinder(start: Vector, end: Vector, center: Vector, radius: f32, height: f32) -> Option<Hit> {

@@ -234,12 +234,18 @@ struct Fade {
     to: f32,
     seconds: f32,
     elapsed: f32,
-    despawn: bool,
+    end: FadeEnd,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FadeEnd {
+    Keep,
+    Despawn,
 }
 
 impl Fade {
-    fn new(from: f32, to: f32, seconds: f32, despawn: bool) -> Self {
-        Self { from, to, seconds, elapsed: 0.0, despawn }
+    fn new(from: f32, to: f32, seconds: f32, end: FadeEnd) -> Self {
+        Self { from, to, seconds, elapsed: 0.0, end }
     }
 
     fn progress(&self) -> f32 {
@@ -254,7 +260,7 @@ impl Fade {
 fn stop_fading(commands: &mut Commands, entity: Entity, seconds: f32) {
     commands.entity(entity).queue(move |mut entity: EntityWorldMut| {
         let from = entity.get::<Fade>().map_or(1.0, Fade::level);
-        entity.insert(Fade::new(from, 0.0, seconds, true));
+        entity.insert(Fade::new(from, 0.0, seconds, FadeEnd::Despawn));
     });
 }
 
@@ -272,7 +278,7 @@ fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Query<(Entity
             heard.fade = level;
         }
         if fade.progress() >= 1.0 {
-            if fade.despawn {
+            if fade.end == FadeEnd::Despawn {
                 commands.entity(entity).despawn();
             } else {
                 commands.entity(entity).remove::<Fade>();
@@ -426,13 +432,13 @@ fn tick_play(
         && world.frame.travel.is_none()
         && let Some(job) = job.take()
     {
-        world.start(job, false);
+        world.start(job, JobThread::Main);
     }
     let new = world.present();
     if world.frame.travel.is_none()
         && let Some(job) = job
     {
-        world.start(job, true);
+        world.start(job, JobThread::Worker);
     }
     if !new {
         return;
@@ -567,12 +573,12 @@ fn play_music(commands: &mut Commands, world: &mut PlayWorld, sources: &mut Asse
                         let settings = if fading_in { settings.with_volume(Volume::SILENT) } else { settings };
                         let entity = commands.spawn((AudioPlayer::new(source), spatial(settings), Song(generation), heard, Transform::from_translation(position))).id();
                         if fading_in {
-                            commands.entity(entity).insert(Fade::new(0.0, 1.0, fade_in, false));
+                            commands.entity(entity).insert(Fade::new(0.0, 1.0, fade_in, FadeEnd::Keep));
                         }
                         entity
                     }
                     None if fade_in > 0.0 => {
-                        let faded = (BaseVolume(volume * gain), Fade::new(0.0, 1.0, fade_in, false));
+                        let faded = (BaseVolume(volume * gain), Fade::new(0.0, 1.0, fade_in, FadeEnd::Keep));
                         commands.spawn((AudioPlayer::new(source), settings.with_volume(Volume::SILENT), Song(generation), faded)).id()
                     }
                     None => commands.spawn((AudioPlayer::new(source), settings, Song(generation), BaseVolume(volume * gain))).id(),
@@ -664,7 +670,7 @@ fn play_zone_sounds(commands: &mut Commands, world: &mut PlayWorld, sources: &mu
         };
         let (fade_in, fade_out) = (zone_sound.fade_in, zone_sound.fade_out);
         let settings = PlaybackSettings::LOOP.with_volume(Volume::SILENT).with_speed(zone_sound.pitch);
-        let faded = (BaseVolume(zone_sound.volume), Fade::new(0.0, 1.0, fade_in, false));
+        let faded = (BaseVolume(zone_sound.volume), Fade::new(0.0, 1.0, fade_in, FadeEnd::Keep));
         let entity = commands.spawn((AudioPlayer::new(source), settings, Song(generation), faded)).id();
         world.zone_sounds.insert(zone_sound.key, (entity, fade_out));
     }
