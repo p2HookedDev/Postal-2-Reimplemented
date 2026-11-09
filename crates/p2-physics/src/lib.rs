@@ -121,7 +121,6 @@ struct Hooks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Contacts {
     All,
-    /// Static level geometry only: no other body, awake or dormant.
     LevelOnly,
 }
 

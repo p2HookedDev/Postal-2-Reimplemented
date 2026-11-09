@@ -51,7 +51,7 @@ pub fn point_check(model: &Model, hulls: &BspHulls, point: Vector, extent: Vecto
     (!overlap.node(0, Some(0), model.root_outside, MAX_TREE_DEPTH)).then_some(overlap.hit)
 }
 
-/// [`point_check`] with zero extent: whether the point is in solid space, points on a plane counted behind it.
+/// [`point_check`] with zero extent; a point on a plane counts as behind it.
 pub fn point_solid(model: &Model, point: Vector) -> bool {
     let mut outside = model.root_outside;
     let mut node = Some(0);
@@ -201,8 +201,7 @@ impl Overlap<'_> {
     }
 }
 
-/// Every node's collision hull planes, built once per `Model`, in the engine's test order: the hull planes, the six
-/// bounding box planes (0.1 outside the box on the −X, −Y, −Z, +Z sides, 0.1 inside on +X and +Y), then edge bevels.
+/// In the engine's test order: hull planes, six box planes (0.1 out on −X −Y −Z +Z, 0.1 in on +X +Y), edge bevels.
 #[derive(Default)]
 pub struct BspHulls {
     planes: Vec<Plane>,

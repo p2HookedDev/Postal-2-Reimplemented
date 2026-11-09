@@ -1,5 +1,4 @@
-//! Head bolt-ons (hats, caps) are knocked off as loose bodies at death and when the head goes (our choice; retail keeps
-//! them on the head at death and destroys them with it).
+//! Hats and caps come off as loose bodies at death and when the head goes; retail keeps them on and destroys them with it.
 
 use std::collections::VecDeque;
 

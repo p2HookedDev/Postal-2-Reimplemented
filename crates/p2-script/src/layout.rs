@@ -127,8 +127,7 @@ fn name_hash(name: &str) -> u64 {
     name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3))
 }
 
-/// Layouts built so far, keyed by package address: reuse it only with a resolver whose packages all stay loaded
-/// while the cache lives, or a new package at a freed address would find another's layouts.
+/// Keyed by package address: reuse only with a resolver whose packages outlive the cache, as freed addresses recur.
 #[derive(Default, Clone)]
 pub struct LayoutCache(FxHashMap<(usize, usize), Arc<StructLayout>>);
 

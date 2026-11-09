@@ -27,8 +27,7 @@ crate::render::shader_layers::layered_extension!(
 /// `depth_bias` as the pipeline's constant depth bias; [`OpaqueDecals::specialize`] takes this offset back out of it.
 pub const TERRAIN_LAYER_SORT: f32 = -1_000_000.0;
 
-/// The engine draws translucent BSP and actors in one back-to-front list in BSP walk order, so an actor in the eye's
-/// leaf comes last. Bevy sorts by box centre along the view, which for a mesh around the eye flips as the view turns.
+/// Retail draws a translucent actor in the eye's leaf last; Bevy's box-centre sort flips it as the view turns.
 pub const AROUND_EYE_SORT: f32 = 1_000_000.0;
 
 const BLENDED_SHADER: Handle<Shader> = uuid_handle!("3b8e51a4-7c2d-4f69-b0e8-91d5a6c4f207");

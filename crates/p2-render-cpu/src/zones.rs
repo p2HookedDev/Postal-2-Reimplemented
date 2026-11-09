@@ -100,7 +100,7 @@ impl AntiportalActor {
         Some(Self { faces, centre, zones: zones(min, max), min, max })
     }
 
-    /// Appends the occluder's planes to `planes`; `false` (nothing appended) when the eye faces no face.
+    /// `false`, appending nothing, when the eye faces no face.
     fn occluder(&self, eye: Vector, planes: &mut Vec<Plane>) -> bool {
         let front = |face: &Face| plane_dot(&face.plane, eye) > 0.0;
         if !self.faces.iter().any(front) {
@@ -194,7 +194,7 @@ impl ZonePortals {
     /// Each portal of a reached zone that the eye faces from that zone's side is clipped by the zone's view volumes; what is
     /// left opens the zone behind. Antiportals hide, in that zone, what lies wholly behind them, portals included (retail
     /// adds them as its front-to-back walk meets them; here as each volume is expanded). Zone 0 (outside the world) sees
-    /// everything. `seen` is reused from walk to walk.
+    /// everything.
     pub fn visible(&self, eye: Vector, zone: u8, view: &[Plane], seen: &mut VisibleZones) {
         let VisibleZones { walked, capped, planes, volumes, occluders, antiportals_used, actors_used, antiportal_sides, portal_sides, queue } =
             seen;

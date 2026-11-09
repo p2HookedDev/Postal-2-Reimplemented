@@ -39,7 +39,6 @@ impl ExportsByName {
         Self(order.into_boxed_slice())
     }
 
-    /// The exports named `name`, ascending.
     pub fn get(&self, package: &Package, name: &str) -> &[usize] {
         let order_of = |index: &usize| caseless_cmp(package.name(package.exports[*index].object_name), name);
         let start = self.0.partition_point(|index| order_of(index).is_lt());
@@ -79,8 +78,7 @@ pub struct LoadedPackage {
     exports_by_name: ExportsByName,
 }
 
-/// Finds packages by name in the search paths, loads them on demand, and resolves imports. A clone shares the loaded
-/// packages and copies the resolved-import cache: a clone that loads more packages keeps every [`PackageId`] of the original.
+/// A clone shares the loaded packages and copies the import cache, so it keeps every [`PackageId`] of the original.
 #[derive(Debug, Default, Clone)]
 pub struct Loader {
     files: FxHashMap<Caseless, PathBuf>,

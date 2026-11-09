@@ -288,7 +288,7 @@ impl LightMapTexture {
 }
 
 impl Model {
-    /// Mip 0 of each light map atlas as RGBA, decoded from the saved bytes without copying them into a [`Texture`].
+    /// Mip 0 of each light map atlas as RGBA.
     pub fn light_map_atlases(&self) -> Vec<Option<(u32, u32, Vec<[u8; 4]>)>> {
         self.light_map_textures
             .iter()

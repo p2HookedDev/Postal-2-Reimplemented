@@ -73,7 +73,6 @@ impl<'a> Scene<'a> {
         at
     }
 
-    /// Meshes whose box the segment enters only after `limit` are skipped.
     fn mesh_time(&self, start: Vector, end: Vector, limit: f32, wanted: MeshHit) -> Option<f32> {
         let entry = |index: u32, limit: f32| {
             let node = &self.tree[index as usize];

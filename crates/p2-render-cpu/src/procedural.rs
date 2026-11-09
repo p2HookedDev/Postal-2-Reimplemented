@@ -31,7 +31,7 @@ pub struct WaterSim {
     rng: u32,
 }
 
-/// The water texture's drop types; 0x40 and 0x41 are whirlies with a negative speed.
+/// 0x40 and 0x41 are whirlies with a negative speed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum DropType {

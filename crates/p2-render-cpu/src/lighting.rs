@@ -179,7 +179,6 @@ pub fn light_world_radius(radius: f32) -> f32 {
     25.0 * (radius as i32 + 1) as f32
 }
 
-/// What [`MeshLight::sample_intensity`] derives from the light alone, worked out once for many samples.
 struct PreparedLight<'a> {
     light: &'a MeshLight,
     radius: f32,

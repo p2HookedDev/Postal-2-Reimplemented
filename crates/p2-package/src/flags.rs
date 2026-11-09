@@ -1,5 +1,3 @@
-//! Retail object flag bits (`RF_*`) stored on each export.
-
 pub const RF_PUBLIC: u32 = 0x0000_0004;
 /// `RF_LoadForClient`, `RF_LoadForServer` and `RF_LoadForEdit`.
 pub const RF_LOAD_FOR_ANY: u32 = 0x0007_0000;

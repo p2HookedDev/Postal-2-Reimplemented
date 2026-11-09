@@ -1,5 +1,3 @@
-//! Retail flag bits on properties (`CPF_*`), functions (`FUNC_*`), states (`STATE_*`) and classes (`CLASS_*`).
-
 pub const CPF_INPUT: u32 = 0x4;
 pub const CPF_OPTIONAL_PARM: u32 = 0x10;
 pub const CPF_NET: u32 = 0x20;

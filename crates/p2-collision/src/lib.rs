@@ -377,8 +377,7 @@ pub fn mesh_line_check_at<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision
     found(best, start, end)
 }
 
-/// Keeps in `best` the smallest (time, mesh, triangle) among its hit and `mesh`'s, so the visiting order of meshes
-/// does not matter; returns the time limit for the next mesh.
+/// Keeps the smallest (time, mesh, triangle) in `best`, so mesh order does not matter; returns the next mesh's limit.
 fn earliest_in(mesh: &MeshCollision, index: usize, start: Vector, end: Vector, best: &mut Option<(f32, usize, usize, Vector)>) -> f32 {
     mesh.tree.along(start, end, best.map_or(1.0, |(time, ..)| time), |triangle| {
         let [a, b, c] = mesh.triangles[triangle].map(Vector::from);

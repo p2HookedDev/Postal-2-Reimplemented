@@ -62,7 +62,6 @@ fn lazy_skip(r: &mut Reader) -> Result<(usize, usize), Error> {
     Ok((unsigned(r, "lazy array skip offset")?, offset))
 }
 
-/// Lazy array: jumps past it without reading it.
 pub(crate) fn skip_lazy_array(r: &mut Reader) -> Result<(), Error> {
     let (skip, offset) = lazy_skip(r)?;
     seek_forward(r, skip, offset)
