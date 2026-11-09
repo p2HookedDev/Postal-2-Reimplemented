@@ -1,4 +1,4 @@
-//! The step runs on its own thread: scripts see results a step late; body changes queue until it ends.
+//! The step runs inside the level tick before actors, so scripts see this tick's results.
 
 mod shapes;
 
@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use p2_assets::{KMeshProps, read_kmesh_props, read_static_mesh};
 use p2_package::Package;
-use p2_physics::{Background, BodyId, BodyParams, Shape};
+use p2_physics::{BodyId, BodyParams, Impact, Shape, World};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use p2_math::{Rotator, Vector, quat_to_rotator, rotator_to_quat};
@@ -31,7 +31,8 @@ const TORQUE_SCALE: f32 = p2_physics::UNITS_PER_METER * p2_physics::UNITS_PER_ME
 
 #[derive(Default)]
 pub(crate) struct Karma {
-    pub(crate) world: Option<Background>,
+    pub(crate) world: Option<World>,
+    impacts: Vec<Impact>,
     bodies: BTreeMap<ObjectId, Body>,
     pub(crate) actors: FxHashMap<BodyId, ObjectId>,
     pub(crate) ragdolls: crate::ragdoll::Ragdolls,
@@ -89,7 +90,6 @@ impl<L: LoaderRef> Vm<L> {
     /// Runs before actors tick (unverified). Covers every level actor, static ones in `PHYS_Karma` too;
     /// `Physics` is read first, so an actor in no such mode costs one word.
     pub(crate) fn karma_tick(&mut self, delta: f32) -> Vec<(String, Error)> {
-        let mut errors = self.karma_results();
         let (mut actors, mut ragdolls, mut flying) = (Vec::new(), Vec::new(), Vec::new());
         for o in self.actors() {
             let list = match self.store.physics_of(o) {
@@ -111,23 +111,19 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.ragdolls_before_step(ragdolls);
         self.ragdoll_leftover_hits();
-        errors.extend(self.limbs_before_step(flying, delta.min(MAX_KARMA_TICK)));
+        let mut errors = self.limbs_before_step(flying, delta.min(MAX_KARMA_TICK));
         self.karma_movers_tick();
-        if let Some(world) = &mut self.karma.world
-            && (!self.karma.bodies.is_empty() || !self.karma.ragdolls.is_empty() || !self.karma.limbs.is_empty())
-        {
-            world.start(delta.min(MAX_KARMA_TICK));
+        let Some(world) = &mut self.karma.world else { return errors };
+        if self.karma.bodies.is_empty() && self.karma.ragdolls.is_empty() && self.karma.limbs.is_empty() {
+            return errors;
         }
-        errors
-    }
-
-    fn karma_results(&mut self) -> Vec<(String, Error)> {
-        let Some(world) = &mut self.karma.world else { return Vec::new() };
-        let impacts = world.take_impacts();
-        let (waits, waited) = world.take_waits();
-        self.count_n(Work::KarmaWait, waits as usize);
-        self.count_n(Work::KarmaWaitMicros, usize::try_from(waited.as_micros()).unwrap_or(usize::MAX));
-        let mut errors = self.ragdolls_after_step();
+        let timed = self.diagnostics.count_work.then(std::time::Instant::now);
+        world.step_into(delta.min(MAX_KARMA_TICK), &mut self.karma.impacts);
+        if let Some(started) = timed {
+            self.count_n(Work::KarmaStepMicros, usize::try_from(started.elapsed().as_micros()).unwrap_or(usize::MAX));
+        }
+        let impacts = std::mem::take(&mut self.karma.impacts);
+        errors.extend(self.ragdolls_after_step());
         errors.extend(self.limbs_after_step());
         let bodies: Vec<(ObjectId, BodyId)> = self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id)).collect();
         for (actor, id) in bodies {
@@ -165,13 +161,13 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn follow_body(&mut self, actor: ObjectId, id: BodyId) -> Result<(), Error> {
-        let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return Ok(()) };
+        let Some(world) = self.karma.world.as_mut() else { return Ok(()) };
         if world.is_sleeping(id) {
             self.set_vector(actor, Prop::Velocity, [0.0; 3].into());
             return Ok(());
         }
         let max_speed = self.store.get(actor, Prop::KarmaMaxSpeed).as_ref().map_or(2500.0, float);
-        let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return Ok(()) };
+        let Some(world) = self.karma.world.as_mut() else { return Ok(()) };
         world.limit_speed(id, max_speed);
         let (Some((location, quat)), Some(velocity)) = (world.pose(id), world.velocity(id)) else { return Ok(()) };
         let rotation = quat_to_rotator(quat);
@@ -198,7 +194,7 @@ impl<L: LoaderRef> Vm<L> {
                 (body.location, body.rotation) = (location, rotation);
                 if let Some(world) = &mut self.karma.world {
                     let quat = rotator_to_quat(rotation);
-                    world.change(move |w| w.set_pose(id, location, quat));
+                    world.set_pose(id, location, quat);
                 }
             }
             return Some(id);
@@ -223,7 +219,7 @@ impl<L: LoaderRef> Vm<L> {
             allow_yaw: params.allow_rotate,
         };
         self.karma_world(actor);
-        let world = self.karma.world.as_mut()?.world()?;
+        let world = self.karma.world.as_mut()?;
         let id = world.add_body(&body);
         self.karma.bodies.insert(actor, Body { id, location, rotation });
         self.karma.actors.insert(id, actor);
@@ -237,7 +233,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let phase = self.profile_start();
         let gravity = self.store.object_of(actor, Prop::PhysicsVolume).map_or(DEFAULT_GRAVITY, |v| self.store.vector(v, Prop::Gravity));
-        let mut world = p2_physics::World::new(gravity);
+        let mut world = World::new(gravity);
         for crate::world::LevelMesh { vertices, triangles } in self.level_meshes() {
             if let Err(e) = world.add_static_mesh(&vertices, triangles) {
                 self.diagnostics.log.push(format!("Karma level geometry: {e}"));
@@ -253,7 +249,7 @@ impl<L: LoaderRef> Vm<L> {
                 self.diagnostics.log.push(format!("Karma static mesh: {e}"));
             }
         }
-        self.karma.world = Some(Background::new(world));
+        self.karma.world = Some(world);
         self.karma.movers = self.actors().filter(|&a| self.store.is_a(a, crate::Kind::Mover) && !self.store.is_deleted(a)).map(|a| (a, None)).collect();
         self.profile_phase("load: karma world", phase);
     }
@@ -268,7 +264,7 @@ impl<L: LoaderRef> Vm<L> {
             let body = match (self.karma.movers.get(&mover).copied().flatten(), blocks) {
                 (Some(body), false) => {
                     if let Some(world) = &mut self.karma.world {
-                        world.change(move |w| w.remove_body(body.id));
+                        world.remove_body(body.id);
                     }
                     None
                 }
@@ -277,7 +273,7 @@ impl<L: LoaderRef> Vm<L> {
                         && let Some(world) = &mut self.karma.world
                     {
                         let quat = matrix_to_quat(rotation.axes().map(Vector::from));
-                        world.change(move |w| w.move_mover(body.id, location, quat));
+                        world.move_mover(body.id, location, quat);
                     }
                     Some(Body { id: body.id, location, rotation })
                 }
@@ -304,7 +300,7 @@ impl<L: LoaderRef> Vm<L> {
             self.diagnostics.log.push(format!("Karma mover {path}: no collision shape"));
             return None;
         };
-        let added = self.karma.world.as_mut()?.world()?.add_mover(&shapes, location, quat);
+        let added = self.karma.world.as_mut()?.add_mover(&shapes, location, quat);
         match added {
             Ok(id) => Some(Body { id, location, rotation: self.store.rotator_of(mover, Prop::Rotation) }),
             Err(e) => {
@@ -318,7 +314,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(body) = self.karma.bodies.remove(&actor) {
             self.karma.actors.remove(&body.id);
             if let Some(world) = &mut self.karma.world {
-                world.change(move |w| w.remove_body(body.id));
+                world.remove_body(body.id);
             }
         }
     }
@@ -433,11 +429,11 @@ impl<L: LoaderRef> Vm<L> {
                 };
                 if let (Some(world), Some(a), Some(other)) = (self.karma.world.as_mut(), body, other) {
                     let enabled = native == Native::KEnableCollision;
-                    world.change(move |w| w.set_pair_collision(a, other, enabled));
+                    world.set_pair_collision(a, other, enabled);
                 }
             }
             Native::KGetCOMPosition => {
-                let centre = match (self.karma.world.as_mut().and_then(Background::world), body) {
+                let centre = match (self.karma.world.as_mut(), body) {
                     (Some(w), Some(id)) => w.center_of_mass(id),
                     _ => None,
                 };
@@ -466,7 +462,7 @@ impl<L: LoaderRef> Vm<L> {
                 set_param(self, Prop::KMass, Value::Float(mass));
                 None
             }
-            Native::KGetMass => Some(Value::Float(match (world.as_mut().and_then(Background::world), body) {
+            Native::KGetMass => Some(Value::Float(match (world.as_mut(), body) {
                 (Some(w), Some(id)) => w.mass(id).unwrap_or(0.0),
                 _ => param(self, Prop::KMass),
             })),
@@ -517,7 +513,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 }
 
-fn body_command(world: &mut Option<Background>, native: Native, body: Option<BodyId>, args: &[Value]) -> bool {
+fn body_command(world: &mut Option<World>, native: Native, body: Option<BodyId>, args: &[Value]) -> bool {
     let v = |n: usize| vec3(args.get(n));
     match native {
         Native::KAddImpulse => {
@@ -535,16 +531,16 @@ fn body_command(world: &mut Option<Background>, native: Native, body: Option<Bod
             let torque = v(0).map(|c| c * TORQUE_SCALE);
             change_body(world, body, move |w, id| w.add_torque(id, torque));
         }
-        Native::KWake => change_body(world, body, p2_physics::World::wake),
+        Native::KWake => change_body(world, body, World::wake),
         // `KDisableKarma` makes the body sleep (unverified).
-        Native::KDisableKarma => change_body(world, body, p2_physics::World::sleep),
+        Native::KDisableKarma => change_body(world, body, World::sleep),
         _ => return false,
     }
     true
 }
 
-fn change_body(world: &mut Option<Background>, body: Option<BodyId>, change: impl FnOnce(&mut p2_physics::World, BodyId) + Send + Sync + 'static) {
+fn change_body(world: &mut Option<World>, body: Option<BodyId>, change: impl FnOnce(&mut World, BodyId)) {
     if let (Some(world), Some(id)) = (world.as_mut(), body) {
-        world.change(move |w| change(w, id));
+        change(world, id);
     }
 }

@@ -15,12 +15,9 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 let velocity = crate::natives::vec3(args.first());
                 let (Some(world), Some(ragdoll)) = (self.karma.world.as_mut(), self.karma.ragdolls.live.get(&this)) else { return Some(Ok(None)) };
-                let all = ragdoll.all.clone();
-                world.change(move |w| {
-                    for &id in all.iter() {
-                        w.set_velocity(id, velocity);
-                    }
-                });
+                for &id in ragdoll.all.iter() {
+                    world.set_velocity(id, velocity);
+                }
                 Some(Ok(None))
             }
             Native::KFreezeRagdoll => {
@@ -34,8 +31,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             Native::KWake if live => {
                 if let (Some(world), Some(ragdoll)) = (self.karma.world.as_mut(), self.karma.ragdolls.live.get(&this)) {
-                    let all = ragdoll.all.clone();
-                    world.change(move |w| w.wake_ragdoll(&all));
+                    world.wake_ragdoll(&ragdoll.all);
                 }
                 Some(Ok(None))
             }
@@ -60,13 +56,9 @@ impl<L: LoaderRef> Vm<L> {
                     ragdoll.parts.nearest_body(at)
                 };
                 if let Some(id) = target {
-                    let all = ragdoll.all.clone();
                     match seen {
-                        Some(hit) => {
-                            let hit = Hit { impulse, body: Some(id), ..hit };
-                            world.change(move |w| w.ragdoll_hit(&all, &hit));
-                        }
-                        None => world.change(move |w| w.ragdoll_impulse(&all, impulse, Some(id))),
+                        Some(hit) => world.ragdoll_hit(&ragdoll.all, &Hit { impulse, body: Some(id), ..hit }),
+                        None => world.ragdoll_impulse(&ragdoll.all, impulse, Some(id)),
                     }
                 }
                 Some(Ok(None))
@@ -122,8 +114,7 @@ impl<L: LoaderRef> Vm<L> {
             match ragdolls.live.get(&seen.actor) {
                 Some(ragdoll) if seen.hit.throw.is_some() => {
                     if let Some(world) = self.karma.world.as_mut() {
-                        let all = ragdoll.all.clone();
-                        world.change(move |w| w.ragdoll_hit(&all, &seen.hit));
+                        world.ragdoll_hit(&ragdoll.all, &seen.hit);
                     }
                 }
                 None if tick - seen.tick < HIT_TICKS => ragdolls.hits.push(seen),

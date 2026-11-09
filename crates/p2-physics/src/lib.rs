@@ -7,12 +7,10 @@ use std::sync::Mutex;
 use rapier3d::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-mod background;
 mod hit;
 mod level_contact;
 mod ragdoll;
 
-pub use background::Background;
 pub use hit::{Hit, Throw};
 pub use ragdoll::{JointLimit, JointParams, PartParams, RagdollParams, shapes_inertia};
 

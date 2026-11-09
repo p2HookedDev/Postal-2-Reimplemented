@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use p2_physics::{Background, BodyId, BodyParams, Shape};
+use p2_physics::{BodyId, BodyParams, Shape};
 
 use p2_math::{Rotator, Vector, quat_to_rotator, radians, rotator_to_quat};
 use crate::enums::{EDrawType, EPhysics};
@@ -70,7 +70,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let resting: Vec<(ObjectId, BodyId)> =
             self.karma.limbs.live.iter().filter(|&(&a, _)| self.store.physics_of(a) == Some(EPhysics::None)).map(|(&a, limb)| (a, limb.id)).collect();
-        let knocked: Vec<ObjectId> = match self.karma.world.as_mut().and_then(Background::world) {
+        let knocked: Vec<ObjectId> = match self.karma.world.as_mut() {
             Some(world) => resting.into_iter().filter(|&(_, id)| !world.is_sleeping(id)).map(|(a, _)| a).collect(),
             None => Vec::new(),
         };
@@ -121,7 +121,7 @@ impl<L: LoaderRef> Vm<L> {
         if driven.is_empty() {
             return Vec::new();
         }
-        let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return Vec::new() };
+        let Some(world) = self.karma.world.as_mut() else { return Vec::new() };
         let gravity = world.gravity();
         let moved: Vec<_> = driven
             .into_iter()
@@ -226,7 +226,7 @@ impl<L: LoaderRef> Vm<L> {
             allow_yaw: false,
         };
         self.karma_world(actor);
-        let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return };
+        let Some(world) = self.karma.world.as_mut() else { return };
         let id = world.add_body(&body);
         self.count(Work::LimbMade);
         self.karma.actors.insert(id, actor);
@@ -250,7 +250,7 @@ impl<L: LoaderRef> Vm<L> {
         if length([0, 1, 2].map(|i| location[i] - at[i]).into()) > STRAY {
             let quat = rotator_to_quat(self.store.rotator_of(actor, Prop::Rotation));
             if let Some(world) = &mut self.karma.world {
-                world.change(move |w| w.set_pose(id, location, quat));
+                world.set_pose(id, location, quat);
             }
             if let Some(limb) = self.karma.limbs.live.get_mut(&actor) {
                 limb.at = location;
@@ -267,10 +267,8 @@ impl<L: LoaderRef> Vm<L> {
         (limb.wrote, limb.before) = (velocity, velocity);
         let id = limb.id;
         if let Some(world) = &mut self.karma.world {
-            world.change(move |w| {
-                w.set_velocity(id, velocity);
-                w.set_spin(id, spin.into());
-            });
+            world.set_velocity(id, velocity);
+            world.set_spin(id, spin.into());
         }
     }
 
@@ -278,7 +276,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(limb) = self.karma.limbs.live.remove(&actor) else { return };
         self.karma.actors.remove(&limb.id);
         if let Some(world) = &mut self.karma.world {
-            world.change(move |w| w.remove_body(limb.id));
+            world.remove_body(limb.id);
         }
     }
 }

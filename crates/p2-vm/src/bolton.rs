@@ -189,7 +189,7 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(oldest, Prop::LifeSpan, Value::Float(RETIRE_LIFE));
         }
         if let Some(world) = &mut self.karma.world {
-            world.change(move |w| w.set_contacts(id, Contacts::LevelOnly));
+            world.set_contacts(id, Contacts::LevelOnly);
         }
     }
 
@@ -213,7 +213,7 @@ impl<L: LoaderRef> Vm<L> {
         let grown: Vec<BodyId> = young.extract_if(.., |&mut (_, age)| age >= LEVEL_ONLY).map(|(id, _)| id).collect();
         if let Some(world) = &mut self.karma.world {
             for id in grown {
-                world.change(move |w| w.set_contacts(id, Contacts::All));
+                world.set_contacts(id, Contacts::All);
             }
         }
     }

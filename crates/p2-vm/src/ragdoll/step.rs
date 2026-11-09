@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use p2_assets::pose::Frame;
-use p2_physics::{Background, RagdollParams};
+use p2_physics::RagdollParams;
 use p2_math::Vector;
 use crate::enums::EPhysics;
 use p2_math::matrix_to_quat;
@@ -125,7 +125,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn pose_ragdoll(&mut self, actor: ObjectId) -> Option<(Vector, Vector, bool)> {
-        let world = self.karma.world.as_mut()?.world()?;
+        let world = self.karma.world.as_mut()?;
         let ragdoll = self.karma.ragdolls.live.get_mut(&actor)?;
         ragdoll.fresh = false;
         let asleep = ragdoll.all.iter().all(|&id| world.is_sleeping(id));
@@ -212,7 +212,7 @@ impl<L: LoaderRef> Vm<L> {
         };
         let params = RagdollParams { parts: built.parts, joints: built.joint_params, linear_damping, angular_damping, friction, restitution, asleep };
         self.karma_world(actor);
-        let Some(world) = self.karma.world.as_mut().and_then(Background::world) else { return };
+        let Some(world) = self.karma.world.as_mut() else { return };
         let all = world.add_ragdoll(&params);
         let parts = world.parts(&all);
         let bodies = built.part_of_bone.iter().map(|part| part.map(|p| all[p])).collect();
@@ -240,8 +240,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(super) fn end_ragdoll(&mut self, actor: ObjectId, corpse: Corpse) {
         let Some(ragdoll) = self.karma.ragdolls.live.remove(&actor) else { return };
         if let Some(world) = self.karma.world.as_mut() {
-            let all = ragdoll.all.clone();
-            world.change(move |w| w.remove_ragdoll(&all));
+            world.remove_ragdoll(&ragdoll.all);
         }
         for id in ragdoll.all.iter() {
             self.karma.actors.remove(id);
