@@ -141,8 +141,12 @@ impl<L: LoaderRef> Vm<L> {
     /// so the player's own effects run in real time.
     pub fn particle_time_scale(&self, actor: ObjectId) -> f32 {
         let player_owned = self.store.object_of(actor, Prop::Owner).is_some_and(|owner| self.is_player(owner));
-        let dilation = self.level.map_or(1.0, |level| self.store.float_of(level, Prop::TimeDilation));
+        let dilation = self.time_dilation();
         if player_owned && dilation > 0.0 { 1.0 / dilation } else { 1.0 }
+    }
+
+    pub fn time_dilation(&self) -> f32 {
+        self.level.map_or(1.0, |level| self.store.float_of(level, Prop::TimeDilation))
     }
 
     pub fn drag_actors(&self) -> Vec<(Vector, Vector, f32, f32)> {

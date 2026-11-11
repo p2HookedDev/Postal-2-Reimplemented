@@ -16,6 +16,7 @@ use crate::enums::EPhysics;
 use crate::native_id::Native;
 use crate::interp::float;
 use crate::natives::{bool_arg, float_arg, vec3};
+use crate::object_table::ObjectTable;
 use crate::profiling::Work;
 use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop};
 
@@ -24,6 +25,8 @@ pub(crate) const IMPULSE_SCALE: f32 = 0.01;
 /// The force reaches Karma unscaled (Karma lengths are 1/50 of Unreal's), so in Unreal units
 /// the acceleration is force × 50 / mass.
 const MAX_KARMA_TICK: f32 = 0.05;
+/// A corpse this many game ticks old (about 10 s) should lie still: the profile log counts its awake parts apart.
+const OLD_CORPSE_TICKS: u32 = 1000;
 const FORCE_SCALE: f32 = p2_physics::UNITS_PER_METER;
 /// The torque reaches Karma unscaled; inertia in Unreal units is 50² times Karma's (unverified).
 const TORQUE_SCALE: f32 = p2_physics::UNITS_PER_METER * p2_physics::UNITS_PER_METER;
@@ -38,13 +41,39 @@ pub(crate) struct Karma {
     pub(crate) limbs: crate::limbs::Limbs,
     pub(crate) boltons: crate::bolton::Boltons,
     failed: FxHashSet<ObjectId>,
-    meshes: FxHashMap<ObjectId, Option<Arc<MeshShape>>>,
+    meshes: ObjectTable<Option<Arc<MeshShape>>>,
     movers: FxHashMap<ObjectId, Option<Body>>,
 }
 
 impl Karma {
     pub(crate) fn for_next_level(&mut self) -> Self {
         Self { ragdolls: self.ragdolls.for_next_level(), ..Default::default() }
+    }
+}
+
+impl<L: LoaderRef> Vm<L> {
+    /// For the profile log: the bodies the step holds and how many of them it has to move.
+    pub fn karma_census(&mut self) -> String {
+        let (wakes, [moved, turned]) = self.karma.world.as_mut().map_or_else(Default::default, |world| (std::mem::take(&mut world.wakes), std::mem::take(&mut world.rest_broken)));
+        let Some(world) = &self.karma.world else { return String::new() };
+        let count = |bodies: &mut dyn Iterator<Item = (ObjectId, BodyId)>| {
+            let (mut actors, mut parts, mut awake) = (FxHashSet::default(), 0, 0);
+            for (actor, id) in bodies {
+                actors.insert(actor);
+                parts += 1;
+                awake += usize::from(!world.is_sleeping(id));
+            }
+            (actors.len(), parts, awake)
+        };
+        let (ragdolls, parts, parts_awake) = count(&mut self.karma.ragdolls.bodies());
+        let slow = self.karma.ragdolls.bodies().filter(|&(_, id)| !world.is_sleeping(id) && world.is_slow(id)).count();
+        let (old, old_awake) = self.karma.ragdolls.bodies_older_than(OLD_CORPSE_TICKS).fold((0, 0), |(parts, awake), id| (parts + 1, awake + usize::from(!world.is_sleeping(id))));
+        let (limbs, _, limbs_awake) = count(&mut self.karma.limbs.bodies());
+        let flying = self.karma.limbs.bodies().filter(|&(actor, _)| self.store.physics_of(actor) == Some(EPhysics::Projectile)).count();
+        let (others, _, others_awake) = count(&mut self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id)));
+        format!(
+            "{ragdolls} ragdolls of {parts} parts ({parts_awake} awake, {slow} of them slow; over {OLD_CORPSE_TICKS} ticks old: {old} parts, {old_awake} awake), {wakes} wake calls, rest broken {moved} times by a move and {turned} by a turn, {limbs} limbs and bolt-ons ({limbs_awake} awake, {flying} flying), {others} other bodies ({others_awake} awake)"
+        )
     }
 }
 
@@ -89,6 +118,7 @@ impl<L: LoaderRef> Vm<L> {
     /// Runs before actors tick (unverified). Covers every level actor, static ones in `PHYS_Karma` too;
     /// `Physics` is read first, so an actor in no such mode costs one word.
     pub(crate) fn karma_tick(&mut self, delta: f32) -> Vec<(String, Error)> {
+        let phase = self.profile_start();
         let (mut actors, mut ragdolls, mut flying) = (Vec::new(), Vec::new(), Vec::new());
         for o in self.actors() {
             let list = match self.store.physics_of(o) {
@@ -113,6 +143,8 @@ impl<L: LoaderRef> Vm<L> {
         let mut errors = self.limbs_before_step(flying, delta.min(MAX_KARMA_TICK));
         self.karma_movers_tick();
         self.karma_gravity();
+        self.profile_phase("karma: before step", phase);
+        let phase = self.profile_start();
         let Some(world) = &mut self.karma.world else { return errors };
         if self.karma.bodies.is_empty() && self.karma.ragdolls.is_empty() && self.karma.limbs.is_empty() {
             return errors;
@@ -122,9 +154,15 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(started) = timed {
             self.count_n(Work::KarmaStepMicros, usize::try_from(started.elapsed().as_micros()).unwrap_or(usize::MAX));
         }
+        self.profile_phase("karma: step", phase);
+        let phase = self.profile_start();
         let impacts = std::mem::take(&mut self.karma.impacts);
+        let part = self.profile_start();
         errors.extend(self.ragdolls_after_step());
+        self.profile_phase("karma: ragdolls after step", part);
+        let part = self.profile_start();
         errors.extend(self.limbs_after_step());
+        self.profile_phase("karma: limbs after step", part);
         let bodies: Vec<(ObjectId, BodyId)> = self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id)).collect();
         for (actor, id) in bodies {
             if let Err(e) = self.follow_body(actor, id) {
@@ -144,6 +182,7 @@ impl<L: LoaderRef> Vm<L> {
                 errors.push((self.store.object(actor).path.clone(), e));
             }
         }
+        self.profile_phase("karma: after step", phase);
         errors
     }
 
@@ -401,7 +440,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn karma_mesh(&mut self, mesh: ObjectId) -> Option<Arc<MeshShape>> {
-        if let Some(shape) = self.karma.meshes.get(&mesh) {
+        if let Some(shape) = self.karma.meshes.get(mesh) {
             return shape.clone();
         }
         let path = self.store.object(mesh).path.clone();

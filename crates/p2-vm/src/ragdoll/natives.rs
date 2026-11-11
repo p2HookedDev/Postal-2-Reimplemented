@@ -15,6 +15,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 let velocity = crate::natives::vec3(args.first());
                 let (Some(world), Some(ragdoll)) = (self.karma.world.as_mut(), self.karma.ragdolls.live.get(&this)) else { return Some(Ok(None)) };
+                world.wake_ragdoll(&ragdoll.all);
                 for &id in ragdoll.all.iter() {
                     world.set_velocity(id, velocity);
                 }

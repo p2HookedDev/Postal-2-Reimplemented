@@ -4086,6 +4086,7 @@ name = "p2-render-cpu"
 version = "0.2.0"
 dependencies = [
  "p2-assets",
+ "p2-collision",
  "p2-math",
  "p2-package",
  "p2-script",

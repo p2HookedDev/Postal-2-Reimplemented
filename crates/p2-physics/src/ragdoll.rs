@@ -47,7 +47,16 @@ pub struct RagdollParams {
 }
 
 /// Karma's limit. Piles tremble just under it.
-const SLEEP_SPEED: f32 = 7.07;
+pub(crate) const SLEEP_SPEED: f32 = 7.07;
+/// How far a part may be from where it was marked and still count as lying there: Karma's sleep speed over the
+/// sleep time. By where the part is, not by its speed: a pile's parts tremble fast in place.
+const REST_REACH: f32 = SLEEP_SPEED * SLEEP_TIME;
+/// In radians. Wider than Karma's turn speed over the sleep time (0.032): a trembling part turns back and forth
+/// by about that much.
+const REST_TURN: f32 = 0.1;
+const REST_STEPS: u32 = (SLEEP_TIME / crate::STEP + 0.5) as u32;
+/// Unreal units between two corpses' boxes within which they count as one pile.
+const PILE_REACH: f32 = 2.0;
 /// In rad/s, as the original engine: a limb a joint limit still pulls back keeps the corpse awake.
 const SLEEP_ANGULAR_SPEED: f32 = 0.032;
 const SLEEP_TIME: f32 = 1.0;
@@ -60,6 +69,12 @@ const LIMIT_DAMPING: f32 = 5.0;
 const CONE_HOLD: f32 = 0.3;
 /// In rad/s: slower than this, a limb past the cone is only stopped, not pulled back, or a pile never sleeps.
 const CONE_RESTING: f32 = 1.0;
+
+pub(crate) struct Resting {
+    parts: Vec<RigidBodyHandle>,
+    marks: Vec<Pose>,
+    steps: u32,
+}
 
 /// Rapier limits swing per axis, a box whose corners reach about 1.4 times past Karma's elliptical cone; this holds the
 /// swing inside the ellipse.
@@ -127,12 +142,12 @@ pub fn shapes_inertia(shapes: &[Shape], mass: f32) -> Option<p2_math::Vector> {
 
 impl World {
     pub(crate) fn hold_cones(&mut self, dt: f32) {
-        let bodies = &mut self.bodies;
+        let (bodies, dormant) = (&mut self.bodies, &self.dormant);
         self.cones.retain(|cone| bodies.contains(cone.parent) && bodies.contains(cone.child));
         let mut impulses = Vec::new();
         for cone in &self.cones {
             let (Some(parent), Some(child)) = (bodies.get(cone.parent), bodies.get(cone.child)) else { continue };
-            if parent.is_sleeping() && child.is_sleeping() {
+            if (parent.is_sleeping() && child.is_sleeping()) || dormant.contains(&cone.child) {
                 continue;
             }
             let frame = *parent.rotation() * cone.parent_frame;
@@ -175,7 +190,65 @@ impl World {
                 }
             }
         }
+        self.ragdolls.push(Resting { parts: bodies.iter().map(|id| id.0).collect(), marks: Vec::new(), steps: 0 });
         bodies
+    }
+
+    /// A ragdoll whose parts all stayed by their marks for the sleep time goes dormant, whatever it touches.
+    pub(crate) fn settle_ragdolls(&mut self) {
+        let mut settled = Vec::new();
+        for ragdoll in &mut self.ragdolls {
+            let awake = |&part: &RigidBodyHandle| self.bodies.get(part).filter(|body| body.is_dynamic() && !body.is_sleeping()).map(|body| *body.position());
+            let Some(poses) = ragdoll.parts.iter().map(awake).collect::<Option<Vec<Pose>>>() else {
+                ragdoll.marks.clear();
+                continue;
+            };
+            let moved = ragdoll.marks.iter().zip(&poses).any(|(mark, pose)| mark.translation.distance(pose.translation) > REST_REACH);
+            let turned = ragdoll.marks.iter().zip(&poses).any(|(mark, pose)| mark.rotation.angle_between(pose.rotation) > REST_TURN);
+            if ragdoll.marks.len() != poses.len() || moved || turned {
+                self.rest_broken[0] += u32::from(moved);
+                self.rest_broken[1] += u32::from(turned && !moved);
+                (ragdoll.marks, ragdoll.steps) = (poses, 0);
+            } else {
+                ragdoll.steps += 1;
+                if ragdoll.steps >= REST_STEPS {
+                    settled.extend(&ragdoll.parts);
+                }
+            }
+        }
+        for handle in settled {
+            self.sleep(BodyId(handle));
+        }
+    }
+
+    pub(crate) fn is_ragdoll_part(&self, handle: RigidBodyHandle) -> bool {
+        self.ragdolls.iter().any(|ragdoll| ragdoll.parts.contains(&handle))
+    }
+
+    /// The dormant parts of `handle`'s ragdoll and of the dormant ragdolls piled with it: a corpse must fall when
+    /// what it lies on is moved, and a dormant body would hang in the air.
+    pub(crate) fn dormant_pile(&self, handle: RigidBodyHandle) -> Vec<RigidBodyHandle> {
+        let is_dormant = |ragdoll: &Resting| ragdoll.parts.iter().any(|part| self.dormant.contains(part));
+        let Some(first) = self.ragdolls.iter().position(|ragdoll| ragdoll.parts.contains(&handle)).filter(|_| self.ragdolls.iter().any(is_dormant)) else {
+            return Vec::new();
+        };
+        let part_boxes = |ragdoll: &Resting| {
+            let colliders = ragdoll.parts.iter().filter_map(|&part| self.bodies.get(part)).flat_map(|body| body.colliders().iter());
+            colliders.filter_map(|&c| self.colliders.get(c)).map(Collider::compute_aabb).reduce(|a, b| a.merged(&b))
+        };
+        let boxes: Vec<Option<Aabb>> = self.ragdolls.iter().map(part_boxes).collect();
+        let mut pile = vec![first];
+        let mut next = 0;
+        while let Some(&at) = pile.get(next) {
+            next += 1;
+            let Some(reach) = boxes[at].map(|aabb| aabb.loosened(PILE_REACH)) else { continue };
+            for (other, ragdoll) in self.ragdolls.iter().enumerate() {
+                if !pile.contains(&other) && is_dormant(ragdoll) && boxes[other].is_some_and(|aabb| aabb.intersects(&reach)) {
+                    pile.push(other);
+                }
+            }
+        }
+        pile.into_iter().flat_map(|ragdoll| &self.ragdolls[ragdoll].parts).copied().filter(|part| self.dormant.contains(part)).collect()
     }
 
     fn ragdoll_body(&mut self, part: &PartParams, mass: f32, inertia: p2_math::Vector, params: &RagdollParams, activation: RigidBodyActivation) -> BodyId {
@@ -267,16 +340,20 @@ impl World {
     pub fn remove_ragdoll(&mut self, bodies: &[BodyId]) {
         let removed: FxHashSet<RigidBodyHandle> = bodies.iter().map(|id| id.0).collect();
         self.hooks.disabled.retain(|(a, b)| !removed.contains(a) && !removed.contains(b));
+        self.ragdolls.retain(|ragdoll| !ragdoll.parts.iter().any(|part| removed.contains(part)));
         for &id in bodies {
             self.take_out_body(id);
         }
     }
 
+    /// At rest long enough by Rapier's own test: a slow body that stays awake waits for the rest of its ragdoll.
+    pub fn is_slow(&self, id: BodyId) -> bool {
+        self.bodies.get(id.0).is_some_and(|body| body.activation().is_eligible_for_sleep())
+    }
+
     pub fn wake_ragdoll(&mut self, bodies: &[BodyId]) {
-        for id in bodies {
-            if let Some(body) = self.bodies.get_mut(id.0) {
-                body.wake_up(true);
-            }
+        for &id in bodies {
+            self.wake(id);
         }
     }
 
@@ -565,7 +642,7 @@ mod tests {
         let mut params = uneven_chain(300.0);
         params.linear_damping = 0.0;
         let bodies = world.add_ragdoll(&params);
-        for _ in 0..30 {
+        for _ in 0..31 {
             world.step(1.0 / 60.0);
         }
         let drop = 300.0 - origin(&world, bodies[0])[2];

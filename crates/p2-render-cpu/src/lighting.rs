@@ -9,7 +9,7 @@ pub struct LightType(pub u8);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LightEffect(pub u8);
 
-const LT_NONE: LightType = LightType(0);
+pub(crate) const LT_NONE: LightType = LightType(0);
 const LT_STEADY: LightType = LightType(1);
 const LT_PULSE: LightType = LightType(2);
 const LT_BLINK: LightType = LightType(3);
@@ -25,6 +25,7 @@ const LE_CYLINDER: LightEffect = LightEffect(17);
 pub const LE_SUNLIGHT: LightEffect = LightEffect(20);
 
 pub const MAX_HARDWARE_LIGHTS: usize = 8;
+pub const SUN_DISTANCE: f32 = 65536.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshLight {
@@ -363,33 +364,6 @@ impl HardwareLight {
     }
 }
 
-/// The lights the renderer gives an actor (unverified): those reaching its lit sphere, strongest
-/// first, sun lights first, spots only with the sphere's centre in their cone, at most `max`.
-pub fn relevant_lights<'a>(candidates: impl IntoIterator<Item = &'a MeshLight>, center: Vector, radius: f32, max: usize) -> Vec<MeshLight> {
-    let mut keyed: Vec<(f32, MeshLight)> = candidates
-        .into_iter()
-        .filter(|light| light.light_type != LT_NONE)
-        .filter_map(|light| {
-            let to_center = center - light.location;
-            let reach = light.world_radius() + radius;
-            let key = match light.effect {
-                LE_SUNLIGHT => f32::MAX,
-                LE_SPOTLIGHT | LE_STATIC_SPOT => {
-                    let length = to_center.dot(to_center).sqrt().max(1e-6);
-                    let along = to_center.dot(light.rotation.vector()) / length;
-                    // The list's limit is squared, so wider than `sample_intensity`'s cone (unverified).
-                    let cone = light.cone_sine();
-                    if along > 0.0 && along > cone * cone { (1.0 - to_center.dot(to_center) / (reach * reach)) * light.brightness } else { 0.0 }
-                }
-                _ => (1.0 - to_center.dot(to_center) / (reach * reach)) * light.brightness,
-            };
-            (key > 0.0).then_some((key, *light))
-        })
-        .collect();
-    keyed.sort_by(|a, b| b.0.total_cmp(&a.0));
-    keyed.into_iter().take(max.min(MAX_HARDWARE_LIGHTS)).map(|(_, light)| light).collect()
-}
-
 /// Whether the engine recomputes the saved colours before drawing: a light whose "missing or dynamic"
 /// state equals its `applied` flag. `lights` matches `instance.lights`; `None` = light actor gone.
 pub fn needs_relight(instance: &StaticMeshInstance, lights: &[Option<MeshLight>]) -> bool {
@@ -566,17 +540,6 @@ mod tests {
         let sun = MeshLight { effect: LE_SUNLIGHT, rotation: [-16384, 0, 0].into(), ..light };
         let sun = HardwareLight::new(&sun, 1.0, [0.0; 3].into(), 50.0).unwrap();
         assert!((sun.sample([5000.0, 0.0, 0.0].into(), [0.0, 0.0, 1.0].into())[0] - 0.875 * full).abs() < 1e-4);
-    }
-
-    #[test]
-    fn relevant_lights_strongest_first() {
-        let at = |x: f32, brightness: f32| MeshLight { location: [x, 0.0, 0.0].into(), radius: 7.0, brightness, ..MeshLight::default() };
-        let sun = MeshLight { effect: LE_SUNLIGHT, location: [1e6, 0.0, 0.0].into(), brightness: 10.0, ..MeshLight::default() };
-        let candidates = [at(100.0, 64.0), at(200.0, 255.0), at(10.0, 255.0), at(400.0, 255.0), sun];
-        let lights = relevant_lights(&candidates, [0.0; 3].into(), 50.0, 3);
-        let xs: Vec<f32> = lights.iter().map(|l| l.location[0]).collect();
-        assert_eq!(xs, [1e6, 10.0, 200.0]);
-        assert_eq!(relevant_lights(&candidates, [0.0; 3].into(), 50.0, 20).len(), 4);
     }
 
     #[test]

@@ -14,6 +14,8 @@ pub struct FrameTimes {
     pub vm_totals: std::collections::BTreeMap<&'static str, Duration>,
     pub vm_profile: VmProfile,
     pub vm_parts: FxHashMap<String, Duration>,
+    /// Game ticks presented: fewer than the frames drawn while a tick takes longer than a frame.
+    pub vm_frames: u32,
     pub(super) current: FrameParts,
     pub(super) slowest: Option<FrameParts>,
 }
@@ -42,6 +44,7 @@ impl FrameTimes {
     }
 
     pub(super) fn add_vm(&mut self, parts: &mut Vec<(&'static str, Duration)>, profile: &mut FxHashMap<String, Duration>) {
+        self.vm_frames += 1;
         for (name, time) in parts.drain(..) {
             *self.vm_totals.entry(name).or_default() += time;
             add_part(&mut self.current.vm, name, time);

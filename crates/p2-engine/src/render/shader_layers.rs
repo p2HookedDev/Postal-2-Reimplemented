@@ -21,6 +21,8 @@ pub struct ShaderLayers {
     pub specular: Vec4,
     pub specular_u: Vec4,
     pub specular_v: Vec4,
+    /// x: 1 for a surface drawn with `OB_Darken`, whose light goes on the colour before it is taken from one.
+    pub blend: Vec4,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,9 +84,15 @@ impl Layers {
             specular: shader_params,
             specular_u: Vec4::X,
             specular_v: Vec4::Y,
+            blend: Vec4::ZERO,
         };
         let specular_uv = if flat_specular.is_some() { specular_uv } else { Vec::new() };
         Self { detail, specular, flat_specular, params, premultiplied, specular_uv }
+    }
+
+    pub fn darkening(mut self) -> Self {
+        self.params.blend.x = 1.0;
+        self
     }
 
     pub fn lit(&self, mut material: StandardMaterial) -> StandardMaterial {

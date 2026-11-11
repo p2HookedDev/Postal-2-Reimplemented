@@ -131,8 +131,8 @@ fn static_mesh_models(
             let relight = relit.filter(|&(fits, _)| !fits).map(|(_, lighting)| {
                 let mesh = shared.get_or_insert_with(|| Arc::new(mesh.clone())).clone();
                 let shading = Shading::Vertices { mesh, sphere, scale: lighting.placement.scale, pre_pivot: lighting.placement.pre_pivot };
-                ActorLit::new(follow.actor, lighting.glow, MAX_HARDWARE_LIGHTS, 0.0, shading)
-                    .lit_at(lighting.placement.location, lighting.placement.rotation)
+                ActorLit::new(follow.actor, MAX_HARDWARE_LIGHTS, 0.0, shading)
+                    .baked_at(lighting.placement.location, lighting.placement.rotation, lighting.glow)
             });
             parts.followers.push(MovingModel { sections: sections(t, lighting.as_deref(), relight.is_some(), mirrored, &|_| true), transform, follow, lit: relight });
             continue;

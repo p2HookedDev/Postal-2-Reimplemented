@@ -8,6 +8,7 @@ use p2_script::{ScriptObject, read_export};
 
 use p2_math::Rotator;
 
+use crate::object_table::ObjectTable;
 use crate::{Error, LoaderRef, NameId, ObjectId, Vm, Prop};
 
 mod natives;
@@ -89,7 +90,7 @@ impl Instance {
 
 #[derive(Debug, Default)]
 pub(crate) struct Anims {
-    instances: FxHashMap<ObjectId, Instance>,
+    instances: ObjectTable<Box<Instance>>,
     sequences: FxHashMap<ObjectId, Option<Arc<[Sequence]>>>,
     default_anims: FxHashMap<ObjectId, Option<ObjectId>>,
     probe_masks: FxHashMap<(PackageId, usize), (u64, u64)>,
@@ -99,7 +100,9 @@ pub(crate) struct Anims {
 
 impl Anims {
     pub(crate) fn forget(&mut self, actors: &FxHashSet<ObjectId>) {
-        self.instances.retain(|actor, _| !actors.contains(actor));
+        for &actor in actors {
+            self.instances.remove(actor);
+        }
     }
 
     /// The loader changed: a mesh stub may have a skeletal mesh export now.
@@ -173,13 +176,14 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn instance(&self, actor: ObjectId) -> Option<&Instance> {
-        let instance = self.media.anims.instances.get(&actor)?;
+        let instance: &Instance = self.media.anims.instances.get(actor)?;
         (Some(instance.mesh) == self.skeletal_mesh(actor)).then_some(instance)
     }
 
     fn instance_mut(&mut self, actor: ObjectId) -> Option<&mut Instance> {
         let mesh = self.skeletal_mesh_kept(actor)?;
-        let instance = self.media.anims.instances.entry(actor).or_insert_with(|| Instance::new(mesh));
+        self.script.states.stir(actor);
+        let instance: &mut Instance = self.media.anims.instances.get_or_insert_with(actor, || Box::new(Instance::new(mesh)));
         if instance.mesh != mesh {
             *instance = Instance::new(mesh);
         }
@@ -192,7 +196,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn channel_mut(&mut self, actor: ObjectId, channel: i32) -> Option<&mut AnimChannel> {
         let mesh = self.skeletal_mesh_kept(actor)?;
-        let instance = self.media.anims.instances.get_mut(&actor).filter(|i| i.mesh == mesh)?;
+        let instance = self.media.anims.instances.get_mut(actor).filter(|i| i.mesh == mesh)?;
         instance.channels.get_mut(usize::try_from(channel).ok()?)
     }
 

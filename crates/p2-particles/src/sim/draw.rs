@@ -49,7 +49,7 @@ impl ParticleEmitter {
                 [up, right] = rotate_about([up, right], spin_units(p), axis);
             }
             let (uv, blend) = subdivision(props, p);
-            SpriteParticle { location, size: [size_x, size_y], up, right, color: p.color, uv, blend }
+            SpriteParticle { location, previous: to_world(p.old_location), size: [size_x, size_y], up, right, color: p.color, uv, blend }
         })
     }
 

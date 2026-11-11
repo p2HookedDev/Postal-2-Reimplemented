@@ -1,3 +1,4 @@
+use crate::states::{EVENT_NAMES, Event};
 use crate::volumes::{OldZone, ZoneEvents};
 use crate::{ClassId, Error, HostCommand, InteractionOrder, Kind, ObjectId, LoaderRef, Prop, Value, Vm};
 use super::{MAX_TICK, MIN_TICK, add_time};
@@ -26,11 +27,11 @@ impl<L: LoaderRef> Vm<L> {
             let mut accepted = vec![player, pawn];
             accepted.extend(self.arrive(pawn)?);
             for &actor in &accepted {
-                self.event(actor, "TravelPreAccept", Vec::new())?;
+                self.event(actor, Event::TravelPreAccept, Vec::new())?;
             }
-            self.event(game, "AcceptInventory", [Value::Object(Some(pawn))])?;
+            self.event(game, Event::AcceptInventory, [Value::Object(Some(pawn))])?;
             for &actor in &accepted {
-                self.event(actor, "TravelPostAccept", Vec::new())?;
+                self.event(actor, Event::TravelPostAccept, Vec::new())?;
             }
         }
         Ok(Some((player, pawn)))
@@ -72,12 +73,13 @@ impl<L: LoaderRef> Vm<L> {
         let game = self.spawn(game_class, None, [None, None])?;
         self.store.set(level, Prop::Game, Value::Object(game));
         if let Some(game) = game
-            && let Err(e) = self.event(game, "InitGame", [Value::Str(options.to_owned()), Value::Str(String::new())])
+            && let Err(e) = self.event(game, Event::InitGame, [Value::Str(options.to_owned()), Value::Str(String::new())])
         {
             errors.push((self.store.object(game).path.clone(), "InitGame", e));
         }
-        for event in ["PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState"] {
-            if event == "PostBeginPlay" {
+        for event in [Event::PreBeginPlay, Event::BeginPlay, Event::PostBeginPlay, Event::SetInitialState] {
+            let post_begin_play = matches!(event, Event::PostBeginPlay);
+            if post_begin_play {
                 for &actor in &actors {
                     if let Err(e) = self.set_zone(actor, ZoneEvents::Silent, OldZone::Level) {
                         errors.push((self.store.object(actor).path.clone(), "SetZone", e));
@@ -89,9 +91,9 @@ impl<L: LoaderRef> Vm<L> {
                     continue;
                 }
                 if let Err(e) = self.event(actor, event, Vec::new()) {
-                    errors.push((self.store.object(actor).path.clone(), event, e));
+                    errors.push((self.store.object(actor).path.clone(), EVENT_NAMES[event as usize], e));
                 }
-                if event == "PostBeginPlay" && self.store.is_a(actor, Kind::SceneManager) && !self.store.is_deleted(actor) {
+                if post_begin_play && self.store.is_a(actor, Kind::SceneManager) && !self.store.is_deleted(actor) {
                     self.prepare_path(actor);
                 }
             }

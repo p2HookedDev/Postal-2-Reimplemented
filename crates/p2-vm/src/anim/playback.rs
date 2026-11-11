@@ -209,7 +209,7 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn anim_rate_on_channel(&mut self, actor: ObjectId, channel: i32) -> f32 {
         let Some(sequence) = self.valid_channel(actor, channel).map(|state| state.sequence) else { return DEFAULT_SEQUENCE_RATE };
-        let known = self.media.anims.instances.get(&actor).and_then(|instance| instance.rates.iter().find(|(name, _)| *name == sequence));
+        let known = self.media.anims.instances.get(actor).and_then(|instance| instance.rates.iter().find(|(name, _)| *name == sequence));
         if let Some(&(_, rate)) = known {
             return rate;
         }
@@ -217,7 +217,7 @@ impl<L: LoaderRef> Vm<L> {
             Some((_, rate)) if rate != 0.0 => rate,
             _ => DEFAULT_SEQUENCE_RATE,
         };
-        if let Some(instance) = self.media.anims.instances.get_mut(&actor) {
+        if let Some(instance) = self.media.anims.instances.get_mut(actor) {
             instance.rates.push((sequence, rate));
         }
         rate

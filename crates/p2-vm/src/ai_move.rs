@@ -121,7 +121,7 @@ impl<L: LoaderRef> Vm<L> {
                 let mut destination_offset = offset;
                 if self.store.is_a(target, Kind::NavigationPoint) {
                     if self.store.flag_of(target, Prop::bSpecialMove) {
-                        self.event(target, "SuggestMovePreparation", [Value::Object(Some(pawn))])?;
+                        self.event(target, crate::states::Event::SuggestMovePreparation, [Value::Object(Some(pawn))])?;
                     }
                     let straight = self.store.flag_of(target, Prop::bNeverUseStrafing) || self.store.flag_of(target, Prop::bForceNoStrafing);
                     if !radius_version && offset == 0.0 && !straight && self.store.object_of(this, Prop::RouteGoal) != Some(target) {
@@ -188,7 +188,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn set_walking(&mut self, pawn: ObjectId, walk: bool) -> Result<(), Error> {
         if walk != self.store.flag_of(pawn, Prop::bIsWalking) {
-            self.event(pawn, "SetWalking", [Value::Bool(walk)])?;
+            self.event(pawn, crate::states::Event::SetWalking, [Value::Bool(walk)])?;
         }
         Ok(())
     }
@@ -274,7 +274,7 @@ impl<L: LoaderRef> Vm<L> {
                 let left = self.store.float_of(controller, Prop::LatentFloat) - delta;
                 self.store.set(controller, Prop::LatentFloat, Value::Float(left));
                 if left < 0.0 {
-                    self.event(controller, "LongFall", Vec::new())?;
+                    self.event(controller, crate::states::Event::LongFall, Vec::new())?;
                 }
                 Ok(false)
             }
@@ -321,7 +321,7 @@ impl<L: LoaderRef> Vm<L> {
             if let Some(goal) = goal.filter(|&g| self.store.is_a(g, Kind::NavigationPoint)) {
                 self.store.set(pawn, Prop::Anchor, Value::Object(Some(goal)));
             }
-            self.event(controller, "HitPathGoal", [Value::Object(goal), Value::Vector(destination)])?;
+            self.event(controller, crate::states::Event::HitPathGoal, [Value::Object(goal), Value::Vector(destination)])?;
             return Ok(true);
         }
         let heading = if fly {

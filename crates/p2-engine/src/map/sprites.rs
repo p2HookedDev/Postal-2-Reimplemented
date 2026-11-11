@@ -11,14 +11,14 @@ pub struct SpriteQuad {
 }
 
 impl Session {
-    pub(super) fn add_sprites(&mut self, sprites: Vec<SpriteActor>, origin: Vec3, t: &mut SceneTargets) {
+    pub(super) fn add_sprites(&mut self, sprites: Vec<SpriteActor>, origin: Vec3, t: &mut SpawnTargets) {
         if sprites.is_empty() {
             return;
         }
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         let quad = t.assets.meshes.add(sprite_quad());
         for sprite in sprites {
-            let found = self.actor_textures.entry(sprite.texture.clone()).or_insert_with_key(|path| ActorTexture::read(game, path, |image| t.assets.images.add(image)));
+            let found = t.spawned.actor_textures.entry(sprite.texture.clone()).or_insert_with_key(|path| ActorTexture::read(game, path, |image| t.assets.images.add(image)));
             let Some(ActorTexture { image, texels, blending }) = found.clone() else { continue };
             let blend = sprite_blend(blending, sprite.style);
             let material = ParticleMaterial::sprite(image, blend);
@@ -27,7 +27,7 @@ impl Session {
             let (hidden, location) = frame.unwrap_or((sprite.hidden, sprite.location));
             let placed = follow.transform(location, Rotator::from([0; 3]));
             let shown = if hidden { Visibility::Hidden } else { Visibility::Inherited };
-            let parent = t.commands.spawn((ActorModel(sprite.object), Transform::from_translation(origin), Visibility::default())).id();
+            let parent = t.commands.spawn((MapScoped, ActorModel(sprite.object), Transform::from_translation(origin), Visibility::default())).id();
             t.commands.spawn((
                 Mesh3d(quad.clone()),
                 MeshMaterial3d(t.assets.particle_materials.add(material)),

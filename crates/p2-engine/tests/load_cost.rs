@@ -15,7 +15,7 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use p2_engine::animation::Animated;
-use p2_engine::map::{SceneTargets, Session};
+use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SceneTargets, Session, SpawnedActors};
 use p2_engine::mesh_view::{MeshViewPlugin, MeshViewSystems};
 use p2_engine::play::{FrameTimes, Play};
 
@@ -41,6 +41,12 @@ fn monday_scene_build_cost() {
         .init_resource::<Animated>()
         .init_resource::<Play>()
         .init_resource::<FrameTimes>()
+        .init_resource::<Fluids>()
+        .init_resource::<MaterialSwitches>()
+        .init_resource::<Projectors>()
+        .init_resource::<Particles>()
+        .init_resource::<SpawnedActors>()
+        .init_resource::<Hud>()
         .insert_resource(Holder { session: Session::new(root), begun: None, finish: None })
         .add_systems(Update, (|mut holder: ResMut<Holder>, mut t: SceneTargets| {
             let holder = &mut *holder;

@@ -42,13 +42,25 @@ fn set_camera(camera: &mut Mut<Camera>, is_active: bool, viewport: Option<&Viewp
 
 /// After the frame is presented: a slot's camera turns on and takes its field of view in the frame its models move to its
 /// layer (a kick's foot takes slot 0 and the weapon moves to slot 1), not a frame later.
-pub(super) fn place_overlay_cameras(
+pub(super) struct ViewCameraPlugin;
+
+impl Plugin for ViewCameraPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, place_camera.in_set(SceneViewSystems::Place))
+            // After the HUD paint (egui's pass), so a layer shows in the frame it was painted.
+            .add_systems(PostUpdate, show_canvas_layers.after(EguiPostUpdateSet::EndPass))
+            .add_systems(PostUpdate, place_overlay_cameras.after(crate::play::PlaySystems::Present).before(CameraUpdateSystems).before(bevy::transform::TransformSystems::Propagate));
+    }
+}
+
+fn place_overlay_cameras(
     view: Res<MeshView>,
+    look: Res<crate::components::OverlayLook>,
     cameras: Query<&Transform, (With<SceneView>, Without<OverlayCamera>)>,
     mut overlays: Query<(&mut Camera, &mut Transform, &mut Projection, &OverlayCamera), Without<SceneView>>,
 ) {
     let viewport = view.bevy_viewport();
-    let view_transform = cameras.iter().next().copied();
+    let view_transform = look.0.or_else(|| cameras.iter().next().copied());
     for (mut camera, mut transform, mut projection, OverlayCamera(slot)) in &mut overlays {
         let fov = view.overlays.get(*slot).copied();
         view.set_fov(&mut projection, fov.filter(|&fov| fov > 0.0).unwrap_or(view.view_fov()));
@@ -61,7 +73,7 @@ pub(super) fn place_overlay_cameras(
     }
 }
 
-pub(super) fn show_canvas_layers(view: Res<MeshView>, mut layers: Query<(&mut Camera, &CanvasLayer)>) {
+fn show_canvas_layers(view: Res<MeshView>, mut layers: Query<(&mut Camera, &CanvasLayer)>) {
     for (mut camera, CanvasLayer(slot)) in &mut layers {
         let shown = view.canvas_below.get(*slot).copied().unwrap_or(false);
         if camera.is_active != shown {
@@ -70,7 +82,7 @@ pub(super) fn show_canvas_layers(view: Res<MeshView>, mut layers: Query<(&mut Ca
     }
 }
 
-pub(super) fn place_camera(
+fn place_camera(
     mut commands: Commands,
     view: Res<MeshView>,
     mut cameras: Query<

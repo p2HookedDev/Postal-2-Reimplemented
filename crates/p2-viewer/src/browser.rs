@@ -25,10 +25,10 @@ use p2_engine::animation::{Animated, AnimationSystems};
 use p2_engine::game_dir_form::GameDirForm;
 use p2_engine::library::Library;
 use p2_engine::map::{
-    SceneTargets, SectionChunks, Session, SessionHolder, animate_mesh_with, material_images, present_session, sections_of_static_mesh, skeletal_mesh_sections, travel_package,
+    MapSystems, SceneTargets, SectionChunks, Session, animate_mesh_with, material_images, sections_of_static_mesh, skeletal_mesh_sections, travel_package,
 };
 use p2_engine::mesh_view::{ModelView, Scene};
-use p2_engine::play::{PlaySystems, PlayWorld};
+use p2_engine::play::PlayWorld;
 
 fn loop_browsed_meshes(time: Res<Time>, animated: Res<Animated>, mut meshes: ResMut<Assets<Mesh>>) {
     for item in animated.0.iter().filter(|item| item.actor.is_none()) {
@@ -66,7 +66,7 @@ impl Plugin for AssetBrowserPlugin {
         )
         .add_systems(Update, play_sound.run_if(in_state(ViewerState::Browse)))
         .add_systems(Update, loop_browsed_meshes.in_set(AnimationSystems::Pose))
-        .add_systems(PostUpdate, present_session::<Browser>.in_set(PlaySystems::Present).run_if(in_state(ViewerState::Browse)));
+        .configure_sets(PostUpdate, MapSystems::Present.run_if(in_state(ViewerState::Browse)));
     }
 }
 
@@ -113,17 +113,10 @@ pub struct Browser {
     kind: Kind,
     open: Option<OpenPackage>,
     preview: Option<TexturePreview>,
-    session: Session,
     status: String,
     pending: Vec<Action>,
     sound: Option<Vec<u8>>,
     playing: Option<Entity>,
-}
-
-impl SessionHolder for Browser {
-    fn session(&mut self) -> &mut Session {
-        &mut self.session
-    }
 }
 
 struct OpenPackage {
@@ -166,7 +159,7 @@ struct Targets<'w, 's> {
 }
 
 impl Browser {
-    pub fn new(root: PathBuf, start_package: Option<&str>, start_asset: Option<String>) -> std::io::Result<Self> {
+    pub fn new(root: PathBuf, start_package: Option<&str>, start_asset: Option<String>) -> std::io::Result<(Self, Session)> {
         let mut packages = Vec::new();
         collect_packages(&root, &root, &mut packages)?;
         packages.sort_by_key(|p| p.to_lowercase());
@@ -181,7 +174,7 @@ impl Browser {
         }
         let status = format!("{} packages", packages.len());
         let package_rows = (0..packages.len()).collect();
-        Ok(Self {
+        let browser = Self {
             root: root.clone(),
             packages,
             package_filter: String::new(),
@@ -190,18 +183,18 @@ impl Browser {
             kind: Kind::Texture,
             open: None,
             preview: None,
-            session: Session::new(root),
             status,
             pending,
             sound: None,
             playing: None,
-        })
+        };
+        Ok((browser, Session::new(root)))
     }
 
-    fn apply(&mut self, action: Action, t: &mut Targets) {
+    fn apply(&mut self, action: Action, session: &mut Session, t: &mut Targets) {
         match action {
             Action::OpenPackage(index) => self.open_package(index, t),
-            Action::Show(kind, slot) => self.show(kind, slot, t),
+            Action::Show(kind, slot) => self.show(kind, slot, session, t),
             Action::ShowNamed(name) => {
                 let found = self.open.as_ref().and_then(|open| {
                     Kind::ALL.into_iter().find_map(|kind| {
@@ -211,7 +204,7 @@ impl Browser {
                 match found {
                     Some((kind, slot)) => {
                         self.kind = kind;
-                        self.show(kind, slot, t);
+                        self.show(kind, slot, session, t);
                     }
                     None => self.status = format!("no asset {name}"),
                 }
@@ -251,9 +244,9 @@ impl Browser {
         self.open = Some(open);
     }
 
-    fn show(&mut self, kind: Kind, slot: usize, t: &mut Targets) {
+    fn show(&mut self, kind: Kind, slot: usize, session: &mut Session, t: &mut Targets) {
         self.clear_preview(t);
-        self.session.clear(&mut t.scene);
+        session.clear(&mut t.scene);
         let Some(open) = &mut self.open else { return };
         // A click's slot can be stale: a travel earlier in the frame may have opened another package.
         let Some(&index) = open.assets(kind).get(slot) else { return };
@@ -261,9 +254,9 @@ impl Browser {
         let open = &*open;
         let path = &self.packages[open.index];
         let status = match kind {
-            Kind::Texture => show_texture(open, index, &mut self.session.library, &self.root, path, &mut self.preview, t),
-            Kind::StaticMesh => show_static_mesh(open, index, &mut self.session.library, &self.root, path, t),
-            Kind::SkeletalMesh => show_skeletal_mesh(open, index, &mut self.session.library, &self.root, path, t),
+            Kind::Texture => show_texture(open, index, &mut session.library, &self.root, path, &mut self.preview, t),
+            Kind::StaticMesh => show_static_mesh(open, index, &mut session.library, &self.root, path, t),
+            Kind::SkeletalMesh => show_skeletal_mesh(open, index, &mut session.library, &self.root, path, t),
             Kind::Sound => {
                 let pkg = &open.package;
                 let export = &pkg.exports[index];
@@ -277,7 +270,7 @@ impl Browser {
                     Err(e) => Err(format!("{name}: {e}")),
                 }
             }
-            Kind::Level => self.session.load_map(path, &mut t.scene).map_err(|e| e.to_string()),
+            Kind::Level => session.load_map(path, &mut t.scene).map_err(|e| e.to_string()),
         };
         self.status = match status {
             Ok(text) | Err(text) => text,
@@ -301,7 +294,7 @@ impl Browser {
         if let Some(preview) = self.preview.take() {
             t.contexts.remove_image(preview.image.id());
         }
-        t.scene.view.clear();
+        t.scene.scenes.write(p2_engine::mesh_view::SceneChange::Clear);
     }
 }
 
@@ -414,7 +407,7 @@ fn bounds(points: impl Iterator<Item = Vec3>) -> (Vec3, Vec3) {
 }
 
 fn show_model(t: &mut SceneTargets, model: ModelView, min: Vec3, max: Vec3) {
-    t.view.show(Scene {
+    t.scenes.write(p2_engine::mesh_view::SceneChange::Show(Box::new(Scene {
         models: vec![model],
         center: (min + max) / 2.0,
         radius: ((max - min).length() / 2.0).max(1.0),
@@ -428,7 +421,7 @@ fn show_model(t: &mut SceneTargets, model: ModelView, min: Vec3, max: Vec3) {
         lighting: None,
         antiportals: Vec::new(),
         light_maps: Vec::new(),
-    });
+    })));
 }
 
 fn collect_packages(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
@@ -451,6 +444,7 @@ fn collect_packages(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::
 fn ui(
     mut targets: Targets,
     mut browser: ResMut<Browser>,
+    mut session: ResMut<Session>,
     mut form: ResMut<GameDirForm>,
     mut next: ResMut<NextState<ViewerState>>,
 ) -> Result {
@@ -541,7 +535,7 @@ fn ui(
                 Kind::Level => "Right-drag: look   W/A/S/D: move   Q/E: down/up   Shift: faster   Wheel: speed   G: walk / fly   Space: jump",
                 _ => "Left-drag: orbit   Wheel: zoom",
             };
-            browser.session.frame(&ctx, rect, &mut targets.contexts, &mut targets.scene);
+            session.frame(&ctx, rect, &mut targets.contexts, &mut targets.scene);
             egui::Area::new("mesh_status".into()).fixed_pos(rect.min + egui::vec2(8.0, 8.0)).show(&ctx, |ui| {
                 egui::Frame::NONE.fill(egui::Color32::from_black_alpha(170)).inner_margin(6.0).show(ui, |ui| {
                     ui.label(&browser.status);
@@ -555,11 +549,11 @@ fn ui(
     }
 
     for action in actions {
-        browser.apply(action, &mut targets);
+        browser.apply(action, &mut session, &mut targets);
     }
     if change_game_dir {
         browser.clear_preview(&mut targets);
-        browser.session.clear(&mut targets.scene);
+        session.clear(&mut targets.scene);
         targets.scene.view.viewport = None;
         form.input = browser.root.display().to_string();
         form.error = None;

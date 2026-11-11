@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers, Visibility};
-use bevy::ecs::prelude::{AnyOf, ChildOf, Commands, Entity, Has, Query, Res, ResMut, With, Without};
+use bevy::ecs::prelude::{AnyOf, ChildOf, Commands, Entity, Has, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::system::SystemParam;
 use bevy::image::Image;
 use bevy::light::ClusteredDecal;
@@ -38,6 +38,7 @@ use crate::actors::{
     projector_actor, skeletal_actor, sprite_actor, zone_ambient, zone_fog,
 };
 use crate::animation::{Animated, AnimatedMesh, FollowBone};
+use crate::components::{LeftCanvasActor, MapScoped};
 use crate::library::{Game, Library, LoadError, LoadProgress, PlayLoaderTask};
 use crate::loading::ProgressBar;
 use crate::render::translucent_order::TranslucentDraw;
@@ -50,28 +51,76 @@ use crate::render::particle_material::ParticleMaterial;
 use crate::play::{FrameTimes, Overlay, OverlayTitle, Play, PlayWorld};
 pub use crate::level_collision::{LevelCollision, StaticCollision};
 
+mod canvas_actors;
 mod coronas;
 mod fluids;
 mod hud;
+mod load;
 mod movie;
 mod particles;
 mod scene;
 mod spawned;
 mod sprites;
 
-use hud::{HudAssets, HudFont, paint_canvas, paint_hud, paint_overlay};
+use hud::{HudAssets, paint_canvas, paint_hud, paint_overlay};
+pub use hud::Hud;
+pub use load::{LoadMap, MapFailed, MapLoadPlugin, MapState};
 use movie::Movies;
-use particles::ParticleActor;
-pub use particles::ParticleReport;
+pub use particles::{ParticleReport, Particles};
 pub use particles::pad_bounds;
 pub use sprites::{SpriteQuad, face_sprites};
 pub use coronas::{CoronaActor, corona_actor, draw_coronas, is_corona};
-pub use spawned::material_images;
+pub use spawned::{SpawnedActors, material_images};
+use spawned::SpawnTargets;
+use canvas_actors::HudTargets;
+pub use fluids::Fluids;
+pub use scene::MaterialSwitches;
 pub use scene::{SceneAssets, SectionChunks, animate_mesh_with, sections_of_static_mesh, skeletal_mesh_sections, skeletal_sections};
 use scene::{ActorTexture, projector_image, projector_tag, projector_transform, scene_preparer};
 pub use scene::projector_box;
 
-pub fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
+pub struct MapPlugin;
+
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MapSystems {
+    /// In the egui pass: a host that paints a map's frame does it after this.
+    Load,
+    Present,
+}
+
+impl bevy::app::Plugin for MapPlugin {
+    fn build(&self, app: &mut bevy::app::App) {
+        use bevy::ecs::schedule::IntoScheduleConfigs;
+        app.init_resource::<Fluids>()
+            .init_resource::<MaterialSwitches>()
+            .init_resource::<Projectors>()
+            .init_resource::<Particles>()
+            .init_resource::<SpawnedActors>()
+            .init_resource::<Hud>()
+            .add_systems(bevy::app::Startup, spawn_hud_camera)
+            .configure_sets(bevy::app::PostUpdate, MapSystems::Present.in_set(crate::play::PlaySystems::Present).run_if(map_shown))
+            .add_systems(
+                bevy::app::PostUpdate,
+                (
+                    canvas_actors::drop_left_canvas_actors_when_presented,
+                    // Spawned and restyled actors first: a HUD-drawn model whose `Skins` changed (the kick's foot getting
+                    // bloody) is made again before the HUD's models are shown, not missing for a frame.
+                    spawned::present_spawned,
+                    canvas_actors::present_canvas_actors,
+                    spawned::present_projections,
+                    scene::present_material_switches,
+                    // Before `update_particles`, which takes the frame's step.
+                    fluids::present_fluids,
+                    particles::present_particles,
+                )
+                    // Spawns and despawns queued by one part reach the world after the last part, as when all were one system.
+                    .chain_ignore_deferred()
+                    .in_set(MapSystems::Present),
+            );
+    }
+}
+
+fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
     egui_settings.auto_create_primary_context = false;
     commands.spawn((
         PrimaryEguiContext,
@@ -98,11 +147,35 @@ pub struct SceneTargets<'w, 's> {
     pub(crate) canvas: CanvasModels<'w, 's>,
     pub(crate) models: ActorModels<'w, 's>,
     pub view: ResMut<'w, MeshView>,
+    pub scenes: bevy::ecs::prelude::MessageWriter<'w, crate::mesh_view::SceneChange>,
     pub(crate) shown: ResMut<'w, crate::shown_scene::ShownScene>,
     pub animated: ResMut<'w, Animated>,
     pub times: ResMut<'w, FrameTimes>,
     pub play: ResMut<'w, Play>,
     pub commands: Commands<'w, 's>,
+    pub(crate) fluids: ResMut<'w, Fluids>,
+    pub(crate) switches: ResMut<'w, MaterialSwitches>,
+    pub(crate) projectors: ResMut<'w, Projectors>,
+    pub(crate) particles: ResMut<'w, Particles>,
+    pub(crate) spawned: ResMut<'w, SpawnedActors>,
+    pub(crate) hud: ResMut<'w, Hud>,
+}
+
+impl<'w, 's> SceneTargets<'w, 's> {
+    fn spawn_targets(&mut self) -> SpawnTargets<'_, 'w, 's> {
+        SpawnTargets {
+            assets: &mut self.assets,
+            spawned: &mut self.spawned,
+            particles: &mut self.particles,
+            hud: &mut self.hud,
+            animated: &mut self.animated,
+            play: &mut self.play,
+            actor_models: &self.models.actor_models,
+            followers: &self.models.followers,
+            commands: &mut self.commands,
+            times: &mut self.times,
+        }
+    }
 }
 
 #[derive(SystemParam)]
@@ -128,15 +201,17 @@ pub(crate) struct ParticleView<'w, 's> {
     pub(crate) pool_slots: Query<'w, 's, &'static mut Transform, (With<particles::PoolSlot>, Without<FollowActor>, Without<SceneView>)>,
 }
 
-impl ParticleView<'_, '_> {
-    pub(crate) fn frustum_test(&self, origin: Vec3) -> impl Fn(Option<(Vec3, Vec3)>) -> bool + use<> {
-        let camera = self.cameras.iter().next();
-        let frustum = camera.zip(self.projections.iter().next()).map(|(camera, projection)| projection.compute_frustum(&bevy::transform::components::GlobalTransform::from(*camera)));
-        let at_origin = bevy::math::Affine3A::from_translation(origin);
-        move |bounds| match (bounds, &frustum) {
-            (Some((min, max)), Some(frustum)) => frustum.intersects_obb(&bevy::camera::primitives::Aabb::from_min_max(min, max), &at_origin, true, true),
-            _ => true,
-        }
+fn frustum_test(
+    cameras: &Query<&'static Transform, With<SceneView>>,
+    projections: &Query<&'static Projection, With<SceneView>>,
+    origin: Vec3,
+) -> impl Fn(Option<(Vec3, Vec3)>) -> bool + use<> {
+    let camera = cameras.iter().next();
+    let frustum = camera.zip(projections.iter().next()).map(|(camera, projection)| projection.compute_frustum(&bevy::transform::components::GlobalTransform::from(*camera)));
+    let at_origin = bevy::math::Affine3A::from_translation(origin);
+    move |bounds| match (bounds, &frustum) {
+        (Some((min, max)), Some(frustum)) => frustum.intersects_obb(&bevy::camera::primitives::Aabb::from_min_max(min, max), &at_origin, true, true),
+        _ => true,
     }
 }
 
@@ -144,6 +219,7 @@ impl ParticleView<'_, '_> {
 pub(crate) struct CanvasModels<'w, 's> {
     pub(crate) canvas_models: Query<'w, 's, (&'static FollowActor, &'static CanvasDrawn, &'static mut Transform), Without<SceneView>>,
     pub(crate) canvas_sections: Query<'w, 's, (Entity, &'static ChildOf), With<CanvasDrawn>>,
+    pub(crate) left: Query<'w, 's, (), With<LeftCanvasActor>>,
     pub(crate) attached: Query<
         'w,
         's,
@@ -166,49 +242,24 @@ struct CanvasActor {
     slot: Option<usize>,
 }
 
+#[derive(Resource)]
 pub struct Session {
     root: PathBuf,
     pub library: Library,
     map: Option<String>,
     map_system: Option<PathBuf>,
-    hud_textures: FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
-    hud_fonts: FxHashMap<String, Option<HudFont>>,
-    /// Keeps those images alive: egui holds them weakly and forgets each once it goes.
-    hud_images: Vec<Handle<Image>>,
-    movies: Movies,
-    hud_assets: HudAssets,
-    canvas_actors: Vec<CanvasActor>,
-    failed_canvas_meshes: FxHashSet<String>,
-    /// Kept drawn after a load until the new map's first frame replaces the load screen, as the engine's frame buffer keeps
-    /// them.
-    left_canvas_actors: Vec<Entity>,
+    pending: Option<PendingLoad>,
+    animations: HashMap<PackageId, Arc<[Arc<MeshAnimation>]>>,
+    vm_animations: scene::VmAnimations,
+}
+
+#[derive(Resource, Default)]
+pub struct Projectors {
     dynamic_decals: FxHashMap<ObjectId, Entity>,
     mover_decals: FxHashMap<ObjectId, spawned::MoverDecal>,
     decal_movers: FxHashSet<ObjectId>,
     projector_actors: FxHashSet<ObjectId>,
     decal_images: FxHashMap<String, Option<(Handle<Image>, Vec2, Option<p2_assets::FinalBlend>)>>,
-    switch_images: HashMap<(PackageId, usize), Vec<scene::SwitchImage>>,
-    switch_targets: FxHashMap<(PackageId, usize), Option<scene::SwitchTarget>>,
-    spawn_models: HashMap<spawned::ModelKey, Option<spawned::SpawnModel>>,
-    spawn_materials: FxHashMap<crate::mesh_view::ActorMaterialKey, SectionMaterial>,
-    spawn_builds: Vec<spawned::ModelBuild>,
-    texture_builds: Vec<spawned::TextureBuild>,
-    waiting_sprites: Vec<SpriteActor>,
-    waiting_coronas: Vec<CoronaActor>,
-    spawn_waiting: Vec<spawned::SpawnedActor>,
-    particles: Vec<ParticleActor>,
-    particle_emitters: FxHashMap<ObjectId, (usize, usize)>,
-    actor_textures: FxHashMap<String, Option<ActorTexture>>,
-    pool_materials: HashMap<particles::PoolMaterialKey, Handle<StandardMaterial>>,
-    particle_records: Vec<[u32; crate::render::particle_material::RECORD_WORDS]>,
-    corona_materials: FxHashMap<String, Option<Handle<ParticleMaterial>>>,
-    fluids: Vec<fluids::FluidShown>,
-    pending: Option<PendingLoad>,
-    /// Loading frames show it again: the engine does not clear the screen.
-    last_hud: Arc<[CanvasItem]>,
-    animations: HashMap<PackageId, Arc<[Arc<MeshAnimation>]>>,
-    vm_animations: scene::VmAnimations,
-    progress_bar: Option<Option<(ProgressBar, egui::TextureId)>>,
 }
 
 pub fn map_package(name: &str) -> String {
@@ -235,23 +286,17 @@ pub fn travel_package(url: &str) -> Option<String> {
     (!name.is_empty()).then(|| map_package(name))
 }
 
-pub trait SessionHolder: bevy::ecs::resource::Resource<Mutability = bevy::ecs::component::Mutable> {
-    fn session(&mut self) -> &mut Session;
+fn despawn_map_scoped(world: &mut bevy::ecs::world::World) {
+    let scoped: Vec<Entity> = world.query_filtered::<Entity, bevy::ecs::query::Or<(With<MapScoped>, With<LeftCanvasActor>)>>().iter(world).collect();
+    for entity in scoped {
+        if let Ok(entity) = world.get_entity_mut(entity) {
+            entity.despawn();
+        }
+    }
 }
 
-pub fn present_session<R: SessionHolder>(holder: Option<ResMut<R>>, mut t: SceneTargets) {
-    let Some(mut holder) = holder else { return };
-    let session = holder.session();
-    if session.loading().is_some() {
-        return;
-    }
-    let Some(world) = t.play.world() else { return };
-    let presented = world.presented();
-    let items = if presented { world.hud_items() } else { Arc::default() };
-    if presented {
-        session.drop_left_canvas_actors(&mut t);
-    }
-    session.present(&items, &mut t);
+fn map_shown(session: Option<Res<Session>>, play: Res<Play>) -> bool {
+    session.is_some_and(|session| session.loading().is_none()) && play.world().is_some()
 }
 
 /// Frames the engine draws as travel begins (P2Screen.uc: three duplicates, one for a loading message, and one with
@@ -391,40 +436,9 @@ impl Session {
             library: Library::default(),
             map: None,
             map_system: None,
-            hud_textures: FxHashMap::default(),
-            hud_fonts: FxHashMap::default(),
-            hud_images: Vec::new(),
-            movies: Movies::default(),
-            hud_assets: HudAssets::default(),
-            canvas_actors: Vec::new(),
-            failed_canvas_meshes: FxHashSet::default(),
-            left_canvas_actors: Vec::new(),
-            dynamic_decals: FxHashMap::default(),
-            mover_decals: FxHashMap::default(),
-            decal_movers: FxHashSet::default(),
-            projector_actors: FxHashSet::default(),
-            decal_images: FxHashMap::default(),
-            switch_images: HashMap::new(),
-            switch_targets: FxHashMap::default(),
-            spawn_models: HashMap::new(),
-            spawn_materials: FxHashMap::default(),
-            spawn_builds: Vec::new(),
-            texture_builds: Vec::new(),
-            waiting_sprites: Vec::new(),
-            waiting_coronas: Vec::new(),
-            spawn_waiting: Vec::new(),
-            particles: Vec::new(),
-            particle_emitters: FxHashMap::default(),
-            actor_textures: FxHashMap::default(),
-            pool_materials: HashMap::new(),
-            particle_records: Vec::new(),
-            corona_materials: FxHashMap::default(),
-            fluids: Vec::new(),
             pending: None,
-            last_hud: Arc::default(),
             animations: HashMap::new(),
             vm_animations: scene::VmAnimations::default(),
-            progress_bar: None,
         }
     }
 
@@ -437,43 +451,26 @@ impl Session {
         t.play.set(None);
         self.map = None;
         self.map_system = None;
-        self.projector_actors.clear();
-        self.hud_textures.clear();
-        self.hud_fonts.clear();
-        self.hud_images.clear();
-        self.hud_assets = HudAssets::default();
-        self.movies.stop(&mut t.commands);
-        for shown in self.canvas_actors.drain(..) {
-            t.commands.entity(shown.entity).despawn();
-        }
-        self.drop_left_canvas_actors(t);
-        for (_, entity) in self.dynamic_decals.drain() {
-            t.commands.entity(entity).despawn();
-        }
-        self.mover_decals.clear();
-        self.decal_movers.clear();
-        for (entity, _, preview) in &t.models.actor_models {
-            if !preview {
-                t.commands.entity(entity).despawn();
-            }
-        }
-        self.decal_images.clear();
-        self.failed_canvas_meshes.clear();
-        self.spawn_models.clear();
-        self.spawn_materials.clear();
-        self.spawn_builds.clear();
-        self.texture_builds.clear();
-        self.waiting_sprites.clear();
-        self.waiting_coronas.clear();
-        self.spawn_waiting.clear();
-        for particles in self.particles.drain(..) {
-            t.commands.entity(particles.parent).despawn();
-        }
-        self.particle_emitters.clear();
-        self.actor_textures.clear();
-        self.pool_materials.clear();
-        self.corona_materials.clear();
-        self.fluids.clear();
+        let hud = &mut *t.hud;
+        hud.hud_textures.clear();
+        hud.hud_fonts.clear();
+        hud.hud_images.clear();
+        hud.hud_assets = HudAssets::default();
+        hud.movies.stop(&mut t.commands);
+        hud.canvas_actors.clear();
+        hud.failed_canvas_meshes.clear();
+        t.commands.queue(despawn_map_scoped);
+        *t.projectors = Projectors::default();
+        *t.spawned = SpawnedActors::default();
+        let particles = &mut *t.particles;
+        particles.waiting_sprites.clear();
+        particles.waiting_coronas.clear();
+        particles.actors.clear();
+        particles.particle_emitters.clear();
+        particles.pool_materials.clear();
+        particles.emitter_materials.clear();
+        particles.corona_materials.clear();
+        *t.fluids = Fluids::default();
     }
 
     pub fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut SceneTargets) {
@@ -483,13 +480,14 @@ impl Session {
         // Until a new map's first VM frame is presented, the last image (the load screen) stays up, as in the
         // engine's frame buffer; its canvas actors belong to the level left.
         if t.play.world().is_some_and(|world| !world.presented()) {
-            let items = Arc::clone(&self.last_hud);
+            let items = Arc::clone(&t.hud.last_hud);
             paint_hud(ctx, rect, &items, self, contexts, t);
             t.times.add("hud paint", started);
             return;
         }
         let items = t.play.world().map(PlayWorld::hud_items).unwrap_or_default();
-        self.movies.update(&self.root, contexts, t, &mut self.hud_textures);
+        let hud = &mut *t.hud;
+        hud.movies.update(&self.root, contexts, &mut t.play, &mut t.commands, &mut t.assets, &mut hud.hud_textures);
         if let Some(overlay) = t.play.world().and_then(PlayWorld::screen_overlay) {
             paint_overlay(ctx, rect, overlay, self, contexts, t);
         }
@@ -497,46 +495,61 @@ impl Session {
             paint_canvas(ctx, rect, &items, self, contexts, t);
         }
         t.times.add("hud paint", started);
-        self.last_hud = items;
+        t.hud.last_hud = items;
     }
 
+    /// Runs the parts of `MapSystems::Present` in their order, for hosts that keep a `Session` outside the app's resources.
     pub fn present(&mut self, items: &[CanvasItem], t: &mut SceneTargets) {
-        // Spawned and restyled actors first: a HUD-drawn model whose `Skins` changed (the kick's foot getting bloody) is
-        // made again before the HUD's models are shown, not missing for a frame.
         let started = std::time::Instant::now();
-        self.update_spawned(t);
+        self.update_spawned(&mut t.spawn_targets());
         t.times.add("spawned", started);
         let started = std::time::Instant::now();
-        let calls = items.iter().filter(|item| matches!(item, CanvasItem::Actor { .. }));
-        let drawn: Vec<(&CanvasItem, usize)> = calls.zip(hud::call_slots(items)).filter(|&(_, slot)| slot < OVERLAY_LAYERS.len()).collect();
-        t.view.fov = t.play.world().and_then(PlayWorld::fov).unwrap_or(0.0);
-        if let Some(fogs) = t.play.world_mut().and_then(PlayWorld::take_zone_fogs) {
-            t.shown.fogs = fogs;
-        }
-        if self.left_canvas_actors.is_empty() {
-            t.view.overlays.clear();
-            for &(item, slot) in &drawn {
-                if let CanvasItem::Actor { fov, .. } = *item
-                    && slot == t.view.overlays.len()
-                {
-                    t.view.overlays.push(fov);
-                }
-            }
-        }
-        self.show_canvas_actors(&drawn, t);
+        self.show_hud_actors(items, &mut t.hud_targets());
         t.times.add("canvas actors", started);
         let started = std::time::Instant::now();
-        self.update_projections(t);
+        spawned::update_projections(&mut spawned::ProjectionTargets {
+            library: &mut self.library,
+            map_system: self.map_system.as_deref(),
+            projectors: &mut t.projectors,
+            play: &mut t.play,
+            followers: &t.models.followers,
+            untagged: &t.models.untagged,
+            images: &mut t.assets.images,
+            commands: &mut t.commands,
+        });
         t.times.add("projections", started);
         let started = std::time::Instant::now();
-        self.update_material_switches(t);
+        scene::update_material_switches(&mut scene::SwitchTargets {
+            library: &mut self.library,
+            map_system: self.map_system.as_deref(),
+            switches: &mut t.switches,
+            play: &mut t.play,
+            images: &mut t.assets.images,
+            commands: &mut t.commands,
+        });
         t.times.add("material switches", started);
-        // Before `update_particles`, which takes the frame's step.
         let started = std::time::Instant::now();
-        self.update_fluids(t);
+        fluids::update_fluids(&mut fluids::FluidTargets {
+            fluids: &mut t.fluids,
+            play: &mut t.play,
+            cameras: &t.particle_view.cameras,
+            projections: &t.particle_view.projections,
+            commands: &mut t.commands,
+            meshes: &mut t.assets.meshes,
+            materials: &mut t.assets.materials,
+            mesh_lit: &mut t.assets.mesh_lit,
+        });
         t.times.add("fluids", started);
         let started = std::time::Instant::now();
-        self.update_particles(t);
+        particles::update_particles(&mut particles::ParticleTargets {
+            particles: &mut t.particles,
+            play: &mut t.play,
+            canvas: &t.hud.canvas_actors,
+            view: &mut t.particle_view,
+            commands: &mut t.commands,
+            meshes: &mut t.assets.meshes,
+            sprite_buffers: t.assets.sprite_buffers.as_mut(),
+        });
         t.times.add("particles", started);
     }
 
@@ -544,17 +557,17 @@ impl Session {
         let Some(progress) = self.loading() else { return };
         t.play.set_canvas_size([rect.width(), rect.height()]);
         t.view.canvas_below = [false; OVERLAY_LAYERS.len()];
-        let items = Arc::clone(&self.last_hud);
+        let items = Arc::clone(&t.hud.last_hud);
         paint_hud(ctx, rect, &items, self, contexts, t);
-        if self.progress_bar.is_none() {
+        if t.hud.progress_bar.is_none() {
             let entry = map_package("Entry");
             let found = self.library.open(&self.root, &entry).ok().and_then(|(game, id)| ProgressBar::read(game, id));
-            self.progress_bar = Some(found.map(|(bar, image)| {
+            t.hud.progress_bar = Some(found.map(|(bar, image)| {
                 let id = contexts.add_image(EguiTextureHandle::Strong(t.assets.images.add(image)));
                 (bar, id)
             }));
         }
-        if let Some(Some((bar, texture))) = &self.progress_bar {
+        if let Some(Some((bar, texture))) = &t.hud.progress_bar {
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, "progress".into())).with_clip_rect(rect);
             painter.add(bar.mesh(rect, progress, *texture));
         }
@@ -583,7 +596,7 @@ impl Session {
             for frame in 1..=TRAVEL_FRAMES {
                 let items = world.hud(width, height);
                 if frame < TRAVEL_FRAMES {
-                    self.last_hud = items.into();
+                    t.hud.last_hud = items.into();
                 }
             }
         }
@@ -620,20 +633,19 @@ impl Session {
             Ok(Err(error)) => return Some(Err(error)),
             Err(_) => return Some(Err(LoadError::Panicked { package })),
         };
-        // The weapon stays on the load screen until the new map's first frame (`present_session`).
-        let left: Vec<Entity> = self.canvas_actors.drain(..).map(|shown| shown.entity).collect();
+        // The weapon stays on the load screen until the new map's first frame (`drop_left_canvas_actors_when_presented`).
+        let left: Vec<Entity> = t.hud.canvas_actors.drain(..).map(|shown| shown.entity).collect();
+        for &entity in &left {
+            t.commands.entity(entity).remove::<MapScoped>();
+        }
         let started = std::time::Instant::now();
         self.clear(t);
-        self.left_canvas_actors = left;
+        for entity in left {
+            t.commands.entity(entity).insert(LeftCanvasActor);
+        }
         let shown = self.show_scene(prepared, t);
         bevy::log::info!("load: scene shown in {} ms (main thread)", started.elapsed().as_millis());
         Some(shown)
-    }
-
-    fn drop_left_canvas_actors(&mut self, t: &mut SceneTargets) {
-        for entity in self.left_canvas_actors.drain(..) {
-            t.commands.entity(entity).despawn();
-        }
     }
 }
 
@@ -641,13 +653,25 @@ impl Session {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{map_package, start_map};
+    use super::{LeftCanvasActor, MapScoped, despawn_map_scoped, map_package, start_map};
 
     #[test]
     fn map_names_become_package_paths() {
         let expected = PathBuf::from("Maps").join("Startup.fuk").display().to_string();
         assert_eq!(map_package("Startup.fuk"), expected);
         assert_eq!(map_package("Startup"), expected);
+    }
+
+    #[test]
+    fn leaving_a_map_despawns_what_was_made_for_it() {
+        let mut world = bevy::ecs::world::World::new();
+        let root = world.spawn(MapScoped).id();
+        let child = world.spawn(bevy::ecs::prelude::ChildOf(root)).id();
+        let left = world.spawn(LeftCanvasActor).id();
+        let kept = world.spawn_empty().id();
+        despawn_map_scoped(&mut world);
+        assert!([root, child, left].iter().all(|&entity| world.get_entity(entity).is_err()));
+        assert!(world.get_entity(kept).is_ok());
     }
 
     #[test]

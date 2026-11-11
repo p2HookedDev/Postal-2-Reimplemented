@@ -1,7 +1,7 @@
 use crate::actors::RenderStyle;
 use p2_assets::Blending;
 use bevy::app::{App, Plugin};
-use bevy::asset::{Asset, AssetApp, Assets, Handle, RenderAssetUsages, uuid_handle};
+use bevy::asset::{Asset, AssetApp, AssetId, Assets, Handle, RenderAssetUsages, uuid_handle};
 use bevy::image::Image;
 use bevy::material::AlphaMode;
 use bevy::mesh::{Mesh, MeshVertexBufferLayoutRef};
@@ -68,7 +68,20 @@ pub struct ParticleMaterial {
     pub no_depth: bool,
 }
 
+/// What two particle materials must share to draw alike.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SharedParticleKey {
+    texture: AssetId<Image>,
+    params: [u32; 5],
+    no_depth: bool,
+}
+
 impl ParticleMaterial {
+    pub fn shared_key(&self) -> SharedParticleKey {
+        let ParticleParams { style, alpha_ref, alpha_test, blend_frames, fogged } = self.params;
+        SharedParticleKey { texture: self.texture.id(), params: [style, alpha_ref.to_bits(), alpha_test, blend_frames, fogged], no_depth: self.no_depth }
+    }
+
     pub fn new(texture: Handle<Image>, props: &p2_particles::EmitterProperties) -> Self {
         let blend = props.blend_between_subdivisions && !props.use_random_subdivision;
         let params = ParticleParams {

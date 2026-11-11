@@ -1,7 +1,7 @@
 use p2_math::{Rotator, Vector, units_truncated};
 use crate::interp::{float, int, truthy};
 use crate::native_id::{Native, NativeGroup};
-use crate::{Error, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
+use crate::{Error, LoaderRef, Lookups, NameId, ObjectId, ObjectStore, Prop, Value, Vm};
 use crate::natives::actor::mesh_native;
 use crate::natives::actor::placement_native;
 use crate::natives::actor::sense_native;
@@ -27,7 +27,7 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
         return Ok(Some(value));
     }
     match native.group() {
-        NativeGroup::Operator => Err(Error::UnknownNative(name.to_owned())),
+        NativeGroup::Operator | NativeGroup::Iterator => Err(Error::UnknownNative(name.to_owned())),
         NativeGroup::Text => text_native(native, args),
         NativeGroup::Random => random_native(vm, native, args),
         NativeGroup::Reflect => reflect_native(vm, native, this, args),
@@ -57,105 +57,106 @@ pub(crate) fn call<L: LoaderRef>(vm: &mut Vm<L>, name: &str, native: Option<Nati
     }
 }
 
-pub(crate) fn iterator_outs(name: &str) -> &'static [usize] {
-    match name {
-        "TraceActors" => &[2, 3],
+pub(crate) fn iterator_outs(native: Option<Native>) -> &'static [usize] {
+    match native {
+        Some(Native::TraceActors) => &[2, 3],
         _ => &[],
     }
 }
 
 /// An actor the loop body spawns, added at the list's end, is reached.
 /// For `ChildActors` and `BasedActors` this is (unverified).
-pub(crate) fn walks_actor_list(name: &str) -> Option<&'static str> {
-    ["AllActors", "DynamicActors", "ChildActors", "BasedActors", "RadiusActors", "VisibleActors"].into_iter().find(|&walk| walk == name)
+pub(crate) fn walks_actor_list(native: Option<Native>) -> Option<Native> {
+    native.filter(|native| {
+        matches!(native, Native::AllActors | Native::DynamicActors | Native::ChildActors | Native::BasedActors | Native::RadiusActors | Native::VisibleActors)
+    })
 }
 
-pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, name: &str, this: Option<ObjectId>, args: &[Value]) -> Result<Vec<Value>, Error> {
+pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Vec<Value>, Error> {
     let class = match args.first() {
         Some(&Value::Object(Some(class))) => vm.store.object(class).name,
         _ => vm.script.lookups.class_names.object,
     };
-    let all_objects = name == "AllObjects";
-    let tested = std::cell::RefCell::new(vm.script.lookups.class_tests.remove(&class).unwrap_or_default());
-    let of_class = |vm: &Vm<L>, candidates: &mut dyn Iterator<Item = ObjectId>, keep: &dyn Fn(ObjectId) -> bool| -> Vec<Value> {
-        let mut tested = tested.borrow_mut();
+    let all_objects = native == Native::AllObjects;
+    let of_class = |store: &ObjectStore, lookups: &mut Lookups, candidates: &mut dyn Iterator<Item = ObjectId>, keep: &dyn Fn(ObjectId) -> bool| -> Vec<Value> {
+        let tested = lookups.class_tests.entry(class).or_default();
         candidates
             .filter(|&object| {
-                let of_class = vm.store.object(object).class.is_some_and(|c| *tested.entry(c).or_insert_with(|| vm.store.class_has_name(c, class)));
-                of_class && !vm.store.is_deleted(object) && keep(object)
+                let of_class = store.object(object).class.is_some_and(|c| *tested.entry(c).or_insert_with(|| store.class_has_name(c, class)));
+                of_class && !store.is_deleted(object) && keep(object)
             })
             .map(|object| Value::Object(Some(object)))
             .collect()
     };
-    let objects = |vm: &Vm<L>, keep: &dyn Fn(ObjectId) -> bool| -> Vec<Value> {
-        if all_objects { of_class(vm, &mut vm.object_ids(), keep) } else { of_class(vm, &mut vm.actors(), keep) }
+    let objects = |store: &ObjectStore, lookups: &mut Lookups, keep: &dyn Fn(ObjectId) -> bool| -> Vec<Value> {
+        if all_objects {
+            of_class(store, lookups, &mut (0..store.objects.len() as u32).map(ObjectId), keep)
+        } else {
+            of_class(store, lookups, &mut store.actor_ids.iter().copied(), keep)
+        }
     };
     let radius = args.get(1).map_or(0.0, float);
     let centre = |vm: &Vm<L>| match args.get(2) {
         Some(location) if is_struct_value(location) => vec3(Some(location)),
         _ => vec3(this.and_then(|this| vm.store.get(this, Prop::Location))),
     };
-    let within = |vm: &Vm<L>, centre: Vector, object: ObjectId| {
-        let at = vm.store.vector(object, Prop::Location);
+    let within = |store: &ObjectStore, centre: Vector, object: ObjectId| {
+        let at = store.vector(object, Prop::Location);
         (0..3).map(|i| (at[i] - centre[i]).powi(2)).sum::<f32>() <= radius * radius
     };
-    let items = match name {
-        "AllActors" | "DynamicActors" | "AllObjects" => {
+    let items = match native {
+        Native::AllActors | Native::DynamicActors | Native::AllObjects => {
             let tag = match args.get(1) {
                 Some(&Value::Name(tag)) if tag != NameId::NONE => Some(tag),
                 _ => None,
             };
-            let dynamic = (name == "DynamicActors").then(|| vm.dynamic_actors());
+            let dynamic = (native == Native::DynamicActors).then(|| vm.dynamic_actors());
             let keep = |object: ObjectId| tag.is_none_or(|tag| vm.store.name_of(object, Prop::Tag) == tag);
             match dynamic {
-                Some(dynamic) => of_class(vm, &mut dynamic.into_iter(), &keep),
-                None => objects(vm, &keep),
+                Some(dynamic) => of_class(&vm.store, &mut vm.script.lookups, &mut dynamic.into_iter(), &keep),
+                None => objects(&vm.store, &mut vm.script.lookups, &keep),
             }
         }
-        "TouchingActors" => {
+        Native::TouchingActors => {
             this.map_or_else(Vec::new, |this| vm.store.objects_of(this, Prop::Touching).flatten().filter(|&o| vm.store.is_a(o, class)).map(|o| Value::Object(Some(o))).collect())
         }
-        "ChildActors" => objects(vm, &|object| this.is_some() && vm.store.get(object, Prop::Owner) == Some(Value::Object(this))),
-        "BasedActors" => objects(vm, &|object| this.is_some() && vm.store.get(object, Prop::Base) == Some(Value::Object(this))),
+        Native::ChildActors => objects(&vm.store, &mut vm.script.lookups, &|object| this.is_some() && vm.store.get(object, Prop::Owner) == Some(Value::Object(this))),
+        Native::BasedActors => objects(&vm.store, &mut vm.script.lookups, &|object| this.is_some() && vm.store.get(object, Prop::Base) == Some(Value::Object(this))),
         // Centre strictly within `Radius` + the actor's own `CollisionRadius`
         // (a match of radius 5 finds a gas puddle of radius 100 around it).
-        "RadiusActors" => {
+        Native::RadiusActors => {
             let centre = centre(vm);
-            objects(vm, &|object| {
+            objects(&vm.store, &mut vm.script.lookups, &|object| {
                 let radius = radius + vm.store.float_of(object, Prop::CollisionRadius);
                 let at = vm.store.vec3_of(object, Prop::Location);
                 (0..3).map(|i| (at[i] - centre[i]).powi(2)).sum::<f32>() < radius * radius
             })
         }
-        "CollidingActors" | "VisibleCollidingActors" => {
+        Native::CollidingActors | Native::VisibleCollidingActors => {
             let at = centre(vm);
             let near = vm.colliders_near([at[0], at[1]], [at[0], at[1]], radius);
-            let visible = name == "VisibleCollidingActors";
+            let visible = native == Native::VisibleCollidingActors;
             let ignore_hidden = visible && args.get(3).is_some_and(truthy);
-            let mut items = of_class(vm, &mut near.into_iter().map(|e| e.actor), &|object| {
-                vm.store.flag_of(object, Prop::bCollideActors) && !(ignore_hidden && vm.store.flag_of(object, Prop::bHidden)) && within(vm, at, object)
+            let mut items = of_class(&vm.store, &mut vm.script.lookups, &mut near.into_iter().map(|e| e.actor), &|object| {
+                vm.store.flag_of(object, Prop::bCollideActors) && !(ignore_hidden && vm.store.flag_of(object, Prop::bHidden)) && within(&vm.store, at, object)
             });
             if visible {
                 vm.keep_line_of_sight(this, at, &mut items);
             }
             items
         }
-        "VisibleActors" => {
+        Native::VisibleActors => {
             let at = centre(vm);
-            let mut items = objects(vm, &|object| {
+            let mut items = objects(&vm.store, &mut vm.script.lookups, &|object| {
                 let offset = vm.store.vector(object, Prop::Location) - at;
                 !vm.store.flag_of(object, Prop::bHidden) && (radius == 0.0 || offset.dot(offset) < radius * radius)
             });
             vm.keep_line_of_sight(this, at, &mut items);
             items
         }
-        "TraceActors" => vm.trace_actors_items(this, args),
-        _ => {
-            vm.script.lookups.class_tests.insert(class, tested.into_inner());
-            return Err(Error::UnknownNative(name.to_owned()));
-        }
+        Native::TraceActors => vm.trace_actors_items(this, args),
+        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
     };
-    vm.script.lookups.class_tests.insert(class, tested.into_inner());
     Ok(items)
 }
 
@@ -311,7 +312,7 @@ mod route_tests {
         let empty = std::env::temp_dir();
         let loader = Loader::new(&empty, &[]).unwrap();
         let mut unrouted = Vec::new();
-        for &native in Native::ALL {
+        for &native in Native::ALL.iter().filter(|native| !matches!(native.group(), NativeGroup::Iterator)) {
             let name = format!("{native:?}");
             let mut vm = Vm::new(&loader);
             let mut args = vec![Value::Int(0); 8];

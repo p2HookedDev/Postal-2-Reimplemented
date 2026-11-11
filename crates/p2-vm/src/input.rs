@@ -6,6 +6,7 @@ use p2_script::Type;
 use p2_script::flags::{CPF_INPUT, CPF_OPTIONAL_PARM, FUNC_EXEC};
 
 use p2_math::{Rotator, Vector};
+use crate::object::Stamp;
 use crate::Prop;
 use crate::{Error, LoaderRef, ObjectId, Value, Vm, zero_slot};
 
@@ -178,7 +179,7 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(viewport, Prop::Actor, Value::Object(Some(controller)));
         }
         self.host.input.held.clear();
-        self.event(controller, "InitInputSystem", Vec::new())
+        self.event(controller, crate::states::Event::InitInputSystem, Vec::new())
     }
 
     pub(crate) fn key_down(&self, key: &str) -> bool {
@@ -240,7 +241,7 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn player_tick(&mut self, controller: ObjectId, delta: f32) -> Result<(), Error> {
         let has_input = |vm: &Self| vm.store.object_of(controller, Prop::PlayerInput).is_some();
         if !has_input(self) {
-            self.event(controller, "InitInputSystem", Vec::new())?;
+            self.event(controller, crate::states::Event::InitInputSystem, Vec::new())?;
             if !has_input(self) {
                 return Ok(());
             }
@@ -266,7 +267,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(class) = self.store.object(controller).class else { return Ok(()) };
         let layout = Arc::clone(&self.store.class(class).layout);
         let fields = &self.store.memory.get(self.store.class(class).mem).fields;
-        let words = &mut self.store.objects[controller.0 as usize].mem.words;
+        let words = &mut self.store.objects[controller.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn).words;
         for (property, field) in layout.properties.iter().zip(fields) {
             if property.flags & CPF_INPUT != 0
                 && field.shape == crate::memory::Shape::Float

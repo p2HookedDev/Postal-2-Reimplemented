@@ -315,6 +315,19 @@ natives! {
         Trace,
         FastTrace,
     ],
+    Iterator: [
+        AllActors,
+        DynamicActors,
+        AllObjects,
+        TouchingActors,
+        ChildActors,
+        BasedActors,
+        RadiusActors,
+        CollidingActors,
+        VisibleCollidingActors,
+        VisibleActors,
+        TraceActors,
+    ],
     Ai: [
         CanSee,
         PickWallAdjust,
@@ -572,5 +585,26 @@ mod tests {
         assert_eq!(Native::from_name("actorReachable"), Some(Native::actorReachable));
         assert_eq!(Native::from_name("AddEqual_IntInt"), Some(Native::AddEqual_IntInt));
         assert_eq!(Native::from_name("NoSuchNative"), None);
+    }
+
+    #[test]
+    fn iterator_names_resolve_to_their_native() {
+        let names = [
+            "AllActors",
+            "DynamicActors",
+            "AllObjects",
+            "TouchingActors",
+            "ChildActors",
+            "BasedActors",
+            "RadiusActors",
+            "CollidingActors",
+            "VisibleCollidingActors",
+            "VisibleActors",
+            "TraceActors",
+        ];
+        for name in names {
+            let native = Native::from_name(name);
+            assert!(native.is_some_and(|native| matches!(native.group(), NativeGroup::Iterator) && format!("{native:?}") == name), "{name}");
+        }
     }
 }

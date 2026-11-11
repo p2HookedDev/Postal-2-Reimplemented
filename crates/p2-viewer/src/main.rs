@@ -9,7 +9,7 @@ mod game_dir;
 mod walk;
 
 use bevy::DefaultPlugins;
-use bevy::app::{App, PluginGroup, Startup};
+use bevy::app::{App, PluginGroup};
 use bevy::log::LogPlugin;
 use bevy::state::prelude::{AppExtStates, States};
 use bevy_egui::EguiPlugin;
@@ -22,7 +22,6 @@ use p2_engine::diagnostics::{DiagnosticsPlugin, capture_layer, install_panic_hoo
 use p2_engine::display::DisplayPlugin;
 use p2_engine::game_dir_form::GameDirForm;
 use p2_engine::render::gamma::GammaPlugin;
-use p2_engine::map::spawn_hud_camera;
 use p2_engine::render::modern::ModernGraphicsPlugin;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
@@ -42,13 +41,13 @@ fn main() {
     let defaults = DefaultPlugins.set(LogPlugin { custom_layer: capture_layer, ..Default::default() });
     app.add_plugins((defaults, EguiPlugin::default(), GameDirPlugin, AssetBrowserPlugin, ViewerControlsPlugin))
         .add_plugins(P2EnginePlugins.build().disable::<DisplayPlugin>().disable::<GammaPlugin>().disable::<ModernGraphicsPlugin>())
-        .add_plugins(DiagnosticsPlugin::<Browser>::default())
-        .add_systems(Startup, spawn_hud_camera);
+        .add_plugins(DiagnosticsPlugin);
 
     let state = match p2_engine::game_dir::known_game_dir() {
         Some(dir) => match Browser::new(dir.clone(), package.as_deref(), asset) {
-            Ok(browser) => {
+            Ok((browser, session)) => {
                 app.insert_resource(browser);
+                app.insert_resource(session);
                 ViewerState::Browse
             }
             Err(e) => {

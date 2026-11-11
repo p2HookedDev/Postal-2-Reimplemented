@@ -80,7 +80,7 @@ impl<L: LoaderRef> Vm<L> {
             return None;
         }
         let base = field.word + key as u32 * field.words;
-        let words = &self.store.object(mover).mem.words;
+        let words = &self.store.object(mover).mem().words;
         Some(self.store.memory.get(id).head.map(|(word, shape)| crate::memory::scalar(words.get((base + word) as usize).copied().unwrap_or(0), shape)))
     }
 

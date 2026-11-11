@@ -1,6 +1,14 @@
 use super::*;
 
-pub(super) fn zone_fog(
+pub(super) struct FogPlugin;
+
+impl Plugin for FogPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, zone_fog.in_set(SceneViewSystems::Fog));
+    }
+}
+
+fn zone_fog(
     time: Res<Time>,
     shown: Res<ShownScene>,
     collision: Res<LevelCollision>,

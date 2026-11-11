@@ -62,7 +62,7 @@ struct Placement {
 pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option<(Vector, Rotator)> {
     let prefix = format!("{}.", map.to_ascii_lowercase());
     let live = || vm.actors().filter(|&o| !vm.store.is_deleted(o) && vm.store.object(o).path.to_ascii_lowercase().starts_with(&prefix));
-    let linked = live().filter(|&o| vm.store.is_a(o, Kind::LevelInfo)).find_map(|info| match vm.store.get(info, "SkyZone") {
+    let linked = live().filter(|&o| vm.store.is_a(o, Kind::LevelInfo)).find_map(|info| match vm.store.get(info, p2_vm::Prop::SkyZone) {
         Some(p2_vm::Value::Object(Some(sky))) => Some(sky),
         _ => None,
     });
@@ -71,7 +71,7 @@ pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option
 }
 
 pub(super) fn scene_preparer(game: &Game, id: PackageId, package: &str, t: &SceneTargets) -> impl FnOnce(StartedVm) -> Result<PreparedScene, LoadError> + Send + 'static {
-    let (game, package, assets) = (game.clone(), package.to_owned(), PendingAssets::new(t));
+    let (game, package, assets) = (game.clone(), package.to_owned(), PendingAssets::new(&t.assets));
     move |started| PreparedScene::build(game, id, &package, started, assets)
 }
 
@@ -88,70 +88,111 @@ impl Session {
 
     pub(super) fn show_scene(&mut self, prepared: PreparedScene, t: &mut SceneTargets) -> Result<String, LoadError> {
         let PreparedScene { emitter_models, package, game: built, animations, vm_animations, assets, scene, played, animated, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches } = prepared;
-        assets.insert(t);
+        assets.insert(&mut t.assets);
         for model in emitter_models.values() {
-            spawned::keep_static_meshes(t, model.as_ref());
+            spawned::keep_static_meshes(&mut t.assets.meshes, model.as_ref());
         }
-        self.spawn_models.extend(emitter_models);
-        self.hud_assets = hud;
+        t.spawned.spawn_models.extend(emitter_models);
+        t.hud.hud_assets = hud;
         let (game, _) = self.library.open(&self.root, &package)?;
         game.adopt(&built);
-        self.switch_images.clear();
-        self.switch_targets.clear();
+        *t.switches = MaterialSwitches::default();
         for ((id, export), drawn) in switches {
             if let Some(id) = game.same_package(&built, id) {
-                self.switch_images.entry((id, export)).or_default().push(drawn);
+                t.switches.images.entry((id, export)).or_default().push(drawn);
             }
         }
         self.animations = animations.into_iter().filter_map(|(id, animation)| Some((game.same_package(&built, id)?, animation))).collect();
         self.vm_animations = vm_animations;
-        self.actor_textures = actor_textures;
+        t.spawned.actor_textures = actor_textures;
         self.map_system = Some(Library::system_of(&self.root, &package));
         self.map = Some(package);
         t.animated.0.extend(animated);
         let center = scene.center;
         let (vm, loader, player, zone_actors) = played;
         t.play.set(Some(PlayWorld::new(vm, loader, center, player, zone_actors, self.root.join("Music"))));
-        self.add_particles(emitters, -center, t);
-        self.add_sprites(sprites, -center, t);
-        self.add_coronas(coronas, -center, t);
+        let spawn = &mut t.spawn_targets();
+        self.add_particles(emitters, -center, spawn);
+        self.add_sprites(sprites, -center, spawn);
+        self.add_coronas(coronas, -center, spawn);
         self.add_fluids(fluids, -center, t);
-        t.view.show(scene);
+        t.scenes.write(crate::mesh_view::SceneChange::Show(Box::new(scene)));
         Ok(status)
     }
 
-    pub(super) fn update_material_switches(&mut self, t: &mut SceneTargets) {
-        let Some(world) = t.play.world_mut() else { return };
-        let changes = world.take_material_switches();
-        if changes.is_empty() || self.switch_images.is_empty() {
-            return;
-        }
-        let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
-        let (mut switched, mut looks) = (HashSet::new(), HashMap::new());
-        for (switch, material) in changes {
-            let Some(key) = game.export_by_path(&switch) else { continue };
-            let Some(surfaces) = self.switch_images.get_mut(&key) else { continue };
-            let Some((package, export)) = material.and_then(|path| game.export_by_path(&path)) else { continue };
-            let target = self.switch_targets.entry((package, export)).or_insert_with(|| switch_target(game, &mut t.assets.images, package, export));
-            let Some(SwitchTarget { image, now, size, specular_size }) = target else { continue };
-            for surface in surfaces {
-                let Some(mut drawn) = t.assets.images.get_mut(surface.image) else { continue };
-                *drawn = image.clone();
-                switched.insert(surface.image);
-                if surface.whole {
-                    let was = MaterialImages { state: std::mem::replace(&mut surface.shown, now.state.clone()), ..now.clone() };
-                    let (was, now) = (SectionView::textured(Handle::default(), Some(was)), SectionView::textured(Handle::default(), Some(now.clone())));
-                    looks.insert(surface.image, crate::mesh_view::SwitchedLook { was, now, size: *size, specular_size: *specular_size });
-                }
+}
+
+pub(super) struct SwitchTargets<'a, 'w, 's> {
+    pub(super) library: &'a mut Library,
+    pub(super) map_system: Option<&'a Path>,
+    pub(super) switches: &'a mut MaterialSwitches,
+    pub(super) play: &'a mut Play,
+    pub(super) images: &'a mut ResMut<'w, Assets<Image>>,
+    pub(super) commands: &'a mut Commands<'w, 's>,
+}
+
+#[derive(SystemParam)]
+pub(super) struct SwitchParams<'w, 's> {
+    session: ResMut<'w, Session>,
+    switches: ResMut<'w, MaterialSwitches>,
+    play: ResMut<'w, Play>,
+    images: ResMut<'w, Assets<Image>>,
+    commands: Commands<'w, 's>,
+    times: ResMut<'w, FrameTimes>,
+}
+
+pub(super) fn present_material_switches(mut t: SwitchParams) {
+    let started = std::time::Instant::now();
+    let session = &mut *t.session;
+    update_material_switches(&mut SwitchTargets {
+        library: &mut session.library,
+        map_system: session.map_system.as_deref(),
+        switches: &mut t.switches,
+        play: &mut t.play,
+        images: &mut t.images,
+        commands: &mut t.commands,
+    });
+    t.times.add("material switches", started);
+}
+
+pub(super) fn update_material_switches(t: &mut SwitchTargets) {
+    let Some(world) = t.play.world_mut() else { return };
+    let changes = world.take_material_switches();
+    if changes.is_empty() || t.switches.images.is_empty() {
+        return;
+    }
+    let Some(game) = open_game(t.library, t.map_system) else { return };
+    let switches = &mut *t.switches;
+    let (mut switched, mut looks) = (HashSet::new(), HashMap::new());
+    for (switch, material) in changes {
+        let Some(key) = game.export_by_path(&switch) else { continue };
+        let Some(surfaces) = switches.images.get_mut(&key) else { continue };
+        let Some((package, export)) = material.and_then(|path| game.export_by_path(&path)) else { continue };
+        let target = switches.targets.entry((package, export)).or_insert_with(|| switch_target(game, t.images, package, export));
+        let Some(SwitchTarget { image, now, size, specular_size }) = target else { continue };
+        for surface in surfaces {
+            let Some(mut drawn) = t.images.get_mut(surface.image) else { continue };
+            *drawn = image.clone();
+            switched.insert(surface.image);
+            if surface.whole {
+                let was = MaterialImages { state: std::mem::replace(&mut surface.shown, now.state.clone()), ..now.clone() };
+                let (was, now) = (SectionView::textured(Handle::default(), Some(was)), SectionView::textured(Handle::default(), Some(now.clone())));
+                looks.insert(surface.image, crate::mesh_view::SwitchedLook { was, now, size: *size, specular_size: *specular_size });
             }
         }
-        if !switched.is_empty() {
-            t.commands.queue(move |world: &mut bevy::ecs::world::World| {
-                rebind_materials(world, &switched);
-                crate::mesh_view::restyle_switched(world, &looks);
-            });
-        }
     }
+    if !switched.is_empty() {
+        t.commands.queue(move |world: &mut bevy::ecs::world::World| {
+            rebind_materials(world, &switched);
+            crate::mesh_view::restyle_switched(world, &looks);
+        });
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct MaterialSwitches {
+    images: HashMap<(PackageId, usize), Vec<SwitchImage>>,
+    targets: FxHashMap<(PackageId, usize), Option<SwitchTarget>>,
 }
 
 /// A prepared material holds the view of the texture it was prepared with, so it shows a switched image's new texture

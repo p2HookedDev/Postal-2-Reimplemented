@@ -180,7 +180,7 @@ impl<L: LoaderRef> Vm<L> {
             self.prepare_path(scene);
         }
         self.set_scene_start_time(scene);
-        self.event(scene, "SceneStarted", Vec::new())?;
+        self.event(scene, crate::states::Event::SceneStarted, Vec::new())?;
         for orientation in ["CamOrientation", "PrevOrientation"] {
             if let Some(value) = self.store.get(scene, orientation).as_ref().map(zero_like) {
                 self.store.set(scene, orientation, value);
@@ -196,7 +196,7 @@ impl<L: LoaderRef> Vm<L> {
         self.store.set(scene, Prop::bIsRunning, Value::Bool(false));
         self.store.set(scene, Prop::bIsSceneStarted, Value::Bool(false));
         self.store.set_path(scene, &["PrevOrientation", "MA"], Value::Int(0));
-        self.event(scene, "SceneEnded", Vec::new())?;
+        self.event(scene, crate::states::Event::SceneEnded, Vec::new())?;
         for action in self.objects_in(scene, Prop::Actions) {
             for sub_action in self.objects_in(action, Prop::SubActions) {
                 let looks = self.store.get_path(sub_action, &["CamOrientation", "CamOrientation"]) == Some(Value::Byte(ECamOrientation::LookAtActor as u8));
@@ -276,7 +276,7 @@ impl<L: LoaderRef> Vm<L> {
             };
             if let Some(name) = next {
                 let args = vec![Value::Name(name), Value::Object(Some(viewer)), Value::Object(self.store.object_of(scene, Prop::OldPawn))];
-                self.event(scene, "TriggerEvent", args)?;
+                self.event(scene, crate::states::Event::TriggerEvent, args)?;
             }
         }
         Ok(())
@@ -523,7 +523,7 @@ impl<L: LoaderRef> Vm<L> {
         } else if self.store.is_a(sub_action, Kind::SubActionTrigger) {
             let event = self.store.get(sub_action, Prop::EventName).unwrap_or(Value::Name(NameId::NONE));
             let args = vec![event, Value::Object(viewer), Value::Object(self.store.object_of(scene, Prop::OldPawn))];
-            self.event(scene, "TriggerEvent", args)?;
+            self.event(scene, crate::states::Event::TriggerEvent, args)?;
         } else if self.store.is_a(sub_action, Kind::SubActionCameraEffect) {
             if let (Some(controller), Some(effect)) = (controller, self.store.object_of(sub_action, Prop::CameraEffect)) {
                 let (start, end) = (self.store.float_of(sub_action, Prop::StartAlpha), self.store.float_of(sub_action, Prop::EndAlpha));
@@ -550,9 +550,9 @@ impl<L: LoaderRef> Vm<L> {
 
     fn show_camera_effect(&mut self, controller: ObjectId, effect: ObjectId, show: bool) -> Result<(), Error> {
         if show {
-            self.event(controller, "AddCameraEffect", [Value::Object(Some(effect)), Value::Bool(true)])
+            self.event(controller, crate::states::Event::AddCameraEffect, [Value::Object(Some(effect)), Value::Bool(true)])
         } else {
-            self.event(controller, "RemoveCameraEffect", [Value::Object(Some(effect))])
+            self.event(controller, crate::states::Event::RemoveCameraEffect, [Value::Object(Some(effect))])
         }
     }
 

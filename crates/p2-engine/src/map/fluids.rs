@@ -156,24 +156,24 @@ pub(super) struct FluidActor {
 }
 
 pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> Option<FluidActor> {
-    use p2_vm::Value;
+    use p2_vm::{Prop, Value};
     if !vm.store.is_a(actor, "FluidSurfaceInfo") {
         return None;
     }
-    let float = |object: ObjectId, name: &str, default: f32| match vm.store.get(object, name) {
+    let float = |object: ObjectId, property: Prop, default: f32| match vm.store.get(object, property) {
         Some(Value::Float(value)) => value,
         _ => default,
     };
-    let byte = |object: ObjectId, name: &str, default: u8| match vm.store.get(object, name) {
+    let byte = |object: ObjectId, property: Prop, default: u8| match vm.store.get(object, property) {
         Some(Value::Byte(value)) => value,
         _ => default,
     };
-    let int = |name: &str, default: i32| match vm.store.get(actor, name) {
+    let int = |property: Prop, default: i32| match vm.store.get(actor, property) {
         Some(Value::Int(value)) => value,
         _ => default,
     };
     let d = FluidSettings::default();
-    let noise_strength = match vm.store.get(actor, "FluidNoiseStrength") {
+    let noise_strength = match vm.store.get(actor, Prop::FluidNoiseStrength) {
         Some(Value::Struct(range)) => match range.as_slice() {
             [Value::Float(min), Value::Float(max), ..] => (*min, *max),
             _ => d.noise_strength,
@@ -181,31 +181,31 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
         _ => d.noise_strength,
     };
     let settings = FluidSettings {
-        hexagonal: byte(actor, "FluidGridType", u8::from(d.hexagonal)) == 1,
-        spacing: float(actor, "FluidGridSpacing", d.spacing),
-        x_size: int("FluidXSize", d.x_size),
-        y_size: int("FluidYSize", d.y_size),
-        height_scale: float(actor, "FluidHeightScale", d.height_scale),
-        speed: float(actor, "FluidSpeed", d.speed),
-        damping: float(actor, "FluidDamping", d.damping),
-        noise_frequency: float(actor, "FluidNoiseFrequency", d.noise_frequency),
+        hexagonal: byte(actor, Prop::FluidGridType, u8::from(d.hexagonal)) == 1,
+        spacing: float(actor, Prop::FluidGridSpacing, d.spacing),
+        x_size: int(Prop::FluidXSize, d.x_size),
+        y_size: int(Prop::FluidYSize, d.y_size),
+        height_scale: float(actor, Prop::FluidHeightScale, d.height_scale),
+        speed: float(actor, Prop::FluidSpeed, d.speed),
+        damping: float(actor, Prop::FluidDamping, d.damping),
+        noise_frequency: float(actor, Prop::FluidNoiseFrequency, d.noise_frequency),
         noise_strength,
-        u_tiles: float(actor, "UTiles", d.u_tiles),
-        u_offset: float(actor, "UOffset", d.u_offset),
-        v_tiles: float(actor, "VTiles", d.v_tiles),
-        v_offset: float(actor, "VOffset", d.v_offset),
-        alpha_curve_scale: float(actor, "AlphaCurveScale", d.alpha_curve_scale),
-        alpha_height_scale: float(actor, "AlphaHeightScale", d.alpha_height_scale),
-        alpha_max: byte(actor, "AlphaMax", d.alpha_max),
-        ripple_velocity_factor: float(actor, "RippleVelocityFactor", d.ripple_velocity_factor),
-        warm_up_time: float(actor, "WarmUpTime", d.warm_up_time),
-        update_rate: float(actor, "UpdateRate", d.update_rate),
+        u_tiles: float(actor, Prop::UTiles, d.u_tiles),
+        u_offset: float(actor, Prop::UOffset, d.u_offset),
+        v_tiles: float(actor, Prop::VTiles, d.v_tiles),
+        v_offset: float(actor, Prop::VOffset, d.v_offset),
+        alpha_curve_scale: float(actor, Prop::AlphaCurveScale, d.alpha_curve_scale),
+        alpha_height_scale: float(actor, Prop::AlphaHeightScale, d.alpha_height_scale),
+        alpha_max: byte(actor, Prop::AlphaMax, d.alpha_max),
+        ripple_velocity_factor: float(actor, Prop::RippleVelocityFactor, d.ripple_velocity_factor),
+        warm_up_time: float(actor, Prop::WarmUpTime, d.warm_up_time),
+        update_rate: float(actor, Prop::UpdateRate, d.update_rate),
     };
-    let clamp_bitmap = match vm.store.get(actor, "ClampBitmap") {
+    let clamp_bitmap = match vm.store.get(actor, Prop::ClampBitmap) {
         Some(Value::Array(words)) => words.iter().map(|word| if let Value::Int(word) = word { *word } else { 0 }).collect(),
         _ => Vec::new(),
     };
-    let skin = match vm.store.get(actor, "Skins") {
+    let skin = match vm.store.get(actor, Prop::Skins) {
         Some(Value::Array(skins)) => match skins.first() {
             Some(Value::Object(Some(material))) => Some(vm.store.object(*material).path.clone()),
             _ => None,
@@ -216,19 +216,19 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
     let mut surface = FluidSurface::new(settings, location, clamp_bitmap, seed);
     surface.oscillators = vm
         .actors()
-        .filter(|&o| !vm.store.is_deleted(o) && vm.store.is_a(o, "FluidSurfaceOscillator") && vm.store.get(o, "FluidInfo") == Some(Value::Object(Some(actor))))
+        .filter(|&o| !vm.store.is_deleted(o) && vm.store.is_a(o, "FluidSurfaceOscillator") && vm.store.get(o, Prop::FluidInfo) == Some(Value::Object(Some(actor))))
         .map(|o| FluidOscillator {
             location: vm.store.location(o),
-            frequency: float(o, "Frequency", 1.0),
-            phase: byte(o, "Phase", 0),
-            strength: float(o, "Strength", 10.0),
-            radius: float(o, "Radius", 0.0),
+            frequency: float(o, Prop::Frequency, 1.0),
+            phase: byte(o, Prop::Phase, 0),
+            strength: float(o, Prop::Strength, 10.0),
+            radius: float(o, Prop::Radius, 0.0),
             time: 0.0,
         })
         .collect();
     let s = &surface.settings;
     let half = Vector::new((s.x_size - 1).max(0) as f32 * 0.5 * s.spacing, (s.y_size - 1).max(0) as f32 * 0.5 * s.spacing * s.row_spacing(), s.spacing);
-    Some(FluidActor { object: actor, bounds: (location - half, location + half), skin, hidden: vm.store.flag_of(actor, "bHidden"), surface })
+    Some(FluidActor { object: actor, bounds: (location - half, location + half), skin, hidden: vm.store.flag_of(actor, Prop::bHidden), surface })
 }
 
 pub(super) struct FluidShown {
@@ -245,6 +245,9 @@ pub(super) struct FluidShown {
     uv_size: [f32; 2],
     seconds: f32,
 }
+
+#[derive(Resource, Default)]
+pub struct Fluids(Vec<FluidShown>);
 
 impl Session {
     pub(super) fn add_fluids(&mut self, fluids: Vec<FluidActor>, origin: Vec3, t: &mut SceneTargets) {
@@ -274,11 +277,11 @@ impl Session {
             section.two_sided = true;
             let material = section_material(&section, actor_standard(&section, SceneLights::Ignored), &mut t.assets.materials, &mut t.assets.mesh_lit);
             let shown = if fluid.hidden { Visibility::Hidden } else { Visibility::Inherited };
-            let parent = t.commands.spawn((ActorModel(fluid.object), Transform::from_translation(origin), Visibility::default())).id();
+            let parent = t.commands.spawn((MapScoped, ActorModel(fluid.object), Transform::from_translation(origin), Visibility::default())).id();
             let mut spawned = t.commands.spawn((Mesh3d(mesh.clone()), Transform::default(), shown, NoFrustumCulling, ChildOf(parent)));
             material.insert(&mut spawned);
             let entity = spawned.id();
-            self.fluids.push(FluidShown {
+            t.fluids.0.push(FluidShown {
                 object: fluid.object,
                 surface: fluid.surface,
                 vertices: Vec::new(),
@@ -294,52 +297,92 @@ impl Session {
             });
         }
     }
+}
 
-    /// Before `update_particles` takes the presented frame's step. A surface steps only while in view
-    /// within the last second (`drawn_lately`); only surfaces in view get their vertices rebuilt.
-    pub(super) fn update_fluids(&mut self, t: &mut SceneTargets) {
-        let Some(world) = t.play.world_mut() else { return };
-        let plings = world.take_plings();
-        if self.fluids.is_empty() {
-            return;
+pub(super) struct FluidTargets<'a, 'w, 's> {
+    pub(super) fluids: &'a mut Fluids,
+    pub(super) play: &'a mut Play,
+    pub(super) cameras: &'a Query<'w, 's, &'static Transform, With<SceneView>>,
+    pub(super) projections: &'a Query<'w, 's, &'static Projection, With<SceneView>>,
+    pub(super) commands: &'a mut Commands<'w, 's>,
+    pub(super) meshes: &'a mut Assets<Mesh>,
+    pub(super) materials: &'a mut Assets<StandardMaterial>,
+    pub(super) mesh_lit: &'a mut Assets<MeshLitMaterial>,
+}
+
+#[derive(SystemParam)]
+pub(super) struct FluidParams<'w, 's> {
+    fluids: ResMut<'w, Fluids>,
+    play: ResMut<'w, Play>,
+    cameras: Query<'w, 's, &'static Transform, With<SceneView>>,
+    projections: Query<'w, 's, &'static Projection, With<SceneView>>,
+    commands: Commands<'w, 's>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    mesh_lit: ResMut<'w, Assets<MeshLitMaterial>>,
+    times: ResMut<'w, FrameTimes>,
+}
+
+pub(super) fn present_fluids(mut t: FluidParams) {
+    let started = std::time::Instant::now();
+    update_fluids(&mut FluidTargets {
+        fluids: &mut t.fluids,
+        play: &mut t.play,
+        cameras: &t.cameras,
+        projections: &t.projections,
+        commands: &mut t.commands,
+        meshes: &mut t.meshes,
+        materials: &mut t.materials,
+        mesh_lit: &mut t.mesh_lit,
+    });
+    t.times.add("fluids", started);
+}
+
+/// A surface steps only while in view within the last second (`drawn_lately`); only surfaces in view get their
+/// vertices rebuilt.
+pub(super) fn update_fluids(t: &mut FluidTargets) {
+    let Some(world) = t.play.world_mut() else { return };
+    let plings = world.take_plings();
+    if t.fluids.0.is_empty() {
+        return;
+    }
+    let step = world.step();
+    if t.cameras.iter().next().is_none() {
+        return;
+    }
+    let in_frustum = frustum_test(t.cameras, t.projections, world.origin());
+    for fluid in &mut t.fluids.0 {
+        for pling in plings.iter().filter(|pling| pling.surface == fluid.object) {
+            fluid.surface.pling(pling.position, pling.strength, pling.radius);
         }
-        let step = world.step();
-        if t.particle_view.cameras.iter().next().is_none() {
-            return;
+        if let Some(actor) = world.actor(fluid.object) {
+            let shown = !(actor.gone || actor.hidden);
+            if shown != fluid.shown {
+                fluid.shown = shown;
+                t.commands.entity(fluid.entity).try_insert(if shown { Visibility::Inherited } else { Visibility::Hidden });
+            }
         }
-        let in_frustum = t.particle_view.frustum_test(world.origin());
-        for fluid in &mut self.fluids {
-            for pling in plings.iter().filter(|pling| pling.surface == fluid.object) {
-                fluid.surface.pling(pling.position, pling.strength, pling.radius);
-            }
-            if let Some(actor) = world.actor(fluid.object) {
-                let shown = !(actor.gone || actor.hidden);
-                if shown != fluid.shown {
-                    fluid.shown = shown;
-                    t.commands.entity(fluid.entity).try_insert(if shown { Visibility::Inherited } else { Visibility::Hidden });
-                }
-            }
-            let (min, max) = (Vec3::from(to_bevy(fluid.bounds.0)), Vec3::from(to_bevy(fluid.bounds.1)));
-            let in_view = in_frustum(Some((min.min(max), min.max(max))));
-            let drawn = fluid.shown && in_view;
-            fluid.since_drawn = if drawn { 0.0 } else { fluid.since_drawn + step };
-            if step <= 0.0 {
-                continue;
-            }
-            let touchers = world.fluid_touchers(fluid.object);
-            fluid.surface.tick(step, fluid.since_drawn <= 1.0, touchers);
-            if drawn && let Some(mut mesh) = t.assets.meshes.get_mut(&fluid.mesh) {
-                refill_fluid(&mut mesh, &mut fluid.surface, &mut fluid.vertices);
-            }
-            fluid.seconds += step;
-            if drawn && !fluid.uv.is_empty() {
-                let [[a, b, c], [d, e, f]] = uv_matrix(&fluid.uv, fluid.seconds, fluid.uv_size);
-                let transform = bevy::math::Affine2::from_cols(Vec2::new(a, d), Vec2::new(b, e), Vec2::new(c, f));
-                match &fluid.material {
-                    SectionMaterial::MeshLit(handle) => set_uv_transform(&mut t.assets.mesh_lit, handle, transform, |m| &m.base, |m| &mut m.base),
-                    SectionMaterial::Standard(handle) => set_uv_transform(&mut t.assets.materials, handle, transform, |m| m, |m| m),
-                    _ => {}
-                }
+        let (min, max) = (Vec3::from(to_bevy(fluid.bounds.0)), Vec3::from(to_bevy(fluid.bounds.1)));
+        let in_view = in_frustum(Some((min.min(max), min.max(max))));
+        let drawn = fluid.shown && in_view;
+        fluid.since_drawn = if drawn { 0.0 } else { fluid.since_drawn + step };
+        if step <= 0.0 {
+            continue;
+        }
+        let touchers = world.fluid_touchers(fluid.object);
+        fluid.surface.tick(step, fluid.since_drawn <= 1.0, touchers);
+        if drawn && let Some(mut mesh) = t.meshes.get_mut(&fluid.mesh) {
+            crate::diagnostics::mesh_written(crate::diagnostics::MeshWrite::Fluid);
+            refill_fluid(&mut mesh, &mut fluid.surface, &mut fluid.vertices);
+        }
+        fluid.seconds += step;
+        if drawn && !fluid.uv.is_empty() {
+            let [[a, b, c], [d, e, f]] = uv_matrix(&fluid.uv, fluid.seconds, fluid.uv_size);
+            let transform = bevy::math::Affine2::from_cols(Vec2::new(a, d), Vec2::new(b, e), Vec2::new(c, f));
+            match &fluid.material {
+                SectionMaterial::MeshLit(handle) => set_uv_transform(t.mesh_lit, handle, transform, |m| &m.base, |m| &mut m.base),
+                SectionMaterial::Standard(handle) => set_uv_transform(t.materials, handle, transform, |m| m, |m| m),
+                _ => {}
             }
         }
     }

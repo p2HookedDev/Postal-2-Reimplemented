@@ -15,7 +15,7 @@ use p2_render_cpu::{LE_SUNLIGHT, MeshLight};
 use rayon::prelude::*;
 
 pub use cache::{cache_key, load, save};
-pub use scene::{SUN_DISTANCE, Scene, is_sky};
+pub use scene::{SUN_DISTANCE, Scene};
 use scene::Seen;
 
 pub const SCALE: usize = 2;

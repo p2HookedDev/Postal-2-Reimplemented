@@ -175,6 +175,7 @@ pub(crate) fn light_terrain(
         };
         for handle in &sector.meshes {
             if let Some(mut mesh) = meshes.get_mut(handle) {
+                crate::diagnostics::mesh_written(crate::diagnostics::MeshWrite::TerrainLight);
                 p2_bevy_assets::set_vertex_colors(&mut mesh, colors);
             }
         }

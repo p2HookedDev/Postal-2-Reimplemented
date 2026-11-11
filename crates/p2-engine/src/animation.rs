@@ -22,8 +22,13 @@ use p2_bevy_assets::{bone_matrices, scaled_bone_matrices_into, unreal_mesh_matri
 use p2_vm::ObjectId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::mesh_view::{FollowActor, MeshViewSystems, SkinJoint};
-use crate::play::{ActorPose, ChannelPose, FrameTimes, Play};
+use crate::mesh_view::{FollowActor, SkinJoint};
+use crate::play::{ActorPose, ChannelPose, FrameTimes, Play, PlayWorld};
+use attachments::{follow_bones, place_attached};
+pub(crate) use attachments::{AttachmentPlaces, BoneFrame, attached_transform};
+pub use attachments::attachment_frame;
+
+mod attachments;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AnimationSystems {
@@ -34,12 +39,10 @@ pub struct AnimationPlugin;
 
 impl Plugin for AnimationPlugin {
     fn build(&self, app: &mut App) {
-        // After the actors' models took their actors' places (`play::follow_actors`), so attachments land on this
-        // frame's bones.
+        crate::add_once(app, crate::FrameOrderPlugin);
         app.init_resource::<Animated>()
             .init_resource::<Poses>()
             .init_resource::<AttachmentPlaces>()
-            .configure_sets(Update, AnimationSystems::Pose.after(MeshViewSystems::Camera))
             .add_systems(Update, (animate, pose_joints, follow_bones, place_attached).chain().in_set(AnimationSystems::Pose))
             .add_systems(
                 PostUpdate,
@@ -75,51 +78,6 @@ impl Poses {
         self.joints.remove(&actor);
         self.slots.remove(&actor);
     }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct BoneFrame {
-    pub(crate) location: Vector,
-    pub(crate) axes: [Vector; 3],
-}
-
-fn axes_matrix(axes: [Vector; 3], origin: Vec3) -> Mat4 {
-    let [x, y, z] = axes.map(|axis| Vec3::from_array(axis.into()).extend(0.0));
-    Mat4::from_cols(x, y, z, origin.extend(1.0))
-}
-
-#[derive(Resource, Default)]
-pub(crate) struct AttachmentPlaces(pub(crate) FxHashMap<ObjectId, (ObjectId, BoneFrame)>);
-
-impl AttachmentPlaces {
-    fn record(&mut self, actor: ObjectId, base: ObjectId, frame: Mat4) {
-        let axes = [frame.x_axis, frame.y_axis, frame.z_axis].map(|axis| axis.truncate().to_array());
-        self.0.insert(actor, (base, BoneFrame { location: frame.w_axis.truncate().to_array().into(), axes: axes.map(Vector::from) }));
-    }
-
-    pub(crate) fn frame(&self, actor: ObjectId) -> Option<Mat4> {
-        let (_, place) = self.0.get(&actor)?;
-        Some(axes_matrix(place.axes, Vec3::from_array(place.location.into())))
-    }
-}
-
-impl FollowBone {
-    pub fn transform(&self, body: Mat4, bone: Mat4) -> Transform {
-        self.transform_at(self.frame(body, bone))
-    }
-
-    fn frame(&self, body: Mat4, bone: Mat4) -> Mat4 {
-        attachment_frame(body, bone, self.relative_location, self.relative_rotation)
-    }
-
-    fn transform_at(&self, frame: Mat4) -> Transform {
-        skeletal_transform(frame, self.scale, self.pre_pivot, (self.mesh_scale, self.origin, self.rot_origin))
-    }
-}
-
-fn skeletal_transform(frame: Mat4, scale: Vector, pre_pivot: Vector, (mesh_scale, origin, rot_origin): (Vector, Vector, Rotator)) -> Transform {
-    let (_, rotation, position) = frame.to_scale_rotation_translation();
-    unreal_to_bevy(unreal_mesh_matrix(position.to_array().into(), Mat4::from_quat(rotation), scale, pre_pivot, mesh_scale, origin, rot_origin))
 }
 
 #[derive(Clone)]
@@ -261,8 +219,120 @@ fn map_bones(bone_names: &[String], animation_names: &[String]) -> Vec<Option<us
     bone_names.iter().map(|name| animation_names.iter().position(|n| n == name)).collect()
 }
 
+/// Fewer animated meshes than this are posed on the calling thread: handing them out costs more than it saves.
+const POSED_AT_ONCE: usize = 16;
+
+#[derive(Default)]
+struct PoseScratch {
+    times: Vec<f32>,
+}
+
+enum PoseWork<'a> {
+    Keep,
+    Ragdoll(std::borrow::Cow<'a, [p2_assets::pose::Frame]>),
+    /// The pose, and where its channels' shown times start in the frame's list of them.
+    Channels(&'a ActorPose, usize),
+    /// No game behind it (the viewer), or an actor that does not animate: its own sequence by the clock.
+    Free,
+}
+
+/// The mesh's new bone matrices, or `None` while it shows the pose it already has.
+fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elapsed: f32) -> Option<Vec<Mat4>> {
+    match work {
+        PoseWork::Keep => None,
+        PoseWork::Ragdoll(bones) => {
+            let mut key = rustc_hash::FxHasher::default();
+            bones.iter().for_each(|b| b.axes.iter().chain([&b.origin]).flatten().for_each(|c| c.to_bits().hash(&mut key)));
+            let key = Some(key.finish());
+            if key == item.last_pose {
+                return None;
+            }
+            item.last_pose = key;
+            Some(bones.iter().map(frame_matrix).collect())
+        }
+        PoseWork::Channels(actor_pose, from) => {
+            let ActorPose { scales, turns, .. } = actor_pose;
+            let shown = |index: usize, channel: &ChannelPose| shown_times.get(from + index).copied().unwrap_or(channel.time);
+            let mut key = std::hash::DefaultHasher::new();
+            for (index, (channel, alpha, bone)) in pose_channels(actor_pose).enumerate() {
+                (Arc::as_ptr(&channel.animation), channel.sequence, shown(index, channel).to_bits(), alpha.to_bits(), bone).hash(&mut key);
+                channel.tween.as_ref().map(|(from, weight)| (Arc::as_ptr(from).addr(), weight.to_bits())).hash(&mut key);
+            }
+            scales.iter().for_each(|(bone, scale)| (&**bone, scale.to_bits()).hash(&mut key));
+            turns.iter().for_each(|(bone, turn)| (&**bone, turn).hash(&mut key));
+            let key = Some(key.finish());
+            if key == item.last_pose {
+                return None;
+            }
+            item.last_pose = key;
+            let mut local = std::mem::take(&mut item.local_scratch);
+            let mut channel_pose = std::mem::take(&mut item.channel_scratch);
+            local.clear();
+            for (index, (channel, alpha, bone)) in pose_channels(actor_pose).enumerate() {
+                let map = Arc::clone(item.vm_bone_maps.entry(Arc::clone(&channel.animation.path)).or_insert_with(|| map_bones(&item.bone_names, &channel.animation.bone_names).into()));
+                let pose = if index == 0 { &mut local } else { &mut channel_pose };
+                item.local_pose(&channel.animation.animation, channel.sequence, shown(index, channel), &map, pose);
+                if let Some((from, weight)) = &channel.tween {
+                    tween_pose(from, pose, *weight);
+                }
+                if index > 0 {
+                    blend_local(&mut local, &channel_pose, alpha, &item.subtree(bone));
+                }
+            }
+            item.scale_bones(scales);
+            for (bone, turn) in turns {
+                if let Some(index) = item.bone_index(bone)
+                    && let Some(posed) = local.get_mut(index)
+                {
+                    posed.0 = p2_assets::pose::turn_local(posed.0, *turn);
+                }
+            }
+            let mut pose = Vec::new();
+            let factors = &item.bone_scales;
+            scaled_bone_matrices_into(&item.parents, &local, |bone| factors.get(bone).copied().unwrap_or(1.0), &mut pose);
+            item.local_scratch = local;
+            item.channel_scratch = channel_pose;
+            Some(pose)
+        }
+        PoseWork::Free => {
+            let sequence = item.animation.sequences.get(item.sequence)?;
+            Some(item.bone_pose(elapsed * sequence.rate))
+        }
+    }
+}
+
 fn pose_channels(pose: &ActorPose) -> impl Iterator<Item = (&ChannelPose, f32, &str)> {
     std::iter::once((&pose.base, 1.0, "")).chain(pose.blends.iter().map(|(channel, alpha, bone)| (channel, *alpha, &**bone)))
+}
+
+fn pose_work<'a>(item: &AnimatedMesh, world: Option<&'a PlayWorld>, shown_times: &mut Vec<f32>) -> PoseWork<'a> {
+    let Some(actor) = item.actor else { return PoseWork::Keep };
+    if let Some(bones) = world.and_then(|world| world.shown_ragdoll(actor)) {
+        return PoseWork::Ragdoll(bones);
+    }
+    match world.map_or(Some(None), |world| world.pose(actor)) {
+        None => PoseWork::Keep,
+        Some(None) => PoseWork::Free,
+        Some(Some(pose)) => {
+            let from = shown_times.len();
+            shown_times.extend(pose_channels(pose).enumerate().map(|(index, (channel, ..))| world.map_or(channel.time, |world| world.shown_time(actor, index, channel))));
+            PoseWork::Channels(pose, from)
+        }
+    }
+}
+
+/// The joints of a mesh made after this frame's `animate`, posed as the game shows its actor now, so its first frame
+/// is not the bind pose. `None` while the game has no pose for it.
+pub(crate) fn first_joints(item: &mut AnimatedMesh, world: &PlayWorld) -> Option<Arc<[Transform]>> {
+    let mut shown_times = Vec::new();
+    let work = pose_work(item, Some(world), &mut shown_times);
+    if matches!(work, PoseWork::Free) {
+        return None;
+    }
+    let bones = pose_mesh(item, &work, &shown_times, 0.0)?;
+    // Posed again by the next `animate`, which also records it in `Poses` as for any new mesh.
+    item.last_pose = None;
+    Some(bones.into_iter().map(joint_transform).collect())
 }
 
 fn animate(
@@ -272,6 +342,7 @@ fn animate(
     mut poses: ResMut<Poses>,
     mut times: ResMut<FrameTimes>,
     mut generation: Local<u64>,
+    mut scratch: Local<PoseScratch>,
 ) {
     let started = std::time::Instant::now();
     let world = play.world();
@@ -301,76 +372,37 @@ fn animate(
             }
         }
     }
-    for item in &mut animated.0 {
-        let Some(actor) = item.actor else { continue };
-        if let Some(world) = world
-            && let Some(bones) = world.ragdoll(actor)
-        {
-            let mut key = rustc_hash::FxHasher::default();
-            bones.iter().for_each(|b| b.axes.iter().chain([&b.origin]).flatten().for_each(|c| c.to_bits().hash(&mut key)));
-            let key = Some(key.finish());
-            if key != item.last_pose {
-                item.last_pose = key;
-                poses.bones.insert(actor, bones.iter().map(frame_matrix).collect());
-                poses.changed.insert(actor);
-                poses.note(actor, item);
-            }
-            continue;
+    // What each mesh is posed from is read here, where the world is at hand; the posing itself is spread over threads.
+    let shown_times = &mut scratch.times;
+    shown_times.clear();
+    let work: Vec<PoseWork> = animated.0.iter().map(|item| pose_work(item, world, shown_times)).collect();
+    let (shown_times, elapsed) = (&*shown_times, time.elapsed_secs());
+    let mut posed: Vec<Option<Vec<Mat4>>> = Vec::new();
+    posed.resize_with(work.len(), || None);
+    let pose_all = |items: &mut [AnimatedMesh], work: &[PoseWork], posed: &mut [Option<Vec<Mat4>>]| {
+        for ((item, work), posed) in items.iter_mut().zip(work).zip(posed) {
+            *posed = pose_mesh(item, work, shown_times, elapsed);
         }
-        // An actor the presented frame did not pose keeps its pose.
-        let Some(channels) = world.map_or(Some(None), |world| world.pose(actor)) else { continue };
-        let pose = match channels {
-            Some(actor_pose) => {
-                let ActorPose { scales, turns, .. } = actor_pose;
-                let mut key = std::hash::DefaultHasher::new();
-                for (channel, alpha, bone) in pose_channels(actor_pose) {
-                    (Arc::as_ptr(&channel.animation), channel.sequence, channel.time.to_bits(), alpha.to_bits(), bone).hash(&mut key);
-                    channel.tween.as_ref().map(|(from, weight)| (Arc::as_ptr(from).addr(), weight.to_bits())).hash(&mut key);
-                }
-                scales.iter().for_each(|(bone, scale)| (&**bone, scale.to_bits()).hash(&mut key));
-                turns.iter().for_each(|(bone, turn)| (&**bone, turn).hash(&mut key));
-                let key = Some(key.finish());
-                if key == item.last_pose {
-                    continue;
-                }
-                item.last_pose = key;
-                let mut local = std::mem::take(&mut item.local_scratch);
-                let mut channel_pose = std::mem::take(&mut item.channel_scratch);
-                local.clear();
-                for (index, (channel, alpha, bone)) in pose_channels(actor_pose).enumerate() {
-                    let map = Arc::clone(item.vm_bone_maps.entry(Arc::clone(&channel.animation.path)).or_insert_with(|| map_bones(&item.bone_names, &channel.animation.bone_names).into()));
-                    let pose = if index == 0 { &mut local } else { &mut channel_pose };
-                    item.local_pose(&channel.animation.animation, channel.sequence, channel.time, &map, pose);
-                    if let Some((from, weight)) = &channel.tween {
-                        tween_pose(from, pose, *weight);
-                    }
-                    if index > 0 {
-                        blend_local(&mut local, &channel_pose, alpha, &item.subtree(bone));
-                    }
-                }
-                item.scale_bones(scales);
-                for (bone, turn) in turns {
-                    if let Some(index) = item.bone_index(bone)
-                        && let Some(posed) = local.get_mut(index)
-                    {
-                        posed.0 = p2_assets::pose::turn_local(posed.0, *turn);
-                    }
-                }
-                let mut pose = poses.bones.get_mut(&actor).map(std::mem::take).unwrap_or_default();
-                let factors = &item.bone_scales;
-                scaled_bone_matrices_into(&item.parents, &local, |bone| factors.get(bone).copied().unwrap_or(1.0), &mut pose);
-                item.local_scratch = local;
-                item.channel_scratch = channel_pose;
-                pose
+    };
+    if work.len() < POSED_AT_ONCE {
+        pose_all(&mut animated.0, &work, &mut posed);
+    } else {
+        let pool = bevy::tasks::ComputeTaskPool::get();
+        let share = work.len().div_ceil(pool.thread_num().max(1)).max(POSED_AT_ONCE / 2);
+        let pose_all = &pose_all;
+        pool.scope(|scope| {
+            for ((items, work), posed) in animated.0.chunks_mut(share).zip(work.chunks(share)).zip(posed.chunks_mut(share)) {
+                scope.spawn(async move { pose_all(items, work, posed) });
             }
-            None => {
-                let Some(sequence) = item.animation.sequences.get(item.sequence) else { continue };
-                item.bone_pose(time.elapsed_secs() * sequence.rate)
-            }
-        };
-        poses.bones.insert(actor, pose);
-        poses.changed.insert(actor);
-        poses.note(actor, item);
+        });
+    }
+    drop(work);
+    for (item, pose) in animated.0.iter().zip(posed) {
+        if let (Some(actor), Some(pose)) = (item.actor, pose) {
+            poses.bones.insert(actor, pose);
+            poses.changed.insert(actor);
+            poses.note(actor, item);
+        }
     }
     times.add("animate", started);
 }
@@ -415,177 +447,6 @@ fn joint_transform(matrix: Mat4) -> Transform {
     if transform.rotation.is_finite() { transform } else { Transform { rotation: Quat::IDENTITY, ..transform } }
 }
 
-fn follow_bones(
-    mut commands: Commands,
-    poses: Res<Poses>,
-    play: Res<Play>,
-    mut places: ResMut<AttachmentPlaces>,
-    mut attached: Query<(Entity, Ref<FollowBone>, &mut Transform, &mut Visibility)>,
-) {
-    let world = play.world();
-    for (entity, follow, mut transform, mut shown) in &mut attached {
-        let changed = world.is_some_and(|world| world.changed(follow.base) || world.changed(follow.actor));
-        if !(follow.is_added() || changed || poses.changed.contains(&follow.base)) {
-            continue;
-        }
-        let base = world.and_then(|world| world.actor(follow.base));
-        let own = world.and_then(|world| world.actor(follow.actor));
-        if base.is_some_and(|base| base.gone) || own.is_some_and(|own| own.gone) {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        if let Some(own) = own
-            && own.attachment.as_ref().is_none_or(|attachment| attachment.base != follow.base)
-        {
-            let skeletal = Some((follow.mesh_scale, follow.origin, follow.rot_origin));
-            commands.entity(entity).remove::<FollowBone>().insert(FollowActor { actor: follow.actor, scale: follow.scale, pre_pivot: follow.pre_pivot, skeletal });
-            continue;
-        }
-        if base.is_some() || own.is_some() {
-            let hidden = base.is_some_and(|base| base.hidden) || own.is_some_and(|own| own.hidden);
-            shown.set_if_neq(if hidden { Visibility::Hidden } else { Visibility::Inherited });
-        }
-        let Some(&bone) = poses.bones.get(&follow.base).and_then(|pose| pose.get(follow.bone)) else { continue };
-        let body = match base {
-            Some(base) => FollowActor { pre_pivot: base.pre_pivot, ..follow.base_follow }.mesh_matrix(base.location, base.rotation).unwrap_or(follow.body),
-            None => follow.body,
-        };
-        let frame = follow.frame(body, bone);
-        places.record(follow.actor, follow.base, frame);
-        transform.set_if_neq(follow.transform_at(frame));
-    }
-}
-
-/// They sit at the bone's current frame instead of their actor's `Location`, which the VM does not move with the bone.
-fn place_attached(
-    mut poses: ResMut<Poses>,
-    play: Res<Play>,
-    mut places: ResMut<AttachmentPlaces>,
-    mut models: Query<(Entity, Ref<FollowActor>, &mut Transform)>,
-    on_bones: Query<&FollowBone>,
-    mut buffers: Local<AttachedBuffers>,
-) {
-    let Some(world) = play.world() else { return };
-    let poses = &mut *poses;
-    let AttachedBuffers { generation, bone_bodies, bases, due_models, emitters } = &mut *buffers;
-    if *generation != play.generation() {
-        *generation = play.generation();
-        poses.slots.clear();
-    }
-    bone_bodies.clear();
-    bases.clear();
-    due_models.clear();
-    emitters.clear();
-    // Bases themselves on a bone (a map pawn's head, drawn as `FollowBone`): without these a bolt-on hat stayed at its spawn
-    // point in the air.
-    bone_bodies.extend(on_bones.iter().filter_map(|follow| {
-        let place = places.0.get(&follow.actor)?.1;
-        let rotation = axes_matrix(place.axes, Vec3::ZERO);
-        let body = unreal_mesh_matrix(place.location, rotation, follow.scale, follow.pre_pivot, follow.mesh_scale, follow.origin, follow.rot_origin);
-        Some((follow.actor, body))
-    }));
-    let bone_bodies = &*bone_bodies;
-    let changed = &poses.changed;
-    let due = |follow: &FollowActor, added: bool| {
-        let attachment = world.actor(follow.actor)?.attachment.as_ref()?;
-        let base = attachment.base;
-        (added || world.changed(follow.actor) || world.changed(base) || changed.contains(&base) || bone_bodies.contains_key(&base))
-            .then_some(attachment)
-    };
-    // Emitters on a bone have no model but are placed the same way. The first-person muzzle flash is one:
-    // left at the weapon's origin, its sprite filled the screen.
-    emitters.extend(world.watched().filter_map(|actor| {
-        let attachment = world.actor(actor)?.attachment.as_ref()?;
-        (world.changed(actor) || world.changed(attachment.base) || changed.contains(&attachment.base) || bone_bodies.contains_key(&attachment.base))
-            .then_some((actor, attachment.base))
-    }));
-    for (entity, follow, _) in &models {
-        if let Some(attachment) = due(&follow, follow.is_added()) {
-            due_models.push(entity);
-            bases.insert(attachment.base, None);
-        }
-    }
-    bases.extend(emitters.iter().map(|&(_, base)| (base, None)));
-    if bases.is_empty() {
-        return;
-    }
-    for (_, follow, _) in &models {
-        if follow.skeletal.is_some()
-            && let Some(base) = bases.get_mut(&follow.actor)
-        {
-            *base = Some(*follow);
-        }
-    }
-    let (slots, names, aliases, bones) = (&mut poses.slots, &poses.names, &poses.aliases, &poses.bones);
-    let mut frame_of = |attachment: &crate::actors::BoneAttachment| {
-        let (index, tag) = bone_slot(slots, names, aliases, attachment)?;
-        let bone = *bones.get(&attachment.base)?.get(index)? * tag;
-        let body = match bases.get(&attachment.base).copied().flatten() {
-            Some(base) => {
-                let actor = world.actor(attachment.base)?;
-                base.mesh_matrix(actor.location, actor.rotation)?
-            }
-            None => *bone_bodies.get(&attachment.base)?,
-        };
-        Some(attachment_frame(body, bone, attachment.relative_location, attachment.relative_rotation))
-    };
-    for &(actor, _) in emitters.iter() {
-        if let Some(attachment) = world.actor(actor).and_then(|actor| actor.attachment.as_ref())
-            && let Some(frame) = frame_of(attachment)
-        {
-            places.record(actor, attachment.base, frame);
-        }
-    }
-    for &entity in due_models.iter() {
-        let Ok((_, follow, mut transform)) = models.get_mut(entity) else { continue };
-        let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) else { continue };
-        let Some(frame) = frame_of(attachment) else { continue };
-        places.record(follow.actor, attachment.base, frame);
-        transform.set_if_neq(attached_transform(&follow, frame));
-    }
-}
-
-#[derive(Default)]
-struct AttachedBuffers {
-    generation: u64,
-    bone_bodies: FxHashMap<ObjectId, Mat4>,
-    bases: FxHashMap<ObjectId, Option<FollowActor>>,
-    due_models: Vec<Entity>,
-    emitters: Vec<(ObjectId, ObjectId)>,
-}
-
-fn bone_slot(
-    slots: &mut FxHashMap<ObjectId, Vec<(p2_vm::NameId, usize, Mat4)>>,
-    names: &FxHashMap<ObjectId, Arc<[String]>>,
-    aliases: &FxHashMap<ObjectId, Arc<[(String, usize, Mat4)]>>,
-    attachment: &crate::actors::BoneAttachment,
-) -> Option<(usize, Mat4)> {
-    let known = slots.entry(attachment.base).or_default();
-    if let Some(&(_, index, tag)) = known.iter().find(|(name, ..)| *name == attachment.bone_id) {
-        return Some((index, tag));
-    }
-    let alias = aliases.get(&attachment.base).and_then(|aliases| aliases.iter().find(|(alias, ..)| **alias == *attachment.bone));
-    let (index, tag) = match alias {
-        Some(&(_, index, tag)) => (index, tag),
-        None => (names.get(&attachment.base)?.iter().position(|name| **name == *attachment.bone)?, Mat4::IDENTITY),
-    };
-    known.push((attachment.bone_id, index, tag));
-    Some((index, tag))
-}
-
-pub(crate) fn attached_transform(follow: &FollowActor, frame: Mat4) -> Transform {
-    if let Some(mesh) = follow.skeletal {
-        return skeletal_transform(frame, follow.scale, follow.pre_pivot, mesh);
-    }
-    let (_, rotation, position) = frame.to_scale_rotation_translation();
-    unreal_to_bevy(
-        Mat4::from_translation(position)
-            * Mat4::from_quat(rotation)
-            * Mat4::from_scale(Vec3::from_array(follow.scale.into()))
-            * Mat4::from_translation(-Vec3::from_array(follow.pre_pivot.into())),
-    )
-}
-
 /// Bevy's `DynamicSkinnedMeshBounds` does this for every skinned mesh every frame and writes the `Aabb` even when equal,
 /// which also makes the renderer extract the mesh again; a mesh's bounds are in its own space, so only a new pose
 /// changes them.
@@ -595,7 +456,9 @@ fn skinned_bounds(
     meshes: Res<Assets<Mesh>>,
     mut sections: Query<(&mut Aabb, &Mesh3d, &SkinnedMesh, &GlobalTransform, &FollowActor)>,
     joints: Query<&GlobalTransform>,
+    mut times: ResMut<FrameTimes>,
 ) {
+    let started = std::time::Instant::now();
     for (mut aabb, mesh, skinned, global, follow) in &mut sections {
         if !(aabb.is_added() || poses.moved.contains(&follow.actor)) {
             continue;
@@ -605,15 +468,7 @@ fn skinned_bounds(
             aabb.set_if_neq(bounds.into());
         }
     }
-}
-
-pub fn attachment_frame(body: Mat4, bone: Mat4, relative_location: Vector, relative_rotation: Rotator) -> Mat4 {
-    let (_, rotation, position) = (body * bone).to_scale_rotation_translation();
-    // A bone scaled to nothing has no rotation (NaN from glam).
-    let rotation = if rotation.is_finite() { rotation } else { Quat::IDENTITY };
-    Mat4::from_rotation_translation(rotation, position)
-        * Mat4::from_translation(Vec3::from_array(relative_location.into()))
-        * p2_bevy_assets::rotator_matrix(relative_rotation)
+    times.add("skinned bounds", started);
 }
 
 #[cfg(test)]

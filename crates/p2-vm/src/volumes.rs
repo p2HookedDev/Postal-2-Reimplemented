@@ -178,15 +178,15 @@ impl<L: LoaderRef> Vm<L> {
         let zone_changed = zone != old_zone && events == ZoneEvents::Sent;
         if zone_changed {
             if let Some(old) = old_zone {
-                self.event(old, "ActorLeaving", [Value::Object(Some(actor))])?;
+                self.event(old, crate::states::Event::ActorLeaving, [Value::Object(Some(actor))])?;
             }
-            self.event(actor, "ZoneChange", [Value::Object(zone)])?;
+            self.event(actor, crate::states::Event::ZoneChange, [Value::Object(zone)])?;
         }
         if zone_changed || region != Some((zone, leaf, number)) {
             self.store.set(actor, Prop::Region, Value::Struct(vec![Value::Object(zone), Value::Int(leaf), Value::Byte(number)]));
         }
         if zone_changed && let Some(zone) = zone {
-            self.event(zone, "ActorEntered", [Value::Object(Some(actor))])?;
+            self.event(zone, crate::states::Event::ActorEntered, [Value::Object(Some(actor))])?;
         }
         // The volume part reads `Location` again: a warp zone's `ActorEntered` may have moved the actor.
         let location = self.store.vector(actor, Prop::Location);
@@ -198,12 +198,12 @@ impl<L: LoaderRef> Vm<L> {
                 self.store.set(actor, Prop::PhysicsVolume, object(new));
             } else if new != old {
                 if let Some(old) = old {
-                    self.event(old, "ActorLeavingVolume", [object(Some(actor))])?;
-                    self.event(actor, "PhysicsVolumeChange", [object(new)])?;
+                    self.event(old, crate::states::Event::ActorLeavingVolume, [object(Some(actor))])?;
+                    self.event(actor, crate::states::Event::PhysicsVolumeChange, [object(new)])?;
                 }
                 self.store.set(actor, Prop::PhysicsVolume, object(new));
                 if let Some(new) = new {
-                    self.event(new, "ActorEnteredVolume", [object(Some(actor))])?;
+                    self.event(new, crate::states::Event::ActorEnteredVolume, [object(Some(actor))])?;
                 }
             }
             return Ok(());
@@ -213,26 +213,26 @@ impl<L: LoaderRef> Vm<L> {
         if new != old {
             if events == ZoneEvents::Sent {
                 if let Some(old) = old {
-                    self.event(old, "PawnLeavingVolume", [object(Some(actor))])?;
-                    self.event(actor, "PhysicsVolumeChange", [object(new)])?;
+                    self.event(old, crate::states::Event::PawnLeavingVolume, [object(Some(actor))])?;
+                    self.event(actor, crate::states::Event::PhysicsVolumeChange, [object(new)])?;
                 }
                 if let Some(controller) = self.store.object_of(actor, Prop::Controller) {
-                    self.event(controller, "NotifyPhysicsVolumeChange", [object(new)])?;
+                    self.event(controller, crate::states::Event::NotifyPhysicsVolumeChange, [object(new)])?;
                 }
             }
             self.store.set(actor, Prop::PhysicsVolume, object(new));
             if events == ZoneEvents::Sent && let Some(new) = new {
-                self.event(new, "PawnEnteredVolume", [object(Some(actor))])?;
+                self.event(new, crate::states::Event::PawnEnteredVolume, [object(Some(actor))])?;
             }
         }
         if head != self.store.object_of(actor, Prop::HeadVolume) {
             if events == ZoneEvents::Sent {
                 let handled = match self.store.object_of(actor, Prop::Controller) {
-                    Some(controller) => self.event_bool(controller, "NotifyHeadVolumeChange", [object(head)])?,
+                    Some(controller) => self.event_bool(controller, crate::states::Event::NotifyHeadVolumeChange, [object(head)])?,
                     None => false,
                 };
                 if !handled {
-                    self.event(actor, "HeadVolumeChange", [object(head)])?;
+                    self.event(actor, crate::states::Event::HeadVolumeChange, [object(head)])?;
                 }
             }
             self.store.set(actor, Prop::HeadVolume, object(head));

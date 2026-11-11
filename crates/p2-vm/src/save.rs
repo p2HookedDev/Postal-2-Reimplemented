@@ -3,6 +3,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
+use crate::object::Stamp;
 use crate::ai_move::LatentMove;
 use crate::memory::{self, Mem, Shape};
 use crate::states::ObjectState;
@@ -124,15 +125,15 @@ impl<L: LoaderRef> Vm<L> {
         if self.level.is_none() {
             return Ok(false);
         }
-        self.each_live_actor("PreSaveGame")?;
+        self.each_live_actor(crate::states::Event::PreSaveGame)?;
         let save = self.snapshot();
-        self.each_live_actor("PostSaveGame")?;
+        self.each_live_actor(crate::states::Event::PostSaveGame)?;
         self.host.saved_slots.insert(slot);
         self.host.commands.push(HostCommand::SaveGame { slot, save: Box::new(save) });
         Ok(true)
     }
 
-    fn each_live_actor(&mut self, event: &str) -> Result<(), Error> {
+    fn each_live_actor(&mut self, event: crate::states::Event) -> Result<(), Error> {
         let actors: Vec<ObjectId> = self.actors().collect();
         for actor in actors {
             if !self.store.is_deleted(actor) {
@@ -147,7 +148,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut errors = Vec::new();
         for actor in actors {
             if !self.store.is_deleted(actor)
-                && let Err(e) = self.event(actor, "PostLoadGame", Vec::new())
+                && let Err(e) = self.event(actor, crate::states::Event::PostLoadGame, Vec::new())
             {
                 errors.push((self.store.object(actor).path.clone(), e));
             }
@@ -174,7 +175,7 @@ impl<L: LoaderRef> Vm<L> {
     fn object_refs(&mut self, object: ObjectId, out: &mut Vec<ObjectId>) {
         let Some(class) = self.store.object(object).class else { return };
         let layout = self.store.class(class).mem;
-        let mut mem = std::mem::take(&mut self.store.objects[object.0 as usize].mem);
+        let mut mem = std::mem::take(self.store.objects[object.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn));
         self.store.memory.visit_refs(layout, &mut mem, &mut |shape, word| {
             if shape == Shape::Object
                 && let Some(found) = memory::object(*word)
@@ -182,7 +183,7 @@ impl<L: LoaderRef> Vm<L> {
                 out.push(found);
             }
         });
-        self.store.objects[object.0 as usize].mem = mem;
+        *self.store.objects[object.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn) = mem;
     }
 
     fn kept_transient(&mut self) -> FxHashSet<ObjectId> {
@@ -267,7 +268,7 @@ impl<L: LoaderRef> Vm<L> {
         let mut objects = Vec::with_capacity(saved.len());
         for &o in &saved {
             let Some(class) = self.store.object(o).class else { continue };
-            let mut mem = self.store.object(o).mem.clone();
+            let mut mem = self.store.object(o).mem().clone();
             self.store.memory.visit_refs(self.store.class(class).mem, &mut mem, &mut |shape, word| {
                 *word = match shape {
                     Shape::Object => reference(self, memory::object(*word)),
@@ -352,7 +353,7 @@ impl<L: LoaderRef> Vm<L> {
                     _ => name(*word).0,
                 };
             });
-            self.store.objects[id.0 as usize].mem = mem;
+            *self.store.objects[id.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn) = mem;
             self.reset_transient_properties(id, class);
             if let Some(state) = &saved.state {
                 self.restore_state(id, state, &reference, &name);

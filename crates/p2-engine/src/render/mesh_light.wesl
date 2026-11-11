@@ -9,7 +9,7 @@ import package::p2_engine::projector::{apply_decals, cluster_ranges, mesh_target
 import package::p2_engine::dynamic_light::{dynamic_light, dynamic_light_relief};
 import package::p2_engine::modern::{base_relief, is_modern, key_shading, static_occlusion, to_eye};
 import package::p2_engine::color::{to_display, to_linear};
-import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
+import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 @if(BINDLESS)
 import package::p2_engine::layer_bindings::indices;
 
@@ -44,14 +44,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         light *= static_occlusion(position.xyz, normal, pbr_input.frag_coord.xy);
         let baked = key.x * to_display(light) / 2.0;
         let lit = to_linear(2.0 * min(baked + lights.diffuse, vec3(1.0)));
-        color = vec4(color.rgb * lit + key.y * light + lights.specular, color.a);
+        if layers.blend.x == 0.0 {
+            color = vec4(color.rgb * lit + key.y * light + lights.specular, color.a);
+        } else {
+            color = vec4(lit_color(layers, color.rgb, lit), color.a);
+        }
     } else {
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);
         if any(dynamic > vec3(0.0)) {
             let baked = to_display(light) / 2.0;
             light = to_linear(2.0 * min(baked + dynamic, vec3(1.0)));
         }
-        color = vec4(color.rgb * light, color.a);
+        color = vec4(lit_color(layers, color.rgb, light), color.a);
     }
 }
     color = apply_layers(in, color, color.a, pbr_input, layers);

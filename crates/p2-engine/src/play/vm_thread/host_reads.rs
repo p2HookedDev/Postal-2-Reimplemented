@@ -1,43 +1,76 @@
 use super::*;
 
 impl Simulation {
+    /// Before a pass of reads: writes from here on carry a later stamp than `mark`, so a write that comes after an
+    /// actor was read in this pass, at any time, makes the next pass read it again.
+    pub(in crate::play) fn begin_reads(&mut self) {
+        self.mark = self.vm.store.stamp();
+        self.vm.store.next_stamp();
+        self.time_dilation = self.vm.time_dilation().to_bits();
+    }
+
     pub(in crate::play) fn pass_actor(&mut self, actor: ObjectId, changes: &mut Vec<(ObjectId, ActorFrame)>, restyled: &mut Vec<Spawned>) {
-        let now = self.actor_frame(actor);
+        let store = &self.vm.store;
+        let time_dilation = self.time_dilation;
+        let undrawn = |sent: &Sent| {
+            sent.steady
+                && sent.time_dilation == time_dilation
+                && store.object(actor).drawn() <= sent.read_at
+                && sent.emitters.iter().all(|&emitter| store.object(emitter).drawn() <= sent.read_at)
+        };
+        if self.sent.get(&actor).is_some_and(undrawn) {
+            self.reads[0] += 1;
+            return;
+        }
+        let always = self.sent.get(&actor).is_some_and(|sent| !sent.steady);
+        self.reads[if always { 2 } else { 1 }] += 1;
+        if self.vm.diagnostics.tick_profile.is_some()
+            && let Some(class) = store.object(actor).class
+        {
+            self.reads_by_class.entry(class).or_default()[usize::from(always)] += 1;
+        }
+        let (vm, view, hud_drawn, names) = (&self.vm, self.view.as_ref(), &self.hud_drawn, &mut self.lower_names);
+        let (owner_only, now) = vm.store.reading_drawn(|| {
+            let owner_only = vm.store.flag_of(actor, Prop::bOwnerNoSee) || vm.store.flag_of(actor, Prop::bOnlyOwnerSee);
+            (owner_only, actor_frame(vm, actor, view, hud_drawn, names))
+        });
+        let (read_at, steady) = (self.mark, now.attachment.is_none() && !owner_only);
+        let emitters = || self.vm.store.objects_of(actor, Prop::Emitters).flatten();
         match self.sent.get_mut(&actor) {
-            Some(sent) if *sent == now => {}
             Some(sent) => {
-                if sent.look != now.look {
-                    let vm = &self.vm;
-                    let (mesh, skeletal) = (mesh_actor(vm, actor), skeletal_actor(vm, actor));
-                    restyled.push(Spawned { actor, mesh, skeletal, emitter: None, sprite: crate::actors::sprite_actor(vm, actor), corona: None, restyled: true });
+                (sent.read_at, sent.steady, sent.time_dilation) = (read_at, steady, time_dilation);
+                sent.emitters.clear();
+                sent.emitters.extend(emitters());
+                if sent.frame == now {
+                    return;
                 }
-                sent.clone_from(&now);
+                if sent.frame.look != now.look {
+                    let vm = &self.vm;
+                    let (mesh, skeletal, sprite) = vm.store.reading_drawn(|| (mesh_actor(vm, actor), skeletal_actor(vm, actor), crate::actors::sprite_actor(vm, actor)));
+                    restyled.push(Spawned { actor, mesh, skeletal, emitter: None, sprite, corona: None, restyled: true });
+                }
+                sent.frame.clone_from(&now);
                 changes.push((actor, now));
             }
             None => {
-                self.sent.insert(actor, now.clone());
+                let emitters = emitters().collect();
+                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, time_dilation, emitters });
                 changes.push((actor, now));
             }
         }
     }
 
-    pub(in crate::play) fn actor_frame(&mut self, actor: ObjectId) -> ActorFrame {
-        let vm = &self.vm;
-        let (location, rotation) = location_rotation(vm, actor);
-        ActorFrame {
-            location,
-            rotation,
-            scale: actor_scale(vm, actor),
-            pre_pivot: vm.store.vector(actor, Prop::PrePivot),
-            velocity: vm.velocity(actor),
-            time_scale: vm.particle_time_scale(actor),
-            gone: vm.store.is_deleted(actor),
-            hidden: vm.filtered_from_view(actor, self.view.as_ref(), &self.hud_drawn),
-            attachment: bone_attachment(vm, actor, &mut self.lower_names),
-            emitters_disabled: emitters_disabled(vm, actor),
-            look: actor_look(vm, actor),
-            glow: vm.store.byte_of(actor, Prop::AmbientGlow),
+    pub(in crate::play) fn draw_hud(&mut self, frame: &mut VmFrame, canvas: [f32; 2], step: f32) {
+        self.hud_age += step;
+        // With a menu or the mouse shown the HUD's scripts answer input: they run every tick.
+        if self.hud_age >= HUD_PERIOD || frame.shows_mouse || self.hud_canvas != canvas || self.hud_kept.is_empty() {
+            self.hud_age = 0.0;
+            self.hud_canvas = canvas;
+            self.hud_kept = self.hud(canvas).into();
+            self.hud_view = self.view;
         }
+        frame.hud = Arc::clone(&self.hud_kept);
+        frame.hud_view = self.hud_view;
     }
 
     pub(in crate::play) fn hud(&mut self, [width, height]: [f32; 2]) -> Vec<CanvasItem> {
@@ -113,5 +146,40 @@ impl Simulation {
         let index = index?;
         let frames = animation.animation.sequences[index].num_frames.max(1) as f32;
         Some(ChannelPose { animation, sequence: index, time: frame * frames, tween })
+    }
+}
+
+fn actor_frame(vm: &Vm<Arc<Loader>>, actor: ObjectId, view: Option<&p2_vm::PlayerView>, hud_drawn: &[ObjectId], names: &mut FxHashMap<p2_vm::NameId, Arc<str>>) -> ActorFrame {
+    let (location, rotation) = location_rotation(vm, actor);
+    ActorFrame {
+        location,
+        rotation,
+        scale: actor_scale(vm, actor),
+        pre_pivot: vm.store.vector(actor, Prop::PrePivot),
+        velocity: vm.velocity(actor),
+        time_scale: vm.particle_time_scale(actor),
+        gone: vm.store.is_deleted(actor),
+        hidden: vm.filtered_from_view(actor, view, hud_drawn),
+        attachment: bone_attachment(vm, actor, names),
+        emitters_disabled: emitters_disabled(vm, actor),
+        look: actor_look(vm, actor),
+        glow: vm.store.byte_of(actor, Prop::AmbientGlow),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_host_reads_of_an_actor_are_all_on_the_drawn_list() {
+        let loader = Loader::new(&std::env::temp_dir(), &[]).unwrap();
+        let mut vm = Vm::new(Arc::new(loader));
+        let actor = vm.stub("Fixture.Thing0", "Actor");
+        let mut names = FxHashMap::default();
+        let frame = vm.store.reading_drawn(|| actor_frame(&vm, actor, None, &[], &mut names));
+        assert!(frame.attachment.is_none() && !frame.gone);
+        let restyle = vm.store.reading_drawn(|| (mesh_actor(&vm, actor), skeletal_actor(&vm, actor), crate::actors::sprite_actor(&vm, actor)));
+        assert!(restyle.0.is_none() && restyle.1.is_none() && restyle.2.is_none());
     }
 }

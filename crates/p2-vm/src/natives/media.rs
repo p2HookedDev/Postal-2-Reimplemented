@@ -56,7 +56,7 @@ pub(super) fn presentation_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, 
                 && let Some(index) = crate::util_natives::subtitle_index(vm.store.get(this, "SubTag").as_ref(), str_arg(args, 0))
                 && let Some(player) = vm.player()
             {
-                vm.event(player, "CallSubtitle", vec![Value::Object(None), Value::Int(index), Value::Int(-1), Value::Object(None)])?;
+                vm.event(player, crate::states::Event::CallSubtitle, vec![Value::Object(None), Value::Int(index), Value::Int(-1), Value::Object(None)])?;
             }
             return Ok(None);
         }

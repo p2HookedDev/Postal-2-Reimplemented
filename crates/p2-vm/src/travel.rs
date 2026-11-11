@@ -4,6 +4,7 @@
 use p2_script::flags::CPF_TRAVEL;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::object::Stamp;
 use crate::Prop;
 use crate::{ClassId, Error, HostCommand, Kind, LoaderRef, ObjectId, Value, Vm};
 
@@ -100,7 +101,7 @@ pub(crate) struct TravelActor {
 impl<L: LoaderRef> Vm<L> {
     pub fn leave_level(&mut self) -> Result<(), Error> {
         if let Some(player) = self.player() {
-            self.event(player, "PreClientTravel", Vec::new())?;
+            self.event(player, crate::states::Event::PreClientTravel, Vec::new())?;
             self.travelling = Vec::new();
             if self.travel_items
                 && let Some(pawn) = self.store.object_of(player, Prop::Pawn)
@@ -136,11 +137,12 @@ impl<L: LoaderRef> Vm<L> {
         // The garbage collection after the unload clears every reference to a deleted actor (interactions, menus and
         // class defaults that pointed into the level now hold `None`).
         let is_gone = |o: ObjectId| actors.contains(&o);
+        let stamp = self.store.stamp;
         for (id, object) in self.store.objects.iter_mut().enumerate() {
             if let Some(class) = object.class
                 && !actors.contains(&ObjectId(id as u32))
             {
-                self.store.memory.forget(self.store.classes[class.0 as usize].mem, &mut object.mem, &is_gone);
+                self.store.memory.forget(self.store.classes[class.0 as usize].mem, object.mem_mut(stamp, Stamp::Drawn), &is_gone);
             }
         }
         for class in &mut self.store.classes {
@@ -203,7 +205,7 @@ impl<L: LoaderRef> Vm<L> {
                 if let Some(class) = self.store.object(*actor).class
                     && let Some(&field) = self.store.memory.get(self.store.class(class).mem).fields.get(*index)
                 {
-                    self.store.memory.write_field(&field, &mut self.store.objects[actor.0 as usize].mem, value);
+                    self.store.memory.write_field(&field, self.store.objects[actor.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn), value);
                 }
             }
         }

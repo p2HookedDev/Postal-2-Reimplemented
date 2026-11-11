@@ -121,9 +121,252 @@ fn steps_are_even_over_alternating_frame_times() {
 }
 
 #[test]
+fn the_look_runs_ahead_only_while_every_tick_turns_alike() {
+    let mut look = LookAhead::default();
+    let mut rotation = p2_math::Rotator { pitch: 0, yaw: 65000, roll: 0 };
+    look.learn(rotation, None);
+    for _ in 0..LOOK_SAMPLES {
+        look.in_flight = [10.0, -4.0];
+        rotation = p2_math::Rotator { pitch: rotation.pitch - 80, yaw: rotation.yaw + 200, roll: 0 };
+        look.learn(rotation, None);
+    }
+    look.in_flight = [5.0, 0.0];
+    let ahead = look.ahead(rotation, rotation, [5.0, 2.0]);
+    assert_eq!((shortest_turn(rotation.yaw, ahead.yaw), shortest_turn(rotation.pitch, ahead.pitch)), (200, 40));
+    let high = p2_math::Rotator { pitch: 17990, ..rotation };
+    assert_eq!(look.ahead(high, high, [0.0, 50.0]).pitch, LOOK_PITCH_LIMITS[1]);
+
+    for _ in 0..2 {
+        look.in_flight = [10.0, 0.0];
+        rotation.yaw += 900;
+        look.learn(rotation, None);
+    }
+    assert_eq!(look.ahead(rotation, rotation, [5.0, 0.0]).yaw, rotation.yaw);
+}
+
+#[test]
+fn one_odd_sample_keeps_the_look_ahead_two_stop_it() {
+    let samples = |odd: usize| (0..LOOK_SAMPLES).map(|i| if i < odd { 30.0 } else { 10.0 }).collect::<std::collections::VecDeque<f32>>();
+    assert_eq!(LookAhead::scale(&samples(1)), 10.0);
+    assert_eq!(LookAhead::scale(&samples(2)), 0.0);
+}
+
+const FRAME_TIME: f32 = 0.0039;
+
+fn shown_motion(frames: usize, ready: impl Fn(usize) -> f64, step: impl Fn(usize) -> f64) -> Vec<f64> {
+    let mix = |a: f64, b: f64, t: f32| a + (b - a) * f64::from(t);
+    let (mut clock, mut points, mut tick) = (TickClock::default(), [0.0f64; 3], 0);
+    (0..frames)
+        .map(|frame| {
+            let mut glide = clock.frame(FRAME_TIME);
+            if ready(tick) <= frame as f64 * f64::from(FRAME_TIME) {
+                points = [glide.pick(points[0], points[1], points[2], mix), points[2], points[2] + step(tick)];
+                clock.tick(step(tick) as f32);
+                glide = clock.glide();
+                tick += 1;
+            }
+            glide.pick(points[0], points[1], points[2], mix)
+        })
+        .collect()
+}
+
+fn frame_steps(shown: &[f64]) -> Vec<f64> {
+    let steps: Vec<f64> = shown.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert!(steps.iter().all(|&step| step >= 0.0), "{steps:?}");
+    steps
+}
+
+fn mean(steps: &[f64]) -> f64 {
+    steps.iter().sum::<f64>() / steps.len() as f64
+}
+
+#[test]
+fn frame_rounded_ticks_show_as_even_motion() {
+    for rate in [120.0, 106.0] {
+        let period = 1.0 / rate;
+        let steps = frame_steps(&shown_motion(1000, |tick| tick as f64 * period, |_| period));
+        let steady = &steps[128..];
+        let mean = mean(steady);
+        for (frame, step) in steady.iter().enumerate() {
+            assert!((step - mean).abs() <= mean * 0.05, "{rate} ticks a second, frame {frame}: {step} against {mean}");
+        }
+    }
+}
+
+#[test]
+fn a_late_tick_neither_stops_nor_rushes_the_motion() {
+    let period = 1.0 / 120.0;
+    let late = |tick: usize| if tick.is_multiple_of(37) { 0.002 } else { 0.0 };
+    let steps = frame_steps(&shown_motion(1000, |tick| tick as f64 * period + late(tick), |_| period));
+    let steady = &steps[128..];
+    let mean = mean(steady);
+    for (frame, &step) in steady.iter().enumerate() {
+        assert!(step > 0.0 && step <= mean * 1.5, "frame {frame}: {step} against {mean}");
+    }
+}
+
+#[test]
+fn after_a_gap_the_clock_jumps_forward_and_moves_on() {
+    let (period, gap, first) = (1.0 / 120.0, 0.3, 200);
+    let ready = |tick: usize| tick as f64 * period + if tick >= first { gap } else { 0.0 };
+    let steps = frame_steps(&shown_motion(1000, ready, |tick| period + if tick == first { gap } else { 0.0 }));
+    let jumps: Vec<usize> = (0..steps.len()).filter(|&frame| steps[frame] > gap / 2.0).collect();
+    assert_eq!(jumps.len(), 1, "{steps:?}");
+    assert!(steps[jumps[0] + 5..].iter().all(|&step| step > 0.0), "{steps:?}");
+}
+
+#[test]
+fn with_the_look_ahead_off_a_steady_turn_never_steps_back() {
+    let look = LookAhead::default();
+    let period = 1.0f32 / 120.0;
+    let place = |yaw| (p2_math::Vector { x: 0.0, y: 0.0, z: 0.0 }, p2_math::Rotator { pitch: 0, yaw, roll: 0 });
+    let (mut clock, mut points, mut tick) = (TickClock::default(), [place(65000); 3], 0);
+    let mut shown = Vec::new();
+    for frame in 0..600 {
+        let mut glide = clock.frame(FRAME_TIME);
+        if tick as f32 * period <= frame as f32 * FRAME_TIME {
+            tick += 1;
+            points = [glide.pick(points[0], points[1], points[2], glided), points[2], place(65000 + (tick as f32 * 3.0 * 38.4) as i32)];
+            clock.tick(period);
+            glide = clock.glide();
+        }
+        let between = glide.pick(points[0], points[1], points[2], glided).1;
+        shown.push(look.ahead(points[2].1, between, [0.0; 2]).yaw);
+    }
+    let turns: Vec<i32> = shown.windows(2).map(|pair| shortest_turn(pair[0], pair[1])).collect();
+    assert!(turns.iter().all(|&turn| turn >= 0), "{turns:?}");
+    assert!(turns[128..].iter().all(|&turn| turn > 0), "{turns:?}");
+}
+
+const LOOP_FRAMES: f32 = 20.0;
+
+fn channel_at(sequence: usize, time: f32) -> ChannelTime {
+    ChannelTime { animation: 1, sequence, time, length: LOOP_FRAMES }
+}
+
+fn shown_channel(frames: usize, at: impl Fn(usize) -> ChannelTime) -> Vec<(f32, usize)> {
+    let period = 1.0f32 / 120.0;
+    let (mut clock, mut from, mut tick) = (TickClock::default(), None::<ChannelFrom>, 0);
+    (0..frames)
+        .map(|frame| {
+            let mut glide = clock.frame(FRAME_TIME);
+            if tick as f32 * period <= frame as f32 * FRAME_TIME {
+                if tick > 0 {
+                    from = Some(ChannelFrom::new(from.as_ref(), at(tick - 1), glide));
+                }
+                clock.tick(period);
+                glide = clock.glide();
+                tick += 1;
+            }
+            (glided_time(from.as_ref(), at(tick - 1), glide), tick - 1)
+        })
+        .collect()
+}
+
+fn loop_moves(shown: &[(f32, usize)]) -> Vec<f64> {
+    shown
+        .windows(2)
+        .map(|pair| pair[1].0 - pair[0].0)
+        .map(|moved| f64::from(if moved < -LOOP_FRAMES * 0.5 { moved + LOOP_FRAMES } else { moved }))
+        .collect()
+}
+
+fn wraps(shown: &[(f32, usize)]) -> usize {
+    shown.windows(2).filter(|pair| pair[1].0 < pair[0].0).count()
+}
+
+fn shown_in_tick(shown: &[(f32, usize)], tick: usize) -> Vec<f32> {
+    shown.iter().filter(|&&(_, at)| at == tick).map(|&(time, _)| time).collect()
+}
+
+#[test]
+fn a_loop_moves_evenly_across_its_wrap() {
+    let shown = shown_channel(1000, |tick| channel_at(0, (tick as f32 * 0.25) % LOOP_FRAMES));
+    assert!(shown.iter().all(|&(time, _)| (0.0..LOOP_FRAMES).contains(&time)), "{shown:?}");
+    assert!(wraps(&shown) >= 4, "{shown:?}");
+    let moves = loop_moves(&shown);
+    let steady = &moves[128..];
+    let mean = mean(steady);
+    for (frame, &moved) in steady.iter().enumerate() {
+        assert!((moved - mean).abs() <= mean * 0.05, "frame {frame}: {moved} against {mean}");
+    }
+}
+
+#[test]
+fn a_wrap_moves_no_more_than_one_tick_in_a_frame() {
+    let step = |tick: usize| if tick.is_multiple_of(2) { 0.2 } else { 0.3 };
+    let shown = shown_channel(1000, |tick| channel_at(0, (0..tick).map(step).sum::<f32>() % LOOP_FRAMES));
+    assert!(wraps(&shown) >= 4, "{shown:?}");
+    let moves = loop_moves(&shown);
+    assert!(moves.iter().all(|&moved| (-1e-4..=0.3 + 1e-4).contains(&moved)), "{moves:?}");
+}
+
+#[test]
+fn a_channel_that_drops_back_without_a_wrap_shows_the_tick_at_once() {
+    let time = |tick: usize| match tick {
+        0..90 => (tick as f32 * 0.25).min(19.0),
+        90..160 => (tick - 90) as f32 * 0.25,
+        _ => (tick - 160) as f32 * 0.25,
+    };
+    let shown = shown_channel(600, |tick| channel_at(0, time(tick)));
+    for restart in [90, 160] {
+        let times = shown_in_tick(&shown, restart);
+        assert!(!times.is_empty() && times.iter().all(|&time| time == 0.0), "tick {restart}: {times:?}");
+    }
+}
+
+#[test]
+fn a_new_sequence_shows_at_once() {
+    let at = |tick: usize| if tick < 80 { channel_at(0, (tick as f32 * 0.25) % LOOP_FRAMES) } else { channel_at(1, (tick - 80) as f32 * 0.25) };
+    let times = shown_in_tick(&shown_channel(400, at), 80);
+    assert!(!times.is_empty() && times.iter().all(|&time| time == 0.0), "{times:?}");
+}
+
+#[test]
+fn a_backward_play_shows_each_tick_at_once() {
+    let time = |tick: usize| 19.0 - tick as f32 * 0.1;
+    let shown = shown_channel(400, |tick| channel_at(0, time(tick)));
+    assert!(shown.iter().all(|&(at, tick)| at == time(tick)), "{shown:?}");
+}
+
+#[test]
+fn a_glide_turns_the_short_way_round() {
+    let rotator = |yaw| p2_math::Rotator { pitch: 0, yaw, roll: 0 };
+    let (from, to) = (p2_math::Vector { x: 0.0, y: 0.0, z: 0.0 }, p2_math::Vector { x: 8.0, y: 0.0, z: -4.0 });
+    let (location, rotation) = glided((from, rotator(65000)), (to, rotator(65536 + 464)), 0.25);
+    assert_eq!((location, shortest_turn(65000, rotation.yaw)), (p2_math::Vector { x: 2.0, y: 0.0, z: -1.0 }, 250));
+    assert_eq!(glided((from, rotator(65000)), (to, rotator(464)), 1.0).0, to);
+}
+
+#[test]
+fn glided_bones_keep_their_length_while_they_turn() {
+    use p2_assets::pose::Frame;
+    let quarter = Frame { axes: [[0.0, 2.0, 0.0], [-2.0, 0.0, 0.0], [0.0, 0.0, 2.0]], origin: [4.0, 0.0, 0.0] };
+    let from = vec![Frame { axes: [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]], origin: [0.0; 3] }];
+    let half = glided_bones(&from, &[quarter], 0.5);
+    let axis = half[0].axes[0];
+    assert!((axis[0] - 2f32.sqrt()).abs() < 1e-5 && (axis[1] - 2f32.sqrt()).abs() < 1e-5, "{axis:?}");
+    assert_eq!(half[0].origin, [2.0, 0.0, 0.0]);
+    assert_eq!(glided_bones(&[], &[quarter], 0.5), vec![quarter]);
+}
+
+#[test]
 fn the_vm_can_move_to_its_thread() {
     fn send<T: Send>() {}
     send::<Simulation>();
     send::<Job>();
     send::<VmFrame>();
+}
+
+#[test]
+fn input_stays_where_it_was_read_while_no_map_is_played() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut world = World::new();
+    world.init_resource::<Time>();
+    world.init_resource::<Play>();
+    world.insert_resource(PlayerInput { typed: "a".into(), mouse: [3.0, 4.0], ..Default::default() });
+    world.run_system_once(gather_input).expect("the input system runs");
+    assert_eq!(world.resource::<PlayerInput>().typed, "a");
+    assert_eq!(world.resource::<Play>().backlog.mouse, [0.0; 2]);
+    assert!(world.resource::<Play>().backlog.typed.is_empty());
 }

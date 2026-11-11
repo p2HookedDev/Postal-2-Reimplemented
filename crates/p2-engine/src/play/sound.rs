@@ -1,12 +1,89 @@
 use super::*;
 
+pub struct SoundPlugin;
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SoundSystems {
+    Stop,
+    Start,
+    Mix,
+}
+
+impl Plugin for SoundPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<SoundBook>()
+            .configure_sets(Update, (SoundSystems::Stop, SoundSystems::Start, SoundSystems::Mix).chain().in_set(PlaySystems::Tick))
+            .add_systems(Startup, watch_output_device)
+            .add_systems(Update, watch_audio)
+            .add_systems(Update, stop_old_songs.in_set(SoundSystems::Stop))
+            .add_systems(Update, start_sounds.in_set(SoundSystems::Start).after(hand_off).before(look_ahead))
+            .add_systems(Update, (heard_volume, sound_limits, fade_sounds, pause_movie_sound).chain().in_set(SoundSystems::Mix));
+    }
+}
+
+struct PlayingAmbient {
+    sound: ObjectId,
+    entity: Entity,
+    said: (p2_math::Vector, f32, f32),
+}
+
+/// What is playing for the world of `generation`, and the sounds read for it. Emptied when another world is played.
+#[derive(Resource, Default)]
+pub(crate) struct SoundBook {
+    generation: u64,
+    songs: HashMap<i32, Entity>,
+    zone_sounds: FxHashMap<(ObjectId, usize), (Entity, f32)>,
+    ambients: FxHashMap<ObjectId, PlayingAmbient>,
+    heard_now: FxHashSet<ObjectId>,
+    voices: FxHashMap<(ObjectId, u8), Entity>,
+    sounds: HashMap<String, Option<LoadedSound>>,
+    /// In the world's seconds played.
+    flashbang_until: Option<f32>,
+    flashbang_on: bool,
+}
+
+impl SoundBook {
+    fn add_sound_file(&mut self, path: String, file: Option<p2_assets::Sound>, sources: &mut Assets<AudioSource>) {
+        if file.is_none() {
+            bevy::log::warn!("sound {path}: not found in a loaded package or its package file");
+        }
+        let loaded = file.and_then(|sound| loaded_sound(&path, sound, sources));
+        self.sounds.entry(path).or_insert(loaded);
+    }
+
+    fn sound(&self, path: &str) -> Option<LoadedSound> {
+        self.sounds.get(path).cloned().flatten()
+    }
+
+    fn flashbang_playing(&self, seconds: f32) -> bool {
+        self.flashbang_until.is_some_and(|until| seconds < until)
+    }
+}
+
+fn start_sounds(
+    mut commands: Commands,
+    mut play: ResMut<Play>,
+    mut book: ResMut<SoundBook>,
+    mut sources: ResMut<Assets<AudioSource>>,
+    cameras: Query<&Transform, With<SceneView>>,
+) {
+    let generation = play.generation;
+    if book.generation != generation {
+        *book = SoundBook { generation, ..Default::default() };
+    }
+    let Some(world) = play.world.as_mut().filter(|world| world.fresh) else { return };
+    let camera = cameras.iter().next().map(|camera| camera.translation);
+    play_world_sounds(&mut commands, world, &mut book, &mut sources, camera, generation);
+    play_music(&mut commands, world, &mut book, &mut sources, camera, generation);
+}
+
 #[derive(Component)]
 pub(crate) struct Song(u64);
 
 #[derive(Component)]
 pub(crate) struct MovieSound(pub(crate) ObjectId);
 
-pub(super) fn pause_movie_sound(play: Res<Play>, sinks: Query<(&MovieSound, &AudioSink)>) {
+fn pause_movie_sound(play: Res<Play>, sinks: Query<(&MovieSound, &AudioSink)>) {
     let Some(world) = play.world.as_ref() else { return };
     for (sound, sink) in &sinks {
         let script_paused = world.movies().iter().any(|(_, movie, state)| *movie == sound.0 && state.paused);
@@ -65,7 +142,7 @@ fn stop_fading(commands: &mut Commands, entity: Entity, seconds: f32) {
     });
 }
 
-pub(super) fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Query<(Entity, &mut Fade, Option<&BaseVolume>, Option<&mut AudioSink>)>, mut heard: Query<&mut HeardSound>) {
+fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Query<(Entity, &mut Fade, Option<&BaseVolume>, Option<&mut AudioSink>)>, mut heard: Query<&mut HeardSound>) {
     for (entity, mut fade, base, sink) in &mut fades {
         if base.is_some() && sink.is_none() {
             continue;
@@ -88,18 +165,19 @@ pub(super) fn fade_sounds(mut commands: Commands, time: Res<Time>, mut fades: Qu
     }
 }
 
-pub(super) fn sound_limits(
+fn sound_limits(
     mut commands: Commands,
-    mut play: ResMut<Play>,
+    play: Res<Play>,
+    mut book: ResMut<SoundBook>,
     channels: Query<(Entity, &Channel)>,
     mut loops: Query<&mut AudioSink, With<Song>>,
     mut spatial_loops: Query<&mut SpatialAudioSink, With<Song>>,
     mut playing: Local<Vec<(Entity, f32)>>,
 ) {
-    let Some(world) = play.world.as_mut() else { return };
-    let flashbang = world.flashbang_playing();
-    if flashbang != world.flashbang_on {
-        world.flashbang_on = flashbang;
+    let Some(world) = play.world.as_ref() else { return };
+    let flashbang = book.flashbang_playing(world.seconds);
+    if flashbang != book.flashbang_on {
+        book.flashbang_on = flashbang;
         for sink in &mut loops {
             if flashbang { sink.pause() } else { sink.play() }
         }
@@ -151,7 +229,7 @@ pub(crate) struct HeardSound {
     fade: f32,
 }
 
-pub(super) fn heard_volume(
+fn heard_volume(
     play: Res<Play>,
     cameras: Query<&Transform, (With<SceneView>, Without<HeardSound>)>,
     mut sounds: Query<(&mut HeardSound, &mut Transform, &mut SpatialAudioSink)>,
@@ -168,7 +246,7 @@ pub(super) fn heard_volume(
     }
 }
 
-pub(super) fn stop_old_songs(mut commands: Commands, play: Res<Play>, songs: Query<(Entity, &Song)>, channels: Query<(Entity, &Channel)>) {
+fn stop_old_songs(mut commands: Commands, play: Res<Play>, songs: Query<(Entity, &Song)>, channels: Query<(Entity, &Channel)>) {
     for (entity, song) in &songs {
         if song.0 != play.generation {
             commands.entity(entity).despawn();
@@ -181,7 +259,7 @@ pub(super) fn stop_old_songs(mut commands: Commands, play: Res<Play>, songs: Que
     }
 }
 
-pub(super) fn play_music(commands: &mut Commands, world: &mut PlayWorld, sources: &mut Assets<AudioSource>, camera: Option<Vec3>, generation: u64) {
+fn play_music(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, sources: &mut Assets<AudioSource>, camera: Option<Vec3>, generation: u64) {
     for (command, position, song) in std::mem::take(&mut world.frame.music) {
         match command {
             MusicCommand::Play { handle, actor, volume, radius, pitch, fade_in, .. } => {
@@ -210,15 +288,15 @@ pub(super) fn play_music(commands: &mut Commands, world: &mut PlayWorld, sources
                     }
                     None => commands.spawn((AudioPlayer::new(source), settings, Song(generation), BaseVolume(volume * gain))).id(),
                 };
-                world.songs.insert(handle, entity);
+                book.songs.insert(handle, entity);
             }
             MusicCommand::StopAll { fade_out } => {
-                for (_, entity) in world.songs.drain() {
+                for (_, entity) in book.songs.drain() {
                     stop_fading(commands, entity, fade_out);
                 }
             }
             MusicCommand::Stop { handle, fade_out } => {
-                if let Some(entity) = world.songs.remove(&handle) {
+                if let Some(entity) = book.songs.remove(&handle) {
                     stop_fading(commands, entity, fade_out);
                 }
             }
@@ -226,18 +304,18 @@ pub(super) fn play_music(commands: &mut Commands, world: &mut PlayWorld, sources
     }
 }
 
-pub(super) fn play_world_sounds(commands: &mut Commands, world: &mut PlayWorld, sources: &mut Assets<AudioSource>, camera: Option<Vec3>, generation: u64) {
+fn play_world_sounds(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, sources: &mut Assets<AudioSource>, camera: Option<Vec3>, generation: u64) {
     for (path, file) in std::mem::take(&mut world.frame.sound_files) {
-        world.add_sound_file(path, file, sources);
+        book.add_sound_file(path, file, sources);
     }
-    play_sounds(commands, world, camera, generation);
-    play_ambients(commands, world, generation);
-    play_zone_sounds(commands, world, sources, generation);
+    play_sounds(commands, world, book, camera, generation);
+    play_ambients(commands, world, book, generation);
+    play_zone_sounds(commands, world, book, sources, generation);
 }
 
-fn play_ambients(commands: &mut Commands, world: &mut PlayWorld, generation: u64) {
+fn play_ambients(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, generation: u64) {
     let mut ambients = std::mem::take(&mut world.frame.ambients);
-    let mut heard_now = std::mem::take(&mut world.heard_now);
+    let mut heard_now = std::mem::take(&mut book.heard_now);
     heard_now.clear();
     for (actor, ambient, path) in ambients.drain(..) {
         heard_now.insert(actor);
@@ -245,7 +323,7 @@ fn play_ambients(commands: &mut Commands, world: &mut PlayWorld, generation: u64
         let radius = if ambient.radius > 0.0 { ambient.radius } else { p2_vm::AUDIO_DEFAULT_RADIUS };
         let heard = HeardSound { actor: Some(actor), position, volume: ambient.volume, radius, fade: 1.0 };
         let said = (ambient.location, ambient.volume, radius);
-        if let Some(playing) = world.ambients.get_mut(&actor)
+        if let Some(playing) = book.ambients.get_mut(&actor)
             && playing.sound == ambient.sound
         {
             if playing.said != said {
@@ -254,15 +332,15 @@ fn play_ambients(commands: &mut Commands, world: &mut PlayWorld, generation: u64
             }
             continue;
         }
-        if let Some(old) = world.ambients.remove(&actor) {
+        if let Some(old) = book.ambients.remove(&actor) {
             commands.entity(old.entity).despawn();
         }
-        let Some(source) = world.sound(&path).map(|loaded| loaded.source) else { continue };
+        let Some(source) = book.sound(&path).map(|loaded| loaded.source) else { continue };
         let settings = spatial(PlaybackSettings::LOOP.with_volume(Volume::SILENT).with_speed(pitch_factor(ambient.pitch)));
         let entity = commands.spawn((AudioPlayer::new(source), settings, heard, Song(generation), Transform::from_translation(position))).id();
-        world.ambients.insert(actor, PlayingAmbient { sound: ambient.sound, entity, said });
+        book.ambients.insert(actor, PlayingAmbient { sound: ambient.sound, entity, said });
     }
-    world.ambients.retain(|actor, playing| {
+    book.ambients.retain(|actor, playing| {
         let keep = heard_now.contains(actor);
         if !keep {
             commands.entity(playing.entity).despawn();
@@ -270,13 +348,13 @@ fn play_ambients(commands: &mut Commands, world: &mut PlayWorld, generation: u64
         keep
     });
     world.frame.ambients = ambients;
-    world.heard_now = heard_now;
+    book.heard_now = heard_now;
 }
 
-fn play_zone_sounds(commands: &mut Commands, world: &mut PlayWorld, sources: &mut Assets<AudioSource>, generation: u64) {
+fn play_zone_sounds(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, sources: &mut Assets<AudioSource>, generation: u64) {
     let Some(heard) = world.frame.zone_sounds.take() else { return };
     let keys: FxHashSet<(ObjectId, usize)> = heard.iter().map(|zone_sound| zone_sound.key).collect();
-    world.zone_sounds.retain(|key, &mut (entity, fade_out)| {
+    book.zone_sounds.retain(|key, &mut (entity, fade_out)| {
         let keep = keys.contains(key);
         if !keep {
             stop_fading(commands, entity, fade_out);
@@ -284,13 +362,13 @@ fn play_zone_sounds(commands: &mut Commands, world: &mut PlayWorld, sources: &mu
         keep
     });
     for zone_sound in heard {
-        if world.zone_sounds.contains_key(&zone_sound.key) {
+        if book.zone_sounds.contains_key(&zone_sound.key) {
             continue;
         }
         let source = match (zone_sound.song, &zone_sound.sound) {
             (Some(bytes), _) => sources.add(AudioSource { bytes }),
             (None, Some(path)) => {
-                let Some(loaded) = world.sound(path) else { continue };
+                let Some(loaded) = book.sound(path) else { continue };
                 loaded.source
             }
             (None, None) => continue,
@@ -299,20 +377,20 @@ fn play_zone_sounds(commands: &mut Commands, world: &mut PlayWorld, sources: &mu
         let settings = PlaybackSettings::LOOP.with_volume(Volume::SILENT).with_speed(zone_sound.pitch);
         let faded = (BaseVolume(zone_sound.volume), Fade::new(0.0, 1.0, fade_in, FadeEnd::Keep));
         let entity = commands.spawn((AudioPlayer::new(source), settings, Song(generation), faded)).id();
-        world.zone_sounds.insert(zone_sound.key, (entity, fade_out));
+        book.zone_sounds.insert(zone_sound.key, (entity, fade_out));
     }
 }
 
-fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, camera: Option<Vec3>, generation: u64) {
-    world.voices.retain(|_, &mut entity| commands.get_entity(entity).is_ok());
+fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, camera: Option<Vec3>, generation: u64) {
+    book.voices.retain(|_, &mut entity| commands.get_entity(entity).is_ok());
     for (played, position) in std::mem::take(&mut world.frame.sounds) {
-        if played.flashbang.is_none() && world.flashbang_playing() {
+        if played.flashbang.is_none() && book.flashbang_playing(world.seconds) {
             continue;
         }
-        let Some(loaded) = world.sound(&played.sound) else { continue };
+        let Some(loaded) = book.sound(&played.sound) else { continue };
         let source = loaded.source;
         if let Some(duration) = played.flashbang {
-            world.flashbang_until = Some(world.seconds + if duration > 0.0 { duration } else { loaded.duration });
+            book.flashbang_until = Some(world.seconds + if duration > 0.0 { duration } else { loaded.duration });
             let settings = PlaybackSettings::DESPAWN.with_volume(Volume::Linear(played.volume)).with_speed(pitch_factor(played.pitch));
             commands.spawn((AudioPlayer::new(source), settings));
             continue;
@@ -320,7 +398,7 @@ fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, camera: Option<Ve
         // A sound on an actor's slot (not slot 0) replaces the one still playing there,
         // or with `bNoOverride` is dropped.
         let voice = played.actor.filter(|_| played.slot != 0).map(|actor| (actor, played.slot));
-        if let Some(mut playing) = voice.and_then(|voice| world.voices.get(&voice)).and_then(|&entity| commands.get_entity(entity).ok()) {
+        if let Some(mut playing) = voice.and_then(|voice| book.voices.get(&voice)).and_then(|&entity| commands.get_entity(entity).ok()) {
             if played.no_override {
                 continue;
             }
@@ -342,7 +420,7 @@ fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, camera: Option<Ve
             None => commands.spawn((AudioPlayer::new(source), settings, channel)).id(),
         };
         if let Some(voice) = voice {
-            world.voices.insert(voice, entity);
+            book.voices.insert(voice, entity);
         }
     }
 }
@@ -357,7 +435,7 @@ pub(crate) struct AudioWatch {
 
 /// Bevy opens the output device once and never reopens it, and rodio reports a dead stream only on stderr:
 /// a sound that stops advancing is how a lost device shows in the log.
-pub(super) fn watch_audio(
+fn watch_audio(
     time: Res<Time<bevy::time::Real>>,
     play: Res<Play>,
     sinks: Query<(Entity, &AudioSink)>,
@@ -394,7 +472,7 @@ pub(super) fn watch_audio(
     }
 }
 
-pub(super) fn watch_output_device() {
+fn watch_output_device() {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let watching = std::thread::Builder::new().name("audio device watch".into()).spawn(|| {
         let host = rodio::cpal::default_host();
@@ -432,4 +510,25 @@ pub(crate) fn ambient_gain(volume: f32, ambient_volume: f32, sound_volume: f32) 
 pub(crate) fn sound_listener() -> SpatialListener {
     let ears = SpatialListener::default();
     SpatialListener { left_ear_offset: ears.right_ear_offset, right_ear_offset: ears.left_ear_offset }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn what_plays_is_forgotten_when_another_world_is_played() {
+        let mut world = bevy::ecs::world::World::new();
+        world.init_resource::<Play>();
+        world.init_resource::<SoundBook>();
+        world.init_resource::<Assets<AudioSource>>();
+        let song = world.spawn_empty().id();
+        world.resource_mut::<SoundBook>().songs.insert(1, song);
+        world.run_system_once(start_sounds).expect("the sound system runs");
+        assert_eq!(world.resource::<SoundBook>().songs.len(), 1);
+        world.resource_mut::<Play>().set(None);
+        world.run_system_once(start_sounds).expect("the sound system runs");
+        assert!(world.resource::<SoundBook>().songs.is_empty());
+    }
 }

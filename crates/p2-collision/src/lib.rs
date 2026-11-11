@@ -1,4 +1,4 @@
-use p2_assets::{BspNode, Model, StaticMesh, Terrain};
+use p2_assets::{BspNode, Model, StaticMesh, Terrain, poly_flags};
 use p2_math::{Rotator, Vector};
 
 mod extent;
@@ -43,8 +43,16 @@ pub fn point_leaf(model: &Model, point: Vector) -> Option<usize> {
 }
 
 pub fn box_zones(model: &Model, min: Vector, max: Vector) -> Vec<u8> {
+    let mut zones: Vec<u8> = box_leaves(model, min, max).into_iter().filter_map(|leaf| u8::try_from(model.leaves[leaf].zone).ok()).collect();
+    zones.sort_unstable();
+    zones.dedup();
+    zones
+}
+
+/// In tree walk order; each leaf index is in range of `model.leaves`.
+pub fn box_leaves(model: &Model, min: Vector, max: Vector) -> Vec<usize> {
     let (center, extent) = ((min + max) * 0.5, (max - min) * 0.5);
-    let mut zones = Vec::new();
+    let mut leaves = Vec::new();
     let mut stack: Vec<usize> = if model.nodes.is_empty() { Vec::new() } else { vec![0] };
     let mut visits = 0;
     while let Some(i) = stack.pop().filter(|_| visits < model.nodes.len()) {
@@ -55,16 +63,15 @@ pub fn box_zones(model: &Model, min: Vector, max: Vector) -> Vec<u8> {
             match (touches, child(n, front)) {
                 (false, _) => {}
                 (true, Some(child)) => stack.push(child),
-                (true, None) => {
-                    let leaf = usize::try_from(n.leaves[usize::from(front)]).ok().and_then(|leaf| model.leaves.get(leaf));
-                    zones.extend(leaf.and_then(|leaf| u8::try_from(leaf.zone).ok()));
-                }
+                (true, None) => leaves.extend(usize::try_from(n.leaves[usize::from(front)]).ok().filter(|&leaf| leaf < model.leaves.len())),
             }
         }
     }
-    zones.sort_unstable();
-    zones.dedup();
-    zones
+    leaves
+}
+
+pub fn is_sky(model: &Model, node: usize) -> bool {
+    model.nodes.get(node).and_then(|node| model.surfaces.get(node.surface)).is_some_and(|surface| surface.poly_flags & poly_flags::FAKE_BACKDROP != 0)
 }
 
 pub fn line_check(model: &Model, start: Vector, end: Vector) -> Option<Hit> {
@@ -313,14 +320,20 @@ impl MeshCollision {
     }
 
     pub fn placed(local: impl AsRef<[[[f32; 3]; 3]]>, location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vector) -> Self {
-        let axes = rotation.axes();
-        let world = |p: [f32; 3]| {
-            let local = [0, 1, 2].map(|i| (p[i] - pre_pivot[i]) * scale[i]);
-            [0, 1, 2].map(|c| location[c] + local[0] * axes[0][c] + local[1] * axes[1][c] + local[2] * axes[2][c])
-        };
-        let triangles: Vec<[[f32; 3]; 3]> = local.as_ref().iter().map(|t| t.map(world)).collect();
+        let world = to_world(location, rotation, scale, pre_pivot);
+        let triangles: Vec<[[f32; 3]; 3]> = local.as_ref().iter().map(|t| t.map(&world)).collect();
         let tree = tree::TriangleTree::new(&triangles);
         Self { triangles, tree, slots: std::sync::Arc::default() }
+    }
+
+    /// The `bounds` of `placed` with the same arguments, without building the mesh.
+    pub fn placed_bounds(local: impl AsRef<[[[f32; 3]; 3]]>, location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vector) -> (Vector, Vector) {
+        let world = to_world(location, rotation, scale, pre_pivot);
+        let (min, max) = local.as_ref().iter().flatten().fold(([f32::MAX; 3], [f32::MIN; 3]), |(min, max), &p| {
+            let p = world(p);
+            ([0, 1, 2].map(|i| min[i].min(p[i])), [0, 1, 2].map(|i| max[i].max(p[i])))
+        });
+        (min.into(), max.into())
     }
 
     pub fn triangles(&self) -> &[[[f32; 3]; 3]] {
@@ -335,6 +348,14 @@ impl MeshCollision {
     fn touches(&self, min: Vector, max: Vector) -> bool {
         let (low, high) = self.bounds();
         (0..3).all(|i| low[i] <= max[i] && high[i] >= min[i])
+    }
+}
+
+fn to_world(location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vector) -> impl Fn([f32; 3]) -> [f32; 3] {
+    let axes = rotation.axes();
+    move |p| {
+        let local = [0, 1, 2].map(|i| (p[i] - pre_pivot[i]) * scale[i]);
+        [0, 1, 2].map(|c| location[c] + local[0] * axes[0][c] + local[1] * axes[1][c] + local[2] * axes[2][c])
     }
 }
 

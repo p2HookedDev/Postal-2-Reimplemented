@@ -18,7 +18,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) {
             return Ok(());
         }
-        if self.rests(actor)? {
+        if self.still_rests(actor)? {
             self.age(actor, delta)?;
             return Ok(());
         }
@@ -116,12 +116,24 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(false);
         }
         let left = life - delta;
-        self.store.set(actor, Prop::LifeSpan, Value::Float(left));
+        self.store.set_unstamped(actor, Prop::LifeSpan, Value::Float(left));
         if left > 1e-4 {
             return Ok(false);
         }
         self.destroy(actor)?;
         Ok(true)
+    }
+
+    /// [`Vm::rests`], asked again only when the actor's memory was written or its state, probes or animation were
+    /// touched since it was last found resting.
+    fn still_rests(&mut self, actor: ObjectId) -> Result<bool, Error> {
+        let written = self.store.object(actor).written();
+        if self.script.states.rested_at(actor).is_some_and(|at| written < at) {
+            return Ok(true);
+        }
+        let rests = self.rests(actor)?;
+        self.script.states.set_rested(actor, rests.then_some(self.store.stamp));
+        Ok(rests)
     }
 
     fn rests(&mut self, actor: ObjectId) -> Result<bool, Error> {
@@ -161,7 +173,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(controller) = self.store.object_of(pawn, Prop::Controller) {
             if self.store.flag_of(controller, Prop::bStasis) {
                 if !self.store.flag_of(pawn, Prop::bSliderStasis) && rendered + delta >= now {
-                    self.event(controller, "ComeOutOfStasis", [Value::Bool(false)])?;
+                    self.event(controller, crate::states::Event::ComeOutOfStasis, [Value::Bool(false)])?;
                 }
             } else {
                 let wait = self.store.float_of(pawn, Prop::TimeTillStasis);

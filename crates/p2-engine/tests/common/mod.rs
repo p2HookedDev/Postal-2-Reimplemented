@@ -17,6 +17,7 @@ use bevy::window::{ExitCondition, WindowPlugin};
 use bevy::winit::WinitPlugin;
 use bevy::{DefaultPlugins, MinimalPlugins};
 use p2_engine::animation::AnimationPlugin;
+use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SpawnedActors};
 use p2_engine::mesh_view::MeshViewPlugin;
 use p2_engine::play::PlayPlugin;
 
@@ -36,6 +37,12 @@ pub fn played_app() -> App {
         .init_asset::<StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
+        .init_resource::<Fluids>()
+        .init_resource::<MaterialSwitches>()
+        .init_resource::<Projectors>()
+        .init_resource::<Particles>()
+        .init_resource::<SpawnedActors>()
+        .init_resource::<Hud>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
         .register_required_components::<Mesh3d, Visibility>();
     app

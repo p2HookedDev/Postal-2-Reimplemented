@@ -211,3 +211,48 @@ fn draws_under_a_zone_layered_root_follow_its_zones_also_when_they_join_later() 
     assert_eq!(layers(&app, later), RenderLayers::layer(SKY_LAYER));
     assert_eq!(layers(&app, overlay), RenderLayers::layer(7), "an overlay draw is left alone");
 }
+
+#[test]
+fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
+    use bevy::asset::AssetApp;
+    let mut app = App::new();
+    app.add_plugins((bevy::MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::transform::TransformPlugin, MeshViewPlugin))
+        .init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<StandardMaterial>();
+    let model = ModelView {
+        sections: vec![SectionView::textured(Handle::default(), None)],
+        instances: vec![Transform::default(), Transform::from_xyz(1.0, 0.0, 0.0)],
+        zone: None,
+    };
+    let scene = Scene {
+        models: vec![model],
+        center: Vec3::ZERO,
+        radius: 1.0,
+        sky: None,
+        start: None,
+        collision: None,
+        fogs: Vec::new(),
+        decals: Vec::new(),
+        actors: Vec::new(),
+        attachments: Vec::new(),
+        lighting: None,
+        antiportals: Vec::new(),
+        light_maps: Vec::new(),
+    };
+    let counts = |app: &mut App| {
+        let world = app.world_mut();
+        (world.query::<&MapModel>().iter(world).count(), world.query::<&Mesh3d>().iter(world).count())
+    };
+    app.update();
+    assert_eq!(counts(&mut app), (0, 0));
+    app.world_mut().write_message(SceneChange::Clear);
+    app.world_mut().write_message(SceneChange::Show(Box::new(scene)));
+    app.update();
+    assert_eq!(counts(&mut app), (2, 2), "the static root and the attachments root, one draw an instance");
+    assert_eq!(app.world().resource::<ShownScene>().radius, 1.0);
+    app.world_mut().write_message(SceneChange::Clear);
+    app.update();
+    assert_eq!(counts(&mut app), (0, 0));
+    assert_eq!(app.world().resource::<ShownScene>().radius, 0.0);
+}

@@ -30,7 +30,9 @@ impl Host {
         }
         self.emitters.retain(|&actor, _| !vm.store.is_deleted(actor));
         let watched: Vec<ObjectId> = self.emitters.keys().copied().collect();
-        for (object, props) in self.values.changes(vm, &watched) {
+        let mark = vm.store.stamp();
+        vm.store.next_stamp();
+        for (object, props) in self.values.changes(vm, &watched, mark) {
             if let Some((sim, index)) = self.emitter_of(object) {
                 sim.set_properties(index, props);
             }

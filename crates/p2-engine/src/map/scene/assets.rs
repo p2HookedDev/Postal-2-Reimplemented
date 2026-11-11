@@ -37,11 +37,11 @@ pub struct PendingAssets {
 }
 
 impl PendingAssets {
-    pub fn new(t: &SceneTargets) -> Self {
+    pub fn new(assets: &AssetStores) -> Self {
         Self {
-            mesh_ids: t.assets.meshes.get_handle_provider(),
-            image_ids: t.assets.images.get_handle_provider(),
-            bindpose_ids: t.assets.bindposes.get_handle_provider(),
+            mesh_ids: assets.meshes.get_handle_provider(),
+            image_ids: assets.images.get_handle_provider(),
+            bindpose_ids: assets.bindposes.get_handle_provider(),
             meshes: Vec::new(),
             images: Vec::new(),
             image_sizes: HashMap::new(),
@@ -56,13 +56,13 @@ impl PendingAssets {
         handle
     }
 
-    pub fn insert(self, t: &mut SceneTargets) {
+    pub fn insert(self, assets: &mut AssetStores) {
         for (image, source) in self.wet {
-            t.assets.wet.add(image, source);
+            assets.wet.add(image, source);
         }
-        let failed = self.meshes.into_iter().map(|(handle, mesh)| t.assets.meshes.insert(handle.id(), mesh).is_err())
-            .chain(self.images.into_iter().map(|(handle, image)| t.assets.images.insert(handle.id(), image).is_err()))
-            .chain(self.bindposes.into_iter().map(|(handle, bindposes)| t.assets.bindposes.insert(handle.id(), bindposes).is_err()))
+        let failed = self.meshes.into_iter().map(|(handle, mesh)| assets.meshes.insert(handle.id(), mesh).is_err())
+            .chain(self.images.into_iter().map(|(handle, image)| assets.images.insert(handle.id(), image).is_err()))
+            .chain(self.bindposes.into_iter().map(|(handle, bindposes)| assets.bindposes.insert(handle.id(), bindposes).is_err()))
             .filter(|&failed| failed)
             .count();
         if failed > 0 {

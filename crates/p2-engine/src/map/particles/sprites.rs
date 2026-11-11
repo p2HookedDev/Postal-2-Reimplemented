@@ -76,7 +76,12 @@ pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, se
         match p.simulation.emitters().get(index).map(|e| e.props().kind) {
             Some(EmitterKind::Strip) => p.simulation.strip_into(index, strip_order, strip),
             Some(EmitterKind::Mesh | EmitterKind::Beam) | None => {}
-            Some(_) => sprites.extend(p.simulation.sprites(index, view)),
+            Some(_) => {
+                let Turn { owner, shown, .. } = p.turn;
+                let emitter = p.simulation.emitters().get(index);
+                let drawn = |s: SpriteParticle| SpriteParticle { location: drawn_location(s.previous, s.location, shown), ..s };
+                sprites.extend(emitter.into_iter().flat_map(|e| e.sprites(owner, view)).map(drawn));
+            }
         }
         p.simulation.beams_into(index, &mut beams[index]);
         if let Some(pool) = &draw.pool {
@@ -84,6 +89,16 @@ pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, se
             *reach = pool.reach;
         }
     }
+}
+
+/// How far a frame stands from the tick before the newest (0) to the newest (1): the time since the newest tick over its
+/// step. The simulation itself only steps on ticks.
+pub(super) fn shown_part(since_tick: f32, step: f32) -> f32 {
+    if step > 0.0 { (since_tick / step).clamp(0.0, 1.0) } else { 1.0 }
+}
+
+pub(super) fn drawn_location(previous: Vector, newest: Vector, shown: f32) -> Vector {
+    previous + (newest - previous) * shown
 }
 
 pub(super) fn sprite_box(sprite: &SpriteParticle) -> (Vec3, Vec3) {

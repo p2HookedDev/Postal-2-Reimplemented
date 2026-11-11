@@ -67,6 +67,11 @@ impl Ragdolls {
     pub(crate) fn is_empty(&self) -> bool {
         self.live.is_empty()
     }
+
+    /// The bodies of ragdolls made at least `ticks` game ticks ago.
+    pub(crate) fn bodies_older_than(&self, ticks: u32) -> impl Iterator<Item = BodyId> + '_ {
+        self.live.values().filter(move |ragdoll| ragdoll.ticks >= ticks).flat_map(|ragdoll| ragdoll.all.iter().copied())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +90,7 @@ struct Ragdoll {
     scale: f32,
     frames: Arc<[Frame]>,
     fresh: bool,
+    ticks: u32,
     posed_asleep: Option<bool>,
     /// Lines and impulses test these while the world steps.
     parts: Parts,

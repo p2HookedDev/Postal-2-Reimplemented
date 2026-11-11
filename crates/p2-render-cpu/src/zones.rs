@@ -145,15 +145,13 @@ impl ZonePortals {
                 .collect::<Option<Vec<_>>>()
         };
         let flags = |node: &BspNode| model.surfaces.get(node.surface).map_or(0, |surface| surface.poly_flags);
-        let portals = model
-            .nodes
-            .iter()
-            .filter(|node| node.zones[0] != node.zones[1] && flags(node) & poly_flags::PORTAL != 0)
-            .filter_map(|node| {
-                let polygon = polygon(node)?;
-                (polygon.len() >= 3).then_some(Portal { polygon, plane: node.plane.into(), zones: node.zones })
-            })
-            .collect();
+        let portals = portal_hulls(
+            model
+                .nodes
+                .iter()
+                .filter(|node| node.zones[0] != node.zones[1] && flags(node) & poly_flags::PORTAL != 0)
+                .filter_map(|node| Some((node.surface, node.zones, node.plane, polygon(node)?))),
+        );
         let mut fragments: BTreeMap<usize, (&BspNode, Vec<Vector>)> = BTreeMap::new();
         for node in model.nodes.iter().filter(|node| flags(node) & (poly_flags::ANTI_PORTAL | poly_flags::PORTAL) == poly_flags::ANTI_PORTAL) {
             if let Some(points) = polygon(node) {
@@ -196,7 +194,7 @@ impl ZonePortals {
     /// adds them as its front-to-back walk meets them; here as each volume is expanded). Zone 0 (outside the world) sees
     /// everything.
     pub fn visible(&self, eye: Vector, zone: u8, view: &[Plane], seen: &mut VisibleZones) {
-        let VisibleZones { walked, capped, planes, volumes, occluders, antiportals_used, actors_used, antiportal_sides, portal_sides, queue } =
+        let VisibleZones { walked, capped, planes, volumes, occluders, antiportals_used, actors_used, antiportal_sides, portal_sides, whole, queue } =
             seen;
         *walked = false;
         *capped = false;
@@ -217,6 +215,8 @@ impl ZonePortals {
         antiportal_sides.extend(self.antiportals.iter().map(|anti| plane_dot(&anti.plane, eye)));
         portal_sides.clear();
         portal_sides.extend(self.portals.iter().map(|portal| plane_dot(&portal.plane, eye)));
+        whole.clear();
+        whole.resize(self.portals.len(), false);
         queue.clear();
         queue.push_back((zone, 0));
         let mut opened = 1;
@@ -260,12 +260,9 @@ impl ZonePortals {
                 let (portal, side) = (&self.portals[index], portal_sides[index]);
                 let [back, front] = portal.zones;
                 let (near, far) = if side >= 0.0 { (front, back) } else { (back, front) };
-                if near != zone {
+                // A portal once opened whole: any later volume through it lies inside that first one.
+                if near != zone || whole[index] {
                     continue;
-                }
-                if opened >= MAX_VOLUMES {
-                    *capped = true;
-                    return;
                 }
                 let hidden = occluders[here]
                     .iter()
@@ -274,6 +271,8 @@ impl ZonePortals {
                     continue;
                 }
                 let volume = volumes[here][i].clone();
+                let seen_whole = side.abs() >= IN_PORTAL
+                    && portal.polygon.iter().all(|&p| planes[volume.clone()].iter().all(|plane| plane_dot(plane, p) >= 0.0));
                 let start = planes.len();
                 let opens = if side.abs() < IN_PORTAL {
                     planes.extend_from_within(volume);
@@ -285,6 +284,11 @@ impl ZonePortals {
                 if !opens {
                     continue;
                 }
+                if opened >= MAX_VOLUMES {
+                    *capped = true;
+                    return;
+                }
+                whole[index] = seen_whole;
                 volumes[usize::from(far)].push(start..planes.len());
                 queue.push_back((far, volumes[usize::from(far)].len() - 1));
                 opened += 1;
@@ -309,6 +313,7 @@ pub struct VisibleZones {
     actors_used: Vec<bool>,
     antiportal_sides: Vec<f32>,
     portal_sides: Vec<f32>,
+    whole: Vec<bool>,
     queue: VecDeque<(u8, usize)>,
 }
 
@@ -351,6 +356,25 @@ fn plane_dot(plane: &Plane, p: Vector) -> f32 {
 fn bounding_box<'a>(points: impl Iterator<Item = &'a Vector>) -> (Vector, Vector) {
     let (min, max) = points.fold(([f32::MAX; 3], [f32::MIN; 3]), |(min, max), p| ([0, 1, 2].map(|k| min[k].min(p[k])), [0, 1, 2].map(|k| max[k].max(p[k]))));
     (min.into(), max.into())
+}
+
+/// One portal per surface and zone pair, both facings as one: the hull of its BSP fragments. Retail opens a portal
+/// surface once, through its source brush poly; the hull covers every fragment and lies inside that poly.
+fn portal_hulls(fragments: impl IntoIterator<Item = (usize, [u8; 2], [f32; 4], Vec<Vector>)>) -> Vec<Portal> {
+    let mut merged: BTreeMap<(usize, [u8; 2], [u32; 4]), Vec<Vector>> = BTreeMap::new();
+    for (surface, [back, front], plane, points) in fragments {
+        let (zones, plane) = if back > front { ([front, back], plane.map(|v| -v)) } else { ([back, front], plane) };
+        // `+ 0.0` turns -0.0 into 0.0, so a plane and its flipped twin key the same.
+        merged.entry((surface, zones, plane.map(|v| (v + 0.0).to_bits()))).or_default().extend(points);
+    }
+    merged
+        .into_iter()
+        .filter_map(|((_, zones, plane), points)| {
+            let plane = Plane::from(plane.map(f32::from_bits));
+            let polygon = hull(&points, plane);
+            (polygon.len() >= 3).then_some(Portal { polygon, plane, zones })
+        })
+        .collect()
 }
 
 fn hull(points: &[Vector], plane: Plane) -> Vec<Vector> {
@@ -532,5 +556,83 @@ mod tests {
         assert!(walk(&doorway(), [-5.0, 0.0, 0.0], 0, &[]).sees(7, [0.0; 3].into(), [1.0; 3].into()));
         let seen = walk(&doorway(), [-0.5, 0.0, 0.0], 1, &[]);
         assert!(seen.sees(2, [10.0, 50.0, -0.5].into(), [11.0, 51.0, 0.5].into()));
+    }
+
+    fn rect(x: f32, [low, high]: [f32; 2], half: f32) -> Vec<Vector> {
+        [[low, -half], [high, -half], [high, half], [low, half]].iter().map(|&[y, z]| Vector::new(x, y, z)).collect()
+    }
+
+    fn sheets(count: u8) -> Vec<(usize, [u8; 2], [f32; 4], Vec<Vector>)> {
+        (0..count)
+            .flat_map(|k| {
+                let x = 2.0 * f32::from(k);
+                [[-4.0, 0.0], [0.0, 4.0]].into_iter().flat_map(move |half| {
+                    let polygon = rect(x, half, 4.0);
+                    [(usize::from(k), [k + 1, k + 2], [1.0, 0.0, 0.0, x], polygon.clone()), (usize::from(k), [k + 2, k + 1], [-1.0, 0.0, 0.0, -x], polygon)]
+                })
+            })
+            .collect()
+    }
+
+    fn by_fragment(fragments: Vec<(usize, [u8; 2], [f32; 4], Vec<Vector>)>) -> ZonePortals {
+        let portals = fragments.into_iter().map(|(_, zones, plane, polygon)| Portal { polygon, plane: plane.into(), zones }).collect();
+        ZonePortals::indexed(portals, Vec::new(), Vec::new())
+    }
+
+    fn by_surface(fragments: Vec<(usize, [u8; 2], [f32; 4], Vec<Vector>)>) -> ZonePortals {
+        ZonePortals::indexed(portal_hulls(fragments), Vec::new(), Vec::new())
+    }
+
+    fn opened(seen: &VisibleZones) -> usize {
+        seen.volumes.iter().map(Vec::len).sum()
+    }
+
+    #[test]
+    fn split_two_sided_portals_open_one_volume_per_zone() {
+        let eye = [-5.0, 0.5, 0.0];
+        let split = walk(&by_fragment(sheets(10)), eye, 1, &[]);
+        assert!(split.capped());
+        assert!(split.sees(11, [100.0; 3].into(), [101.0; 3].into()));
+        let merged = walk(&by_surface(sheets(10)), eye, 1, &[]);
+        assert!(!merged.capped());
+        assert_eq!(opened(&merged), 11);
+        assert!((1..=11).all(|zone| merged.reached(zone)));
+    }
+
+    #[test]
+    fn merged_portals_keep_every_point_the_fragments_saw() {
+        let eye = [-5.0, 0.5, 0.0];
+        let split = walk(&by_fragment(sheets(4)), eye, 1, &[]);
+        let merged = walk(&by_surface(sheets(4)), eye, 1, &[]);
+        assert!(!split.capped());
+        assert!(opened(&merged) < opened(&split));
+        for zone in 1..=5 {
+            assert!(!split.reached(zone) || merged.reached(zone));
+            for (i, j, k) in (0u8..34).flat_map(|i| (0u8..34).flat_map(move |j| (0u8..3).map(move |k| (i, j, k)))) {
+                let p = Vector::new(-4.93 + 0.7 * f32::from(i), -15.13 + 0.9 * f32::from(j), -3.79 + 3.1 * f32::from(k));
+                assert!(!split.sees(zone, p, p) || merged.sees(zone, p, p), "zone {zone} at {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_zone_behind_a_narrow_chain_of_portals_is_seen() {
+        let fragments = vec![
+            (0, [1, 2], [1.0, 0.0, 0.0, 0.0], rect(0.0, [-1.0, 0.0], 1.0)),
+            (0, [1, 2], [1.0, 0.0, 0.0, 0.0], rect(0.0, [0.0, 1.0], 1.0)),
+            (1, [2, 3], [1.0, 0.0, 0.0, 5.0], rect(5.0, [1.5, 3.5], 1.0)),
+        ];
+        let seen = walk(&by_surface(fragments), [-5.0, 0.0, 0.0], 1, &[]);
+        assert!(seen.reached(3));
+        assert!(seen.sees(3, [10.0, 2.5, -0.1].into(), [10.2, 2.7, 0.1].into()));
+        assert!(!seen.sees(3, [10.0, -0.1, -0.1].into(), [10.2, 0.1, 0.1].into()));
+    }
+
+    #[test]
+    fn a_portal_seen_whole_opens_once() {
+        let far = Portal { polygon: rect(5.0, [-1.0, 1.0], 1.0), plane: [1.0, 0.0, 0.0, 5.0].into(), zones: [2, 3] };
+        let portals = ZonePortals::indexed(vec![door(), door(), far], Vec::new(), Vec::new());
+        let seen = walk(&portals, [-5.0, 0.0, 0.0], 1, &[]);
+        assert_eq!((seen.volumes[2].len(), seen.volumes[3].len()), (2, 1));
     }
 }

@@ -194,13 +194,7 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(&id) = self.store.object_ids.get(&key) {
             return Some(id);
         }
-        let object = Object {
-            name: self.intern(parts.last()?),
-            class_name: self.intern(class_name),
-            path,
-            class: None,
-            mem: memory::Mem::default(),
-        };
+        let object = Object::new(self.intern(parts.last()?), self.intern(class_name), path, None, memory::Mem::default());
         let id = ObjectId(self.store.objects.len() as u32);
         self.store.objects.push(object);
         self.store.object_ids.insert(key, id);

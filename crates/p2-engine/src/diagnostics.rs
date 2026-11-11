@@ -3,14 +3,13 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 use bevy::app::{App, AppExit, First, Last, Plugin, PostUpdate, Update};
 use bevy::camera::Camera;
-use bevy::camera::visibility::ViewVisibility;
+use bevy::camera::visibility::{InheritedVisibility, NoCpuCulling, ViewVisibility};
 use bevy::core_pipeline::core_3d::{AlphaMask3d, Opaque3d, Transparent3d};
 use bevy::core_pipeline::prepass::{AlphaMask3dPrepass, Opaque3dPrepass};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
@@ -25,7 +24,7 @@ use bevy::render::view::ExtractedView;
 use bevy::window::Window;
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::error::Result;
-use bevy::ecs::prelude::{Has, Local, MessageReader, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Has, Local, MessageReader, Query, Res, ResMut, Resource, With, Without};
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::KeyCode;
 use bevy::log::BoxedLayer;
@@ -38,7 +37,7 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::display::{MODERN_AO, MODERN_CONTACT_SHADOWS, MODERN_POST, MODERN_RELIEF, MODERN_SHADOWS, MODERN_SPECULAR, Settings};
-use crate::map::SessionHolder;
+use crate::map::{Particles, Session};
 use crate::components::{FollowActor, FollowBone};
 use crate::mesh_view::SceneView;
 use crate::play::{FrameTimes, Play, VmProfile};
@@ -51,6 +50,14 @@ use bevy::asset::{Asset, AssetEvent, Assets};
 use bevy::ecs::prelude::resource_exists;
 use bevy::mesh::Mesh;
 use bevy::image::Image;
+
+mod system_spans;
+mod stage_timing;
+
+use system_spans::{SpanTiming, SystemSpans};
+use stage_timing::a_second_passed;
+pub use stage_timing::{FrameWindow, StageTimingPlugin, log_frame_times};
+pub(crate) use stage_timing::{MeshWrite, mesh_written};
 
 const MAX_LINES: usize = 500;
 const NEAR: f32 = 1500.0;
@@ -151,9 +158,18 @@ fn shown((line, count): &(String, u32)) -> String {
 
 pub fn capture_layer(app: &mut App) -> Option<BoxedLayer> {
     let log = DiagnosticsLog::default();
+    let spans = SystemSpans::default();
     app.insert_resource(log.clone());
+    app.insert_resource(spans.clone());
     let _ = RUNNING.set(log.clone());
-    Some(Box::new(Capture(log)))
+    Some(Box::new(Capture(log).and_then(SpanTiming(spans))))
+}
+
+/// The terminal gets warnings and errors only. Every line is in `diagnostics.txt`, and a line written to a Windows
+/// console costs the logging thread a fraction of a millisecond: a burst of lines in one frame was a hitch.
+pub fn console_layer(_: &mut App) -> Option<bevy::log::BoxedFmtLayer> {
+    use bevy::log::tracing_subscriber::{filter::LevelFilter, fmt};
+    Some(Box::new(fmt::Layer::default().with_writer(std::io::stderr).with_filter(LevelFilter::WARN)))
 }
 
 struct Capture(DiagnosticsLog);
@@ -199,21 +215,15 @@ impl Visit for Fields {
     }
 }
 
-pub struct DiagnosticsPlugin<H>(PhantomData<fn() -> H>);
+pub struct DiagnosticsPlugin;
 
-impl<H> Default for DiagnosticsPlugin<H> {
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<H: SessionHolder> Plugin for DiagnosticsPlugin<H> {
+impl Plugin for DiagnosticsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DiagnosticsLog>()
             .init_resource::<Overlay>()
-            .add_systems(Update, (log_state::<H>, write_file::<H>))
+            .add_systems(Update, (log_state, write_file))
             .add_systems(Last, flush_on_exit)
-            .add_systems(EguiPrimaryContextPass, overlay::<H>);
+            .add_systems(EguiPrimaryContextPass, overlay);
     }
 }
 
@@ -223,9 +233,9 @@ struct Overlay {
     summary: String,
 }
 
-fn log_state<H: SessionHolder>(holder: Option<ResMut<H>>, play: Res<Play>, mut last: Local<(&'static str, String)>) {
-    let Some(mut holder) = holder else { return };
-    let session = holder.bypass_change_detection().session();
+fn log_state(session: Option<ResMut<Session>>, play: Res<Play>, mut last: Local<(&'static str, String)>) {
+    let Some(mut session) = session else { return };
+    let session = session.bypass_change_detection();
     let map = session.map().unwrap_or("none");
     let kind = if session.loading().is_some() {
         "loading"
@@ -251,10 +261,10 @@ fn flush_on_exit(mut exits: MessageReader<AppExit>, log: Res<DiagnosticsLog>) {
 
 /// The file stays open between writes (opening it is what a virus scanner or a slow disk holds up), in append mode:
 /// [`append_now`] and the flushes write beside it.
-fn write_file<H: SessionHolder>(
+fn write_file(
     time: Res<Time<Real>>,
     log: Res<DiagnosticsLog>,
-    holder: Option<ResMut<H>>,
+    particles: Option<Res<Particles>>,
     mut overlay: ResMut<Overlay>,
     mut since: Local<Option<(f32, u32)>>,
     mut file: Local<Option<std::fs::File>>,
@@ -267,7 +277,7 @@ fn write_file<H: SessionHolder>(
     }
     let ms = *seconds * 1000.0 / *frames as f32;
     (*seconds, *frames) = (0.0, 0);
-    let (actors, live) = holder.map_or((0, 0), |mut holder| holder.bypass_change_detection().session().particle_counts());
+    let (actors, live) = particles.map_or((0, 0), |particles| particles.particle_counts());
     overlay.summary = format!("frame {ms:.1} ms ({:.0} fps) | particle actors {actors}, live particles {live}", 1000.0 / ms.max(0.001));
     log.record(Level::INFO, "diagnostics", &format!("summary frame_ms={ms:.1} particle_actors={actors} live_particles={live}"));
     let text = log.take_pending();
@@ -286,12 +296,12 @@ fn write_file<H: SessionHolder>(
     }
 }
 
-fn overlay<H: SessionHolder>(
+fn overlay(
     mut contexts: EguiContexts,
     keys: Res<ButtonInput<KeyCode>>,
     mut overlay: ResMut<Overlay>,
     log: Res<DiagnosticsLog>,
-    holder: Option<ResMut<H>>,
+    particles: Option<Res<Particles>>,
     (play, mut times): (Res<Play>, ResMut<FrameTimes>),
     cameras: Query<&Transform, With<SceneView>>,
 ) -> Result {
@@ -301,8 +311,8 @@ fn overlay<H: SessionHolder>(
     if !overlay.open {
         return Ok(());
     }
-    let near = match (holder, play.world(), cameras.iter().next()) {
-        (Some(mut holder), Some(world), Some(camera)) => holder.bypass_change_detection().session().particles_in_view(world, camera, NEAR, NEAREST),
+    let near = match (particles, play.world(), cameras.iter().next()) {
+        (Some(particles), Some(world), Some(camera)) => particles.particles_in_view(world, camera, NEAR, NEAREST),
         _ => Vec::new(),
     };
     let recent: Vec<String> = log.lines.lock().map(|log| log.lines.iter().skip(log.lines.len().saturating_sub(RECENT)).map(shown).collect()).unwrap_or_default();
@@ -345,363 +355,4 @@ fn overlay<H: SessionHolder>(
         times.vm_profile = profile;
     }
     Ok(())
-}
-
-/// With pipelined rendering, time waiting for the GPU falls in the render stage.
-pub struct StageTimingPlugin;
-
-const MAIN_STAGES: [&str; 3] = ["clusters", "cascades and frusta", "light visibility"];
-const UPDATE_STAGES: [&str; 2] = ["whole update", "wait for render thread and extract"];
-const RENDER_STAGES: [&str; 7] = ["wait for main and extract", "assets and views", "specialize", "queue", "sort and prepare", "bind groups", "render"];
-const GRAPH_STAGES: [&str; 4] = ["all cameras", "finish encoders and submit", "gpu timers", "last submit and present"];
-const PASS_STAGES: [&str; 3] = ["shadows and prepass", "main", "post"];
-
-#[derive(Default)]
-struct StageClock {
-    last: Option<Instant>,
-    spent: Vec<f64>,
-    frames: u32,
-}
-
-#[derive(Resource, Clone, Default)]
-struct StageClocks {
-    main: Arc<Mutex<StageClock>>,
-    update: Arc<Mutex<StageClock>>,
-    render: Arc<Mutex<StageClock>>,
-    graph: Arc<Mutex<StageClock>>,
-    passes: Arc<Mutex<StageClock>>,
-    draw_groups: Arc<Mutex<[usize; 8]>>,
-}
-
-#[derive(Resource, Clone, Default)]
-struct RenderStageClock(Arc<Mutex<StageClock>>);
-
-#[derive(Resource, Clone, Default)]
-struct RenderGraphClock(Arc<Mutex<StageClock>>);
-
-#[derive(Resource, Clone, Default)]
-struct RenderPassClock(Arc<Mutex<StageClock>>);
-
-#[derive(Resource, Clone, Default)]
-struct RenderDrawGroups(Arc<Mutex<[usize; 8]>>);
-
-fn tick(clock: &Mutex<StageClock>, stage: Option<usize>) {
-    let mut clock = clock.lock().unwrap_or_else(PoisonError::into_inner);
-    let now = Instant::now();
-    if let (Some(stage), Some(last)) = (stage, clock.last) {
-        if clock.spent.len() <= stage {
-            clock.spent.resize(stage + 1, 0.0);
-        }
-        clock.spent[stage] += now.duration_since(last).as_secs_f64() * 1000.0;
-    }
-    clock.last = Some(now);
-    if stage.is_none() {
-        clock.frames += 1;
-    }
-}
-
-fn main_mark<const STAGE: i32>(clocks: Res<StageClocks>) {
-    tick(&clocks.main, usize::try_from(STAGE).ok());
-}
-
-fn update_mark<const STAGE: i32>(clocks: Res<StageClocks>) {
-    tick(&clocks.update, usize::try_from(STAGE).ok());
-}
-
-fn render_mark<const STAGE: i32>(clock: Res<RenderStageClock>) {
-    tick(&clock.0, usize::try_from(STAGE).ok());
-}
-
-fn graph_mark<const STAGE: i32>(clock: Res<RenderGraphClock>) {
-    tick(&clock.0, usize::try_from(STAGE).ok());
-}
-
-/// The core 3D schedule runs once per camera: a frame's time is the sum over its cameras.
-fn pass_mark<const STAGE: i32>(clock: Res<RenderPassClock>) {
-    tick(&clock.0, usize::try_from(STAGE).ok());
-}
-
-fn binned<P: BinnedPhaseItem>(phases: &ViewBinnedRenderPhases<P>) -> usize {
-    phases.values().map(|phase| phase.multidrawable_meshes.len() + phase.batchable_meshes.len() + phase.unbatchable_meshes.len() + phase.non_mesh_items.len()).sum()
-}
-
-#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
-fn count_draw_groups(
-    groups: Res<RenderDrawGroups>,
-    opaque: Res<ViewBinnedRenderPhases<Opaque3d>>,
-    masked: Res<ViewBinnedRenderPhases<AlphaMask3d>>,
-    prepass: Res<ViewBinnedRenderPhases<Opaque3dPrepass>>,
-    masked_prepass: Res<ViewBinnedRenderPhases<AlphaMask3dPrepass>>,
-    shadow: Res<ViewBinnedRenderPhases<Shadow>>,
-    blended: Res<ViewSortedRenderPhases<Transparent3d>>,
-    views: Query<(), With<ExtractedView>>,
-) {
-    *groups.0.lock().unwrap_or_else(PoisonError::into_inner) = [
-        binned(&opaque),
-        binned(&masked),
-        binned(&prepass),
-        binned(&masked_prepass),
-        binned(&shadow),
-        blended.values().map(|phase| phase.items.len()).sum(),
-        views.iter().len(),
-        shadow.values().filter(|phase| !phase.is_empty()).count(),
-    ];
-}
-
-fn stage_list(clock: &Mutex<StageClock>, names: &[&str], frames: u32) -> String {
-    let mut clock = clock.lock().unwrap_or_else(PoisonError::into_inner);
-    let frames = f64::from(frames.max(1));
-    let list: Vec<String> = names.iter().zip(&clock.spent).map(|(name, spent)| format!("{name} {:.2}", spent / frames)).collect();
-    clock.spent.clear();
-    clock.frames = 0;
-    list.join(", ")
-}
-
-fn frames_of(clock: &Mutex<StageClock>) -> u32 {
-    clock.lock().unwrap_or_else(PoisonError::into_inner).frames
-}
-
-fn a_second_passed(since: &mut f32, delta: f32) -> bool {
-    *since += delta;
-    *since >= 1.0
-}
-
-#[derive(Default)]
-pub struct FrameWindow {
-    seconds: f32,
-    frames: u32,
-    shortest: f32,
-    longest: f32,
-}
-
-pub fn log_frame_times(mut times: ResMut<FrameTimes>, time: Res<Time<Real>>, mut since: Local<FrameWindow>) {
-    let delta = time.delta_secs();
-    if since.frames == 0 {
-        (since.shortest, since.longest) = (delta, delta);
-    }
-    since.frames += 1;
-    (since.shortest, since.longest) = (since.shortest.min(delta), since.longest.max(delta));
-    if !a_second_passed(&mut since.seconds, delta) {
-        return;
-    }
-    let frames = f64::from(since.frames);
-    let ms = |time: &std::time::Duration| time.as_secs_f64() * 1000.0;
-    let list = |parts: &mut dyn Iterator<Item = (&str, std::time::Duration)>, per: f64| {
-        parts.map(|(name, time)| format!("{name} {:.2}", ms(&time) / per)).collect::<Vec<_>>().join(", ")
-    };
-    bevy::log::info!(
-        "frames {:.2} to {:.2} ms; per frame (ms), main thread: {}; vm thread: {}",
-        since.shortest * 1000.0,
-        since.longest * 1000.0,
-        list(&mut times.totals.iter().map(|(n, t)| (*n, *t)), frames),
-        list(&mut times.vm_totals.iter().map(|(n, t)| (*n, *t)), frames)
-    );
-    if times.vm_profile == VmProfile::TickByClass {
-        let mut vm: Vec<_> = times.vm_parts.drain().collect();
-        vm.sort_by(|(a, a_total), (b, b_total)| b_total.cmp(a_total).then_with(|| a.cmp(b)));
-        bevy::log::info!("vm tick by class and phase (ms per frame): {}", list(&mut vm.iter().take(10).map(|(n, t)| (n.as_str(), *t)), frames));
-    }
-    if let Some(mut slowest) = times.take_slowest() {
-        slowest.main.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
-        slowest.vm.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
-        let named: std::time::Duration = slowest.main.iter().map(|(_, time)| *time).sum();
-        bevy::log::info!(
-            "slowest frame {:.2} ms: main thread: {}, rest (Bevy, render) {:.2}; its vm frame: {}{}",
-            ms(&slowest.length),
-            list(&mut slowest.main.iter().take(6).map(|(n, t)| (*n, *t)), 1.0),
-            ms(&slowest.length.saturating_sub(named)),
-            list(&mut slowest.vm.iter().map(|(n, t)| (*n, *t)), 1.0),
-            if slowest.profile.is_empty() {
-                String::new()
-            } else {
-                format!("; vm tick: {}", list(&mut slowest.profile.iter().take(8).map(|(n, t)| (n.as_str(), *t)), 1.0))
-            }
-        );
-    }
-    times.totals.clear();
-    times.vm_totals.clear();
-    *since = Default::default();
-}
-
-fn log_stage_timing(clocks: Res<StageClocks>, time: Res<Time<Real>>, mut since: Local<f32>) {
-    if a_second_passed(&mut since, time.delta_secs()) {
-        *since = 0.0;
-        let render_frames = frames_of(&clocks.render);
-        let main_frames = frames_of(&clocks.main);
-        let update = stage_list(&clocks.update, &UPDATE_STAGES, main_frames);
-        let main = stage_list(&clocks.main, &MAIN_STAGES, main_frames);
-        let render = stage_list(&clocks.render, &RENDER_STAGES, render_frames);
-        let graph = stage_list(&clocks.graph, &GRAPH_STAGES, render_frames);
-        bevy::log::info!("cpu ms per frame: {update}; {main}; render world: {render}; of render: {graph}; recording: {}", stage_list(&clocks.passes, &PASS_STAGES, render_frames));
-    }
-}
-
-/// A changed asset is a queued write, which `finish encoders and submit` pays for.
-#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
-fn log_asset_churn(
-    time: Res<Time<Real>>,
-    meshes: Res<Assets<Mesh>>,
-    images: Res<Assets<Image>>,
-    actor_materials: Res<Assets<ActorLitMaterial>>,
-    mesh_materials: Res<Assets<MeshLitMaterial>>,
-    terrain_passes: Option<Res<Assets<TerrainMaterial>>>,
-    terrain_layers: Option<Res<Assets<TerrainLayerMaterial>>>,
-    decals: Query<(), With<ClusteredDecal>>,
-    mut mesh_events: MessageReader<AssetEvent<Mesh>>,
-    mut actor_events: MessageReader<AssetEvent<ActorLitMaterial>>,
-    mut mesh_material_events: MessageReader<AssetEvent<MeshLitMaterial>>,
-    mut counts: Local<[u32; 3]>,
-    mut since: Local<f32>,
-) {
-    fn changed<A: Asset>(events: &mut MessageReader<AssetEvent<A>>) -> u32 {
-        events.read().filter(|event| matches!(event, AssetEvent::Modified { .. })).count() as u32
-    }
-    counts[0] += changed(&mut mesh_events);
-    counts[1] += changed(&mut actor_events);
-    counts[2] += changed(&mut mesh_material_events);
-    if !a_second_passed(&mut since, time.delta_secs()) {
-        return;
-    }
-    let per_second = 1.0 / std::mem::take(&mut *since);
-    let [mesh_writes, actor_writes, material_writes] = std::mem::take(&mut *counts).map(|count| (count as f32 * per_second) as u32);
-    bevy::log::info!(
-        "assets, changed a second: meshes {} ({mesh_writes}), images {}, actor materials {} ({actor_writes}), mesh materials {} ({material_writes}); one-pass terrains {}, terrain layer passes {}, decals {}",
-        meshes.len(),
-        images.len(),
-        actor_materials.len(),
-        mesh_materials.len(),
-        terrain_passes.map_or(0, |store| store.len()),
-        terrain_layers.map_or(0, |store| store.len()),
-        decals.iter().count()
-    );
-}
-
-fn log_scene_counts(
-    clocks: Res<StageClocks>,
-    settings: Option<Res<Settings>>,
-    time: Res<Time<Real>>,
-    meshes: Query<(&ViewVisibility, Has<FollowActor>, Has<FollowBone>), With<Mesh3d>>,
-    cameras: Query<&Camera>,
-    windows: Query<&Window>,
-    mut since: Local<f32>,
-) {
-    if let Some(settings) = settings.as_ref().filter(|settings| settings.is_changed()) {
-        bevy::log::info!(
-            "settings: modern {}, sun shadows {}, contact {}, ao {}, relief {}, specular {}, post {}, msaa {}",
-            settings.modern_graphics(),
-            settings.modern_effect(MODERN_SHADOWS),
-            settings.modern_effect(MODERN_CONTACT_SHADOWS),
-            settings.modern_effect(MODERN_AO),
-            settings.modern_effect(MODERN_RELIEF),
-            settings.modern_effect(MODERN_SPECULAR),
-            settings.modern_effect(MODERN_POST),
-            settings.msaa_samples()
-        );
-    }
-    if !a_second_passed(&mut since, time.delta_secs()) {
-        return;
-    }
-    *since = 0.0;
-    let shown = |visible: &ViewVisibility| visible.get();
-    let window = windows.iter().next().map_or([0, 0], |window| [window.physical_width(), window.physical_height()]);
-    let [opaque, masked, prepass, masked_prepass, shadow, blended, views, shadow_views_drawing] = *clocks.draw_groups.lock().unwrap_or_else(PoisonError::into_inner);
-    let movers = meshes.iter().filter(|(_, actor, bone)| *actor || *bone);
-    let (movers_all, movers_shown) = movers.fold((0, 0), |(all, on), (visible, ..)| (all + 1, on + usize::from(shown(visible))));
-    bevy::log::info!(
-        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}",
-        meshes.iter().len(),
-        meshes.iter().filter(|(visible, ..)| shown(visible)).count(),
-        cameras.iter().filter(|camera| camera.is_active).count(),
-        window[0],
-        window[1],
-    );
-}
-
-/// A pass runs once per camera and each run adds a sample, so a path's time per frame is its samples' rate over the frame rate.
-fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, mut since: Local<f32>, mut frames: Local<u32>) {
-    *frames += 1;
-    if !a_second_passed(&mut since, time.delta_secs()) {
-        return;
-    }
-    let frames_per_second = f64::from(std::mem::take(&mut *frames)) / f64::from(std::mem::take(&mut *since));
-    let Some(store) = store else { return };
-    let mut list: Vec<(f64, String)> = store
-        .iter()
-        .filter_map(|diagnostic| {
-            let name = diagnostic.path().as_str().strip_prefix("render/")?.strip_suffix("/elapsed_gpu")?;
-            let (first, last) = (diagnostic.measurements().next()?, diagnostic.measurements().last()?);
-            let seconds = last.time.duration_since(first.time).as_secs_f64();
-            let spent: f64 = diagnostic.measurements().skip(1).map(|sample| sample.value).sum();
-            (seconds > 0.0).then(|| (spent / seconds / frames_per_second, name.to_owned()))
-        })
-        .collect();
-    list.sort_by(|a, b| b.0.total_cmp(&a.0));
-    list.truncate(14);
-    let list: Vec<String> = list.iter().map(|(ms, name)| format!("{name} {ms:.2}")).collect();
-    bevy::log::info!("gpu ms per frame by pass, nested passes overlap: {}", list.join(", "));
-}
-
-impl Plugin for StageTimingPlugin {
-    fn build(&self, app: &mut App) {
-        use bevy::light::SimulationLightSystems as Light;
-        use bevy::render::RenderSystems as Stage;
-        let clocks = StageClocks::default();
-        let render_clock = RenderStageClock(clocks.render.clone());
-        let graph_clock = RenderGraphClock(clocks.graph.clone());
-        let pass_clock = RenderPassClock(clocks.passes.clone());
-        let draw_groups = RenderDrawGroups(clocks.draw_groups.clone());
-        app.insert_resource(clocks);
-        app.add_plugins(RenderDiagnosticsPlugin);
-        app.add_systems(Update, (log_stage_timing, log_scene_counts, log_gpu_timing));
-        app.add_systems(Update, log_asset_churn.run_if(resource_exists::<Assets<ActorLitMaterial>>).run_if(resource_exists::<Assets<MeshLitMaterial>>));
-        app.add_systems(First, update_mark::<1>);
-        app.add_systems(Last, update_mark::<0>);
-        app.add_systems(
-            PostUpdate,
-            (
-                main_mark::<-1>.before(Light::AssignLightsToClusters),
-                main_mark::<0>.after(Light::AssignLightsToClusters).before(Light::UpdateDirectionalLightCascades),
-                main_mark::<1>.after(Light::UpdateLightFrusta).before(Light::CheckLightVisibility),
-                main_mark::<2>.after(Light::CheckLightVisibility),
-            ),
-        );
-        let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) else { return };
-        render.insert_resource(render_clock);
-        render.insert_resource(graph_clock);
-        render.insert_resource(pass_clock);
-        render.insert_resource(draw_groups);
-        render.add_systems(bevy::render::Render, count_draw_groups.after(Stage::PhaseSort).before(Stage::Render));
-        render.add_systems(
-            RenderGraph,
-            (
-                graph_mark::<-1>.before(RenderGraphSystems::Begin),
-                graph_mark::<0>.after(RenderGraphSystems::Render).before(RenderGraphSystems::Submit),
-                graph_mark::<1>.after(RenderGraphSystems::Submit).before(RenderGraphSystems::Finish),
-                graph_mark::<2>.after(RenderGraphSystems::Finish),
-            ),
-        );
-        render.add_systems(
-            Core3d,
-            (
-                pass_mark::<-1>.before(Core3dSystems::Prepass),
-                pass_mark::<0>.after(Core3dSystems::Prepass).before(Core3dSystems::MainPass),
-                pass_mark::<1>.after(Core3dSystems::MainPass).before(Core3dSystems::EarlyPostProcess),
-                pass_mark::<2>.after(Core3dSystems::PostProcess),
-            ),
-        );
-        render.add_systems(
-            bevy::render::Render,
-            (
-                render_mark::<0>.before(Stage::ExtractCommands),
-                render_mark::<1>.after(Stage::CreateViews).before(Stage::Specialize),
-                render_mark::<2>.after(Stage::Specialize).before(Stage::PrepareViews),
-                render_mark::<3>.after(Stage::QueueSweep).before(Stage::PhaseSort),
-                render_mark::<4>.after(Stage::PrepareResourcesFlush).before(Stage::PrepareBindGroups),
-                render_mark::<5>.after(Stage::PrepareBindGroups).before(Stage::Render),
-                render_mark::<6>.after(Stage::Render).before(Stage::Cleanup),
-                graph_mark::<3>.after(Stage::Render).before(Stage::Cleanup),
-                render_mark::<-1>.after(Stage::PostCleanup),
-            ),
-        );
-    }
 }

@@ -8,6 +8,14 @@ pub(crate) fn bounds(points: impl IntoIterator<Item = [f32; 3]>) -> Option<([f32
     points.into_iter().fold(None, |bounds, p| Some(merged_box(bounds.unwrap_or((p, p)), (p, p))))
 }
 
+pub(super) struct ZoneCullingPlugin;
+
+impl Plugin for ZoneCullingPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ShadowOnly>().add_systems(Update, (follower_zones, layers_by_zone, zone_visibility).chain().in_set(SceneViewSystems::Zones));
+    }
+}
+
 pub(super) fn follower_zones(
     mut commands: Commands,
     collision: Res<LevelCollision>,
@@ -60,7 +68,7 @@ pub(super) fn walk_view(transform: &Transform, projection: &Projection, origin: 
 /// a dynamic object with a sun caster mesh ([`CASTER_LAYER`]) within the sun's last cascade stays shown:
 /// `Visibility::Hidden` takes a mesh out of the shadow pass too, so its shadow popped in and out with the view.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
-pub(super) fn zone_visibility(
+fn zone_visibility(
     shown: Res<ShownScene>,
     collision: Res<LevelCollision>,
     cameras: Query<(&Transform, &Projection), With<SceneView>>,
@@ -100,18 +108,23 @@ pub(super) fn zone_visibility(
     world_seen.set_if_neq(WorldSeenZones(seen_bits));
     let sun = eye_seen.zip(suns.iter().next().and_then(|config| config.bounds.last().copied()));
     let caster = RenderLayers::layer(CASTER_LAYER);
-    for (root, zone, mut visibility, children) in &mut culled {
+    let only_shadows = std::sync::Mutex::new(Vec::new());
+    culled.par_iter_mut().for_each(|(root, zone, mut visibility, children)| {
         let forced = forced_shown(zone.only_from.as_deref(), view_zone);
         let seen = forced && zone.zones.iter().any(|&z| Some(z) == shown.sky_zone || seen.sees(z, zone.min.into(), zone.max.into()));
         let drawn = seen
             || (forced
                 && sun.is_some_and(|(eye, reach)| sun_reaches(eye, reach, zone))
                 && children.is_some_and(|children| children.iter().any(|&child| layers.get(child).is_ok_and(|l| l.intersects(&caster)))));
-        if drawn && !seen {
-            shadow_only.0.insert(root);
+        if drawn
+            && !seen
+            && let Ok(mut roots) = only_shadows.lock()
+        {
+            roots.push(root);
         }
         visibility.set_if_neq(if drawn { Visibility::Inherited } else { Visibility::Hidden });
-    }
+    });
+    shadow_only.0.extend(only_shadows.into_inner().unwrap_or_default());
 }
 
 /// Sets the draws under a moving actor, a particle actor or a corona to the sky camera's layer, the view's or both,

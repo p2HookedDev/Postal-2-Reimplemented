@@ -20,7 +20,7 @@ use bevy::pbr::StandardMaterial;
 use bevy::time::TimeUpdateStrategy;
 use bevy::transform::components::Transform;
 use p2_engine::animation::AnimationPlugin;
-use p2_engine::map::{SceneTargets, Session};
+use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SceneTargets, Session, SpawnedActors};
 use p2_engine::mesh_view::{CanvasDrawn, FollowActor, MeshView, MeshViewPlugin, SceneView};
 use p2_engine::play::{FrameTimes, Play, PlayPlugin, PlaySystems, PlayerInput};
 use p2_vm::ObjectId;
@@ -60,6 +60,12 @@ fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
         .init_resource::<MeshView>()
+        .init_resource::<Fluids>()
+        .init_resource::<MaterialSwitches>()
+        .init_resource::<Projectors>()
+        .init_resource::<Particles>()
+        .init_resource::<SpawnedActors>()
+        .init_resource::<Hud>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
         .insert_resource(Holder { session: Session::new(root.to_path_buf()), frame: 0, url: None, loading: false })
         .insert_resource(OtherWork(0.0))

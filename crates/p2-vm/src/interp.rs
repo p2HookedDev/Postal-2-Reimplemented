@@ -142,7 +142,7 @@ struct Iteration {
 }
 
 struct ListWalk {
-    name: &'static str,
+    native: crate::native_id::Native,
     target: Option<ObjectId>,
     args: Vec<Value>,
     first_new: u32,

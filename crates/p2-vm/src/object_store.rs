@@ -3,8 +3,12 @@ use p2_package::PackageId;
 use p2_script::Type;
 use rustc_hash::FxHashMap;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::enums::EPhysics;
 use crate::interp::{float, int};
+use crate::object::{Span, Stamp};
+use crate::props::DRAWN;
 use crate::{Class, ClassId, ClassName, NameId, Object, ObjectId, Prop, PropertyName, Value, actors, lower_lookup, lowercase_index, memory, profiling};
 
 #[derive(Default)]
@@ -25,9 +29,56 @@ pub struct ObjectStore {
     pub(crate) work: profiling::Counters,
     /// `Diagnostics::count_work` as of the start of the last level tick: the store cannot see `Vm`'s diagnostics.
     pub(crate) count_work: bool,
+    /// Goes up when a follower of object values has read them ([`ObjectStore::next_stamp`]); every write leaves the
+    /// current one on its object.
+    pub(crate) stamp: u64,
+    drawn_reads: AtomicBool,
 }
 
 impl ObjectStore {
+    pub fn stamp(&self) -> u64 {
+        self.stamp
+    }
+
+    /// Called by a follower once it has read what it follows: writes from now on carry a later stamp than its reads.
+    pub fn next_stamp(&mut self) {
+        self.stamp += 1;
+    }
+
+    /// Runs `read`, the host reading what it draws an actor from. In debug builds a read of a property that is not on
+    /// the drawn list fails: a write to it would not move `drawn`, and the host would miss the change.
+    pub fn reading_drawn<T>(&self, read: impl FnOnce() -> T) -> T {
+        self.drawn_reads.store(true, Ordering::Relaxed);
+        let result = read();
+        self.drawn_reads.store(false, Ordering::Relaxed);
+        result
+    }
+
+    #[inline]
+    fn check_drawn_read(&self, property: impl PropertyName) {
+        if cfg!(debug_assertions) && self.drawn_reads.load(Ordering::Relaxed) {
+            let prop = property.prop();
+            assert!(prop.is_some_and(|prop| DRAWN.contains(&prop)), "the host draws from {prop:?}, which is not on the drawn list");
+        }
+    }
+
+    pub(crate) fn stamp_at(&self, object: ObjectId, span: Span) -> Stamp {
+        match self.objects.get(object.0 as usize).and_then(|object| object.class) {
+            Some(class) if !self.class(class).resolved.drawn(span) => Stamp::Written,
+            _ => Stamp::Drawn,
+        }
+    }
+
+    /// `most` is [`Stamp::Written`] for the host's own write-backs: they leave `drawn` as it was.
+    fn write_span(&mut self, object: ObjectId, span: Span, most: Stamp, apply: impl FnOnce(&memory::MemLayouts, &mut memory::Mem)) {
+        let kind = match most {
+            Stamp::Drawn => self.stamp_at(object, span),
+            Stamp::Written => Stamp::Written,
+        };
+        let memory = &self.memory;
+        self.objects[object.0 as usize].write(self.stamp, kind, span, |mem| apply(memory, mem));
+    }
+
     #[inline]
     pub fn name(&self, id: NameId) -> &str {
         &self.names[id.0 as usize]
@@ -53,6 +104,7 @@ impl ObjectStore {
     }
 
     pub(crate) fn field(&self, object: ObjectId, property: impl PropertyName) -> Option<memory::Field> {
+        self.check_drawn_read(property);
         property.field_in(self, self.object(object).class?)
     }
 
@@ -63,16 +115,17 @@ impl ObjectStore {
             return Some(memory::scalar(word, shape));
         }
         let field = self.field(object, property)?;
-        Some(self.memory.read_field(&field, &self.object(object).mem))
+        Some(self.memory.read_field(&field, self.object(object).mem()))
     }
 
     #[inline]
     pub(crate) fn word(&self, object: ObjectId, property: impl PropertyName) -> Option<(u32, memory::Shape)> {
+        self.check_drawn_read(property);
         let object_ref = self.object(object);
         let (word, shape) = property.word_in(self, object_ref.class?)?;
         match shape {
             memory::Shape::Byte | memory::Shape::Int | memory::Shape::Bool | memory::Shape::Float | memory::Shape::Object | memory::Shape::Name => {
-                Some((*object_ref.mem.words.get(word as usize)?, shape))
+                Some((*object_ref.mem().words.get(word as usize)?, shape))
             }
             _ => None,
         }
@@ -81,10 +134,11 @@ impl ObjectStore {
     #[inline]
     pub(crate) fn member_words<const N: usize>(&self, object: ObjectId, property: impl PropertyName) -> Option<[(u32, memory::Shape); N]> {
         const { assert!(N <= 3, "member_words reaches a struct's first three members (`MemLayout::head`)") };
+        self.check_drawn_read(property);
         let object_ref = self.object(object);
         let (base, memory::Shape::Struct(id)) = property.word_in(self, object_ref.class?)? else { return None };
         let head = &self.memory.get(id).head;
-        let words = &object_ref.mem.words;
+        let words = &object_ref.mem().words;
         Some(std::array::from_fn(|i| match head.get(i) {
             Some(&(word, shape)) if shape != memory::Shape::Map => (words.get((base + word) as usize).copied().unwrap_or(0), shape),
             _ => (0, memory::Shape::Map),
@@ -93,10 +147,10 @@ impl ObjectStore {
 
     /// R, G, B, A (`Object.uc` declares B, G, R, A), read in place. All four: [`Self::member_words`] reaches only the first
     /// three.
-    pub(crate) fn color_of(&self, object: ObjectId, property: impl PropertyName) -> Option<[u8; 4]> {
+    pub fn color_of(&self, object: ObjectId, property: impl PropertyName) -> Option<[u8; 4]> {
         let field = self.field(object, property)?;
         let (memory::Shape::Struct(id), 1) = (field.shape, field.dim) else { return None };
-        let (members, words) = (&self.memory.get(id).fields, &self.object(object).mem.words);
+        let (members, words) = (&self.memory.get(id).fields, &self.object(object).mem().words);
         let byte = |i: usize| members.get(i).and_then(|m| words.get((field.word + m.word) as usize)).map(|&word| word as u8);
         Some([byte(2)?, byte(1)?, byte(0)?, byte(3)?])
     }
@@ -108,11 +162,11 @@ impl ObjectStore {
     pub(crate) fn set_members<const N: usize>(&mut self, object: ObjectId, property: impl PropertyName, values: [Value; N]) -> bool {
         let Some(field) = self.field(object, property) else { return false };
         let (memory::Shape::Struct(id), 1) = (field.shape, field.dim) else { return false };
-        let members = &self.memory.get(id).fields;
-        let mem = &mut self.objects[object.0 as usize].mem;
-        for (m, value) in members.iter().zip(values) {
-            self.memory.write(m.shape, m.dim, mem, (field.word + m.word) as usize, (field.heap + m.heap) as usize, value);
-        }
+        self.write_span(object, Span::of(&field), Stamp::Drawn, |memory, mem| {
+            for (m, value) in memory.get(id).fields.iter().zip(values) {
+                memory.write(m.shape, m.dim, mem, (field.word + m.word) as usize, (field.heap + m.heap) as usize, value);
+            }
+        });
         true
     }
 
@@ -122,7 +176,7 @@ impl ObjectStore {
         if self.memory.element_size(elem) != (1, 0) {
             return None;
         }
-        match self.object(object).mem.heap.get(field.heap as usize)? {
+        match self.object(object).mem().heap.get(field.heap as usize)? {
             memory::Heap::Array(array) => array.mem.words.get(..array.len as usize),
             memory::Heap::Str(_) => None,
         }
@@ -134,7 +188,7 @@ impl ObjectStore {
 
     pub(crate) fn element_of(&self, object: ObjectId, property: impl PropertyName, index: usize) -> Option<Value> {
         let field = self.field(object, property)?;
-        let mem = &self.object(object).mem;
+        let mem = self.object(object).mem();
         if field.dim > 1 {
             if index >= field.dim as usize {
                 return None;
@@ -158,8 +212,9 @@ impl ObjectStore {
         if index >= field.dim as usize {
             return false;
         }
-        let (word, heap) = (field.word as usize + index * field.words as usize, field.heap as usize + index * field.heaps as usize);
-        self.memory.write(field.shape, 1, &mut self.objects[object.0 as usize].mem, word, heap, value);
+        let (word, heap) = (field.word + index as u32 * field.words, field.heap + index as u32 * field.heaps);
+        let span = Span::place(word, heap, (field.words, field.heaps), 1);
+        self.write_span(object, span, Stamp::Drawn, |memory, mem| memory.write(field.shape, 1, mem, word as usize, heap as usize, value));
         true
     }
 
@@ -170,19 +225,19 @@ impl ObjectStore {
     pub fn properties(&self, object: ObjectId) -> Vec<Value> {
         let object = self.object(object);
         let Some(class) = object.class else { return Vec::new() };
-        self.memory.get(self.class(class).mem).fields.iter().map(|field| self.memory.read_field(field, &object.mem)).collect()
+        self.memory.get(self.class(class).mem).fields.iter().map(|field| self.memory.read_field(field, object.mem())).collect()
     }
 
     pub fn property_at(&self, object: ObjectId, index: usize) -> Option<Value> {
         let object_ref = self.object(object);
         let field = *self.memory.get(self.class(object_ref.class?).mem).fields.get(index)?;
-        Some(self.memory.read_field(&field, &object_ref.mem))
+        Some(self.memory.read_field(&field, object_ref.mem()))
     }
 
     pub(crate) fn set_property_at(&mut self, object: ObjectId, index: usize, value: Value) -> bool {
         let Some(class) = self.object(object).class else { return false };
         let Some(&field) = self.memory.get(self.class(class).mem).fields.get(index) else { return false };
-        self.memory.write_field(&field, &mut self.objects[object.0 as usize].mem, value);
+        self.write_span(object, Span::of(&field), Stamp::Drawn, |memory, mem| memory.write_field(&field, mem, value));
         true
     }
 
@@ -204,20 +259,35 @@ impl ObjectStore {
     pub fn get_path(&self, object: ObjectId, path: &[&str]) -> Option<Value> {
         let (first, members) = path.split_first()?;
         let (shape, dim, word, heap) = self.member_place(self.object(object).class?, first, members)?;
-        Some(self.memory.read(shape, dim, &self.object(object).mem, word, heap))
+        Some(self.memory.read(shape, dim, self.object(object).mem(), word, heap))
     }
 
     pub fn set_path(&mut self, object: ObjectId, path: &[&str], value: Value) -> bool {
         let Some((first, members)) = path.split_first() else { return false };
         let Some(class) = self.object(object).class else { return false };
         let Some((shape, dim, word, heap)) = self.member_place(class, first, members) else { return false };
-        self.memory.write(shape, dim, &mut self.objects[object.0 as usize].mem, word, heap, value);
+        let span = Span::place(word as u32, heap as u32, self.memory.size(shape), dim);
+        self.write_span(object, span, Stamp::Drawn, |memory, mem| memory.write(shape, dim, mem, word, heap, value));
+        true
+    }
+
+    /// See [`Object::mem_mut_unstamped`].
+    pub(crate) fn set_unstamped(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
+        let Some(field) = self.field(object, property) else { return false };
+        self.memory.write_field(&field, self.objects[object.0 as usize].mem_mut_unstamped(), value);
         true
     }
 
     pub fn set(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
         let Some(field) = self.field(object, property) else { return false };
-        self.memory.write_field(&field, &mut self.objects[object.0 as usize].mem, value);
+        self.write_span(object, Span::of(&field), Stamp::Drawn, |memory, mem| memory.write_field(&field, mem, value));
+        true
+    }
+
+    /// For the host's write-backs of what it drew: they move `written` but not `drawn`.
+    pub(crate) fn set_undrawn(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
+        let Some(field) = self.field(object, property) else { return false };
+        self.write_span(object, Span::of(&field), Stamp::Written, |memory, mem| memory.write_field(&field, mem, value));
         true
     }
 
@@ -355,5 +425,73 @@ impl ObjectStore {
     #[inline]
     pub fn is_deleted(&self, actor: ObjectId) -> bool {
         self.flag_of(actor, Prop::bDeleteMe)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::sync::Arc;
+
+    use p2_package::Loader;
+    use p2_test_package::{PackageBuilder, PropertyType};
+
+    use crate::{ObjectId, Prop, Value, Vm};
+
+    pub(crate) fn actor_vm(dir: &str) -> (Vm<Arc<Loader>>, ObjectId) {
+        let mut package = PackageBuilder::new("Fixture");
+        let vector = package.struct_type("Vector");
+        for member in ["X", "Y", "Z"] {
+            package.property(vector, member, PropertyType::Float, 0);
+        }
+        let actor = package.class("Actor", None);
+        for name in ["Location", "Acceleration"] {
+            package.property(actor, name, PropertyType::Struct(vector), 0);
+        }
+        for name in ["TimerCounter", "MoveTimer", "OldZ"] {
+            package.property(actor, name, PropertyType::Float, 0);
+        }
+        package.array_property(actor, "Skins", PropertyType::Object, 0);
+        let dir = package.write_to_temp(dir).unwrap();
+        let mut loader = Loader::new(&dir, &["*.u".into()]).unwrap();
+        loader.load_scripts().unwrap();
+        let mut vm = Vm::new(Arc::new(loader));
+        let class = vm.find_class("Fixture", "Actor").unwrap();
+        let object = vm.new_object(class, None);
+        vm.store.next_stamp();
+        (vm, object)
+    }
+
+    fn stamps(vm: &Vm<Arc<Loader>>, object: ObjectId) -> (u64, u64) {
+        let object = vm.store.object(object);
+        (object.written(), object.drawn())
+    }
+
+    #[test]
+    fn only_a_changed_drawn_property_moves_drawn() {
+        let (mut vm, actor) = actor_vm("drawn-stamp-store");
+        for name in [Prop::TimerCounter, Prop::MoveTimer, Prop::OldZ] {
+            assert!(vm.store.set(actor, name, Value::Float(2.0)));
+        }
+        vm.store.set_vector(actor, Prop::Acceleration, [1.0, 2.0, 3.0].into());
+        vm.store.set_vector(actor, Prop::Location, [0.0; 3].into());
+        assert_eq!(stamps(&vm, actor), (1, 0));
+        vm.store.next_stamp();
+        vm.store.set_vector(actor, Prop::Location, [0.0, 5.0, 0.0].into());
+        assert_eq!(stamps(&vm, actor), (2, 2));
+        vm.store.next_stamp();
+        assert!(vm.store.set_path(actor, &["Location", "Z"], Value::Float(1.0)));
+        assert_eq!(stamps(&vm, actor), (3, 3));
+        vm.store.next_stamp();
+        assert!(vm.store.set_undrawn(actor, Prop::Location, Value::Vector([7.0; 3].into())));
+        assert_eq!(stamps(&vm, actor), (4, 3));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "not on the drawn list")]
+    fn a_host_read_off_the_drawn_list_fails_in_debug_builds() {
+        let (vm, actor) = actor_vm("drawn-stamp-guard");
+        vm.store.reading_drawn(|| vm.store.location(actor));
+        vm.store.reading_drawn(|| vm.store.float_of(actor, Prop::TimerCounter));
     }
 }

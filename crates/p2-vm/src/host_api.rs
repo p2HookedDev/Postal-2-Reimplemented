@@ -34,7 +34,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub fn property_block(&self, object: ObjectId) -> &PropertyBlock {
-        &self.store.object(object).mem
+        self.store.object(object).mem()
     }
 
     pub fn export_class(&self, path: &str, wanted: &str) -> Option<Option<String>> {

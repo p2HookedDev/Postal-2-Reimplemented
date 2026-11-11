@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn projector_decal(game: &mut Game, t: &mut impl SceneAssets, projector: &ProjectorActor) -> Option<(Handle<Image>, Transform, u32)> {
-    let (image, size, final_blend) = projector_image(game, t, &projector.texture)?;
+    let (image, size, final_blend) = projector_image(game, |image| t.add_image(image), &projector.texture)?;
     Some((image, projector_transform(projector, size), projector_tag(projector, final_blend)))
 }
 
@@ -26,11 +26,11 @@ pub(crate) fn projector_tag(projector: &ProjectorActor, final_blend: Option<Fina
     PROJECTOR_TAG | tagged | alpha_test | u32::from(projector.targets.0) << 16 | u32::from(projector.material_blending as u8) << 8 | u32::from(blending)
 }
 
-pub(crate) fn projector_image(game: &mut Game, t: &mut impl SceneAssets, texture: &str) -> Option<(Handle<Image>, Vec2, Option<FinalBlend>)> {
+pub(crate) fn projector_image(game: &mut Game, add: impl FnOnce(Image) -> Handle<Image>, texture: &str) -> Option<(Handle<Image>, Vec2, Option<FinalBlend>)> {
     let (package, export) = game.export_by_path(texture)?;
     let texture = game.material_texture(package, export_reference(export))?;
     let size = texture.image.size().as_vec2();
-    Some((t.add_image(texture.image), size, texture.state.final_blend))
+    Some((add(texture.image), size, texture.state.final_blend))
 }
 
 /// The box holds retail's frustum. Orthographic: the near square (side ½·√2·√(w² + h²)) and

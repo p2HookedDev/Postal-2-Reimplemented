@@ -127,7 +127,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.flag_of(pawn, Prop::bTearOff) {
             if !self.store.flag_of(pawn, Prop::bPlayedDeath) {
                 let args = ["HitDamageType", "TakeHitLocation"].map(|p| self.store.get(pawn, p).unwrap_or(Value::Object(None)));
-                self.event(pawn, "PlayDying", args.to_vec())?;
+                self.event(pawn, crate::states::Event::PlayDying, args.to_vec())?;
             }
             self.zero_movement_alpha(pawn, RIGHT_TURN_CHANNEL, END_CHANNEL, step);
             return Ok(());
@@ -142,11 +142,11 @@ impl<L: LoaderRef> Vm<L> {
         if (old_physics == EPhysics::Falling as u8) != (self.store.physics_of(pawn) == Some(EPhysics::Falling)) {
             let up = self.store.vector(pawn, Prop::Velocity)[2];
             if self.store.physics_of(pawn) == Some(EPhysics::Walking) {
-                self.event(pawn, "PlayLandingAnimation", [Value::Float(up)])?;
+                self.event(pawn, crate::states::Event::PlayLandingAnimation, [Value::Float(up)])?;
             } else if self.store.flag_of(pawn, Prop::bWasOnGround) && up > 0.0 {
-                self.event(pawn, "PlayJump", Vec::new())?;
+                self.event(pawn, crate::states::Event::PlayJump, Vec::new())?;
             } else {
-                self.event(pawn, "PlayFalling", Vec::new())?;
+                self.event(pawn, crate::states::Event::PlayFalling, Vec::new())?;
             }
         }
         let physics = self.store.byte_of(pawn, Prop::Physics);

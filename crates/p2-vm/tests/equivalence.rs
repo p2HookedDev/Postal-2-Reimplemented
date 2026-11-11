@@ -219,6 +219,34 @@ fn name_numbers_are_masked() {
     assert_eq!(mask_name_ids("a NameId(12320), b NameId(x) NameId(0)"), "a NameId(#), b NameId(x) NameId(#)");
 }
 
+/// A save slot records the real date and time of the run (`Time="2026-11-11 : 12:53"`, `lTime=1794394392`): two runs
+/// a minute apart differ there and nowhere else.
+fn mask_clock(text: &str) -> String {
+    mask_field(&mask_field(text, "Time=\"", |c| c == '"'), "lTime=", |c| !c.is_ascii_digit())
+}
+
+fn mask_field(text: &str, key: &str, ends: fn(char) -> bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(key) {
+        let after = at + key.len();
+        out.push_str(&rest[..after]);
+        out.push('#');
+        let tail = &rest[after..];
+        rest = &tail[tail.find(ends).unwrap_or(tail.len())..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn the_clock_of_a_save_slot_is_masked() {
+    let slot = |time: &str, stamp: u32| format!("{{Name=\"Monday\";Day=0;Time=\"{time}\";lTime={stamp};LoadScreen=\"a\";}}");
+    assert_eq!(mask_clock(&slot("2026-11-11 : 12:53", 1794394392)), mask_clock(&slot("2026-11-11 : 12:52", 1794394346)));
+    assert_eq!(mask_clock("Day=3;LoadScreen=\"a\""), "Day=3;LoadScreen=\"a\"");
+    assert_ne!(mask_clock(&slot("x", 1)), mask_clock(&slot("x", 1)).replace("Day=0", "Day=1"));
+}
+
 fn check(name: &str, text: &str) {
     if let Some(dir) = std::env::var_os("P2_EQUIV_OUT").map(PathBuf::from) {
         std::fs::create_dir_all(&dir).unwrap();
@@ -229,7 +257,7 @@ fn check(name: &str, text: &str) {
         return;
     };
     let expected = std::fs::read_to_string(baseline.join(format!("{name}.txt"))).unwrap();
-    let (text, expected) = (mask_name_ids(text), mask_name_ids(&expected));
+    let (text, expected) = (mask_clock(&mask_name_ids(text)), mask_clock(&mask_name_ids(&expected)));
     let (ours, theirs): (Vec<_>, Vec<_>) = (text.lines().collect(), expected.lines().collect());
     let differing: Vec<_> = ours.iter().zip(&theirs).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
     for &i in differing.iter().take(6) {

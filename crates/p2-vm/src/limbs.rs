@@ -26,6 +26,9 @@ const HEARD: f32 = 200.0;
 const HARD_HIT: f32 = 150.0;
 const SPLAT: f32 = 700.0;
 const SPLAT_TICKS: u64 = 12;
+/// A limb lying asleep that its script still flies (a head, a bolt-on) is told so this many ticks, then left alone
+/// until it moves again: told every tick, each such limb cost a script call, a move and a touch test for nothing.
+const ASLEEP_TOLD: u8 = 8;
 
 #[derive(Default)]
 pub(crate) struct Limbs {
@@ -41,11 +44,16 @@ struct Limb {
     before: Vector,
     at: Vector,
     splat_tick: u64,
+    told_asleep: u8,
 }
 
 impl Limbs {
     pub(crate) fn is_empty(&self) -> bool {
         self.live.is_empty()
+    }
+
+    pub(crate) fn bodies(&self) -> impl Iterator<Item = (ObjectId, BodyId)> + '_ {
+        self.live.iter().map(|(&actor, limb)| (actor, limb.id))
     }
 
     pub(crate) fn drives(&self, actor: ObjectId) -> bool {
@@ -130,6 +138,8 @@ impl<L: LoaderRef> Vm<L> {
                 Some((a, location, quat_to_rotator(quat), world.velocity(id)?, world.is_sleeping(id)))
             })
             .collect();
+        let places: Vec<(ObjectId, Vector, Rotator)> = moved.iter().filter(|&&(.., asleep)| !asleep).map(|&(actor, location, rotation, ..)| (actor, location, rotation)).collect();
+        self.prepare_bounds(&places);
         let mut errors = Vec::new();
         for (actor, location, rotation, after, asleep) in moved {
             if let Err(e) = self.limb_moved(actor, location, rotation, after, asleep, gravity) {
@@ -145,6 +155,12 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(limb) = self.karma.limbs.live.get(&actor) {
             let (velocity, at) = (self.store.vector(actor, Prop::Velocity), self.store.vector(actor, Prop::Location));
             if length([0, 1, 2].map(|i| velocity[i] - limb.wrote[i]).into()) > SCRIPT_WROTE || length([0, 1, 2].map(|i| at[i] - limb.at[i]).into()) > STRAY {
+                return Ok(());
+            }
+        }
+        if let Some(limb) = self.karma.limbs.live.get_mut(&actor) {
+            limb.told_asleep = if asleep { limb.told_asleep.saturating_add(1) } else { 0 };
+            if limb.told_asleep > ASLEEP_TOLD {
                 return Ok(());
             }
         }
@@ -230,7 +246,7 @@ impl<L: LoaderRef> Vm<L> {
         let id = world.add_body(&body);
         self.count(Work::LimbMade);
         self.karma.actors.insert(id, actor);
-        self.karma.limbs.live.insert(actor, Limb { id, mesh, wrote: [0.0; 3].into(), before: [0.0; 3].into(), at: location, splat_tick: 0 });
+        self.karma.limbs.live.insert(actor, Limb { id, mesh, wrote: [0.0; 3].into(), before: [0.0; 3].into(), at: location, splat_tick: 0, told_asleep: 0 });
         self.take_limb_motion(actor);
         if let Some(size) = bolton_size {
             self.bolton_adopted(actor, id, size);

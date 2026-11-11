@@ -195,6 +195,7 @@ pub(super) fn state_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: O
         Native::Disable | Native::Enable => {
             let (Some(this), Some(&Value::Name(probe))) = (this, args.first()) else { return Ok(None) };
             let Some(bit) = crate::states::probe_bit(vm.store.name(probe)) else { return Ok(None) };
+            vm.script.states.stir(this);
             let disabled = vm.script.states.probes_disabled.entry(this).or_insert(0);
             if native == Native::Disable {
                 *disabled |= 1 << bit;
@@ -205,7 +206,7 @@ pub(super) fn state_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: O
         }
         Native::Initialize if this.is_some_and(|this| vm.store.is_a(this, "Interaction")) => {
             if let Some(this) = this {
-                vm.event(this, "Initialized", Vec::new())?;
+                vm.event(this, crate::states::Event::Initialized, Vec::new())?;
             }
             return Ok(None);
         }

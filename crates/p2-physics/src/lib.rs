@@ -7,22 +7,28 @@ use std::sync::Mutex;
 use rapier3d::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+mod bodies;
 mod hit;
 mod level_contact;
+mod parts;
 mod ragdoll;
+mod stepping;
 
 pub use hit::{Hit, Throw};
+pub use parts::{Parts, SegmentHit};
 pub use ragdoll::{JointLimit, JointParams, PartParams, RagdollParams, shapes_inertia};
 
 pub const UNITS_PER_METER: f32 = 50.0;
 /// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing.
-const MAX_STEP: f32 = 1.0 / 60.0;
-const MAX_SUBSTEPS: f32 = 30.0;
-const STEP_SLACK: f32 = 0.1;
+/// Every step has this length: a step whose length changes from one to the next leaves resting bodies trembling, so a
+/// pile of corpses never falls asleep. Time not stepped yet is owed to the next call.
+const STEP: f32 = 1.0 / 60.0;
+const MAX_STEPS: u32 = 30;
 
-fn substeps(dt: f32) -> (u32, f32) {
-    let steps = (dt / MAX_STEP - STEP_SLACK).ceil().clamp(1.0, MAX_SUBSTEPS);
-    (steps as u32, (dt / steps).min(MAX_STEP * (1.0 + STEP_SLACK)))
+/// The whole steps `owed` holds, and what stays owed. A call past the limit loses time.
+fn steps_owed(owed: f32) -> (u32, f32) {
+    let steps = (owed / STEP + 1e-3) as u32;
+    if steps > MAX_STEPS { (MAX_STEPS, 0.0) } else { (steps, (owed - steps as f32 * STEP).max(0.0)) }
 }
 /// Pairs multiply their coefficients, so the level leaves a body's own values in charge.
 const LEVEL_FRICTION: f32 = 1.0;
@@ -188,6 +194,16 @@ pub struct World {
     started: Vec<Started>,
     moving: FxHashMap<RigidBodyHandle, Pose>,
     cones: Vec<ragdoll::Cone>,
+    /// Each ragdoll's parts. A ragdoll at rest goes dormant on its own: Rapier sleeps touching bodies only all at
+    /// once, so one moving corpse kept every corpse of its pile awake.
+    ragdolls: Vec<ragdoll::Resting>,
+    /// Rest marks moved since the profile log last asked: by a part's place, by its turn.
+    pub rest_broken: [u32; 2],
+    pub wakes: u32,
+    owed: f32,
+    /// Where each moving body was before the last step: its pose is given between that and the step's, by the time
+    /// owed, so bodies move evenly however the calls fall on the steps.
+    before: FxHashMap<RigidBodyHandle, Pose>,
 }
 
 impl World {
@@ -216,342 +232,20 @@ impl World {
             started: Vec::new(),
             moving: FxHashMap::default(),
             cones: Vec::new(),
+            ragdolls: Vec::new(),
+            rest_broken: [0; 2],
+            wakes: 0,
+            owed: 0.0,
+            before: FxHashMap::default(),
         }
     }
 
-    fn add_level(&mut self, collider: ColliderBuilder) {
-        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
-    }
-
-    /// A triangle's front is the side its corners run counter-clockwise from.
-    pub fn add_static_mesh(&mut self, vertices: &[[f32; 3]], triangles: Vec<[u32; 3]>) -> Result<(), Error> {
-        let flags = TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;
-        let collider = ColliderBuilder::trimesh_with_flags(vectors(vertices), triangles, flags)
-            .map_err(|e| Error::Mesh(e.to_string()))?
-            .user_data(level_contact::ONE_SIDED)
-            .active_hooks(ActiveHooks::MODIFY_SOLVER_CONTACTS);
-        self.add_level(collider);
-        Ok(())
-    }
-
-    pub fn add_static_hull(&mut self, points: &[[f32; 3]]) -> Result<(), Error> {
-        let points = vectors(points);
-        let collider = ColliderBuilder::convex_hull(&points).ok_or_else(|| Error::Mesh(format!("no convex hull of {} points", points.len())))?;
-        self.add_level(collider);
-        Ok(())
-    }
-
-    pub fn add_static_shape(&mut self, shape: &Shape, location: p2_math::Vector, rotation: [f32; 4]) -> Result<(), Error> {
-        let Some(collider) = collider(shape) else { return Err(Error::Mesh("no convex hull".to_owned())) };
-        self.add_level(collider.position(pose(location, rotation)));
-        Ok(())
-    }
-
-    pub fn add_body(&mut self, params: &BodyParams) -> BodyId {
-        let mut body = RigidBodyBuilder::dynamic()
-            .pose(pose(params.location, params.rotation))
-            .linear_damping(params.linear_damping)
-            .angular_damping(params.angular_damping)
-            .ccd_enabled(true)
-            .build();
-        if params.stay_upright {
-            body.set_enabled_rotations(false, false, params.allow_yaw, false);
-        }
-        if params.asleep {
-            body.set_body_type(RigidBodyType::Fixed, false);
-        }
-        let handle = self.bodies.insert(body);
-        if params.asleep {
-            self.dormant.insert(handle);
-        }
-        let mut builders: Vec<ColliderBuilder> = params.shapes.iter().filter_map(collider).collect();
-        if builders.is_empty() {
-            builders.push(ColliderBuilder::ball(1.0));
-        }
-        let colliders: Vec<Collider> = builders.into_iter().map(|builder| body_collider(builder, params.friction, params.restitution).build()).collect();
-        let volume: f32 = colliders.iter().map(Collider::volume).sum();
-        for mut collider in colliders {
-            if params.mass > 0.0 && volume > 0.0 {
-                collider.set_mass(params.mass * collider.volume() / volume);
-            }
-            self.colliders.insert_with_parent(collider, handle, &mut self.bodies);
-        }
-        // Rapier applies the mass at the next step; until then an impulse would move nothing.
-        if let Some(body) = self.bodies.get_mut(handle) {
-            body.recompute_mass_properties_from_colliders(&self.colliders);
-        }
-        BodyId(handle)
-    }
-
-    /// Kinematic: pushes and carries bodies, never pushed back. Even ragdolls touching only the level touch it.
-    pub fn add_mover(&mut self, shapes: &[Shape], location: p2_math::Vector, rotation: [f32; 4]) -> Result<BodyId, Error> {
-        let builders: Vec<ColliderBuilder> = shapes.iter().filter_map(collider).collect();
-        if builders.is_empty() {
-            return Err(Error::Mesh("no mover shape".to_owned()));
-        }
-        let handle = self.bodies.insert(RigidBodyBuilder::kinematic_position_based().pose(pose(location, rotation)).build());
-        for builder in builders {
-            self.colliders.insert_with_parent(with_material(builder, LEVEL_FRICTION, LEVEL_RESTITUTION), handle, &mut self.bodies);
-        }
-        self.hooks.movers.insert(handle);
-        Ok(BodyId(handle))
-    }
-
-    pub fn move_mover(&mut self, id: BodyId, location: p2_math::Vector, rotation: [f32; 4]) {
-        if self.hooks.movers.contains(&id.0) {
-            self.moving.insert(id.0, pose(location, rotation));
-        }
-    }
-
-    pub fn remove_body(&mut self, id: BodyId) {
-        self.hooks.disabled.retain(|&(a, b)| a != id.0 && b != id.0);
-        self.hooks.level_only.remove(&id.0);
-        self.hooks.movers.remove(&id.0);
-        self.moving.remove(&id.0);
-        self.take_out_body(id);
-    }
-
-    fn take_out_body(&mut self, id: BodyId) {
-        self.dormant.remove(&id.0);
-        self.bodies.remove(id.0, &mut self.islands, &mut self.colliders, &mut self.impulse_joints, &mut self.multibody_joints, &mut self.soft_bodies, true);
-    }
-
-    pub fn apply_impulse(&mut self, id: BodyId, impulse: p2_math::Vector, point: Option<p2_math::Vector>) {
-        self.push(id, to_rapier(impulse), point.map(to_rapier));
-    }
-
-    pub fn add_force(&mut self, id: BodyId, force: p2_math::Vector, point: Option<p2_math::Vector>) {
-        self.wake(id);
-        let Some(body) = self.bodies.get_mut(id.0) else { return };
-        self.forced.push(id.0);
-        match point {
-            Some(point) => body.add_force_at_point(to_rapier(force), to_rapier(point), true),
-            None => body.add_force(to_rapier(force), true),
-        }
-    }
-
-    pub fn add_torque(&mut self, id: BodyId, torque: p2_math::Vector) {
-        self.wake(id);
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            self.forced.push(id.0);
-            body.add_torque(to_rapier(torque), true);
-        }
-    }
-
-    pub fn wake(&mut self, id: BodyId) {
-        let dormant = self.dormant.remove(&id.0);
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            if dormant {
-                body.set_body_type(RigidBodyType::Dynamic, false);
-                body.recompute_mass_properties_from_colliders(&self.colliders);
-            }
-            body.wake_up(true);
-        }
-    }
-
-    pub fn sleep(&mut self, id: BodyId) {
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.set_linvel(Vector::ZERO, false);
-            body.set_angvel(Vector::ZERO, false);
-            body.set_body_type(RigidBodyType::Fixed, false);
-            self.dormant.insert(id.0);
-        }
-    }
-
-    pub fn mass(&self, id: BodyId) -> Option<f32> {
-        Some(self.bodies.get(id.0)?.mass())
-    }
-
-    pub fn set_mass(&mut self, id: BodyId, mass: f32) {
-        let Some(body) = self.bodies.get(id.0) else { return };
-        let old = body.mass();
-        if old <= 0.0 || mass <= 0.0 {
-            return;
-        }
-        for &handle in body.colliders() {
-            if let Some(collider) = self.colliders.get_mut(handle) {
-                collider.set_mass(collider.mass() * mass / old);
-            }
-        }
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.recompute_mass_properties_from_colliders(&self.colliders);
-        }
-    }
-
-    pub fn set_friction(&mut self, id: BodyId, friction: f32) {
-        self.each_collider(id, |c| c.set_friction(friction));
-    }
-
-    pub fn set_restitution(&mut self, id: BodyId, restitution: f32) {
-        self.each_collider(id, |c| c.set_restitution(restitution));
-    }
-
-    pub fn set_damping(&mut self, id: BodyId, linear: f32, angular: f32) {
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.set_linear_damping(linear);
-            body.set_angular_damping(angular);
-        }
-    }
-
-    pub fn set_gravity_scale(&mut self, id: BodyId, scale: f32) {
-        if self.bodies.get(id.0).is_some_and(|body| body.gravity_scale() != scale)
-            && let Some(body) = self.bodies.get_mut(id.0)
-        {
-            body.set_gravity_scale(scale, false);
-        }
-    }
-
-    pub fn set_stay_upright(&mut self, id: BodyId, upright: bool, allow_yaw: bool) {
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.set_enabled_rotations(!upright, !upright, !upright || allow_yaw, true);
-        }
-    }
-
-    pub fn set_pair_collision(&mut self, a: BodyId, b: BodyId, enabled: bool) {
-        let pair = body_pair(a.0, b.0);
-        if enabled {
-            self.hooks.disabled.remove(&pair);
-        } else {
-            self.hooks.disabled.insert(pair);
-        }
-    }
-
-    pub fn set_contacts(&mut self, id: BodyId, contacts: Contacts) {
-        match contacts {
-            Contacts::All => self.hooks.level_only.remove(&id.0),
-            Contacts::LevelOnly => self.hooks.level_only.insert(id.0),
-        };
-    }
-
-    pub fn set_pose(&mut self, id: BodyId, location: p2_math::Vector, rotation: [f32; 4]) {
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.set_translation(to_rapier(location), true);
-            body.set_rotation(Rotation::from_array(rotation).normalize(), true);
-        }
-    }
-
-    pub fn set_velocity(&mut self, id: BodyId, velocity: p2_math::Vector) {
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.set_linvel(to_rapier(velocity), true);
-        }
-    }
-
-    pub fn set_spin(&mut self, id: BodyId, spin: p2_math::Vector) {
-        if let Some(body) = self.bodies.get_mut(id.0) {
-            body.set_angvel(to_rapier(spin), true);
-        }
-    }
-
-    pub fn gravity(&self) -> p2_math::Vector {
-        from_rapier(self.gravity)
-    }
-
-    pub fn limit_speed(&mut self, id: BodyId, max: f32) {
-        let Some(body) = self.bodies.get_mut(id.0) else { return };
-        let velocity = body.linvel();
-        let squared = velocity.length_squared();
-        if squared > max * max {
-            body.set_linvel(velocity * (max / squared.sqrt()), false);
-        }
-    }
-
-    pub fn step(&mut self, dt: f32) -> Vec<Impact> {
-        let mut impacts = Vec::new();
-        self.step_into(dt, &mut impacts);
-        impacts
-    }
-
-    pub fn step_into(&mut self, dt: f32, impacts: &mut Vec<Impact>) {
-        if dt <= 0.0 {
-            return;
-        }
-        let (steps, step) = substeps(dt);
-        self.parameters.dt = step;
-        let moves: Vec<(RigidBodyHandle, Pose, Pose)> = self.moving.drain().filter_map(|(handle, to)| Some((handle, *self.bodies.get(handle)?.position(), to))).collect();
-        self.wake_near_movers(&moves);
-        for substep in 1..=steps {
-            for &(handle, from, to) in &moves {
-                if let Some(body) = self.bodies.get_mut(handle) {
-                    body.set_next_kinematic_position(from.lerp(&to, substep as f32 / steps as f32));
-                }
-            }
-            self.pipeline.step(
-                self.gravity,
-                &self.parameters,
-                &mut self.islands,
-                &mut self.broad_phase,
-                &mut self.narrow_phase,
-                &mut self.bodies,
-                &mut self.colliders,
-                &mut self.impulse_joints,
-                &mut self.multibody_joints,
-                &mut self.soft_bodies,
-                &mut self.ccd,
-                &self.hooks,
-                &self.hooks,
-            );
-            self.hold_cones(step);
-            let mut started = std::mem::take(&mut self.started);
-            if let Ok(mut events) = self.hooks.started.lock() {
-                std::mem::swap(&mut *events, &mut started);
-            }
-            for s in started.drain(..) {
-                let bodies = s.colliders.map(|c| self.colliders.get(c).and_then(Collider::parent));
-                for (this, other) in [(0, 1), (1, 0)] {
-                    let awake = bodies[other].and_then(|h| self.bodies.get(h)).is_some_and(|b| b.is_dynamic() && !b.is_sleeping());
-                    if let Some(this) = bodies[this].filter(|h| awake && self.dormant.contains(h)) {
-                        self.wake(BodyId(this));
-                    }
-                }
-                for (this, other, normal) in [(0, 1, -s.normal), (1, 0, s.normal)] {
-                    let Some(body) = bodies[this].filter(|&h| self.bodies.get(h).is_some_and(RigidBody::is_dynamic)) else { continue };
-                    impacts.push(Impact {
-                        body: BodyId(body),
-                        other: bodies[other].map(BodyId),
-                        position: from_rapier(s.point),
-                        velocity: from_rapier(s.velocities[this] - s.velocities[other]),
-                        normal: from_rapier(normal),
-                    });
-                }
-            }
-            self.started = started;
-        }
-        for handle in self.forced.drain(..) {
-            if let Some(body) = self.bodies.get_mut(handle) {
-                body.reset_forces(false);
-                body.reset_torques(false);
-            }
-        }
-    }
-
-    /// A kinematic body makes no contacts with dormant (fixed) bodies and may not wake sleeping ones.
-    fn wake_near_movers(&mut self, moves: &[(RigidBodyHandle, Pose, Pose)]) {
-        let colliders = &self.colliders;
-        let reach: Vec<Aabb> = moves
-            .iter()
-            .filter_map(|&(handle, _, to)| {
-                let swept = |c: &Collider| Some(c.compute_aabb().merged(&c.shape().compute_aabb(&(to * *c.position_wrt_parent()?))).loosened(MOVER_REACH));
-                self.bodies.get(handle)?.colliders().iter().filter_map(|&c| colliders.get(c)).filter_map(swept).reduce(|a, b| a.merged(&b))
-            })
-            .collect();
-        if reach.is_empty() {
-            return;
-        }
-        let near: Vec<RigidBodyHandle> = self
-            .bodies
-            .iter()
-            .filter(|&(handle, body)| self.dormant.contains(&handle) || (body.is_dynamic() && body.is_sleeping()))
-            .filter(|(_, body)| body.colliders().iter().filter_map(|&c| colliders.get(c)).any(|c| reach.iter().any(|r| r.intersects(&c.compute_aabb()))))
-            .map(|(handle, _)| handle)
-            .collect();
-        for handle in near {
-            self.wake(BodyId(handle));
-        }
-    }
-
+    /// Up to one step late: between the last two steps' poses, by the time owed.
     pub fn pose(&self, id: BodyId) -> Option<(p2_math::Vector, [f32; 4])> {
         let body = self.bodies.get(id.0)?;
-        Some((from_rapier(body.translation()), body.rotation().to_array()))
+        let now = body.position();
+        let shown = self.before.get(&id.0).map_or(*now, |before| before.lerp(now, self.owed / STEP));
+        Some((from_rapier(shown.translation), shown.rotation.to_array()))
     }
 
     pub fn velocity(&self, id: BodyId) -> Option<p2_math::Vector> {
@@ -564,86 +258,6 @@ impl World {
 
     pub fn is_sleeping(&self, id: BodyId) -> bool {
         self.dormant.contains(&id.0) || self.bodies.get(id.0).is_some_and(RigidBody::is_sleeping)
-    }
-
-    pub fn parts(&self, bodies: &[BodyId]) -> Parts {
-        let mut parts = Parts::default();
-        self.parts_into(bodies, &mut parts);
-        parts
-    }
-
-    pub fn parts_into(&self, bodies: &[BodyId], parts: &mut Parts) {
-        parts.colliders.clear();
-        parts.centres.clear();
-        parts.bounds = None;
-        for &id in bodies {
-            let Some(body) = self.bodies.get(id.0) else { continue };
-            parts.centres.push((id, from_rapier(body.center_of_mass())));
-            for part in body.colliders().iter().filter_map(|&c| self.colliders.get(c)) {
-                let aabb = part.compute_aabb();
-                parts.bounds = Some(parts.bounds.map_or(aabb, |bounds| bounds.merged(&aabb)));
-                parts.colliders.push(Part { body: id, shape: part.shared_shape().clone(), pose: *part.position(), aabb });
-            }
-        }
-    }
-
-    fn each_collider(&mut self, id: BodyId, mut change: impl FnMut(&mut Collider)) {
-        let Some(body) = self.bodies.get(id.0) else { return };
-        for &handle in body.colliders() {
-            if let Some(collider) = self.colliders.get_mut(handle) {
-                change(collider);
-            }
-        }
-    }
-}
-
-#[derive(Clone)]
-struct Part {
-    body: BodyId,
-    shape: SharedShape,
-    pose: Pose,
-    aabb: Aabb,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SegmentHit {
-    pub body: BodyId,
-    pub time: f32,
-    pub normal: p2_math::Vector,
-}
-
-#[derive(Clone, Default)]
-pub struct Parts {
-    colliders: Vec<Part>,
-    bounds: Option<Aabb>,
-    centres: Vec<(BodyId, p2_math::Vector)>,
-}
-
-impl Parts {
-    pub fn bounds(&self) -> Option<(p2_math::Vector, p2_math::Vector)> {
-        self.bounds.map(|b| (b.mins.to_array().into(), b.maxs.to_array().into()))
-    }
-
-    pub fn segment_hit(&self, start: p2_math::Vector, end: p2_math::Vector) -> Option<SegmentHit> {
-        use rapier3d::parry::query::{Ray, RayCast};
-        let origin = to_rapier(start);
-        let ray = Ray::new(origin, to_rapier(end) - origin);
-        if !self.bounds.is_some_and(|b| b.intersects_local_ray(&ray, 1.0)) {
-            return None;
-        }
-        self.colliders
-            .iter()
-            .filter(|part| part.aabb.intersects_local_ray(&ray, 1.0))
-            .filter_map(|part| {
-                let hit = part.shape.cast_ray_and_get_normal(&part.pose, &ray, 1.0, true)?;
-                Some(SegmentHit { body: part.body, time: hit.time_of_impact, normal: hit.normal.to_array().into() })
-            })
-            .min_by(|a, b| a.time.total_cmp(&b.time))
-    }
-
-    pub fn nearest_body(&self, point: p2_math::Vector) -> Option<BodyId> {
-        let distance = |c: &p2_math::Vector| (*c - point).size_squared();
-        self.centres.iter().min_by(|a, b| distance(&a.1).total_cmp(&distance(&b.1))).map(|&(id, _)| id)
     }
 }
 
@@ -666,21 +280,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_times_around_a_refresh_rate_keep_one_step_count() {
-        for (around, steps) in [(1.0 / 60.0, 1), (1.0 / 30.0, 2), (1.0 / 144.0, 1), (0.1, 6)] {
-            for dt in [around * 0.99, around, around * 1.01] {
-                let (count, size) = substeps(dt);
-                assert_eq!(count, steps, "{dt}");
-                assert!((size * count as f32 - dt).abs() < 1e-6, "{dt}");
-            }
-        }
+    fn steps_are_whole_and_the_rest_stays_owed() {
+        assert_eq!(steps_owed(STEP), (1, 0.0));
+        assert_eq!(steps_owed(STEP * 0.6), (0, STEP * 0.6));
+        let (steps, owed) = steps_owed(STEP * 2.6);
+        assert!(steps == 2 && (owed - STEP * 0.6).abs() < 1e-6, "{steps} {owed}");
+        assert_eq!(steps_owed(2.0), (MAX_STEPS, 0.0));
     }
 
     #[test]
-    fn a_frame_past_the_substep_limit_loses_time() {
-        let (count, size) = substeps(2.0);
-        assert_eq!(count, 30);
-        assert!(size <= MAX_STEP * (1.0 + STEP_SLACK));
+    fn a_falling_body_moves_between_steps() {
+        let mut world = World::new([0.0, 0.0, -950.0].into());
+        let body = world.add_body(&crate_box([0.0, 0.0, 500.0].into()));
+        for _ in 0..6 {
+            world.step(STEP);
+        }
+        let mut last = world.pose(body).unwrap().0.z;
+        for _ in 0..12 {
+            world.step(STEP / 4.0);
+            let now = world.pose(body).unwrap().0.z;
+            assert!(now < last - 0.1, "{now} after {last}");
+            last = now;
+        }
     }
 
     fn crate_box(location: p2_math::Vector) -> BodyParams {
@@ -743,6 +364,7 @@ mod tests {
         let body = world.add_body(&BodyParams { shapes: vec![Shape::Hull(corners)], ..crate_box([0.0; 3].into()) });
         world.set_spin(body, [0.0, 0.0, std::f32::consts::PI].into());
         world.step(0.5);
+        world.step(STEP);
         let (_, [x, y, z, w]) = world.pose(body).unwrap();
         assert!(x.abs() < 0.01 && y.abs() < 0.01 && (z - w).abs() < 0.02 && z > 0.6, "{x} {y} {z} {w}");
         assert_eq!(world.gravity(), [0.0; 3].into());

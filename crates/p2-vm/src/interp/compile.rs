@@ -563,7 +563,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn read_instance(&self, object: ObjectId, class: ClassId, index: usize) -> Value {
         let memory = &self.store.memory;
-        memory.get(self.store.class(class).mem).fields.get(index).map_or(Value::Int(0), |field| memory.read_field(field, &self.store.object(object).mem))
+        memory.get(self.store.class(class).mem).fields.get(index).map_or(Value::Int(0), |field| memory.read_field(field, self.store.object(object).mem()))
     }
 }
 

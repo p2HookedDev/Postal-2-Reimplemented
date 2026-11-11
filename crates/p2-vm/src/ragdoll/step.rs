@@ -117,7 +117,7 @@ impl<L: LoaderRef> Vm<L> {
             {
                 errors.push((self.store.object(actor).path.clone(), e));
             }
-            if torn && let Err(e) = self.event(actor, "KExcessiveJointError", Vec::new()) {
+            if torn && let Err(e) = self.event(actor, crate::states::Event::KExcessiveJointError, Vec::new()) {
                 errors.push((self.store.object(actor).path.clone(), e));
             }
         }
@@ -128,6 +128,7 @@ impl<L: LoaderRef> Vm<L> {
         let world = self.karma.world.as_mut()?;
         let ragdoll = self.karma.ragdolls.live.get_mut(&actor)?;
         ragdoll.fresh = false;
+        ragdoll.ticks += 1;
         let asleep = ragdoll.all.iter().all(|&id| world.is_sleeping(id));
         if asleep && ragdoll.posed_asleep.is_some() {
             let root = ragdoll.bodies.iter().flatten().next().copied()?;
@@ -225,7 +226,7 @@ impl<L: LoaderRef> Vm<L> {
             Some((anchor, body.inverse()?.then(&frames[0])))
         });
         let ragdoll =
-            Ragdoll { bodies, all: all.into(), joints: built.joints, mesh, scale, frames, fresh: true, posed_asleep: None, parts, scales: ResolvedScales::default(), cut_refused: false, root_offset };
+            Ragdoll { bodies, all: all.into(), joints: built.joints, mesh, scale, frames, fresh: true, ticks: 0, posed_asleep: None, parts, scales: ResolvedScales::default(), cut_refused: false, root_offset };
         self.karma.ragdolls.live.insert(actor, ragdoll);
         self.karma.ragdolls.kept.remove(&actor);
         for (property, value) in [("bCollideActors", true), ("bBlockActors", false), ("bBlockPlayers", false), ("bCollideWorld", false), ("bProjTarget", true)] {

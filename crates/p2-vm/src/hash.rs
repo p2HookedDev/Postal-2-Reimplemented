@@ -33,6 +33,7 @@ pub(crate) struct CollisionHash {
     stamps: Vec<u32>,
     stamp: u32,
     spare: Vec<Vec<Entry>>,
+    pub(crate) spare_actors: Vec<Vec<ObjectId>>,
     pub(crate) built: bool,
 }
 
@@ -211,7 +212,7 @@ impl<L: LoaderRef> Vm<L> {
         match self.hash_read(actor) {
             None => self.hash.remove(actor),
             Some((_, location, reach)) => {
-                let radius = reach.unwrap_or_else(|| self.collision_reach(actor));
+                let radius = reach.unwrap_or_else(|| self.moved_reach(actor));
                 if self.hash.insert(actor, location, radius) {
                     self.count(Work::HashEntry);
                 }

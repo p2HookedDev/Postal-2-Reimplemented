@@ -1,5 +1,14 @@
+use std::sync::mpsc::TryRecvError;
+
 use p2_math::{Rotator, Vector};
 use super::*;
+mod channel_glide;
+mod hand_off;
+mod sounds;
+mod tick_clock;
+pub(super) use channel_glide::{ChannelFrom, ChannelTime, glided_time};
+pub(super) use sounds::{LoadedSound, loaded_sound, opens};
+pub(super) use tick_clock::{Glide, TickClock};
 
 #[derive(Clone, PartialEq)]
 pub struct ActorFrame {
@@ -59,12 +68,6 @@ pub struct OverlayTitle {
     pub alpha: f32,
 }
 
-pub(super) struct PlayingAmbient {
-    pub(super) sound: ObjectId,
-    pub(super) entity: Entity,
-    pub(super) said: (Vector, f32, f32),
-}
-
 pub struct PlayWorld {
     pub(super) sim: Slot,
     pub(super) worker: Option<Worker>,
@@ -75,6 +78,17 @@ pub struct PlayWorld {
     pub(super) spare: Option<VmFrame>,
     pub(super) actors: FxHashMap<ObjectId, ActorFrame>,
     pub(super) changed: FxHashSet<ObjectId>,
+    /// Per actor still on its way: the place it showed at when the newest tick came and its place at the tick before.
+    /// It is drawn through both to the newest tick's place, so the world moves at the frame rate while ticks are
+    /// slower than frames.
+    pub(super) gliding: FxHashMap<ObjectId, [(Vector, Rotator); 2]>,
+    view_from: Option<[(Vector, Rotator); 2]>,
+    /// Per posed actor and channel: the animation (its address) and the sequence at the tick before the newest, the
+    /// time shown when the newest tick came and that tick's time.
+    pose_from: FxHashMap<ObjectId, Vec<ChannelFrom>>,
+    ragdoll_from: FxHashMap<ObjectId, [Vec<p2_assets::pose::Frame>; 2]>,
+    clock: TickClock,
+    glide: Glide,
     pub(super) attached: FxHashSet<ObjectId>,
     pub(super) canvas_models: FxHashMap<ObjectId, CanvasModel>,
     pub(super) origin: Vec3,
@@ -84,15 +98,43 @@ pub struct PlayWorld {
     pub(crate) wants_forces: bool,
     pub(crate) finished: Vec<ObjectId>,
     pub(crate) movie_status: Vec<MovieStatus>,
-    pub(super) songs: HashMap<i32, Entity>,
-    pub(super) zone_sounds: FxHashMap<(ObjectId, usize), (Entity, f32)>,
-    pub(super) flashbang_until: Option<f32>,
-    pub(super) flashbang_on: bool,
-    pub(super) ambients: FxHashMap<ObjectId, PlayingAmbient>,
-    pub(super) heard_now: FxHashSet<ObjectId>,
-    pub(super) voices: FxHashMap<(ObjectId, u8), Entity>,
-    pub(super) sounds: HashMap<String, Option<LoadedSound>>,
     pub(super) seconds: f32,
+    /// A frame of the game was presented in this update.
+    pub(super) fresh: bool,
+}
+
+/// A move longer than this in one tick is a jump (a teleport, a camera cut), shown at once.
+const GLIDE_REACH: f32 = 600.0;
+
+pub(super) fn glided(from: (Vector, Rotator), to: (Vector, Rotator), t: f32) -> (Vector, Rotator) {
+    let turn = |from: i32, to: i32| from.wrapping_add((shortest_turn(from, to) as f32 * t) as i32);
+    let rotation = Rotator { pitch: turn(from.1.pitch, to.1.pitch), yaw: turn(from.1.yaw, to.1.yaw), roll: turn(from.1.roll, to.1.roll) };
+    (from.0.lerp(to.0, t), rotation)
+}
+
+fn channels(pose: &ActorPose) -> impl Iterator<Item = &ChannelPose> {
+    std::iter::once(&pose.base).chain(pose.blends.iter().map(|(channel, ..)| channel))
+}
+
+/// Each axis keeps its length (a scaled mesh's bones are not unit) while it turns.
+pub(super) fn glided_bones(from: &[p2_assets::pose::Frame], to: &[p2_assets::pose::Frame], t: f32) -> Vec<p2_assets::pose::Frame> {
+    if from.len() != to.len() {
+        return to.to_vec();
+    }
+    let mix = |a: [f32; 3], b: [f32; 3]| [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t);
+    let length = |v: [f32; 3]| v.iter().map(|c| c * c).sum::<f32>().sqrt();
+    let turned = |a: [f32; 3], b: [f32; 3]| {
+        let between = mix(a, b);
+        let (wanted, has) = (length(a) + (length(b) - length(a)) * t, length(between));
+        if has > 0.0 { between.map(|c| c * wanted / has) } else { b }
+    };
+    from.iter().zip(to).map(|(a, b)| p2_assets::pose::Frame { axes: [0, 1, 2].map(|i| turned(a.axes[i], b.axes[i])), origin: mix(a.origin, b.origin) }).collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum VmWait {
+    Look,
+    UntilBack,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,6 +183,10 @@ impl PlayWorld {
             sequences: FxHashMap::default(),
             emitter_values: Default::default(),
             sent: FxHashMap::default(),
+            mark: 0,
+            time_dilation: 0,
+            reads: [0; 3],
+            reads_by_class: FxHashMap::default(),
             lower_names: FxHashMap::default(),
             settings_sent: false,
             zone_actors,
@@ -152,7 +198,12 @@ impl PlayWorld {
             sound_paths: FxHashSet::default(),
             work_since: None,
             work_second: Default::default(),
+            census_at: None,
             hud_drawn: Vec::new(),
+            hud_kept: Arc::default(),
+            hud_view: None,
+            hud_canvas: [0.0; 2],
+            hud_age: 0.0,
             hud_looks: FxHashMap::default(),
             unmeshed: Default::default(),
             emitterless: Default::default(),
@@ -168,6 +219,12 @@ impl PlayWorld {
             spare: None,
             actors: FxHashMap::default(),
             changed: FxHashSet::default(),
+            gliding: FxHashMap::default(),
+            view_from: None,
+            pose_from: FxHashMap::default(),
+            ragdoll_from: FxHashMap::default(),
+            clock: TickClock::default(),
+            glide: Glide { to_mid: 1.0, to_newest: 1.0 },
             attached: FxHashSet::default(),
             canvas_models: FxHashMap::default(),
             origin: -center,
@@ -177,31 +234,35 @@ impl PlayWorld {
             movie_status: Vec::new(),
             visible: FxHashSet::default(),
             watched: FxHashSet::default(),
-            songs: HashMap::new(),
-            ambients: FxHashMap::default(),
-            heard_now: FxHashSet::default(),
-            zone_sounds: FxHashMap::default(),
-            flashbang_until: None,
-            flashbang_on: false,
-            voices: FxHashMap::default(),
-            sounds: HashMap::new(),
             seconds: 0.0,
+            fresh: false,
         }
     }
 
-    pub(super) fn wait(&mut self) {
+    /// Whether the VM is back from its job. A frame only looks: while the job runs the host draws frames of its own.
+    pub(super) fn wait(&mut self, wait: VmWait) -> bool {
         if !matches!(self.sim, Slot::Away) {
-            return;
+            return true;
         }
-        match self.worker.as_ref().and_then(|worker| worker.done.lock().ok().map(|done| done.recv())) {
-            Some(Ok((sim, frame))) => {
+        let received = match self.worker.as_ref().and_then(|worker| worker.done.lock().ok()) {
+            None => Err(TryRecvError::Disconnected),
+            Some(done) => match wait {
+                VmWait::UntilBack => done.recv().map_err(|_| TryRecvError::Disconnected),
+                VmWait::Look => done.try_recv(),
+            },
+        };
+        match received {
+            Ok((sim, frame)) => {
                 self.sim = Slot::Here(sim);
                 self.ready = Some(frame);
+                true
             }
-            _ => {
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
                 bevy::log::error!("the VM's thread died; the world stops");
                 self.sim = Slot::Lost;
                 self.worker = None;
+                true
             }
         }
     }
@@ -232,6 +293,20 @@ impl PlayWorld {
     pub(super) fn present(&mut self) -> bool {
         self.changed.clear();
         let Some(mut frame) = self.ready.take() else { return false };
+        let (glide, actors) = (self.glide, &self.actors);
+        self.gliding.retain(|actor, [from, mid]| {
+            let on_its_way = actors.get(actor).filter(|_| glide.to_newest < 1.0);
+            on_its_way.is_some_and(|to| {
+                let to = (to.location, to.rotation);
+                *from = glide.pick(*from, *mid, to, glided);
+                *mid = to;
+                *from != to
+            })
+        });
+        let shown = self.frame.view.map(|view| (self.shown_view((view.location, view.rotation)), (view.location, view.rotation)));
+        self.view_from = shown.zip(frame.view).filter(|((_, mid), to)| (to.location - mid.0).size() <= GLIDE_REACH).map(|((from, mid), _)| [from, mid]);
+        self.clock.tick(frame.step);
+        self.glide = self.clock.glide();
         let mut old = std::mem::take(&mut self.frame);
         if frame.travel.is_none() {
             frame.travel = old.travel.take();
@@ -259,6 +334,13 @@ impl PlayWorld {
         }
         for (actor, now) in frame.actor_changes.drain(..) {
             self.changed.insert(actor);
+            if let Some(before) = self.actors.get(&actor) {
+                if now.gone || (now.location - before.location).size() > GLIDE_REACH {
+                    self.gliding.remove(&actor);
+                } else if (before.location, before.rotation) != (now.location, now.rotation) {
+                    self.gliding.entry(actor).or_insert([(before.location, before.rotation); 2]);
+                }
+            }
             if now.attachment.is_some() {
                 self.attached.insert(actor);
             } else {
@@ -266,6 +348,28 @@ impl PlayWorld {
             }
             self.actors.insert(actor, now);
         }
+        let before = std::mem::take(&mut self.pose_from);
+        self.pose_from = old
+            .poses
+            .iter()
+            .filter_map(|(&actor, pose)| {
+                let pose = pose.as_ref()?;
+                frame.poses.get(&actor)?.as_ref()?;
+                let from = before.get(&actor);
+                let shown = channels(pose).enumerate().map(|(index, channel)| ChannelFrom::new(from.and_then(|from| from.get(index)), ChannelTime::of(channel), glide));
+                Some((actor, shown.collect()))
+            })
+            .collect();
+        let before = std::mem::take(&mut self.ragdoll_from);
+        self.ragdoll_from = old
+            .ragdolls
+            .iter()
+            .filter(|(actor, bones)| frame.ragdolls.get(*actor).is_some_and(|now| now.len() == bones.len()))
+            .map(|(&actor, bones)| {
+                let shown = before.get(&actor).map_or_else(|| bones.clone(), |[from, mid]| glide.pick(&from[..], &mid[..], &bones[..], glided_bones));
+                (actor, [shown, bones.clone()])
+            })
+            .collect();
         self.canvas_models.extend(frame.canvas_models.drain(..));
         self.spare = Some(old);
         self.frame = frame;
@@ -278,7 +382,7 @@ impl PlayWorld {
     }
 
     pub(super) fn sim_mut(&mut self) -> Option<&mut Simulation> {
-        self.wait();
+        self.wait(VmWait::UntilBack);
         match &mut self.sim {
             Slot::Here(sim) => Some(sim),
             Slot::Away | Slot::Lost => None,
@@ -301,6 +405,23 @@ impl PlayWorld {
         self.changed.contains(&actor)
     }
 
+    pub(super) fn set_glide(&mut self, real_delta: f32) {
+        self.glide = self.clock.frame(real_delta);
+    }
+
+    pub fn glides(&self, actor: ObjectId) -> bool {
+        self.gliding.contains_key(&actor)
+    }
+
+    pub fn shown_place(&self, actor: ObjectId, now: &ActorFrame) -> (Vector, Rotator) {
+        let to = (now.location, now.rotation);
+        self.gliding.get(&actor).map_or(to, |&[from, mid]| self.glide.pick(from, mid, to, glided))
+    }
+
+    pub(super) fn shown_view(&self, to: (Vector, Rotator)) -> (Vector, Rotator) {
+        self.view_from.map_or(to, |[from, mid]| self.glide.pick(from, mid, to, glided))
+    }
+
     pub fn attached(&self, actor: ObjectId) -> bool {
         self.attached.contains(&actor)
     }
@@ -310,8 +431,16 @@ impl PlayWorld {
         self.frame.poses.get(&actor).map(Option::as_ref)
     }
 
-    pub fn ragdoll(&self, actor: ObjectId) -> Option<&[p2_assets::pose::Frame]> {
-        self.frame.ragdolls.get(&actor).map(Vec::as_slice)
+    pub fn shown_ragdoll(&self, actor: ObjectId) -> Option<std::borrow::Cow<'_, [p2_assets::pose::Frame]>> {
+        let to = self.frame.ragdolls.get(&actor)?;
+        let from = self.ragdoll_from.get(&actor).filter(|_| self.glide.to_newest < 1.0);
+        Some(from.map_or(to.into(), |[from, mid]| self.glide.pick(&from[..], &mid[..], &to[..], glided_bones).into()))
+    }
+
+    /// The time to show channel `index` of the actor's pose at: on its way from the last tick's while both play the
+    /// same sequence forward, across a loop's wrap too.
+    pub fn shown_time(&self, actor: ObjectId, index: usize, channel: &ChannelPose) -> f32 {
+        glided_time(self.pose_from.get(&actor).and_then(|from| from.get(index)), ChannelTime::of(channel), self.glide)
     }
 
     pub fn canvas_mesh(&self, actor: ObjectId) -> Option<&CanvasMesh> {
@@ -335,194 +464,6 @@ impl PlayWorld {
     pub fn origin(&self) -> Vec3 {
         self.origin
     }
-
-    pub fn take_spawned(&mut self) -> Vec<Spawned> {
-        std::mem::take(&mut self.frame.spawned)
-    }
-
-    pub fn is_gone(&self, actor: ObjectId) -> bool {
-        self.actor(actor).is_some_and(|a| a.gone)
-    }
-
-    pub fn watch(&mut self, actor: ObjectId) {
-        self.watched.insert(actor);
-    }
-
-    pub fn unwatch(&mut self, actor: ObjectId) {
-        self.watched.remove(&actor);
-    }
-
-    pub fn watched(&self) -> impl Iterator<Item = ObjectId> + '_ {
-        self.watched.iter().copied()
-    }
-
-    pub fn dynamic_lights(&self) -> &[p2_render_cpu::MeshLight] {
-        &self.frame.dynamic_lights
-    }
-
-    pub fn actor_forces(&self) -> &[ActorForce] {
-        &self.frame.forces
-    }
-
-    pub fn take_particle_commands(&mut self) -> Vec<ParticleCommand<EmitterProperties>> {
-        std::mem::take(&mut self.frame.particles)
-    }
-
-    pub fn step(&self) -> f32 {
-        self.frame.step
-    }
-
-    pub fn take_plings(&mut self) -> Vec<p2_vm::FluidPling> {
-        std::mem::take(&mut self.frame.plings)
-    }
-
-    pub fn fluid_touchers(&self, surface: ObjectId) -> &[p2_particles::FluidToucher] {
-        self.frame.fluid_touchers.iter().find(|(s, _)| *s == surface).map_or(&[][..], |(_, touchers)| touchers.as_slice())
-    }
-
-    pub fn corona_blocked(&self, light: ObjectId) -> bool {
-        self.frame.corona_blocked.binary_search(&light).is_ok()
-    }
-
-    pub fn take_material_switches(&mut self) -> Vec<(String, Option<String>)> {
-        std::mem::take(&mut self.frame.material_switches)
-    }
-
-    pub fn take_emitter_changes(&mut self) -> Vec<(ObjectId, EmitterProperties)> {
-        std::mem::take(&mut self.frame.emitter_changes)
-    }
-
-    pub fn screen_overlay(&self) -> Option<Overlay> {
-        self.frame.overlay.clone()
-    }
-
-    pub fn take_set_mouse(&mut self) -> Option<[f32; 2]> {
-        self.frame.set_mouse.take()
-    }
-
-    pub fn wants_quit(&self) -> bool {
-        self.frame.quit
-    }
-
-    pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<crate::actors::ZoneFog>>> {
-        self.frame.zone_fogs.take()
-    }
-
-    pub fn take_display(&mut self) -> (Option<p2_vm::WindowRequest>, Option<crate::display::Settings>) {
-        (self.frame.window.take(), self.frame.settings.take())
-    }
-
-    pub fn shows_mouse(&self) -> bool {
-        self.frame.shows_mouse
-    }
-
-    /// In seconds, once: later calls return 0 until the next frame (egui may run a frame's UI pass twice, which must not
-    /// advance what follows the game twice).
-    pub fn take_step(&mut self) -> f32 {
-        std::mem::take(&mut self.frame.step)
-    }
-
-    pub fn take_projections(&mut self) -> Vec<(ProjectorEvent, Option<ProjectorActor>)> {
-        std::mem::take(&mut self.frame.projections)
-    }
-
-    pub fn take_projector_actors(&mut self) -> Option<FxHashSet<ObjectId>> {
-        self.frame.projector_actors.take()
-    }
-
-    pub fn take_travel(&mut self) -> Option<String> {
-        self.frame.travel.take()
-    }
-
-    pub fn presented(&self) -> bool {
-        self.presented
-    }
-
-    pub fn hud_items(&self) -> Arc<[CanvasItem]> {
-        Arc::clone(&self.frame.hud)
-    }
-
-    pub fn movies(&self) -> &[(String, ObjectId, p2_vm::MovieState)] {
-        &self.frame.movies
-    }
-
-    pub fn game_paused(&self) -> bool {
-        self.frame.paused
-    }
-
-    pub fn hud(&mut self, width: f32, height: f32) -> Vec<CanvasItem> {
-        self.sim_mut().map(|sim| sim.hud([width, height])).unwrap_or_default()
-    }
-
-    pub fn summary(&self) -> String {
-        format!("Playing: {:.0} s", self.seconds)
-    }
-
-    pub(super) fn add_sound_file(&mut self, path: String, file: Option<p2_assets::Sound>, sources: &mut Assets<AudioSource>) {
-        if file.is_none() {
-            bevy::log::warn!("sound {path}: not found in a loaded package or its package file");
-        }
-        let loaded = file.and_then(|sound| loaded_sound(&path, sound, sources));
-        self.sounds.entry(path).or_insert(loaded);
-    }
-
-    pub(super) fn sound(&self, path: &str) -> Option<LoadedSound> {
-        self.sounds.get(path).cloned().flatten()
-    }
-
-    pub(super) fn scene_position(&self, location: Vector) -> Vec3 {
-        Vec3::from(to_bevy(location)) + self.origin
-    }
-
-    pub(super) fn flashbang_playing(&self) -> bool {
-        self.flashbang_until.is_some_and(|until| self.seconds < until)
-    }
-}
-
-/// `None` (warned once, the result kept per path) when Bevy's decoder cannot open its file: `AudioSource::decoder`
-/// unwraps the decoder, so such a sound would panic the frame it plays.
-fn loaded_sound(path: &str, sound: p2_assets::Sound, sources: &mut Assets<AudioSource>) -> Option<LoadedSound> {
-    let (duration, looping) = (sound.duration().unwrap_or(0.0), sound.loops());
-    let bytes: Arc<[u8]> = sound.data.into();
-    if !opens(&bytes) {
-        bevy::log::warn!("sound {path}: {} file the audio decoder cannot open; not played", sound.file_type);
-        return None;
-    }
-    Some(LoadedSound { source: sources.add(AudioSource { bytes }), duration, looping })
-}
-
-pub(super) fn opens(bytes: &Arc<[u8]>) -> bool {
-    decodable(bytes) && rodio::Decoder::builder().with_byte_len(bytes.len() as u64).with_data(std::io::Cursor::new(Arc::clone(bytes))).build().is_ok()
-}
-
-/// Whether rodio (`hound` for WAV, `lewton` for Ogg Vorbis) opens `data` without panicking: an Ogg stream, or a RIFF WAVE
-/// whose `fmt ` chunk (before its `data` chunk) has format PCM (1), IEEE float (3) or extensible (0xFFFE), at least one
-/// channel and a sample rate. Others fail `hound::WavReader::new`; no channels or rate fail `WavDecoder::new`'s asserts.
-fn decodable(data: &[u8]) -> bool {
-    if data.starts_with(b"OggS") {
-        return true;
-    }
-    let mut format_ok = false;
-    for (id, body) in p2_assets::riff_chunks(data) {
-        match &id {
-            b"fmt " => {
-                let Some(fmt) = data.get(body.start..body.start + 8) else { return false };
-                let (tag, channels) = (u16::from_le_bytes([fmt[0], fmt[1]]), u16::from_le_bytes([fmt[2], fmt[3]]));
-                let rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
-                format_ok = matches!(tag, 1 | 3 | 0xFFFE) && channels > 0 && rate > 0;
-            }
-            b"data" => return format_ok,
-            _ => {}
-        }
-    }
-    false
-}
-
-#[derive(Clone)]
-pub(super) struct LoadedSound {
-    pub(super) source: Handle<AudioSource>,
-    pub(super) duration: f32,
-    pub(super) looping: bool,
 }
 
 pub struct PlayedAnimation {
@@ -549,41 +490,4 @@ pub struct ChannelPose {
     pub sequence: usize,
     pub time: f32,
     pub tween: Option<(Arc<[p2_assets::pose::LocalBone]>, f32)>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{decodable, opens};
-
-    fn wav(tag: u16, channels: u16, rate: u32) -> Vec<u8> {
-        let mut body = b"WAVEfmt ".to_vec();
-        body.extend(16u32.to_le_bytes());
-        body.extend(tag.to_le_bytes());
-        body.extend(channels.to_le_bytes());
-        body.extend(rate.to_le_bytes());
-        body.extend([0; 8]);
-        body.extend(b"data");
-        body.extend(0u32.to_le_bytes());
-        let mut file = b"RIFF".to_vec();
-        file.extend((body.len() as u32).to_le_bytes());
-        file.extend(body);
-        file
-    }
-
-    #[test]
-    fn only_files_the_decoder_opens_are_decodable() {
-        assert!(decodable(&wav(1, 1, 22050)));
-        assert!(decodable(&wav(3, 2, 44100)));
-        assert!(decodable(b"OggS and the rest of the stream"));
-        assert!(!decodable(&wav(0x11, 1, 22050)));
-        assert!(!decodable(&wav(0x55, 1, 22050)));
-        assert!(!decodable(&wav(1, 0, 22050)));
-        assert!(!decodable(&wav(1, 1, 0)));
-        assert!(!decodable(b"ID3 an mp3 file"));
-    }
-
-    #[test]
-    fn a_broken_song_does_not_open() {
-        assert!(!opens(&std::sync::Arc::from(&b"OggS and the rest of the stream"[..])));
-    }
 }

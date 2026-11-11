@@ -10,7 +10,7 @@ import package::p2_engine::dynamic_light::dynamic_light;
 import package::p2_engine::projector::{actor_target, cluster_ranges, project};
 import package::p2_engine::color::to_linear;
 import package::p2_engine::modern::{actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, sun_visibility, to_eye};
-import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
+import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 @if(BINDLESS)
 import package::p2_engine::layer_bindings::indices;
 
@@ -107,7 +107,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     light += dynamic_light(in.world_position, normal, ranges);
     // The driver clamps the lit colour to 1; the texture stage doubles it in display space: as a linear factor.
     let factor = to_linear(2.0 * clamp(light, vec3(0.0), vec3(1.0)));
-    let lit = base.rgb * factor + 2.0 * shine;
+    var lit = base.rgb * factor + 2.0 * shine;
+    if (*shading).layers.blend.x != 0.0 {
+        lit = lit_color((*shading).layers, base.rgb, factor);
+    }
     let layered = apply_layers(in, vec4(lit, base.a), base_alpha, pbr_input, (*shading).layers);
     out.color = post_lighting(pbr_input, project(pbr_input, ranges, base.rgb, layered, actor_target(in.instance_index)));
     return out;

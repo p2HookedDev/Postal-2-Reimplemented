@@ -32,6 +32,7 @@ pub(crate) fn probe_bit(name: &str) -> Option<u32> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[expect(clippy::enum_variant_names, reason = "a variant is spelled as the script event it sends, and one of those is TriggerEvent")]
 pub(crate) enum Event {
     Tick,
     Timer,
@@ -69,15 +70,74 @@ pub(crate) enum Event {
     TakeDamage,
     KImpact,
     Notify,
+    Reset,
+    DetachFromBone,
+    GiveMomentum,
+    SuggestMovePreparation,
+    SetWalking,
+    LongFall,
+    HitPathGoal,
+    InitInputSystem,
+    TravelPreAccept,
+    AcceptInventory,
+    TravelPostAccept,
+    InitGame,
+    ComeOutOfStasis,
+    SceneStarted,
+    SceneEnded,
+    TriggerEvent,
+    AddCameraEffect,
+    RemoveCameraEffect,
+    PlayDying,
+    PlayLandingAnimation,
+    PlayJump,
+    PlayFalling,
+    CallSubtitle,
+    Initialized,
+    FellOutOfWorld,
+    KExcessiveJointError,
+    StartCrouch,
+    EndCrouch,
+    PostLoadGame,
+    PreClientTravel,
+    ActorLeaving,
+    ZoneChange,
+    ActorEntered,
+    ActorLeavingVolume,
+    PhysicsVolumeChange,
+    ActorEnteredVolume,
+    PawnLeavingVolume,
+    NotifyPhysicsVolumeChange,
+    PawnEnteredVolume,
+    NotifyHeadVolumeChange,
+    HeadVolumeChange,
+    SeePlayer,
+    SeeMonster,
+    Spawned,
+    PreBeginPlay,
+    BeginPlay,
+    PostBeginPlay,
+    SetInitialState,
+    PostNetBeginPlay,
+    PreSaveGame,
+    PostSaveGame,
 }
 
 /// Script spellings of [`Event`], in the same order as its variants.
-pub(crate) const EVENT_NAMES: [&str; 36] = [
+pub(crate) const EVENT_NAMES: [&str; 87] = [
     "Tick", "Timer", "PlayerTick", "Touch", "UnTouch", "Bump", "HitWall", "Landed", "Falling", "BeginState", "EndState",
     "BaseChange", "Attach", "Detach", "AnimEnd", "EndedRotation", "EncroachingOn", "EncroachedBy", "UpdateEyeHeight",
     "MayFall", "NotifyBump", "NotifyLanded", "NotifyHitWall", "Destroyed", "GainedChild", "LostChild", "HearNoise",
     "EnemyNotVisible", "BreathTimer", "ChangeAnimation", "PostRender", "KeyFrameReached", "PhysicsChangedFor", "TakeDamage",
-    "KImpact", "Notify",
+    "KImpact", "Notify", "Reset", "DetachFromBone", "GiveMomentum", "SuggestMovePreparation", "SetWalking", "LongFall",
+    "HitPathGoal", "InitInputSystem", "TravelPreAccept", "AcceptInventory", "TravelPostAccept", "InitGame",
+    "ComeOutOfStasis", "SceneStarted", "SceneEnded", "TriggerEvent", "AddCameraEffect", "RemoveCameraEffect", "PlayDying",
+    "PlayLandingAnimation", "PlayJump", "PlayFalling", "CallSubtitle", "Initialized", "FellOutOfWorld",
+    "KExcessiveJointError", "StartCrouch", "EndCrouch", "PostLoadGame", "PreClientTravel", "ActorLeaving", "ZoneChange",
+    "ActorEntered", "ActorLeavingVolume", "PhysicsVolumeChange", "ActorEnteredVolume", "PawnLeavingVolume",
+    "NotifyPhysicsVolumeChange", "PawnEnteredVolume", "NotifyHeadVolumeChange", "HeadVolumeChange", "SeePlayer",
+    "SeeMonster", "Spawned", "PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState", "PostNetBeginPlay",
+    "PreSaveGame", "PostSaveGame",
 ];
 
 /// An event's name and probe bit: from its script spelling, or interned once for a fixed engine event.
@@ -123,6 +183,10 @@ pub(crate) struct States {
     pub in_end_state: FxHashSet<ObjectId>,
     pub changed: FxHashSet<ObjectId>,
     generations: u32,
+    /// By object index: the store's stamp, plus one, when the actor was last found resting; 0 when it was not, or
+    /// when its state, probes or animation were touched since. With no write to its memory since that stamp either,
+    /// it still rests.
+    rested: Vec<u64>,
 }
 
 impl States {
@@ -131,10 +195,35 @@ impl States {
     }
 
     pub(crate) fn of_mut(&mut self, object: ObjectId) -> Option<&mut ObjectState> {
+        self.stir(object);
         self.objects.get_mut(object.0 as usize)?.as_mut()
     }
 
+    /// Something a resting actor's rest depends on, outside its memory, may have changed.
+    pub(crate) fn stir(&mut self, object: ObjectId) {
+        if let Some(rested) = self.rested.get_mut(object.0 as usize) {
+            *rested = 0;
+        }
+    }
+
+    /// The stamp the actor was found resting at, if nothing stirred it since.
+    pub(crate) fn rested_at(&self, object: ObjectId) -> Option<u64> {
+        self.rested.get(object.0 as usize)?.checked_sub(1)
+    }
+
+    pub(crate) fn set_rested(&mut self, object: ObjectId, at: Option<u64>) {
+        let index = object.0 as usize;
+        if self.rested.len() <= index {
+            if at.is_none() {
+                return;
+            }
+            self.rested.resize(index + 1, 0);
+        }
+        self.rested[index] = at.map_or(0, |at| at + 1);
+    }
+
     pub(crate) fn enter(&mut self, object: ObjectId, entry: ObjectState) {
+        self.stir(object);
         let index = object.0 as usize;
         if self.keys.len() <= index {
             self.keys.resize(index + 1, 0);
@@ -147,6 +236,7 @@ impl States {
     }
 
     pub(crate) fn leave(&mut self, object: ObjectId) {
+        self.stir(object);
         if let Some(key) = self.keys.get_mut(object.0 as usize) {
             *key = 0;
         }
@@ -291,6 +381,7 @@ impl<L: LoaderRef> Vm<L> {
             None => self.script.states.leave(object),
         }
         self.script.states.probes_disabled.remove(&object);
+        self.script.states.stir(object);
         if changed && target.is_some() {
             self.event(object, Event::BeginState, Vec::new())?;
         }
@@ -488,5 +579,63 @@ impl<L: LoaderRef> Vm<L> {
         let found = self.loader.loaded_export(package, parent);
         self.script.lookups.super_states.insert((package, export), found);
         Ok(found)
+    }
+}
+
+#[cfg(test)]
+mod rest_tests {
+    use super::*;
+
+    #[test]
+    fn a_stirred_actor_is_no_longer_known_to_rest() {
+        let mut states = States::default();
+        let actor = ObjectId(7);
+        assert_eq!(states.rested_at(actor), None);
+        states.set_rested(actor, None);
+        assert_eq!(states.rested_at(actor), None);
+        states.set_rested(actor, Some(0));
+        assert_eq!(states.rested_at(actor), Some(0));
+        states.set_rested(actor, Some(12));
+        assert_eq!(states.rested_at(actor), Some(12));
+        assert!(states.of_mut(actor).is_none());
+        assert_eq!(states.rested_at(actor), None);
+        states.set_rested(actor, Some(12));
+        states.leave(actor);
+        assert_eq!(states.rested_at(actor), None);
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::Event::*;
+    use super::{EVENT_NAMES, PROBE_NAMES, probe_bit};
+
+    #[test]
+    fn each_event_name_is_its_variant_and_keeps_its_probe_bit() {
+        let all = [
+            Tick, Timer, PlayerTick, Touch, UnTouch, Bump, HitWall, Landed, Falling, BeginState, EndState, BaseChange,
+            Attach, Detach, AnimEnd, EndedRotation, EncroachingOn, EncroachedBy, UpdateEyeHeight, MayFall, NotifyBump,
+            NotifyLanded, NotifyHitWall, Destroyed, GainedChild, LostChild, HearNoise, EnemyNotVisible, BreathTimer,
+            ChangeAnimation, PostRender, KeyFrameReached, PhysicsChangedFor, TakeDamage, KImpact, Notify, Reset,
+            DetachFromBone, GiveMomentum, SuggestMovePreparation, SetWalking, LongFall, HitPathGoal, InitInputSystem,
+            TravelPreAccept, AcceptInventory, TravelPostAccept, InitGame, ComeOutOfStasis, SceneStarted, SceneEnded,
+            TriggerEvent, AddCameraEffect, RemoveCameraEffect, PlayDying, PlayLandingAnimation, PlayJump, PlayFalling,
+            CallSubtitle, Initialized, FellOutOfWorld, KExcessiveJointError, StartCrouch, EndCrouch, PostLoadGame,
+            PreClientTravel, ActorLeaving, ZoneChange, ActorEntered, ActorLeavingVolume, PhysicsVolumeChange,
+            ActorEnteredVolume, PawnLeavingVolume, NotifyPhysicsVolumeChange, PawnEnteredVolume, NotifyHeadVolumeChange,
+            HeadVolumeChange, SeePlayer, SeeMonster, Spawned, PreBeginPlay, BeginPlay, PostBeginPlay, SetInitialState,
+            PostNetBeginPlay, PreSaveGame, PostSaveGame,
+        ];
+        assert_eq!(all.len(), EVENT_NAMES.len());
+        for (index, event) in all.into_iter().enumerate() {
+            let name = EVENT_NAMES[index];
+            assert_eq!(event as usize, index);
+            assert_eq!(format!("{event:?}"), name);
+            let exact = PROBE_NAMES.iter().position(|&probe| probe == name).map(|bit| bit as u32);
+            assert_eq!(probe_bit(name), exact, "{name}");
+        }
+        assert_eq!(probe_bit(EVENT_NAMES[Touch as usize]), Some(13));
+        assert_eq!(probe_bit(EVENT_NAMES[PhysicsVolumeChange as usize]), Some(12));
+        assert_eq!(probe_bit(EVENT_NAMES[NotifyHeadVolumeChange as usize]), Some(51));
     }
 }

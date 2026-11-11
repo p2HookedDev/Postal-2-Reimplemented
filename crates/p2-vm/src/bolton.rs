@@ -131,8 +131,8 @@ impl<L: LoaderRef> Vm<L> {
             if self.draw_type_of(part) != Some(EDrawType::StaticMesh) || self.store.object_of(part, Prop::StaticMesh).is_none() {
                 continue;
             }
-            self.event(head, "DetachFromBone", [Value::Object(Some(part))])?;
-            self.event(part, "GiveMomentum", [Value::Vector(velocity)])?;
+            self.event(head, crate::states::Event::DetachFromBone, [Value::Object(Some(part))])?;
+            self.event(part, crate::states::Event::GiveMomentum, [Value::Vector(velocity)])?;
             self.store.set(part, Prop::LifeSpan, Value::Float(life));
             slot[part_member] = Value::Object(None);
             self.store.set_element(pawn, "boltons", i, Value::Struct(slot));
@@ -186,7 +186,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let damage = args.first().map_or(0.0, crate::interp::float);
         let Some(velocity) = struck_velocity(damage, crate::natives::vec3(args.get(3))) else { return Ok(()) };
-        self.event(part, "GiveMomentum", [Value::Vector(velocity)])
+        self.event(part, crate::states::Event::GiveMomentum, [Value::Vector(velocity)])
     }
 
     pub(crate) fn age_young_boltons(&mut self, delta: f32) {

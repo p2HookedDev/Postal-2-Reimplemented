@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use p2_package::PackageId;
 use p2_script::read_properties;
+use crate::object::Stamp;
 use crate::{ClassId, Error, LoaderRef, Object, ObjectId, Value, Vm, class_export_index, editor_only, interp, memory};
 
 impl<L: LoaderRef> Vm<L> {
@@ -46,13 +47,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
             },
         };
-        let object = Object {
-            name: self.intern(&name),
-            class_name: self.store.class(class).name,
-            path: format!("Transient.{name}"),
-            class: Some(class),
-            mem: self.store.class(class).defaults.clone(),
-        };
+        let object = Object::new(self.intern(&name), self.store.class(class).name, format!("Transient.{name}"), Some(class), self.store.class(class).defaults.clone());
         let id = ObjectId(self.store.objects.len() as u32);
         self.store.objects.push(object);
         self.store.object_ids.insert(key, id);
@@ -65,8 +60,8 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn duplicate_object(&mut self, template: ObjectId) -> ObjectId {
         let Some(class) = self.store.object(template).class else { return template };
         let copy = self.new_object(class, None);
-        let mem = self.store.object(template).mem.clone();
-        self.store.objects[copy.0 as usize].mem = mem;
+        let mem = self.store.object(template).mem().clone();
+        *self.store.objects[copy.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn) = mem;
         self.set_header(copy, class);
         copy
     }
@@ -129,13 +124,7 @@ impl<L: LoaderRef> Vm<L> {
             return id;
         }
         let name = path.rsplit('.').next().unwrap_or(path);
-        let object = Object {
-            name: self.intern(name),
-            class_name: self.intern(class_name),
-            path: path.to_owned(),
-            class: None,
-            mem: memory::Mem::default(),
-        };
+        let object = Object::new(self.intern(name), self.intern(class_name), path.to_owned(), None, memory::Mem::default());
         let id = ObjectId(self.store.objects.len() as u32);
         self.store.objects.push(object);
         self.store.object_ids.insert(key, id);
@@ -186,9 +175,10 @@ impl<L: LoaderRef> Vm<L> {
         let mut r = pkg.export_reader(&loaded.data, entry)?;
         let tags = read_properties(pkg, &mut r, &layout)?;
         self.apply(pkg, package, &layout, self.store.class(class).mem, &mut properties, tags.values);
+        let stamp = self.store.stamp;
         let object = &mut self.store.objects[id.0 as usize];
         object.class = Some(class);
-        object.mem = properties;
+        *object.mem_mut(stamp, Stamp::Drawn) = properties;
         self.set_header(id, class);
         Ok(id)
     }

@@ -368,3 +368,76 @@ fn a_body_with_half_gravity_falls_half_as_far() {
     let drop = |id: BodyId| -world.pose(id).unwrap().0[2];
     assert!((drop(half) / drop(full) - 0.5).abs() < 0.02, "{} {}", drop(full), drop(half));
 }
+
+#[test]
+fn a_pile_goes_to_sleep_when_the_frame_times_vary() {
+    let mut world = World::new(GRAVITY.into());
+    add_room(&mut world);
+    let mut all = Vec::new();
+    for i in 0..5 {
+        all.extend(world.add_ragdoll(&corpse([(i % 3) as f32 * 8.0, (i / 3) as f32 * 8.0, -HALF[2] + 30.0 + i as f32 * 25.0])));
+    }
+    let mut random = Lcg(7);
+    let mut time = 0.0;
+    while time < 15.0 {
+        let frame = 0.010 + random.unit() * 0.002;
+        step(&mut world, &all, frame);
+        time += frame;
+    }
+    let awake = all.iter().filter(|&&b| !world.is_sleeping(b)).count();
+    assert_eq!(awake, 0, "{awake} of {} parts awake", all.len());
+}
+
+fn dropped_corpses(world: &mut World, count: usize) -> Vec<Vec<BodyId>> {
+    add_room(world);
+    (0..count).map(|i| world.add_ragdoll(&corpse([(i % 3) as f32 * 8.0, (i / 3) as f32 * 8.0, -HALF[2] + 30.0 + i as f32 * 25.0]))).collect()
+}
+
+fn asleep(world: &World, corpse: &[BodyId]) -> bool {
+    corpse.iter().all(|&b| world.is_sleeping(b))
+}
+
+#[test]
+fn corpses_of_a_pile_fall_asleep_one_by_one() {
+    let mut world = World::new(GRAVITY.into());
+    let corpses = dropped_corpses(&mut world, 5);
+    let mut some_before_all = false;
+    for _ in 0..1200 {
+        world.step(STEP);
+        let resting = corpses.iter().filter(|corpse| asleep(&world, corpse)).count();
+        some_before_all |= resting > 0 && resting < corpses.len();
+    }
+    assert!(some_before_all, "no corpse slept before the whole pile did");
+    assert!(corpses.iter().all(|corpse| asleep(&world, corpse)));
+}
+
+#[test]
+fn waking_one_part_wakes_the_sleeping_corpses_piled_with_it() {
+    let mut world = World::new(GRAVITY.into());
+    add_room(&mut world);
+    let piled: Vec<Vec<BodyId>> = [0.0, 10.0].iter().map(|&x| world.add_ragdoll(&corpse([x, 0.0, 0.0]))).collect();
+    let apart = world.add_ragdoll(&corpse([200.0, 0.0, 0.0]));
+    for &part in piled.iter().flatten().chain(&apart) {
+        world.sleep(part);
+    }
+    world.wake(piled[0][0]);
+    let asleep_in_pile = piled.iter().flatten().filter(|&&b| world.is_sleeping(b)).count();
+    assert_eq!(asleep_in_pile, 0, "{asleep_in_pile} parts of the pile still sleep");
+    assert!(asleep(&world, &apart), "a corpse away from the pile woke");
+}
+
+#[test]
+fn a_corpse_trembling_in_place_goes_to_rest() {
+    let mut world = World::new(GRAVITY.into());
+    add_room(&mut world);
+    let parts = world.add_ragdoll(&corpse([0.0, 0.0, -HALF[2] + 30.0]));
+    for step in 0..600 {
+        if step >= 60 {
+            let spin = if step % 2 == 0 { 2.0 } else { -2.0 };
+            world.set_spin(parts[0], [0.0, 0.0, spin].into());
+        }
+        world.step(STEP);
+    }
+    let awake = parts.iter().filter(|&&b| !world.is_sleeping(b)).count();
+    assert_eq!(awake, 0, "{awake} of {} parts awake", parts.len());
+}

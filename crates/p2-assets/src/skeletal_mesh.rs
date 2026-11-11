@@ -236,7 +236,7 @@ fn decode_stream(stream: &[u32]) -> Option<(Vec<Wedge>, Vec<Influence>, Vec<u32>
             for _ in 0..(header >> 28) & 7 {
                 influences.push(decode_influence(words.next()?)?);
             }
-            normalize(&mut influences[start..]);
+            normalize_weights(&mut influences[start..]);
             starts.push(u32::try_from(influences.len()).ok()?);
             if header & 0x8000_0000 != 0 {
                 shared.push(point);
@@ -260,7 +260,7 @@ fn decode_influence(word: u32) -> Option<Influence> {
 }
 
 /// Scales weights to sum 1. The engine ignores the weight of a single influence (full weight), which this matches.
-fn normalize(influences: &mut [Influence]) {
+fn normalize_weights(influences: &mut [Influence]) {
     let sum: f32 = influences.iter().map(|i| i.weight).sum();
     let count = influences.len() as f32;
     for influence in influences {

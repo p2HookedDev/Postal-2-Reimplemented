@@ -58,16 +58,17 @@ impl SectionView {
     pub fn textured(mesh: Handle<Mesh>, found: Option<MaterialImages>) -> Self {
         let state = found.as_ref().map(|found| found.state.clone()).unwrap_or_default();
         let alpha_mode = alpha_mode(&state);
+        let layers = Layers::new(
+            found.as_ref().and_then(|found| found.detail.clone()),
+            state.detail.map_or(0.0, |detail| detail.scale),
+            found.as_ref().and_then(|found| found.specular.clone()),
+            state.specular_uv.clone(),
+            state.opacity.is_some() && (state.glow.is_some() || state.specular.is_some()),
+        );
         Self {
             mesh,
             glow: found.as_ref().and_then(|found| found.glow.clone()),
-            layers: Layers::new(
-                found.as_ref().and_then(|found| found.detail.clone()),
-                state.detail.map_or(0.0, |detail| detail.scale),
-                found.as_ref().and_then(|found| found.specular.clone()),
-                state.specular_uv.clone(),
-                state.opacity.is_some() && (state.glow.is_some() || state.specular.is_some()),
-            ),
+            layers: if state.darken { layers.darkening() } else { layers },
             texture: found.map(|found| found.image),
             alpha_mode,
             no_scene_lights: state.unlit,

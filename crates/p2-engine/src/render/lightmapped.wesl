@@ -9,7 +9,7 @@ import bevy_pbr::{
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_BSP};
 import package::p2_engine::dynamic_light::LE_NON_INCIDENCE;
-import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
+import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::modern::{
     base_relief, highlight, is_modern, key_shading, masked_sun_visibility, no_relief, relief_light, static_occlusion, sun_highlight,
@@ -92,7 +92,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let modern = is_modern(layers.detail.z);
     var relief = no_relief(normal);
     var light_map = view.exposure * pbr_input.lightmap_light;
-    var surface = light_map * color.rgb;
+    var surface = lit_color(layers, color.rgb, light_map);
     var eye = vec3(0.0);
     if modern {
         eye = to_eye(pbr_input.world_position.xyz);
@@ -102,7 +102,12 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         relief = base_relief(vertex_output, pbr_input, normal, layers.specular.x, layers.detail.z);
         let key = key_shading(normal, relief, pbr_input.world_position.xyz);
         let sun = sun_highlight(relief, mask, visibility, pbr_input.world_position.xyz, normal);
-        surface = static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy) * light_map * (key.x * color.rgb + key.y) + sun;
+        let shade = static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy) * light_map;
+        if layers.blend.x == 0.0 {
+            surface = shade * (key.x * color.rgb + key.y) + sun;
+        } else {
+            surface = lit_color(layers, color.rgb, shade * key.x);
+        }
     }
     let layered = apply_layers(vertex_output, vec4(surface, color.a), base_alpha, pbr_input, layers);
     var lit = layered.rgb;
@@ -122,8 +127,13 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     }
     if any(passes > vec3(0.0)) {
         let texture = to_display(color.rgb);
-        let display = to_display(lit) + texture * passes + shine;
-        lit = to_linear(min(display, vec3(1.0)));
+        if layers.blend.x == 0.0 {
+            let display = to_display(lit) + texture * passes + shine;
+            lit = to_linear(min(display, vec3(1.0)));
+        } else {
+            // A darken surface stores one minus its colour: light on the colour takes off the stored one.
+            lit = to_linear(max(to_display(lit) - (1.0 - texture) * passes, vec3(0.0)));
+        }
     }
     out.color = post_lighting(pbr_input, project(pbr_input, ranges, color.rgb, vec4(lit, layered.a), TARGET_BSP));
     return out;

@@ -9,7 +9,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
 use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
-use p2_engine::render::actor_light::{ActorLit, ActorLitMaterial, Shading};
+use p2_engine::render::actor_light::{ActorLightCache, ActorLit, ActorLitMaterial, Shading};
 use p2_engine::map::{SceneTargets, Session};
 use p2_engine::mesh_view::{MeshView, SKY_LAYER};
 use p2_engine::play::PlaySystems;
@@ -58,13 +58,13 @@ fn moving_actors_lit_where_they_are() {
             app.update();
         }
         let world = app.world_mut();
-        let mut query = world.query::<(&ActorLit, &Mesh3d, Option<&MeshMaterial3d<ActorLitMaterial>>)>();
-        let lit: Vec<_> = query.iter(world).map(|(lit, mesh, material)| (lit.clone(), mesh.0.clone(), material.map(|m| m.0.clone()))).collect();
+        let mut query = world.query::<(&ActorLit, &ActorLightCache, &Mesh3d, Option<&MeshMaterial3d<ActorLitMaterial>>)>();
+        let lit: Vec<_> = query.iter(world).map(|(lit, cache, mesh, material)| (lit.clone(), lit.is_lit(cache), mesh.0.clone(), material.map(|m| m.0.clone()))).collect();
         let (meshes, materials) = (world.resource::<Assets<Mesh>>(), world.resource::<Assets<ActorLitMaterial>>());
         let (mut vertex, mut tint, mut unlit_yet, mut dark) = (0, 0, 0, 0);
         let mut brightness = Vec::new();
-        for (lit, mesh, material) in &lit {
-            if !lit.is_lit() {
+        for (lit, is_lit, mesh, material) in &lit {
+            if !is_lit {
                 unlit_yet += 1;
                 continue;
             }

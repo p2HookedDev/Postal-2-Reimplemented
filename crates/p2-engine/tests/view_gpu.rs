@@ -122,7 +122,7 @@ mod monday {
     use bevy::math::UVec2;
     use bevy::time::TimeUpdateStrategy;
     use p2_engine::animation::AnimationPlugin;
-    use p2_engine::map::{SceneTargets, Session};
+    use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SceneTargets, Session, SpawnedActors};
     use p2_engine::mesh_view::{MeshView, MeshViewPlugin, SceneView};
     use p2_engine::play::{PlayPlugin, PlaySystems, PlayerInput};
 
@@ -149,6 +149,12 @@ mod monday {
         let mut app = App::new();
         common::headless_renderer(&mut app);
         app.add_plugins((MeshViewPlugin, PlayPlugin, AnimationPlugin))
+        .init_resource::<Fluids>()
+        .init_resource::<MaterialSwitches>()
+        .init_resource::<Projectors>()
+        .init_resource::<Particles>()
+        .init_resource::<SpawnedActors>()
+        .init_resource::<Hud>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
         .insert_resource(Holder { session: Session::new(root), frame: 0 })
         .add_systems(

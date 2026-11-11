@@ -1,8 +1,8 @@
-use p2_assets::{Model, Terrain, poly_flags};
-use p2_collision::{MeshCollision, Sides, line_check, line_check_node, mesh_line_check, terrain_line_check};
+use p2_assets::{Model, Terrain};
+use p2_collision::{MeshCollision, Sides, is_sky, line_check, line_check_node, mesh_line_check, terrain_line_check};
 use p2_math::Vector;
 
-pub const SUN_DISTANCE: f32 = 65536.0;
+pub use p2_render_cpu::SUN_DISTANCE;
 
 const MAX_TREE_DEPTH: usize = 64;
 
@@ -158,10 +158,6 @@ impl<'a> Scene<'a> {
             Some((hit, None)) => Seen::Other { time: hit.time },
         }
     }
-}
-
-pub fn is_sky(model: &Model, node: usize) -> bool {
-    model.nodes.get(node).and_then(|node| model.surfaces.get(node.surface)).is_some_and(|surface| surface.poly_flags & poly_flags::FAKE_BACKDROP != 0)
 }
 
 fn box_entry(start: Vector, end: Vector, min: Vector, max: Vector, limit: f32) -> Option<f32> {

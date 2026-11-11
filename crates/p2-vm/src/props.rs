@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use crate::memory::{Field, Shape};
+use crate::object::Span;
 use crate::{ClassId, NameId, ObjectStore};
 
 macro_rules! properties {
@@ -79,7 +80,25 @@ properties!(
     Texture,
     Actions, StartControlPoint, EndControlPoint, FluidXSize, FluidYSize, FluidGridSpacing, FluidGridType, ProjTexture, FOV, MaxTraceDistance,
     Material,
+    ForcedVisibilityZoneTag, bAcceptsProjectors, AmbientHue, AmbientSaturation, AmbientBrightness, bDistanceFog,
+    DistanceFogColor, DistanceFogStart, DistanceFogEnd, FrameBufferBlendingOp, MaterialBlendingOp, bProjectBSP,
+    bProjectTerrain, bProjectStaticMesh, bProjectActor, bProjectOnUnlit, ProjectTag, bDisturbFluidSurface, SkyZone,
+    bTerrainZone, Brightness, MinCoronaSize, MaxCoronaSize,
+    FluidHeightScale, FluidSpeed, FluidDamping, FluidNoiseFrequency, FluidNoiseStrength, UTiles, UOffset, VTiles, VOffset,
+    AlphaCurveScale, AlphaHeightScale, AlphaMax, RippleVelocityFactor, WarmUpTime, UpdateRate, ClampBitmap, FluidInfo,
+    Frequency, Phase, Strength,
 );
+
+/// Every property the host reads to draw an actor: its frame, its look and a restyle. A write that changes one moves
+/// the object's `drawn` stamp, and in debug builds the host's reads fail on any other property.
+pub(crate) const DRAWN: &[Prop] = &[
+    Prop::Location, Prop::Rotation, Prop::DrawScale, Prop::DrawScale3D, Prop::PrePivot, Prop::Velocity, Prop::Owner,
+    Prop::Controller, Prop::bIsPlayer, Prop::TimeDilation, Prop::bDeleteMe, Prop::bHidden, Prop::bOwnerNoSee,
+    Prop::bOnlyOwnerSee, Prop::Base, Prop::AttachmentBone, Prop::RelativeLocation, Prop::RelativeRotation, Prop::Emitters,
+    Prop::Disabled, Prop::Mesh, Prop::StaticMesh, Prop::Skins, Prop::DrawType, Prop::bUnlit, Prop::AmbientGlow,
+    Prop::MaxLights, Prop::StaticMeshInstance, Prop::bCollideActors, Prop::bBlockActors, Prop::ForcedVisibilityZoneTag,
+    Prop::bStatic, Prop::bAcceptsProjectors, Prop::Texture, Prop::Style,
+];
 
 macro_rules! kinds {
     ($($name:ident),* $(,)?) => {
@@ -102,6 +121,8 @@ pub(crate) struct Resolved {
     slots: Box<[u32]>,
     words: Box<[(u32, Shape)]>,
     kinds: u64,
+    drawn_words: Box<[bool]>,
+    drawn_heaps: Box<[bool]>,
 }
 
 impl Resolved {
@@ -115,12 +136,37 @@ impl Resolved {
             })
             .collect();
         let own = KIND_NAMES.iter().position(|k| k.eq_ignore_ascii_case(name)).map_or(0, |bit| 1 << bit);
-        Self { slots, words, kinds: super_kinds | own }
+        let (drawn_words, drawn_heaps) = drawn_flags(&slots, fields);
+        Self { slots, words, kinds: super_kinds | own, drawn_words, drawn_heaps }
     }
 
     pub(crate) fn kinds(&self) -> u64 {
         self.kinds
     }
+
+    /// Whether a write at `span` may change a property on [`DRAWN`]. Where the answer is unclear (a span past the
+    /// class's memory, an empty one) it is yes: an extra read of the actor, never a missed one.
+    pub(crate) fn drawn(&self, span: Span) -> bool {
+        let flagged = |flags: &[bool], at: u32, len: u32| len > 0 && flags.get(at as usize).is_none_or(|&flag| flag);
+        (span.words == 0 && span.heaps == 0) || flagged(&self.drawn_words, span.word, span.words) || flagged(&self.drawn_heaps, span.heap, span.heaps)
+    }
+}
+
+/// One flag per word and per heap slot of a class's memory, set over every element and member of a [`DRAWN`] property.
+fn drawn_flags(slots: &[u32], fields: &[Field]) -> (Box<[bool]>, Box<[bool]>) {
+    let spans = || fields.iter().map(Span::of);
+    let mut words = vec![false; spans().map(|s| s.word + s.words).max().unwrap_or(0) as usize];
+    let mut heaps = vec![false; spans().map(|s| s.heap + s.heaps).max().unwrap_or(0) as usize];
+    for field in DRAWN.iter().filter_map(|&p| fields.get(slots[p as usize] as usize)) {
+        let span = Span::of(field);
+        if let Some(flags) = words.get_mut(span.word as usize..(span.word + span.words) as usize) {
+            flags.fill(true);
+        }
+        if let Some(flags) = heaps.get_mut(span.heap as usize..(span.heap + span.heaps) as usize) {
+            flags.fill(true);
+        }
+    }
+    (words.into(), heaps.into())
 }
 
 pub trait PropertyName: Copy {
@@ -134,6 +180,11 @@ pub trait PropertyName: Copy {
     #[doc(hidden)]
     fn is_resolved(self) -> bool {
         false
+    }
+
+    #[doc(hidden)]
+    fn prop(self) -> Option<Prop> {
+        None
     }
 
     #[doc(hidden)]
@@ -159,6 +210,10 @@ impl PropertyName for Prop {
 
     fn is_resolved(self) -> bool {
         true
+    }
+
+    fn prop(self) -> Option<Prop> {
+        Some(self)
     }
 
     #[inline]
@@ -239,7 +294,28 @@ impl ClassName for Kind {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ordered, Slot};
+    use super::{Field, Ordered, Resolved, Shape, Slot, Span};
+
+    #[test]
+    fn drawn_flags_cover_each_element_and_the_heap_of_a_drawn_property() {
+        let field = |word, heap, dim, shape, words, heaps| Field { word, heap, dim, shape, words, heaps };
+        let fields = [
+            field(0, 0, 1, Shape::Float, 1, 0),
+            field(1, 0, 3, Shape::Float, 1, 0),
+            field(4, 0, 1, Shape::Str, 0, 1),
+            field(4, 1, 1, Shape::Int, 1, 0),
+        ];
+        let names = ["TimerCounter", "Location", "Skins", "MoveTimer"];
+        let slot_of = |name: &str| names.iter().position(|n| *n == name);
+        let resolved = Resolved::new(slot_of, &fields, "Thing", 0);
+        let scalar = |word, heap| resolved.drawn(Span::place(word, heap, (1, 0), 1));
+        assert!(!scalar(0, 0));
+        assert!(scalar(2, 0));
+        assert!(scalar(3, 0));
+        assert!(!scalar(4, 1));
+        assert!(resolved.drawn(Span::place(4, 0, (0, 1), 1)));
+        assert!(scalar(99, 0));
+    }
 
     fn resolve(name: &str) -> Option<Slot> {
         name.strip_prefix('P').and_then(|i| i.parse().ok()).map(Slot)

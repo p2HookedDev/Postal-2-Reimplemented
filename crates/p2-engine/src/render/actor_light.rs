@@ -16,7 +16,7 @@ use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::{Shader, ShaderRef};
 use p2_math::{Rotator, Vector};
 use p2_assets::{Model, SkeletalMesh, StaticMesh, StaticMeshInstance, uv_matrix};
-use p2_render_cpu::{HardwareKind, HardwareLight, MeshLight, MeshPlacement, actor_ambient, hardware_ambient, relevant_lights, static_mesh_colors};
+use p2_render_cpu::{HardwareKind, HardwareLight, MeshLight, MeshPlacement, Walls, actor_ambient, hardware_ambient, leaf_lights, leaves_ambient, relevant_lights, static_mesh_colors};
 use p2_bevy_assets::{lighting_colors, set_vertex_colors, to_bevy};
 use p2_vm::ObjectId;
 
@@ -64,6 +64,12 @@ pub fn points_sphere(points: &[[f32; 3]]) -> ([f32; 3], f32) {
     (center, (half[0] * half[0] + half[1] * half[1] + half[2] * half[2]).sqrt())
 }
 
+/// Retail walks the actor's own render box; the sphere's bounding cube can touch a few more leaves (unverified).
+fn sphere_leaves(model: &Model, center: Vector, radius: f32) -> Vec<usize> {
+    let reach = Vector::new(radius, radius, radius);
+    p2_collision::box_leaves(model, center - reach, center + reach)
+}
+
 fn placed_sphere((center, radius): (Vector, f32), placement: &MeshPlacement) -> (Vector, f32) {
     let scale = <[f32; 3]>::from(placement.scale).iter().fold(0.0f32, |m, s| m.max(s.abs()));
     (placement.transform_point(center), radius * scale)
@@ -86,32 +92,11 @@ impl LightEnvironment {
         actor_ambient(self.zone_ambients.get(usize::from(zone)).copied().unwrap_or_default(), glow)
     }
 
-    /// Uses the baked list of lights reaching each leaf, shadows considered. Leaves are sampled at the
-    /// centre and half the radius out along each axis, so props set into a wall still find the room's.
-    pub fn hardware_lights(&self, model: &Model, center: Vector, radius: f32, max: usize) -> Vec<HardwareLight> {
-        let reach = radius / 2.0;
-        let along = |axis: usize, side: f32| {
-            let mut point = center;
-            point[axis] += side * reach;
-            point
-        };
-        let samples = [center, along(0, -1.0), along(0, 1.0), along(1, -1.0), along(1, 1.0), along(2, -1.0), along(2, 1.0)];
-        let mut leaves: Vec<usize> = samples.iter().filter_map(|&point| p2_collision::point_leaf(model, point)).collect();
-        leaves.sort_unstable();
-        leaves.dedup();
-        let mut listed: Vec<i32> = Vec::new();
-        for leaf in leaves {
-            let start = usize::try_from(model.leaves[leaf].permeating).ok();
-            let lights = start.and_then(|start| model.lights.get(start..)).unwrap_or_default();
-            let earlier = listed.len();
-            for &light in lights.iter().take_while(|&&light| light != 0) {
-                if !listed[..earlier].contains(&light) {
-                    listed.push(light);
-                }
-            }
-        }
+    /// Uses the baked list of lights reaching each of `leaves`, then with `Walls::Checked` a line check from `center` to each light.
+    pub fn hardware_lights(&self, model: &Model, leaves: &[usize], center: Vector, radius: f32, max: usize, walls: Walls) -> Vec<HardwareLight> {
+        let listed = leaf_lights(model, leaves);
         let candidates = listed.iter().filter_map(|light| self.lights.get(light));
-        relevant_lights(candidates, center, radius, max)
+        relevant_lights(model, candidates, center, radius, max, walls)
             .iter()
             .filter_map(|light| HardwareLight::new(light, self.level_brightness, center, radius))
             .collect()
@@ -121,15 +106,16 @@ impl LightEnvironment {
         let lights: Vec<Option<MeshLight>> =
             instance.map_or_else(Vec::new, |i| i.lights.iter().map(|l| self.lights.get(&l.actor).copied()).collect());
         let (center, radius) = placed_sphere(sphere, &lighting.placement);
-        let hardware = self.hardware_lights(model, center, radius, MAX_HARDWARE_LIGHTS);
+        let hardware = self.hardware_lights(model, &sphere_leaves(model, center, radius), center, radius, MAX_HARDWARE_LIGHTS, Walls::Ignored);
         let ambient = self.ambient(lighting.zone, lighting.glow);
         static_mesh_colors(mesh, instance, &lights, &lighting.placement, self.level_brightness, ambient, &hardware)
     }
 
     pub fn skinned_lighting(&self, model: &Model, center: Vector, radius: f32, glow: u8, max_lights: usize, origin: Vec3) -> SkinnedLighting {
-        let zone = p2_collision::point_zone(model, center);
-        let [r, g, b] = hardware_ambient(self.ambient(zone, glow)).map(|c| c / 255.0);
-        let lights = self.hardware_lights(model, center, radius, max_lights);
+        let leaves = sphere_leaves(model, center, radius);
+        let ambient = actor_ambient(leaves_ambient(model, &leaves, &self.zone_ambients), glow);
+        let [r, g, b] = hardware_ambient(ambient).map(|c| c / 255.0);
+        let lights = self.hardware_lights(model, &leaves, center, radius, max_lights, Walls::Checked);
         let mut out = SkinnedLighting { ambient: Vec3::new(r, g, b), count: lights.len() as u32, lights: [HardwareLightUniform::default(); MAX_HARDWARE_LIGHTS] };
         for (gpu, light) in out.lights.iter_mut().zip(&lights) {
             *gpu = HardwareLightUniform::new(light, origin);
@@ -238,34 +224,60 @@ pub enum Shading {
 }
 
 #[derive(Component, Clone)]
+#[require(ActorFrame, ActorLightCache, ActorLightFade)]
 pub struct ActorLit {
     pub actor: ObjectId,
-    pub glow: u8,
     pub max_lights: usize,
     pub radius: f32,
     pub shading: Shading,
-    lit_at: Option<(Vector, Rotator)>,
-    material: Option<Handle<ActorLitMaterial>>,
+    /// Where its vertex colours were made as the map loaded, when they were.
+    baked: Option<ActorPlace>,
     layers: Layers,
+}
+
+#[derive(Component, Clone, Copy, Default, PartialEq)]
+pub struct ActorFrame {
+    pub place: Option<ActorPlace>,
+    pub base: Option<ObjectId>,
+}
+
+#[derive(Component)]
+pub struct ActorLightCache {
+    lit: Option<ActorPlace>,
+    vertices_lit_at: f32,
+}
+
+impl Default for ActorLightCache {
+    fn default() -> Self {
+        Self { lit: None, vertices_lit_at: f32::MIN }
+    }
+}
+
+#[derive(Component, Default)]
+pub struct ActorLightFade {
+    material: Option<Handle<ActorLitMaterial>>,
     target: Option<SkinnedLighting>,
+    /// The light on its way to `target`. The material gets it only once it differs by a step a display can show:
+    /// every write makes the renderer prepare the material again.
+    shown: Option<SkinnedLighting>,
     settling: bool,
 }
 
 impl ActorLit {
-    pub fn new(actor: ObjectId, glow: u8, max_lights: usize, radius: f32, shading: Shading) -> Self {
-        Self { actor, glow, max_lights, radius, shading, lit_at: None, material: None, layers: Layers::default(), target: None, settling: false }
+    pub fn new(actor: ObjectId, max_lights: usize, radius: f32, shading: Shading) -> Self {
+        Self { actor, max_lights, radius, shading, baked: None, layers: Layers::default() }
     }
 
     pub fn with_layers(self, layers: Layers) -> Self {
         Self { layers, ..self }
     }
 
-    pub fn lit_at(self, location: Vector, rotation: Rotator) -> Self {
-        Self { lit_at: Some((location, rotation)), ..self }
+    pub fn baked_at(self, location: Vector, rotation: Rotator, glow: u8) -> Self {
+        Self { baked: Some(ActorPlace { location, rotation, glow }), ..self }
     }
 
-    pub fn is_lit(&self) -> bool {
-        self.lit_at.is_some()
+    pub fn is_lit(&self, cache: &ActorLightCache) -> bool {
+        cache.lit.or(self.baked).is_some()
     }
 
     pub fn skeletal(actor: ObjectId, mesh: &SkeletalMesh, scale: Vector, light: &ActorLighting) -> Option<Self> {
@@ -274,7 +286,7 @@ impl ActorLit {
         }
         let largest = (0..3).fold(0.0f32, |m, i| m.max((scale[i] * mesh.scale[i]).abs()));
         let radius = points_sphere(&mesh.positions).1 * largest;
-        Some(Self::new(actor, light.glow, usize::from(light.max_lights), radius, Shading::Tint))
+        Some(Self::new(actor, usize::from(light.max_lights), radius, Shading::Tint))
     }
 }
 
@@ -292,6 +304,9 @@ fn moved(old: (Vector, Rotator), new: (Vector, Rotator), rotation_counts: bool) 
 }
 
 const VERTEX_UPDATES_PER_FRAME: usize = 64;
+/// In seconds. A moving actor's vertex light is made again at most this often: each time sends its whole mesh to the
+/// graphics card, and frames come faster than the light on a surface visibly changes.
+const VERTEX_RELIGHT_PERIOD: f32 = 1.0 / 60.0;
 
 /// Retail snaps an actor's light at a zone crossing; ours fades in both looks.
 const LIGHT_SETTLE_SECONDS: f32 = 0.3;
@@ -339,31 +354,27 @@ pub fn blend_lighting(shown: &SkinnedLighting, target: &SkinnedLighting, t: f32)
         }
     }
     let out = SkinnedLighting { ambient: shown.ambient.lerp(target.ambient, t), count: used as u32, lights };
-    let close = |a: Vec4, b: Vec4| (a - b).abs().max_element() <= LIGHT_EPSILON;
-    let reached = out.count == target.count
-        && close(out.ambient.extend(0.0), target.ambient.extend(0.0))
-        && out.lights.iter().zip(&target.lights).all(|(a, b)| {
-            a.kind == b.kind && close(a.position, b.position) && close(a.direction.extend(0.0), b.direction.extend(0.0)) && close(a.color, b.color) && close(a.attenuation, b.attenuation)
-        });
-    if reached { *target } else { out }
+    if looks_the_same(&out, target) { *target } else { out }
 }
 
-#[derive(Debug, Clone, Copy)]
+fn looks_the_same(a: &SkinnedLighting, b: &SkinnedLighting) -> bool {
+    let close = |a: Vec4, b: Vec4| (a - b).abs().max_element() <= LIGHT_EPSILON;
+    a.count == b.count
+        && close(a.ambient.extend(0.0), b.ambient.extend(0.0))
+        && a.lights.iter().zip(&b.lights).all(|(a, b)| {
+            a.kind == b.kind && close(a.position, b.position) && close(a.direction.extend(0.0), b.direction.extend(0.0)) && close(a.color, b.color) && close(a.attenuation, b.attenuation)
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActorPlace {
     pub location: Vector,
     pub rotation: Rotator,
     pub glow: u8,
 }
 
-pub trait ActorFrames: bevy::ecs::prelude::Resource {
-    fn origin(&self) -> Option<Vec3>;
-    fn actor_place(&self, actor: ObjectId) -> Option<ActorPlace>;
-    fn attachment_base(&self, actor: ObjectId) -> Option<ObjectId>;
-}
-
 #[derive(SystemParam)]
-pub(crate) struct ActorLightFrame<'w, F: ActorFrames> {
-    play: Option<Res<'w, F>>,
+pub(crate) struct ActorLightFrame<'w> {
     shown: Res<'w, ShownScene>,
     collision: Res<'w, LevelCollision>,
     time: Res<'w, Time>,
@@ -388,13 +399,16 @@ struct StartingMaterial<'a> {
     vertex_lit: Option<&'a MeshMaterial3d<MeshLitMaterial>>,
 }
 
-pub(crate) fn light_actors<F: ActorFrames>(
+pub(crate) fn light_actors(
     mut commands: Commands,
-    frames: ActorLightFrame<F>,
+    frames: ActorLightFrame,
     mut assets: ActorLightAssets,
     mut models: Query<(
         Entity,
         &mut ActorLit,
+        &mut ActorLightCache,
+        &mut ActorLightFade,
+        &ActorFrame,
         &Mesh3d,
         Option<&MeshMaterial3d<StandardMaterial>>,
         Option<&MeshMaterial3d<MeshLitMaterial>>,
@@ -404,10 +418,10 @@ pub(crate) fn light_actors<F: ActorFrames>(
     canvases: Query<(), With<CanvasDrawn>>,
     mut buffers: Local<LightActorBuffers>,
 ) {
-    let (Some(play), Some(environment)) = (frames.play.as_deref(), frames.shown.lighting.as_deref()) else { return };
-    let (Some(origin), Some(model)) = (play.origin(), frames.collision.model()) else { return };
-    let world = RelightWorld { environment, model, origin };
+    let (Some(environment), Some(model)) = (frames.shown.lighting.as_deref(), frames.collision.model()) else { return };
+    let world = RelightWorld { environment, model, origin: frames.shown.origin };
     let step = settle_step(frames.time.delta_secs(), LIGHT_SETTLE_SECONDS);
+    let now = frames.time.elapsed_secs();
     let LightActorBuffers { colors, hud_bases } = &mut *buffers;
     colors.clear();
     hud_bases.clear();
@@ -415,55 +429,59 @@ pub(crate) fn light_actors<F: ActorFrames>(
         hud_bases.extend(
             models
                 .iter()
-                .filter(|(_, lit, _, _, _, canvas, _)| *canvas && matches!(lit.shading, Shading::Tint))
-                .map(|(_, lit, ..)| (lit.actor, (lit.radius, lit.max_lights))),
+                .filter(|(_, lit, _, _, _, _, _, _, canvas, _)| *canvas && matches!(lit.shading, Shading::Tint))
+                .map(|(_, lit, _, _, own, ..)| (lit.actor, (own.place, (lit.radius, lit.max_lights)))),
         );
     }
     let overlay_layers = RenderLayers::from_layers(&OVERLAY_LAYERS);
-    for (entity, mut lit, mesh, standard, vertex_lit, canvas, layers) in &mut models {
+    for (entity, mut lit, mut cache, mut fade, own, mesh, standard, vertex_lit, canvas, layers) in &mut models {
         let base = (!canvas && layers.is_some_and(|layers| layers.intersects(&overlay_layers)))
-            .then(|| play.attachment_base(lit.actor))
+            .then_some(own.base)
             .flatten()
-            .and_then(|base| hud_bases.get(&base).map(|&sphere| (base, sphere)));
-        let Some(frame) = play.actor_place(base.map_or(lit.actor, |(base, _)| base)) else { continue };
+            .and_then(|base| hud_bases.get(&base).copied());
+        let Some(frame) = base.map_or(own.place, |(place, _)| place) else { continue };
         if let Some((_, sphere)) = base {
-            attach_to_hud_base(&mut lit, mesh, sphere, &mut assets.meshes);
+            attach_to_hud_base(&mut lit, &mut cache, mesh, sphere, &mut assets.meshes);
         }
-        let placed = (frame.location, frame.rotation);
         let vertices = matches!(lit.shading, Shading::Vertices { .. });
-        let still = lit.lit_at.is_some_and(|at| !moved(at, placed, vertices)) && lit.glow == frame.glow && !colors.contains_key(&lit.actor);
-        if still && !lit.settling {
+        let last = cache.lit.or(lit.baked);
+        let unmoved = last.is_some_and(|at| !moved((at.location, at.rotation), (frame.location, frame.rotation), vertices) && at.glow == frame.glow);
+        let still = unmoved && !colors.contains_key(&lit.actor);
+        if still && !fade.settling {
             continue;
         }
         if vertices {
+            if last.is_some() && !colors.contains_key(&lit.actor) && now - cache.vertices_lit_at < VERTEX_RELIGHT_PERIOD {
+                continue;
+            }
+            cache.vertices_lit_at = now;
             if !relight_vertices(&lit, frame, &mesh.0, &world, colors, &mut assets.meshes) {
                 continue;
             }
-        } else if let Some(handle) = relight_tint(&mut lit, still, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
+        } else if let Some(handle) = relight_tint(&lit, &mut fade, still, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
             commands
                 .entity(entity)
                 .remove::<(MeshMaterial3d<StandardMaterial>, MeshMaterial3d<MeshLitMaterial>)>()
                 .insert(MeshMaterial3d(handle));
         }
-        lit.lit_at = Some(placed);
-        lit.glow = frame.glow;
+        cache.lit = Some(frame);
     }
 }
 
 #[derive(Default)]
 pub(crate) struct LightActorBuffers {
     colors: FxHashMap<ObjectId, Vec<[f32; 4]>>,
-    hud_bases: FxHashMap<ObjectId, (f32, usize)>,
+    hud_bases: FxHashMap<ObjectId, (Option<ActorPlace>, (f32, usize))>,
 }
 
-fn attach_to_hud_base(lit: &mut ActorLit, mesh: &Mesh3d, (radius, max_lights): (f32, usize), meshes: &mut Assets<Mesh>) {
+fn attach_to_hud_base(lit: &mut ActorLit, cache: &mut ActorLightCache, mesh: &Mesh3d, (radius, max_lights): (f32, usize), meshes: &mut Assets<Mesh>) {
     if matches!(lit.shading, Shading::Vertices { .. }) {
         if let Some(mut source) = meshes.get_mut(&mesh.0) {
             let count = source.count_vertices();
             source.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; count]);
         }
         lit.shading = Shading::Tint;
-        lit.lit_at = None;
+        (lit.baked, cache.lit) = (None, None);
     }
     lit.radius = radius;
     lit.max_lights = max_lights;
@@ -480,45 +498,61 @@ fn relight_vertices(lit: &ActorLit, frame: ActorPlace, target: &Handle<Mesh>, wo
         colors.insert(lit.actor, lighting_colors(&world.environment.mesh_colors(world.model, source, *sphere, None, &lighting)));
     }
     if let (Some(colors), Some(mut mesh)) = (colors.get(&lit.actor), meshes.get_mut(target)) {
+        crate::diagnostics::mesh_written(crate::diagnostics::MeshWrite::ActorLight);
         set_vertex_colors(&mut mesh, colors);
     }
     true
 }
 
-fn relight_tint(lit: &mut ActorLit, still: bool, frame: ActorPlace, step: f32, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
-    let target = match lit.target {
+#[expect(clippy::too_many_arguments, reason = "the parts of one actor's light state and of the frame")]
+fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, frame: ActorPlace, step: f32, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
+    let target = match fade.target {
         Some(target) if still => target,
         _ => world.environment.skinned_lighting(world.model, frame.location, lit.radius, frame.glow, lit.max_lights, world.origin),
     };
-    lit.target = Some(target);
-    let Some(handle) = lit.material.as_ref() else {
+    fade.target = Some(target);
+    let Some(handle) = fade.material.as_ref() else {
         let vertex_lit = start.vertex_lit.and_then(|m| assets.mesh_lit.get(&m.0));
         let base = start.standard.and_then(|s| assets.materials.get(&s.0)).or_else(|| vertex_lit.map(|m| &m.base));
         let base = lit.layers.lit(base.cloned().unwrap_or_default());
         let handle = assets.lit_materials.add(ActorLitMaterial { base, extension: HardwareLighting::new(target, &lit.layers) });
-        lit.material = Some(handle.clone());
+        fade.material = Some(handle.clone());
         return Some(handle);
     };
-    let shown = assets.lit_materials.get(handle).map(|m| m.extension.lighting);
-    let lighting = shown.map_or(target, |shown| blend_lighting(&shown, &target, step));
-    if shown.is_some_and(|shown| shown != lighting)
-        && let Some(mut material) = assets.lit_materials.get_mut(handle)
-    {
-        material.extension.lighting = lighting;
+    let drawn = assets.lit_materials.get(handle).map(|m| m.extension.lighting);
+    let stepped = fade_step(drawn, fade.shown, target, step);
+    fade.shown = Some(stepped.shown);
+    if stepped.write && let Some(mut material) = assets.lit_materials.get_mut(handle) {
+        material.extension.lighting = stepped.shown;
     }
-    lit.settling = lighting != target;
+    fade.settling = !stepped.arrived;
     None
+}
+
+#[derive(Debug, PartialEq)]
+struct LightFade {
+    shown: SkinnedLighting,
+    arrived: bool,
+    write: bool,
+}
+
+/// `drawn` is the light the material holds now, `shown` the light on its way to `target`.
+fn fade_step(drawn: Option<SkinnedLighting>, shown: Option<SkinnedLighting>, target: SkinnedLighting, step: f32) -> LightFade {
+    let lighting = shown.or(drawn).map_or(target, |shown| blend_lighting(&shown, &target, step));
+    let arrived = lighting == target;
+    let write = drawn.is_some_and(|drawn| if arrived { drawn != lighting } else { !looks_the_same(&drawn, &lighting) });
+    LightFade { shown: lighting, arrived, write }
 }
 
 pub(crate) fn animate_actor_speculars(
     time: Res<Time>,
     images: Res<Assets<Image>>,
-    models: Query<&ActorLit>,
+    models: Query<(&ActorLit, &ActorLightFade)>,
     mut lit_materials: ResMut<Assets<ActorLitMaterial>>,
 ) {
     let seconds = time.elapsed_secs();
-    for lit in &models {
-        let (Some(handle), Some(specular)) = (lit.material.as_ref(), lit.layers.flat_specular.as_ref()) else { continue };
+    for (lit, fade) in &models {
+        let (Some(handle), Some(specular)) = (fade.material.as_ref(), lit.layers.flat_specular.as_ref()) else { continue };
         if lit.layers.specular_uv.is_empty() {
             continue;
         }
@@ -534,65 +568,4 @@ pub fn keep_for_relighting(mesh: &mut Mesh) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn light(x: f32, color: f32) -> HardwareLightUniform {
-        HardwareLightUniform {
-            position: Vec4::new(x, 0.0, 0.0, 500.0),
-            direction: Vec3::new(0.0, -1.0, 0.0),
-            kind: 0,
-            color: Vec4::new(color, color, color, 0.0),
-            attenuation: Vec4::new(1.0, 0.0, 0.0, 0.0),
-        }
-    }
-
-    fn lighting(ambient: f32, lights: &[HardwareLightUniform]) -> SkinnedLighting {
-        let mut out = SkinnedLighting { ambient: Vec3::splat(ambient), count: lights.len() as u32, lights: [HardwareLightUniform::default(); MAX_HARDWARE_LIGHTS] };
-        for (slot, light) in out.lights.iter_mut().zip(lights) {
-            *slot = *light;
-        }
-        out
-    }
-
-    #[test]
-    fn identical_lighting_unchanged() {
-        let shown = lighting(0.2, &[light(0.0, 0.5), light(200.0, 0.3)]);
-        assert_eq!(blend_lighting(&shown, &shown, 0.1), shown);
-    }
-
-    #[test]
-    fn blend_converges_to_target() {
-        let (mut shown, target) = (lighting(0.1, &[light(0.0, 0.2)]), lighting(0.6, &[light(3.0, 0.9)]));
-        let next = blend_lighting(&shown, &target, 0.5);
-        assert!((next.ambient.x - 0.35).abs() < 1e-6);
-        assert_eq!(next.count, 1);
-        for _ in 0..200 {
-            shown = blend_lighting(&shown, &target, 0.1);
-        }
-        assert_eq!(shown, target);
-    }
-
-    #[test]
-    fn new_light_fades_in() {
-        let (shown, target) = (lighting(0.2, &[]), lighting(0.2, &[light(100.0, 1.0)]));
-        let next = blend_lighting(&shown, &target, 0.25);
-        assert_eq!(next.count, 1);
-        assert!((next.lights[0].color.x - 0.25).abs() < 1e-6);
-        assert_eq!(next.lights[0].position, target.lights[0].position);
-    }
-
-    #[test]
-    fn dropped_light_fades_out() {
-        let (shown, target) = (lighting(0.2, &[light(0.0, 1.0)]), lighting(0.2, &[light(100.0, 1.0)]));
-        let mut next = blend_lighting(&shown, &target, 0.25);
-        assert_eq!(next.count, 2);
-        assert!((next.lights[0].color.x - 0.25).abs() < 1e-6);
-        assert!((next.lights[1].color.x - 0.75).abs() < 1e-6);
-        assert_eq!(next.lights[1].position, shown.lights[0].position);
-        for _ in 0..100 {
-            next = blend_lighting(&next, &target, 0.25);
-        }
-        assert_eq!(next, target);
-    }
-}
+mod tests;

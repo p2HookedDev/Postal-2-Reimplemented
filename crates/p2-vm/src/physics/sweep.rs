@@ -47,9 +47,8 @@ impl<L: LoaderRef> Vm<L> {
                 if other == mover {
                     continue;
                 }
-                let shape = self.fill_shape(other).and_then(|placement| self.placed_shape(other, &placement));
-                let (min, max) = if let Some(shape) = shape {
-                    let (min, max) = shape.boxes.bounds();
+                let bounds = self.placed_bounds(other);
+                let (min, max) = if let Some((min, max)) = bounds {
                     let grow = Vector::new(radius + 1.0, radius + 1.0, height + 1.0);
                     (min - grow, max + grow)
                 } else {
@@ -78,6 +77,7 @@ impl<L: LoaderRef> Vm<L> {
                     continue;
                 }
                 self.count(crate::profiling::Work::SweepTested);
+                let shape = bounds.and_then(|_| self.fill_shape(other)).and_then(|placement| self.placed_shape(other, &placement));
                 let hit = if let Some(shape) = shape {
                     let primitive = if shape.model { Primitive::Brush } else { Primitive::StaticMesh };
                     let back = pull_back_units(primitive, length) / length;

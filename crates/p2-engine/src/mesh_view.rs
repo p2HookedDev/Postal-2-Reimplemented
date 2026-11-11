@@ -32,6 +32,7 @@ use bevy::ecs::prelude::{
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::prelude::Mut;
+use bevy::ecs::message::{Message, Messages};
 use bevy::ecs::system::{EntityCommands, SystemParam};
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats, Image};
 use bevy::light::cluster::{ClusterConfig, ClusterZConfig, GlobalClusterSettings};
@@ -48,7 +49,7 @@ use p2_math::{Rotator, Vector};
 use p2_assets::{Blending, RenderState, UvModifier, uv_matrix};
 use p2_bevy_assets::{MODULATE_2X, rotator_matrix, to_bevy};
 
-use crate::render::actor_light::{ActorLit, LightEnvironment, animate_actor_speculars, light_actors, settle_step};
+use crate::render::actor_light::{ActorLit, LightEnvironment, animate_actor_speculars, settle_step};
 use crate::actors::ZoneFog;
 use crate::animation::FollowBone;
 use crate::render::blended::{BlendedMaterial, OpaqueDecals, TerrainLayer, TerrainLayerMaterial};
@@ -72,14 +73,14 @@ pub use sections::{MaterialImages, SectionView, Skin, SkinJoint, alpha_mode, spa
 use materials::{SectionMaterials, scene_section_material};
 pub use materials::{ActorMaterialKey, SectionMaterial, follower_material, section_material, vertex_lit};
 pub(crate) use materials::{SceneLights, actor_standard, alpha_key, cached_actor_material, cull_for, image_size};
-use camera::{SceneCameras, place_camera, place_overlay_cameras, plain_output, show_canvas_layers};
+use camera::{SceneCameras, plain_output};
 pub use camera::view_rotation;
 pub use p2_vm::NEAR_CLIPPING_PLANE;
 use animated_materials::{AnimatedMaterials, MovingUv, animate_materials};
 pub(crate) use animated_materials::{set_specular_uv, set_uv_transform};
 pub use restyle::{SwitchedLook, restyle_switched};
-use fog::zone_fog;
-use zone_culling::{follower_zones, layers_by_zone, zone_visibility};
+#[cfg(test)]
+use zone_culling::{follower_zones, layers_by_zone};
 pub(crate) use zone_culling::{bounds, merged_box, sky_and_world};
 
 pub struct MeshViewPlugin;
@@ -91,36 +92,36 @@ pub enum MeshViewSystems {
     Camera,
 }
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SceneViewSystems {
+    Place,
+    Fog,
+    Zones,
+    Light,
+}
+
 impl Plugin for MeshViewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            crate::render::particle_material::ParticlePlugin,
-            crate::render::blended::BlendedPlugin,
-            crate::render::translucent_order::TranslucentOrderPlugin,
-            crate::render::lightmapped::LightmappedPlugin,
-            crate::render::actor_light::ActorLightPlugin,
-            crate::render::mesh_light::MeshLightPlugin,
-            crate::render::world_pass::WorldPassPlugin,
-            crate::render::sampler_refresh::SamplerRefreshPlugin,
-        ));
+        crate::add_once(app, crate::render::RetailRenderPlugin);
+        crate::add_once(app, crate::FrameOrderPlugin);
+        crate::add_once(app, crate::render::RetailLightPlugin);
         app.init_resource::<MeshView>()
+            .add_message::<SceneChange>()
+            .init_resource::<crate::components::OverlayLook>()
             .init_resource::<ShownScene>()
-            .init_resource::<ShadowOnly>()
             .init_resource::<LevelCollision>()
             .init_resource::<crate::render::bsp_light::FrameLights>()
             .init_resource::<AnimatedMaterials>()
             .init_resource::<crate::render::wet::WetTextures>()
             .add_systems(Update, crate::render::wet::animate_wet)
             .configure_sets(Update, (MeshViewSystems::Apply, MeshViewSystems::Control, MeshViewSystems::Camera).chain())
-            .configure_sets(Update, crate::play::PlaySystems::Input.after(MeshViewSystems::Apply))
-            .configure_sets(Update, crate::play::PlaySystems::Tick.before(MeshViewSystems::Camera))
-            .configure_sets(Update, crate::render::modern::ModernGraphicsSystems::Apply.after(MeshViewSystems::Camera))
             .add_systems(Startup, (setup, steady_decal_order))
             .add_systems(Update, (apply_change, animate_materials, animate_actor_speculars, follow_msaa).chain().in_set(MeshViewSystems::Apply))
-            .add_systems(Update, (place_camera, zone_fog, follower_zones, layers_by_zone, zone_visibility, light_actors::<crate::play::Play>, crate::render::terrain_light::light_terrain, crate::render::bsp_light::dynamic_lights).chain().in_set(MeshViewSystems::Camera))
-            // After the HUD paint (egui's pass), so a layer shows in the frame it was painted.
-            .add_systems(PostUpdate, show_canvas_layers.after(EguiPostUpdateSet::EndPass))
-            .add_systems(PostUpdate, place_overlay_cameras.after(crate::play::PlaySystems::Present).before(CameraUpdateSystems).before(bevy::transform::TransformSystems::Propagate));
+            .configure_sets(
+                Update,
+                (SceneViewSystems::Place, SceneViewSystems::Fog, SceneViewSystems::Zones, SceneViewSystems::Light).chain().in_set(MeshViewSystems::Camera),
+            )
+            .add_plugins((camera::ViewCameraPlugin, fog::FogPlugin, zone_culling::ZoneCullingPlugin));
     }
 }
 
@@ -134,7 +135,6 @@ pub struct MeshView {
     pub occlusion_culling: bool,
     pub(crate) canvas_layers: Vec<Entity>,
     pub(crate) canvas_below: [bool; OVERLAY_LAYERS.len()],
-    pending: Option<Change>,
 }
 
 impl Default for MeshView {
@@ -146,7 +146,6 @@ impl Default for MeshView {
             occlusion_culling: false,
             canvas_layers: Vec::new(),
             canvas_below: [false; OVERLAY_LAYERS.len()],
-            pending: None,
         }
     }
 }
@@ -235,7 +234,9 @@ impl ShownScene {
     }
 }
 
-enum Change {
+/// Of several written in one frame the last counts.
+#[derive(Message)]
+pub enum SceneChange {
     Show(Box<Scene>),
     Clear,
 }
@@ -259,13 +260,6 @@ impl MeshView {
         self.viewport.map(|(physical_position, physical_size)| Viewport { physical_position, physical_size, ..Default::default() })
     }
 
-    pub fn show(&mut self, scene: Scene) {
-        self.pending = Some(Change::Show(Box::new(scene)));
-    }
-
-    pub fn clear(&mut self) {
-        self.pending = Some(Change::Clear);
-    }
 }
 
 impl SceneView {
@@ -360,7 +354,7 @@ struct ShownLevel<'w> {
 
 fn apply_change(
     mut commands: Commands,
-    mut view: ResMut<MeshView>,
+    mut changes: ResMut<Messages<SceneChange>>,
     mut section_materials: SectionMaterials,
     map_models: Query<Entity, With<MapModel>>,
     cameras: SceneCameras,
@@ -369,7 +363,10 @@ fn apply_change(
 ) {
     let SceneCameras { mut views, mut skies } = cameras;
     let ShownLevel { mut shown, mut level } = shown_level;
-    let Some(change) = view.pending.take() else { return };
+    if changes.is_empty() {
+        return;
+    }
+    let Some(change) = changes.drain().last() else { return };
     world.clear();
     section_materials.animated.textures.clear();
     section_materials.animated.speculars.clear();
@@ -378,7 +375,7 @@ fn apply_change(
     for entity in &map_models {
         commands.entity(entity).despawn();
     }
-    let Change::Show(scene) = change else {
+    let SceneChange::Show(scene) = change else {
         for mut sky_camera in &mut skies {
             sky_camera.position = None;
         }

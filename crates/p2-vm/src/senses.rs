@@ -239,7 +239,7 @@ impl<L: LoaderRef> Vm<L> {
             let Some(other) = next else { break };
             let player = self.store.flag_of(controller, Prop::bIsPlayer);
             if other != controller && (player || self.store.flag_of(other, Prop::bIsPlayer)) && self.store.float_of(other, Prop::SightCounter) < 0.0 {
-                let (probe, event) = if player { (EProbe::SeePlayer, "SeePlayer") } else { (EProbe::SeeMonster, "SeeMonster") };
+                let (probe, event) = if player { (EProbe::SeePlayer, crate::states::Event::SeePlayer) } else { (EProbe::SeeMonster, crate::states::Event::SeeMonster) };
                 if self.is_probing(other, probe as u32)?
                     && let Some(pawn) = self.store.object_of(controller, Prop::Pawn)
                     && self.see_pawn(other, pawn, SightCheck::Periodic)

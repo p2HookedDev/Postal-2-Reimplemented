@@ -26,6 +26,7 @@ mod native_id;
 mod operators;
 mod natives;
 mod object_store;
+mod object_table;
 mod nav;
 mod pawn_anim;
 mod physics;
@@ -152,16 +153,8 @@ impl Value {
     }
 }
 
-/// An object. Objects that script data references but the VM has not loaded or created (textures, classes,
-/// sounds, ...) are stubs: no `class`, no properties.
-#[derive(Debug, Clone)]
-pub struct Object {
-    pub name: NameId,
-    pub class_name: NameId,
-    pub path: String,
-    pub class: Option<ClassId>,
-    pub(crate) mem: memory::Mem,
-}
+mod object;
+pub use object::Object;
 
 #[derive(Debug)]
 pub struct Class {

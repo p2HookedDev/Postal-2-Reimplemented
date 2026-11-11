@@ -454,7 +454,7 @@ impl<L: LoaderRef> Vm<L> {
             return -1;
         }
         let field = self.store.memory.get(self.store.class(class).mem).fields[index];
-        let Value::Array(ids) = self.store.memory.read_field(&field, &self.store.object(manager).mem) else { return -1 };
+        let Value::Array(ids) = self.store.memory.read_field(&field, self.store.object(manager).mem()) else { return -1 };
         let name = self.store.name(id);
         ids.iter().rposition(|entry| matches!(entry, Value::Name(entry) if self.store.name(*entry).eq_ignore_ascii_case(name))).map_or(-1, |at| at as i32)
     }
@@ -494,7 +494,7 @@ impl<L: LoaderRef> Vm<L> {
         self.store.set(manager, Prop::PendingSounds, Value::Array(pending));
         for entry in due {
             let member = |member| subtitle_member(&entry, member).cloned().unwrap_or(Value::Object(None));
-            self.event(player, "CallSubtitle", [member(0), member(3), member(4), member(1)])?;
+            self.event(player, crate::states::Event::CallSubtitle, [member(0), member(3), member(4), member(1)])?;
         }
         Ok(())
     }

@@ -1,6 +1,7 @@
 use p2_package::PackageId;
 use p2_script::{Expr, Source};
 use crate::memory::{Array, Heap, LayoutId, Mem, MemLayouts, Shape};
+use crate::object::{Span, Stamp};
 use crate::{ClassId, Error, ObjectId, LoaderRef, Value, Vm};
 use super::{
     Frame, Hop, MAX_HOPS, Place, Root, Target, block, block_mut, int, linked, member_link, member_of_link, set_link,
@@ -27,7 +28,7 @@ impl<L: LoaderRef> Vm<L> {
     fn root<'s>(&'s self, frame: &'s Frame, root: Root) -> Option<&'s Mem> {
         Some(match root {
             Root::Local => &frame.locals,
-            Root::Instance(object) => &self.store.objects.get(object.0 as usize)?.mem,
+            Root::Instance(object) => self.store.objects.get(object.0 as usize)?.mem(),
             Root::Default(class) => &self.store.classes.get(class.0 as usize)?.defaults,
         })
     }
@@ -45,30 +46,52 @@ impl<L: LoaderRef> Vm<L> {
         self.store.memory.read(place.shape, place.dim, mem, word, heap)
     }
 
+    /// Inside a dynamic array the whole top-level array counts: its heap slot is the one the class flags.
+    fn span(&self, place: &Place) -> Span {
+        match place.hops[..place.depth as usize].first() {
+            Some(hop) => Span::place(0, hop.heap, (0, 1), 1),
+            None => Span::place(place.word, place.heap, self.store.memory.size(place.shape), place.dim),
+        }
+    }
+
     pub(super) fn write_place(&mut self, frame: &mut Frame, place: &Place, value: Value) {
-        let memory = &self.store.memory;
-        let mem = match place.root {
-            Root::Local => &mut frame.locals,
-            Root::Instance(object) => match self.store.objects.get_mut(object.0 as usize) {
-                Some(object) => &mut object.mem,
-                None => return,
-            },
-            Root::Default(class) => match self.store.classes.get_mut(class.0 as usize) {
-                Some(class) => &mut class.defaults,
-                None => return,
-            },
+        let (span, stamp) = (self.span(place), self.store.stamp);
+        let kind = match place.root {
+            Root::Instance(object) => self.store.stamp_at(object, span),
+            Root::Local | Root::Default(_) => Stamp::Written,
         };
-        if let Some(mem) = block_mut(memory, mem, place) {
-            memory.write(place.shape, place.dim, mem, place.word as usize, place.heap as usize, value);
+        let memory = &self.store.memory;
+        let apply = |mem: &mut Mem| {
+            if let Some(mem) = block_mut(memory, mem, place) {
+                memory.write(place.shape, place.dim, mem, place.word as usize, place.heap as usize, value);
+            }
+        };
+        match place.root {
+            Root::Local => apply(&mut frame.locals),
+            Root::Instance(object) => {
+                if let Some(object) = self.store.objects.get_mut(object.0 as usize) {
+                    object.write(stamp, kind, span, apply);
+                }
+            }
+            Root::Default(class) => {
+                if let Some(class) = self.store.classes.get_mut(class.0 as usize) {
+                    apply(&mut class.defaults);
+                }
+            }
         }
     }
 
     pub(super) fn array_mut<'s>(&'s mut self, frame: &'s mut Frame, place: &Place) -> Option<(&'s MemLayouts, &'s mut Array, LayoutId)> {
         let (Shape::Array(elem), 1) = (place.shape, place.dim) else { return None };
+        let kind = match place.root {
+            Root::Instance(object) => self.store.stamp_at(object, self.span(place)),
+            Root::Local | Root::Default(_) => Stamp::Written,
+        };
         let memory = &self.store.memory;
+        let stamp = self.store.stamp;
         let mem = match place.root {
             Root::Local => &mut frame.locals,
-            Root::Instance(object) => &mut self.store.objects.get_mut(object.0 as usize)?.mem,
+            Root::Instance(object) => self.store.objects.get_mut(object.0 as usize)?.mem_mut(stamp, kind),
             Root::Default(class) => &mut self.store.classes.get_mut(class.0 as usize)?.defaults,
         };
         match block_mut(memory, mem, place)?.heap.get_mut(place.heap as usize)? {
@@ -242,5 +265,34 @@ impl<L: LoaderRef> Vm<L> {
         let struct_export = usize::try_from(entry.package_index - 1).map_err(|_| missing())?;
         let layout = self.layouts.layout(Source { package: &loaded.package, data: &loaded.data }, struct_export)?;
         layout.properties.iter().position(|p| p.name.eq_ignore_ascii_case(name)).ok_or_else(missing)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use p2_package::Loader;
+
+    use super::*;
+    use crate::object_store::tests::actor_vm;
+
+    fn stamp_of(vm: &Vm<Arc<Loader>>, actor: ObjectId, target: Target) -> Stamp {
+        match target {
+            Target::Place(place) => vm.store.stamp_at(actor, vm.span(&place)),
+            Target::Nowhere | Target::Constant(_) => panic!("no place"),
+        }
+    }
+
+    #[test]
+    fn script_places_inside_a_drawn_property_are_drawn() {
+        let (vm, actor) = actor_vm("drawn-stamp-places");
+        let class = vm.store.object(actor).class.unwrap();
+        let property = |name: &str| vm.instance_target(actor, class, vm.store.property_index(class, name).unwrap());
+        assert_eq!(stamp_of(&vm, actor, vm.struct_member_target(property("Location"), 1)), Stamp::Drawn);
+        assert_eq!(stamp_of(&vm, actor, vm.struct_member_target(property("Acceleration"), 1)), Stamp::Written);
+        assert_eq!(stamp_of(&vm, actor, property("TimerCounter")), Stamp::Written);
+        let Target::Place(skins) = property("Skins") else { panic!("Skins") };
+        assert_eq!(stamp_of(&vm, actor, vm.element(skins, 2)), Stamp::Drawn);
     }
 }

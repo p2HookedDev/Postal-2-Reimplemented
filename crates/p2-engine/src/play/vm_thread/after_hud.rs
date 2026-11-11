@@ -29,10 +29,14 @@ impl Simulation {
     }
 
     pub(in crate::play) fn read_after_hud(&mut self, frame: &mut VmFrame, watched: &[ObjectId], forces: bool) {
+        let mut started = Instant::now();
+        let mut part = |frame: &mut VmFrame, name: &'static str| frame.times.push((name, std::mem::replace(&mut started, Instant::now()).elapsed()));
+        self.begin_reads();
         self.read_hud_actors(frame);
         let new: Vec<ObjectId> = self.vm.object_ids().skip(self.seen).collect();
         self.seen += new.len();
         self.read_spawned(frame, &new);
+        part(frame, "after hud: hud actors and spawned");
         for index in 0..self.hud_drawn.len() {
             let actor = self.hud_drawn[index];
             self.pass_actor(actor, &mut frame.actor_changes, &mut frame.spawned);
@@ -40,13 +44,17 @@ impl Simulation {
         for &actor in watched.iter().chain(&new) {
             self.pass_actor(actor, &mut frame.actor_changes, &mut frame.spawned);
         }
+        part(frame, "after hud: watched actors");
         self.update_tracked_lists(frame, &new);
         self.animate_dynamic_lights(frame);
+        part(frame, "after hud: lights, switches, coronas");
         self.recent.swap(0, 1);
         self.recent[0] = new;
         self.take_host_commands(frame);
+        part(frame, "after hud: host commands");
         let vm = &self.vm;
-        frame.emitter_changes = self.emitter_values.changes(vm, watched);
+        frame.emitter_changes = self.emitter_values.changes(vm, watched, self.mark);
+        part(frame, "after hud: emitter changes");
         if forces {
             frame.forces.extend(vm.drag_actors().into_iter().map(|(location, velocity, radius, scale)| ActorForce { location, velocity, radius, scale }));
         }
@@ -112,10 +120,16 @@ impl Simulation {
     fn read_spawned(&mut self, frame: &mut VmFrame, new: &[ObjectId]) {
         for &actor in new {
             let vm = &self.vm;
-            if vm.store.is_a(actor, Kind::Emitter) && (crate::actors::emitter_objects(vm, actor).is_empty() || vm.store.is_deleted(actor)) {
-                let class = vm.store.object(actor).class.map_or_else(String::new, |class| vm.store.name(vm.store.class(class).name).to_owned());
+            let Some(class) = vm.store.object(actor).class else { continue };
+            // Fluid feeders and trail starters are emitters that declare no particle emitters: logic actors with nothing to draw.
+            if vm.store.is_a(actor, Kind::Emitter)
+                && !vm.store.is_deleted(actor)
+                && crate::actors::emitter_objects(vm, actor).is_empty()
+                && matches!(vm.store.default_value(class, Prop::Emitters), Some(p2_vm::Value::Array(items)) if !items.is_empty())
+            {
+                let class = vm.store.name(vm.store.class(class).name).to_owned();
                 if self.emitterless.insert(class.clone()) {
-                    bevy::log::warn!("spawned {class} ({actor:?}) has no particle emitter to simulate: deleted {}, Emitters {:?}", vm.store.is_deleted(actor), vm.store.get(actor, Prop::Emitters));
+                    bevy::log::warn!("spawned {class} ({actor:?}) has no particle emitter to simulate though its class declares some: Emitters {:?}", vm.store.get(actor, Prop::Emitters));
                 }
             }
         }
@@ -232,7 +246,7 @@ fn fluid_touchers(vm: &Vm<Arc<Loader>>, surfaces: &[ObjectId], touchers: &mut Ve
         let disturbing: Vec<_> = touching
             .iter()
             .filter_map(|value| if let p2_vm::Value::Object(Some(actor)) = value { Some(*actor) } else { None })
-            .filter(|&actor| vm.store.flag_of(actor, "bDisturbFluidSurface"))
+            .filter(|&actor| vm.store.flag_of(actor, Prop::bDisturbFluidSurface))
             .map(|actor| p2_particles::FluidToucher {
                 location: vm.store.location(actor),
                 velocity: vm.velocity(actor),

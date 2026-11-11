@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use p2_script::{Callee, Expr};
 use crate::Prop;
+use crate::native_id::Native;
 use crate::{Error, LoaderRef, Value, Vm, natives};
 use super::{Flow, Frame, Iteration, ListWalk, StepResult, Target, compile, int, iterator_args, truthy, unlink};
 
@@ -90,7 +91,11 @@ impl<L: LoaderRef> Vm<L> {
             }
         }
         let first_new = self.store.objects.len() as u32;
-        let items = match natives::iterate(self, &function.object_name, target, &values) {
+        let iterated = match function.native_id {
+            Some(native) => natives::iterate(self, native, target, &values),
+            None => Err(Error::UnknownNative(function.object_name.clone())),
+        };
+        let items = match iterated {
             Ok(items) => items,
             Err(Error::UnknownNative(name)) => {
                 *self.diagnostics.missing_natives.entry(name).or_insert(0) += 1;
@@ -101,18 +106,18 @@ impl<L: LoaderRef> Vm<L> {
         if args.get(1).is_none() {
             return Err(Error::Unsupported("iterator without a variable".to_owned()));
         }
-        let outs = natives::iterator_outs(&function.object_name);
-        let walk = natives::walks_actor_list(&function.object_name).map(|name| {
+        let outs = natives::iterator_outs(function.native_id);
+        let walk = natives::walks_actor_list(function.native_id).map(|native| {
             let mut values = values;
             // An omitted `Loc` is read once, here: the loop body may move the caller.
-            if matches!(name, "RadiusActors" | "VisibleActors")
+            if matches!(native, Native::RadiusActors | Native::VisibleActors)
                 && !values.get(2).is_some_and(natives::is_struct_value)
                 && let Some(target) = target
             {
                 values.truncate(2);
                 values.push(Value::Vector(self.store.vector(target, Prop::Location)));
             }
-            ListWalk { name, target, args: values, first_new }
+            ListWalk { native, target, args: values, first_new }
         });
         let mut iteration = Iteration { items, next: 0, statement: pc, outs, body: pc + 1, walk };
         let flow = self.advance(frame, &mut iteration, Flow::Next, end)?;
@@ -142,7 +147,7 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(false);
         }
         walk.first_new = made;
-        let items = natives::iterate(self, walk.name, walk.target, &walk.args)?;
+        let items = natives::iterate(self, walk.native, walk.target, &walk.args)?;
         iteration.items.extend(items.into_iter().filter(|item| matches!(item, &Value::Object(Some(o)) if o.0 >= first_new)));
         Ok(iteration.next < iteration.items.len())
     }

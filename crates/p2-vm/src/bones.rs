@@ -11,6 +11,7 @@ use p2_package::{Loader, PackageId};
 use crate::enums::EDrawType;
 use crate::anim::AnimChannel;
 use crate::collision::Placement;
+use crate::object_table::ObjectTable;
 use crate::{LoaderRef, NameId, ObjectId, ObjectStore, Value, Vm, Prop};
 
 pub(crate) struct PosedMesh {
@@ -41,7 +42,7 @@ pub(crate) struct BoneData {
     meshes: FxHashMap<ObjectId, Option<Arc<PosedMesh>>>,
     animations: FxHashMap<ObjectId, Option<Arc<PosedAnimation>>>,
     pub(crate) parsed: MeshAnimations,
-    poses: FxHashMap<ObjectId, (PoseKey, Arc<[Frame]>)>,
+    poses: ObjectTable<Box<(PoseKey, Arc<[Frame]>)>>,
     bone_maps: FxHashMap<(ObjectId, ObjectId), Arc<[Option<usize>]>>,
     sequences: FxHashMap<(ObjectId, NameId), Option<usize>>,
     mesh_bones: FxHashMap<(ObjectId, NameId), Option<usize>>,
@@ -134,15 +135,15 @@ const UNIT: Frame = Frame::IDENTITY;
 
 impl BoneData {
     fn keep_pose(&mut self, store: &ObjectStore, actor: ObjectId, key: PoseKey, frames: Arc<[Frame]>) {
-        if self.poses.len() >= POSE_CACHE_LIMIT && !self.poses.contains_key(&actor) {
+        if self.poses.get(actor).is_none() && self.poses.count() >= POSE_CACHE_LIMIT {
             let mut poses = std::mem::take(&mut self.poses);
-            poses.retain(|&posed, _| !store.is_deleted(posed));
-            if poses.len() >= POSE_CACHE_LIMIT {
-                poses.clear();
+            poses.retain(|posed| !store.is_deleted(posed));
+            if poses.count() >= POSE_CACHE_LIMIT {
+                poses = ObjectTable::default();
             }
             self.poses = poses;
         }
-        self.poses.insert(actor, (key, frames));
+        self.poses.insert(actor, Box::new((key, frames)));
     }
 
     fn ref_bone(&mut self, store: &ObjectStore, mesh_object: ObjectId, mesh: &PosedMesh, bone: NameId) -> Option<usize> {
@@ -268,7 +269,7 @@ impl<L: LoaderRef> Vm<L> {
                 channels.push(channel);
             }
             let placement = self.drawn_placement(actor);
-            if let Some((kept, frames)) = self.media.bone_data.poses.get(&actor)
+            if let Some((kept, frames)) = self.media.bone_data.poses.get(actor).map(Box::as_ref)
                 && kept.matches(mesh_object, &channels, self.bone_scales(actor), self.bone_rotations(actor), placement)
             {
                 return Some((mesh, frames.clone()));

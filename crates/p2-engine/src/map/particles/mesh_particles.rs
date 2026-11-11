@@ -11,10 +11,10 @@ pub(super) struct MeshPool {
 }
 
 impl MeshPool {
-    pub(super) fn new(sections: &[SectionView], props: &p2_particles::EmitterProperties, t: &mut SceneTargets, shared: &mut HashMap<PoolMaterialKey, Handle<StandardMaterial>>) -> Self {
+    pub(super) fn new(sections: &[SectionView], props: &p2_particles::EmitterProperties, assets: &mut AssetStores, shared: &mut HashMap<PoolMaterialKey, Handle<StandardMaterial>>) -> Self {
         let reach = sections
             .iter()
-            .filter_map(|section| t.assets.meshes.get(&section.mesh)?.get_aabb())
+            .filter_map(|section| assets.meshes.get(&section.mesh)?.get_aabb())
             .map(|aabb| Vec3::from(aabb.min()).abs().max(Vec3::from(aabb.max()).abs()).length())
             .fold(0.0, f32::max);
         let sections = sections
@@ -24,7 +24,7 @@ impl MeshPool {
                 let alpha_mode = if props.use_mesh_blend_mode { section.alpha_mode } else { standard_alpha(props.draw_style) };
                 let key = PoolMaterialKey { texture: section.texture.as_ref().map(Handle::id), alpha: alpha_key(alpha_mode), two_sided };
                 let material = shared.entry(key).or_insert_with(|| {
-                    t.assets.materials.add(StandardMaterial {
+                    assets.materials.add(StandardMaterial {
                         base_color_texture: section.texture.clone(),
                         alpha_mode,
                         unlit: true,

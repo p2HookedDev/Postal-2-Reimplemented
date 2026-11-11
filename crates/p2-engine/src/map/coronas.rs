@@ -46,7 +46,7 @@ pub fn is_corona(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> bool {
 
 pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaActor> {
     let texture = corona_texture(vm, actor)?;
-    let float = |name: &str, default: f32| match vm.store.get(actor, name) {
+    let float = |property: Prop, default: f32| match vm.store.get(actor, property) {
         Some(Value::Float(value)) => value,
         _ => default,
     };
@@ -56,12 +56,12 @@ pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaAc
         texture: vm.store.object(texture).path.clone(),
         location,
         rotation,
-        draw_scale: float("DrawScale", 1.0),
-        draw_scale3d: vm.store.vector(actor, "DrawScale3D").into(),
-        hue: vm.store.byte_of(actor, "LightHue"),
-        saturation: vm.store.byte_of(actor, "LightSaturation"),
-        sizes: vm.store.is_a(actor, "Light").then(|| (float("MinCoronaSize", 0.0), float("MaxCoronaSize", 0.0))),
-        light_radius: float("LightRadius", 0.0),
+        draw_scale: float(Prop::DrawScale, 1.0),
+        draw_scale3d: vm.store.vector(actor, Prop::DrawScale3D).into(),
+        hue: vm.store.byte_of(actor, Prop::LightHue),
+        saturation: vm.store.byte_of(actor, Prop::LightSaturation),
+        sizes: vm.store.is_a(actor, "Light").then(|| (float(Prop::MinCoronaSize, 0.0), float(Prop::MaxCoronaSize, 0.0))),
+        light_radius: float(Prop::LightRadius, 0.0),
     })
 }
 
@@ -73,15 +73,15 @@ pub struct CoronaQuad {
 }
 
 impl Session {
-    pub(super) fn add_coronas(&mut self, coronas: Vec<CoronaActor>, origin: Vec3, t: &mut SceneTargets) {
+    pub(super) fn add_coronas(&mut self, coronas: Vec<CoronaActor>, origin: Vec3, t: &mut SpawnTargets) {
         if coronas.is_empty() {
             return;
         }
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         for corona in coronas {
             let (images, particle_materials) = (&mut t.assets.images, &mut t.assets.particle_materials);
-            let textures = &mut self.actor_textures;
-            let material = self.corona_materials.entry(corona.texture.clone()).or_insert_with_key(|path| {
+            let textures = &mut t.spawned.actor_textures;
+            let material = t.particles.corona_materials.entry(corona.texture.clone()).or_insert_with_key(|path| {
                 let texture = textures.entry(path.clone()).or_insert_with(|| ActorTexture::read(game, path, |image| images.add(image))).as_ref()?;
                 let material = ParticleMaterial::corona(texture.image.clone());
                 Some(particle_materials.add(material))
@@ -90,7 +90,7 @@ impl Session {
                 bevy::log::warn!("corona {:?}: texture {} not loaded, no quad", corona.object, corona.texture);
                 continue;
             };
-            let parent = t.commands.spawn((ActorModel(corona.object), Transform::from_translation(origin), Visibility::default())).id();
+            let parent = t.commands.spawn((MapScoped, ActorModel(corona.object), Transform::from_translation(origin), Visibility::default())).id();
             t.commands.spawn((
                 Mesh3d(t.assets.meshes.add(sprite_quad())),
                 MeshMaterial3d(material),
@@ -173,6 +173,7 @@ pub fn draw_coronas(
         if quad.color != color
             && let Some(mut mesh) = meshes.get_mut(&mesh.0)
         {
+            crate::diagnostics::mesh_written(crate::diagnostics::MeshWrite::Corona);
             let [r, g, b] = color;
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[r, g, b, 1.0]; 4]);
             quad.color = color;

@@ -6,7 +6,7 @@ use bevy::app::{App, Plugin, PostUpdate};
 use bevy::camera::Camera3d;
 use bevy::core_pipeline::core_3d::{Transparent3d, TransparentSortingInfo3d};
 use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::ecs::prelude::{Component, Entity, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Component, Entity, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::{Vec3, Vec4};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
@@ -81,14 +81,20 @@ fn rank_sorted_nodes(
     sections: Query<(Entity, &SortedBspNode)>,
     draws: Query<(Entity, &TranslucentDraw)>,
     mut order: ResMut<TranslucentOrder>,
+    mut cached: Local<Option<(usize, WantedNodes)>>,
 ) {
     let nodes: FxHashMap<Entity, SortedBspNode> = sections.iter().map(|(entity, node)| (entity, *node)).collect();
     let ranks = match level.model().filter(|_| !nodes.is_empty()) {
         Some(model) => {
             let wanted: FxHashSet<usize> = nodes.values().map(|section| section.node).collect();
+            let key = model.nodes.as_ptr() as usize;
+            if cached.as_ref().is_none_or(|(at, known)| *at != key || known.wanted != wanted) {
+                *cached = Some((key, WantedNodes::new(model, wanted)));
+            }
+            let Some((_, wanted)) = cached.as_ref() else { return };
             let rank = |eye: Vec3| {
                 let eye = to_bevy((eye - shown.origin).to_array());
-                back_to_front(model, eye, &wanted).into_iter().enumerate().map(|(rank, node)| (node, rank)).collect()
+                back_to_front(model, eye, wanted).into_iter().enumerate().map(|(rank, node)| (node, rank)).collect()
             };
             cameras.iter().map(|(camera, transform)| (camera, rank(transform.translation()))).collect()
         }
@@ -100,7 +106,7 @@ fn rank_sorted_nodes(
 
 /// The wanted nodes in the order the engine's list holds them: it pushes each onto the head while walking the tree
 /// front to back, so the list runs back to front, a node's coplanar nodes ahead of it.
-pub(crate) fn back_to_front(model: &Model, eye: [f32; 3], wanted: &FxHashSet<usize>) -> Vec<usize> {
+pub(crate) fn back_to_front(model: &Model, eye: [f32; 3], wanted: &WantedNodes) -> Vec<usize> {
     enum Step {
         Visit(usize),
         Emit(usize),
@@ -112,7 +118,7 @@ pub(crate) fn back_to_front(model: &Model, eye: [f32; 3], wanted: &FxHashSet<usi
         visits += 1;
         match step {
             Step::Visit(n) => {
-                let Some(node) = model.nodes.get(n) else { continue };
+                let Some(node) = model.nodes.get(n).filter(|_| wanted.holding.get(n).copied().unwrap_or(false)) else { continue };
                 let [x, y, z, w] = node.plane;
                 let (near, far) = if x * eye[0] + y * eye[1] + z * eye[2] - w > 0.0 { (node.front, node.back) } else { (node.back, node.front) };
                 stack.extend(near.map(Step::Visit));
@@ -121,12 +127,41 @@ pub(crate) fn back_to_front(model: &Model, eye: [f32; 3], wanted: &FxHashSet<usi
             }
             Step::Emit(n) => {
                 let start = out.len();
-                out.extend(std::iter::successors(Some(n), |&m| model.nodes.get(m)?.coplanar).take(model.nodes.len()).filter(|m| wanted.contains(m)));
+                out.extend(std::iter::successors(Some(n), |&m| model.nodes.get(m)?.coplanar).take(model.nodes.len()).filter(|m| wanted.wanted.contains(m)));
                 out[start..].reverse();
             }
         }
     }
     out
+}
+
+/// The walk skips any node whose subtree and coplanar chain hold no wanted node; a level has thousands of nodes and
+/// few translucent ones.
+pub(crate) struct WantedNodes {
+    wanted: FxHashSet<usize>,
+    holding: Vec<bool>,
+}
+
+impl WantedNodes {
+    pub(crate) fn new(model: &Model, wanted: FxHashSet<usize>) -> Self {
+        let mut parent = vec![None; model.nodes.len()];
+        for (n, node) in model.nodes.iter().enumerate() {
+            for child in [node.front, node.back, node.coplanar].into_iter().flatten() {
+                if let Some(slot) = parent.get_mut(child) {
+                    *slot = Some(n);
+                }
+            }
+        }
+        let mut holding = vec![false; model.nodes.len()];
+        for &node in &wanted {
+            let mut at = Some(node);
+            while let Some(n) = at.filter(|&n| holding.get(n) == Some(&false)) {
+                holding[n] = true;
+                at = parent[n];
+            }
+        }
+        Self { wanted, holding }
+    }
 }
 
 enum Entry {
@@ -210,11 +245,11 @@ mod tests {
     fn the_walk_lists_the_far_side_first() {
         let mut model = crate::mesh_view::tests::two_zones();
         model.nodes[0].coplanar = None;
-        let wanted = FxHashSet::from_iter([0]);
+        let wanted = WantedNodes::new(&model, FxHashSet::from_iter([0]));
         assert_eq!(back_to_front(&model, [0.0, 0.0, 10.0], &wanted), [0]);
         model.nodes.push(p2_assets::BspNode { plane: [0.0, 0.0, 1.0, 50.0], ..model.nodes[0] });
         model.nodes[0].front = Some(1);
-        let wanted = FxHashSet::from_iter([0, 1]);
+        let wanted = WantedNodes::new(&model, FxHashSet::from_iter([0, 1]));
         assert_eq!(back_to_front(&model, [0.0, 0.0, -10.0], &wanted), [1, 0], "eye below both planes: the upper node is farther");
         assert_eq!(back_to_front(&model, [0.0, 0.0, 100.0], &wanted), [0, 1], "eye above both: the lower node is farther");
     }

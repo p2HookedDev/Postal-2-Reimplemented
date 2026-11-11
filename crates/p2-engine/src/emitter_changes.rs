@@ -9,12 +9,20 @@ use crate::actors::{emitter_objects, emitter_properties};
 
 #[derive(Default)]
 pub struct EmitterValues {
-    values: FxHashMap<ObjectId, (u64, PropertyBlock)>,
+    values: FxHashMap<ObjectId, Seen>,
     calls: u64,
 }
 
+struct Seen {
+    call: u64,
+    /// The reads' mark when the values were compared: an emitter not written since is not compared again.
+    read_at: u64,
+    values: PropertyBlock,
+}
+
 impl EmitterValues {
-    pub fn changes(&mut self, vm: &Vm<impl LoaderRef>, watched: &[ObjectId]) -> Vec<(ObjectId, EmitterProperties)> {
+    /// `mark`: the store's stamp as this pass of reads began, the stamp itself raised since.
+    pub fn changes(&mut self, vm: &Vm<impl LoaderRef>, watched: &[ObjectId], mark: u64) -> Vec<(ObjectId, EmitterProperties)> {
         self.calls += 1;
         let call = self.calls;
         let mut changed = Vec::new();
@@ -25,20 +33,25 @@ impl EmitterValues {
             for emitter in emitter_objects(vm, actor) {
                 let values = vm.property_block(emitter);
                 match self.values.get_mut(&emitter) {
-                    Some((seen, before)) if before == values => *seen = call,
-                    Some((seen, before)) => {
-                        changed.push((emitter, emitter_properties(vm, emitter)));
-                        before.clone_from(values);
-                        *seen = call;
+                    Some(seen) => {
+                        seen.call = call;
+                        if vm.store.object(emitter).written() <= seen.read_at {
+                            continue;
+                        }
+                        seen.read_at = mark;
+                        if seen.values != *values {
+                            changed.push((emitter, emitter_properties(vm, emitter)));
+                            seen.values.clone_from(values);
+                        }
                     }
                     None => {
                         changed.push((emitter, emitter_properties(vm, emitter)));
-                        self.values.insert(emitter, (call, values.clone()));
+                        self.values.insert(emitter, Seen { call, read_at: mark, values: values.clone() });
                     }
                 }
             }
         }
-        self.values.retain(|_, (seen, _)| *seen == call);
+        self.values.retain(|_, seen| seen.call == call);
         changed
     }
 }

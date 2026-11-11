@@ -1,5 +1,5 @@
 use super::*;
-use super::sprites::{fill_sprites, header_record, sprite_record};
+use super::sprites::{drawn_location, fill_sprites, header_record, shown_part, sprite_record};
 
 fn to_linear(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
@@ -88,6 +88,7 @@ fn fire_sprites_are_as_bright_as_the_engines() {
 fn padded_emitter_meshes_sort_by_the_actors_centre() {
     let sprite = |x: f32| SpriteParticle {
         location: [x, 0.0, 0.0].into(),
+        previous: [x, 0.0, 0.0].into(),
         size: [2.0; 2],
         up: [0.0, 0.0, 2.0].into(),
         right: [0.0, 2.0, 0.0].into(),
@@ -115,6 +116,7 @@ fn padded_emitter_meshes_sort_by_the_actors_centre() {
 fn sprite_boxes_are_the_meshes_bounds() {
     let sprite = |location: Vector, up: Vector, right: Vector| SpriteParticle {
         location,
+        previous: location,
         size: [2.0; 2],
         up,
         right,
@@ -134,6 +136,7 @@ fn sprite_boxes_are_the_meshes_bounds() {
 fn floor_sprites_are_not_occluded_by_their_floor() {
     let puddle = SpriteParticle {
         location: [10.0, 20.0, -0.3].into(),
+        previous: [10.0, 20.0, -0.3].into(),
         size: [30.0; 2],
         up: [30.0, 0.0, 0.0].into(),
         right: [0.0, 30.0, 0.0].into(),
@@ -208,6 +211,7 @@ fn sprite_records_expand_to_the_cpu_quads() {
     use bevy::mesh::VertexAttributeValues::{Float32x2, Float32x3, Float32x4};
     let sprite = |blend| SpriteParticle {
         location: [10.0, -4.0, 7.0].into(),
+        previous: [10.0, -4.0, 7.0].into(),
         size: [2.0; 2],
         up: [0.5, 1.0, 3.0].into(),
         right: [-2.0, 1.5, 0.25].into(),
@@ -254,25 +258,86 @@ fn scene_targets_queries_do_not_conflict() {
 
 #[test]
 fn sprite_grids_sort_at_the_actors_box_centre() {
-    let (min, max) = (Vec3::new(100.0, -20.0, 7.0), Vec3::new(300.0, 40.0, 9.0));
-    let (place, aabb) = grid_place(min, max);
-    for quads in [MIN_QUADS, 64] {
-        let sort_centre = place.transform_point(Vec3::from(sprite_grid(quads).get_aabb().expect("bounds").center));
-        assert_eq!(sort_centre, (min + max) / 2.0);
+    let parent = Transform::from_translation(Vec3::new(-5000.0, 300.0, 1200.0));
+    let grid = sprite_grid(MIN_QUADS);
+    assert!(grid.asset_usage.contains(RenderAssetUsages::MAIN_WORLD), "a mesh only the render world keeps has its bounds recomputed from the quad numbers");
+    let mesh_centre = Vec3::from(grid.get_aabb().expect("bounds").center);
+    assert_eq!(mesh_centre, Vec3::from(sprite_grid(64).get_aabb().expect("bounds").center));
+    let location: Vector = [50.0, -20.0, 7.0].into();
+    let sprite = SpriteParticle { location, previous: location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None };
+    let boxes = [(Vec3::new(100.0, -20.0, 7.0), Vec3::new(300.0, 40.0, 9.0)), (Vec3::new(-900.0, 5.0, -60.0), Vec3::new(-850.0, 25.0, -10.0))];
+    let mut sort_centres = Vec::new();
+    for (min, max) in boxes {
+        let (place, aabb) = grid_place(min, max);
+        let world_from_local = bevy::transform::components::GlobalTransform::from(parent).mul_transform(place).affine();
+        let sort_centre = world_from_local.transform_point3(mesh_centre);
+        assert!(sort_centre.abs_diff_eq(parent.transform_point((min + max) / 2.0), 1e-3), "{sort_centre} for {min} {max}");
+        sort_centres.push(sort_centre);
+        let whole = occlusion_aabb(min, max);
+        assert_eq!(place.transform_point(Vec3::from(aabb.center)), Vec3::from(whole.center));
+        assert_eq!(aabb.half_extents, whole.half_extents);
+        let record = sprite_record(&sprite, (min + max) / 2.0);
+        let local = Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));
+        let drawn_at = world_from_local.transform_point3(local);
+        assert!(drawn_at.abs_diff_eq(parent.transform_point(Vec3::from(to_bevy(location))), 1e-3), "{drawn_at}");
     }
-    let whole = occlusion_aabb(min, max);
-    assert_eq!(place.transform_point(Vec3::from(aabb.center)), Vec3::from(whole.center));
-    assert_eq!(aabb.half_extents, whole.half_extents);
+    assert!(sort_centres[0].distance(sort_centres[1]) > 100.0);
 }
 
 #[test]
 fn sprite_records_keep_their_place_on_a_moved_grid() {
     let location: Vector = [50.0, -20.0, 7.0].into();
-    let sprite = SpriteParticle { location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None };
+    let sprite = SpriteParticle { location, previous: location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None };
     let grid_at = Vec3::new(40.0, 3.0, -9.0);
     let record = sprite_record(&sprite, grid_at);
     let centre = Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));
     assert_eq!(centre + grid_at, Vec3::from(to_bevy(location)));
+}
+
+#[test]
+fn sprites_move_evenly_every_frame_between_ticks() {
+    let (tick, frames) = (1.0 / 120.0, 3);
+    let place = |ticks: usize| -> Vector { [10.0 * ticks as f32, 0.0, 0.0].into() };
+    let mut drawn = Vec::new();
+    for newest in 1..5 {
+        for frame in 0..frames {
+            let shown = shown_part(frame as f32 * tick / frames as f32, tick);
+            drawn.push(drawn_location(place(newest - 1), place(newest), shown).x);
+        }
+    }
+    assert_eq!(drawn[0], 0.0);
+    for pair in drawn.windows(2) {
+        assert!((pair[1] - pair[0] - 10.0 / frames as f32).abs() < 1e-3, "{drawn:?}");
+    }
+}
+
+#[test]
+fn newborn_sprites_do_not_move_before_their_birth_place() {
+    use p2_particles::{EmitterProperties, EmitterSettings};
+    let props = EmitterProperties { max_particles: 1, initial_particles_per_second: 0.0, particles_per_second: 0.0, automatic_initial_spawning: false, ..EmitterProperties::default() };
+    let mut emitter = Emitter::new(EmitterSettings::default(), vec![props], 1);
+    emitter.tick(1.0 / 120.0, [30.0, -5.0, 2.0].into(), [0; 3].into());
+    emitter.spawn_one(0, [0.0; 3].into());
+    let sprite = emitter.sprites(0, p2_particles::View::default()).next().expect("a sprite");
+    assert_eq!(sprite.previous, sprite.location);
+    let (birth, moved): (Vector, Vector) = ([30.0, -5.0, 2.0].into(), [34.0, -5.0, 2.0].into());
+    for shown in [0.0, 0.25, 0.5, 1.0] {
+        assert_eq!(drawn_location(sprite.previous, sprite.location, shown), sprite.location);
+        let x = drawn_location(birth, moved, shown).x;
+        assert!((30.0..=34.0).contains(&x), "{shown}: {x}");
+    }
+    assert_eq!(drawn_location(birth, moved, 0.0), birth);
+}
+
+#[test]
+fn sprites_never_pass_their_newest_place() {
+    let tick = 1.0 / 120.0;
+    for since in [tick, 1.5 * tick, 10.0 * tick] {
+        assert_eq!(shown_part(since, tick), 1.0);
+    }
+    assert_eq!(shown_part(0.003, 0.0), 1.0);
+    let (previous, newest): (Vector, Vector) = ([0.0; 3].into(), [8.0, 0.0, -4.0].into());
+    assert_eq!(drawn_location(previous, newest, shown_part(3.0 * tick, tick)), newest);
 }
 
 #[test]

@@ -47,15 +47,22 @@ pub(super) fn particles_box(p: &ParticleActor) -> Option<(Vec3, Vec3)> {
 
 pub(super) fn apply_bounds(writes: &mut MeshWrites, p: &mut ParticleActor, changed: bool, (leaves, here): (Option<&Model>, Vec3)) {
     if let Some((min, max)) = p.drawn_bounds {
-        for draw in &p.draws {
-            let Some(EmitterMesh { entity, mesh, shown: true }) = &draw.mesh else { continue };
+        for draw in &mut p.draws {
+            let Some(EmitterMesh { entity, mesh, shown: true, strip_key, written }) = &mut draw.mesh else { continue };
             if draw.grid.is_some() {
                 if changed {
                     writes.commands.entity(*entity).insert(grid_place(min, max));
                 }
                 continue;
             }
-            if let Some(mut mesh) = writes.meshes.get_mut(mesh) {
+            if !std::mem::take(written) {
+                // The bounds padded into a strip left as it was are the old ones: it is made again next frame.
+                if changed {
+                    *strip_key = None;
+                }
+                continue;
+            }
+            if let Some(mut mesh) = writes.meshes.get_mut(&*mesh) {
                 pad_bounds(&mut mesh, min, max);
             }
             writes.commands.entity(*entity).insert(occlusion_aabb(min, max));

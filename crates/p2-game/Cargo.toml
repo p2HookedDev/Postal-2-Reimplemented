@@ -11,6 +11,8 @@ repository.workspace = true
 dev = ["bevy/dynamic_linking"]
 # Developer builds only: Tracy profiler spans.
 tracy = ["bevy/trace_tracy"]
+# Developer builds only: time per Bevy system in diagnostics.txt.
+profile = ["bevy/trace"]
 
 [dependencies]
 anyhow.workspace = true

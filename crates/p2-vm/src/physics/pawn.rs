@@ -73,13 +73,13 @@ impl<L: LoaderRef> Vm<L> {
         if controller.is_some()
             && self.kill_z(pawn, physics == Some(EPhysics::Walking)).is_some_and(|kill_z| start[2] < kill_z)
         {
-            self.event(pawn, "FellOutOfWorld", Vec::new())?;
+            self.event(pawn, crate::states::Event::FellOutOfWorld, Vec::new())?;
             if self.store.is_deleted(pawn) {
                 return Ok(());
             }
         }
         if self.store.flag_of(pawn, Prop::bCollideWorld) && self.out_of_world(pawn) {
-            self.event(pawn, "FellOutOfWorld", Vec::new())?;
+            self.event(pawn, crate::states::Event::FellOutOfWorld, Vec::new())?;
             return Ok(());
         }
         self.store.set(pawn, Prop::OldZ, Value::Float(start[2]));
@@ -143,7 +143,7 @@ impl<L: LoaderRef> Vm<L> {
         self.relocate(pawn);
         self.set_vector(pawn, Prop::PrePivot, [0.0, 0.0, adjust].into());
         self.store.set(pawn, Prop::bIsCrouched, Value::Bool(true));
-        self.event(pawn, "StartCrouch", [Value::Float(adjust)])
+        self.event(pawn, crate::states::Event::StartCrouch, [Value::Float(adjust)])
     }
 
     fn uncrouch(&mut self, pawn: ObjectId) -> Result<(), Error> {
@@ -169,7 +169,7 @@ impl<L: LoaderRef> Vm<L> {
         self.relocate(pawn);
         self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
         self.store.set(pawn, Prop::bIsCrouched, Value::Bool(false));
-        self.event(pawn, "EndCrouch", [Value::Float(adjust)])
+        self.event(pawn, crate::states::Event::EndCrouch, [Value::Float(adjust)])
     }
 
     pub(super) fn start_new_physics(&mut self, pawn: ObjectId, delta: f32, iterations: u32) -> Result<(), Error> {

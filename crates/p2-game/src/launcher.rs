@@ -11,6 +11,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use p2_engine::game_dir::{known_game_dir, save_game_dir};
 use p2_engine::game_dir_form::GameDirForm;
 use p2_engine::install;
+use p2_engine::map::{Hud, LoadMap, Particles, SpawnedActors};
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
@@ -55,6 +56,7 @@ fn launcher(
     mut commands: Commands,
     mut next: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
+    mut loads: MessageWriter<LoadMap>,
 ) -> Result {
     let (mut play, mut quit) = (false, false);
     egui::Window::new("POSTAL 2 Reimplemented")
@@ -99,12 +101,16 @@ fn launcher(
     }
     if play && let Some(info) = form.info.clone() {
         match crate::new_game(&info.dir) {
-            Ok(game) => {
+            Ok((package, session)) => {
                 if let Err(e) = save_game_dir(&info.dir) {
                     warn!("could not remember the game folder: {e}");
                 }
                 state.failure = None;
-                commands.insert_resource(game);
+                loads.write(LoadMap { package, url: None });
+                commands.insert_resource(session);
+                commands.insert_resource(Particles::default());
+                commands.insert_resource(SpawnedActors::default());
+                commands.insert_resource(Hud::default());
                 next.set(GameState::Playing);
             }
             Err(e) => state.failure = Some(format!("{e:#}")),

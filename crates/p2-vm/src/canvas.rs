@@ -45,7 +45,7 @@ impl<L: LoaderRef> Vm<L> {
                 canvas
             }
         };
-        self.event(canvas, "Reset", Vec::new())?;
+        self.event(canvas, crate::states::Event::Reset, Vec::new())?;
         for (property, value) in [(Prop::SizeX, Value::Int(width as i32)), (Prop::SizeY, Value::Int(height as i32))] {
             self.store.set(canvas, property, value);
         }

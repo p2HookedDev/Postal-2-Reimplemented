@@ -3,11 +3,12 @@
 
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Asset, AssetId, Assets};
-use bevy::ecs::change_detection::DetectChanges;
+use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::prelude::{Entity, Res, ResMut, Resource, World};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::Local;
 use bevy::image::{Image, ImageSamplerDescriptor};
+use bevy::mesh::Mesh3d;
 use bevy::pbr::{Lightmap, StandardMaterial};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::renderer::RenderDevice;
@@ -50,6 +51,11 @@ fn refresh_samplers(world: &mut World, mut refresh: Local<Refresh>) {
     for (entity, lightmap) in refresh.lightmaps.drain(..) {
         if let Ok(mut entity) = world.get_entity_mut(entity) {
             entity.insert(lightmap);
+            // A light map coming back does not make the renderer build the mesh's pipeline again; a changed mesh does.
+            // Without it the mesh is drawn with the pipeline built while it had no light map, which the GPU refuses.
+            if let Some(mut mesh) = entity.get_mut::<Mesh3d>() {
+                mesh.set_changed();
+            }
         }
     }
     let settings = world.resource_ref::<Settings>();
@@ -157,5 +163,34 @@ mod tests {
 
         app.update();
         assert!(app.world().resource::<ChangedSamplers>().0.is_empty());
+    }
+
+    #[test]
+    fn a_light_map_put_back_marks_its_mesh_changed() {
+        #[derive(Resource, Default)]
+        struct ChangedMeshes(usize);
+        fn count(changed: bevy::ecs::prelude::Query<(), bevy::ecs::prelude::Changed<Mesh3d>>, mut count: ResMut<ChangedMeshes>) {
+            count.0 = changed.iter().count();
+        }
+        let mut app = App::new();
+        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<Settings>().init_resource::<ChangedSamplers>().init_resource::<ChangedMeshes>();
+        app.add_systems(Update, (refresh_samplers, count).chain());
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(image(ImageSampler::Default, 1));
+        let lit = app.world_mut().spawn((Mesh3d::default(), Lightmap { image, ..Default::default() })).id();
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<ChangedMeshes>().0, 0);
+
+        *app.world_mut().resource_mut::<Settings>() =
+            Settings::read(|query| if query.ends_with("TextureDetailWorld") { "Low".to_owned() } else { String::new() });
+        app.update();
+        assert!(app.world().entity(lit).get::<Lightmap>().is_none());
+        assert_eq!(app.world().resource::<ChangedMeshes>().0, 0);
+
+        app.update();
+        assert!(app.world().entity(lit).get::<Lightmap>().is_some());
+        assert_eq!(app.world().resource::<ChangedMeshes>().0, 1);
     }
 }

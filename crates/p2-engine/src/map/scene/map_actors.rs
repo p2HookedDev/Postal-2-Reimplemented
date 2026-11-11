@@ -60,7 +60,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
     let zone_tags: Vec<_> = zone_actors
         .iter()
         .map(|&object| {
-            match object.or(level_info).and_then(|object| vm.store.get(object, "Tag")) {
+            match object.or(level_info).and_then(|object| vm.store.get(object, p2_vm::Prop::Tag)) {
                 Some(p2_vm::Value::Name(tag)) => Some(tag),
                 _ => None,
             }
@@ -68,7 +68,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
         .collect();
     let project_tags: Vec<_> = vm
         .actors()
-        .filter_map(|o| match vm.store.get(o, "ProjectTag") {
+        .filter_map(|o| match vm.store.get(o, p2_vm::Prop::ProjectTag) {
             Some(p2_vm::Value::Name(tag)) if tag != p2_vm::NameId::NONE => Some(tag),
             _ => None,
         })
@@ -107,7 +107,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
         let placement = (actor.blocks && !actor.movable).then_some(Placement { location: actor.location, rotation: actor.rotation, scale: actor.scale, pre_pivot: actor.pre_pivot });
         // Merged sections take every untagged projector and no tagged one: a model of its own carries the actor's own answer
         // (`Session::update_projections`).
-        let aimed_at = matches!(vm.store.get(actor.object, "Tag"), Some(p2_vm::Value::Name(tag)) if project_tags.contains(&tag));
+        let aimed_at = matches!(vm.store.get(actor.object, p2_vm::Prop::Tag), Some(p2_vm::Value::Name(tag)) if project_tags.contains(&tag));
         let own_model = (!actor.accepts_projectors || aimed_at) && actor.forced_zone_tag.is_none();
         let follow =
             (actor.movable || own_model).then_some(FollowActor { actor: actor.object, scale: actor.scale, pre_pivot: actor.pre_pivot, skeletal: None });
@@ -118,10 +118,10 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
     }
     for &object in &zone_actors {
         zone_fogs.push(object.and_then(|object| zone_fog(&vm, object)));
-        terrain_zones.push(object.or(level_info).is_some_and(|object| vm.store.flag_of(object, "bTerrainZone")));
+        terrain_zones.push(object.or(level_info).is_some_and(|object| vm.store.flag_of(object, p2_vm::Prop::bTerrainZone)));
         zone_ambients.push(object.or(level_info).map_or([0.0; 3], |object| zone_ambient(&vm, object)));
     }
-    if let Some(p2_vm::Value::Float(brightness)) = level_info.and_then(|info| vm.store.get(info, "Brightness")) {
+    if let Some(p2_vm::Value::Float(brightness)) = level_info.and_then(|info| vm.store.get(info, p2_vm::Prop::Brightness)) {
         level_brightness = brightness;
     }
     let played = (vm, Arc::clone(&loader), player, zone_actors);

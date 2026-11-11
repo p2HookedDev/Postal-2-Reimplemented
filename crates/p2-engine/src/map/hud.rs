@@ -8,6 +8,21 @@ pub(super) struct HudFont {
 
 type HudImage = (Handle<Image>, egui::Vec2);
 
+#[derive(Resource, Default)]
+pub struct Hud {
+    pub(super) hud_textures: FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
+    pub(super) hud_fonts: FxHashMap<String, Option<HudFont>>,
+    /// Keeps those images alive: egui holds them weakly and forgets each once it goes.
+    pub(super) hud_images: Vec<Handle<Image>>,
+    pub(super) movies: Movies,
+    pub(super) hud_assets: HudAssets,
+    pub(super) canvas_actors: Vec<CanvasActor>,
+    pub(super) failed_canvas_meshes: FxHashSet<String>,
+    /// Loading frames show it again: the engine does not clear the screen.
+    pub(super) last_hud: Arc<[CanvasItem]>,
+    pub(super) progress_bar: Option<Option<(ProgressBar, egui::TextureId)>>,
+}
+
 #[derive(Default)]
 pub(super) struct HudAssets {
     fonts: HashMap<String, (Font, Vec<Option<HudImage>>)>,
@@ -86,7 +101,7 @@ pub(super) fn paint_overlay(
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(r, g, b, (cover * 255.0) as u8));
     }
     for OverlayTitle { material, color: [r, g, b, a], size, at: [x, y], alpha } in titles {
-        let Some((id, texels)) = session.cached_hud_texture(&material, contexts, &mut targets.assets.images) else { continue };
+        let Some((id, texels)) = session.cached_hud_texture(&material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
         let width = size * rect.width();
         let height = width * texels.y / texels.x.max(1.0);
         let centre = rect.min + egui::vec2(x * rect.width(), y * rect.height());
@@ -146,11 +161,11 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
         match item {
             CanvasItem::Text { text, position, scale, color: c, font } => {
                 let path = font.as_deref().unwrap_or_default();
-                let hud_font = match session.hud_fonts.get(path) {
+                let hud_font = match targets.hud.hud_fonts.get(path) {
                     Some(found) => found.as_ref(),
                     None => {
-                        let found = font.as_deref().and_then(|path| session.hud_font(path, contexts, &mut targets.assets.images));
-                        session.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
+                        let found = font.as_deref().and_then(|path| session.hud_font(path, &mut targets.hud, contexts, &mut targets.assets.images));
+                        targets.hud.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
                     }
                 };
                 let origin = rect.min + egui::vec2(position[0], position[1]);
@@ -177,7 +192,7 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
             }
             CanvasItem::Actor { .. } => {}
             CanvasItem::Tile { material, position, size, uv, color: c, style } => {
-                let Some((id, texels)) = session.cached_hud_texture(material, contexts, &mut targets.assets.images) else { continue };
+                let Some((id, texels)) = session.cached_hud_texture(material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
                 let area = egui::Rect::from_min_size(rect.min + egui::vec2(position[0], position[1]), egui::vec2(size[0], size[1]));
                 let uv = egui::Rect::from_min_size(
                     egui::pos2(uv[0] / texels.x, uv[1] / texels.y),
@@ -191,33 +206,34 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
 }
 
 impl Session {
-    pub(super) fn hud_font(&mut self, path: &str, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<HudFont> {
-        let (font, pages) = match self.hud_assets.fonts.remove(path) {
+    pub(super) fn hud_font(&mut self, path: &str, hud: &mut Hud, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<HudFont> {
+        let (font, pages) = match hud.hud_assets.fonts.remove(path) {
             Some(read) => read,
             None => read_hud_font(open_game(&mut self.library, self.map_system.as_deref())?, path, |image| images.add(image))?,
         };
-        let pages = pages.into_iter().map(|page| page.map(|(handle, size)| (self.registered_image(handle, contexts), size))).collect();
+        let pages = pages.into_iter().map(|page| page.map(|(handle, size)| (hud.registered_image(handle, contexts), size))).collect();
         Some(HudFont { font, pages })
     }
 
-    pub(super) fn hud_texture(&mut self, material: &str, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<(egui::TextureId, egui::Vec2)> {
-        let (handle, size) = match self.hud_assets.textures.remove(material) {
+    pub(super) fn hud_texture(&mut self, material: &str, hud: &mut Hud, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<(egui::TextureId, egui::Vec2)> {
+        let (handle, size) = match hud.hud_assets.textures.remove(material) {
             Some(read) => read,
             None => read_hud_texture(open_game(&mut self.library, self.map_system.as_deref())?, material, |image| images.add(image))?,
         };
-        Some((self.registered_image(handle, contexts), size))
+        Some((hud.registered_image(handle, contexts), size))
     }
 
-    pub(super) fn cached_hud_texture(&mut self, material: &str, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<(egui::TextureId, egui::Vec2)> {
-        if let Some(found) = self.hud_textures.get(material) {
+    pub(super) fn cached_hud_texture(&mut self, material: &str, hud: &mut Hud, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<(egui::TextureId, egui::Vec2)> {
+        if let Some(found) = hud.hud_textures.get(material) {
             return *found;
         }
-        let found = self.hud_texture(material, contexts, images);
-        self.hud_textures.insert(material.to_owned(), found);
+        let found = self.hud_texture(material, hud, contexts, images);
+        hud.hud_textures.insert(material.to_owned(), found);
         found
     }
+}
 
-    /// The session holds it: `bevy_egui` forgets the image when the asset goes ([`Session::clear`] drops the handles).
+impl Hud {
     fn registered_image(&mut self, handle: Handle<Image>, contexts: &mut EguiContexts) -> egui::TextureId {
         let id = contexts.add_image(EguiTextureHandle::Weak(handle.id()));
         self.hud_images.push(handle);

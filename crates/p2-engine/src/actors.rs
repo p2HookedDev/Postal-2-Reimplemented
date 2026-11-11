@@ -168,14 +168,14 @@ pub fn mesh_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshActor>
         instance: object_path(vm, vm.store.get(actor, Prop::StaticMeshInstance).as_ref()),
         lighting: actor_lighting(vm, actor),
         blocks: vm.store.flag_of(actor, Prop::bCollideActors) && vm.store.flag_of(actor, Prop::bBlockActors),
-        forced_zone_tag: match vm.store.get(actor, "ForcedVisibilityZoneTag") {
+        forced_zone_tag: match vm.store.get(actor, Prop::ForcedVisibilityZoneTag) {
             Some(Value::Name(tag)) if tag != p2_vm::NameId::NONE => Some(tag),
             _ => None,
         },
         skins,
         object: actor,
         movable: !vm.store.flag_of(actor, Prop::bStatic),
-        accepts_projectors: vm.store.flag_of(actor, "bAcceptsProjectors"),
+        accepts_projectors: vm.store.flag_of(actor, Prop::bAcceptsProjectors),
     })
 }
 
@@ -257,7 +257,7 @@ pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight>
 }
 
 pub fn zone_ambient(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> [f32; 3] {
-    hsv_color(vm.store.byte_of(zone, "AmbientHue"), vm.store.byte_of(zone, "AmbientSaturation"), vm.store.byte_of(zone, "AmbientBrightness"))
+    hsv_color(vm.store.byte_of(zone, Prop::AmbientHue), vm.store.byte_of(zone, Prop::AmbientSaturation), vm.store.byte_of(zone, Prop::AmbientBrightness))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -268,14 +268,11 @@ pub struct ZoneFog {
 }
 
 pub fn zone_fog(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> Option<ZoneFog> {
-    if !vm.store.flag_of(zone, "bDistanceFog") {
+    if !vm.store.flag_of(zone, Prop::bDistanceFog) {
         return None;
     }
-    let color = ["R", "G", "B"].map(|channel| match vm.store.get_path(zone, &["DistanceFogColor", channel]) {
-        Some(Value::Byte(value)) => value,
-        _ => 0,
-    });
-    Some(ZoneFog { color, start: vm.store.float_of(zone, "DistanceFogStart"), end: vm.store.float_of(zone, "DistanceFogEnd") })
+    let color = vm.store.color_of(zone, Prop::DistanceFogColor).map_or([0; 3], |[r, g, b, _]| [r, g, b]);
+    Some(ZoneFog { color, start: vm.store.float_of(zone, Prop::DistanceFogStart), end: vm.store.float_of(zone, Prop::DistanceFogEnd) })
 }
 
 pub struct AmbientActor {
@@ -427,11 +424,11 @@ pub const PROJECT_ACTOR: u8 = 8;
 pub const PROJECT_ON_UNLIT: u8 = 16;
 
 pub fn projector_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<ProjectorActor> {
-    let Some(Value::Object(Some(texture))) = vm.store.get(actor, "ProjTexture") else { return None };
+    let Some(Value::Object(Some(texture))) = vm.store.get(actor, Prop::ProjTexture) else { return None };
     if !vm.store.is_a(actor, Kind::Projector) || vm.store.is_deleted(actor) {
         return None;
     }
-    let int = |name: &str, default: i32| match vm.store.get(actor, name) {
+    let int = |property: Prop, default: i32| match vm.store.get(actor, property) {
         Some(Value::Int(value)) => value,
         _ => default,
     };
@@ -444,30 +441,30 @@ pub fn projector_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Proje
             Some(Value::Float(scale)) => scale,
             _ => 1.0,
         },
-        max_trace: int("MaxTraceDistance", 1000) as f32,
-        fov: int("FOV", 0),
-        blending: match vm.store.get(actor, "FrameBufferBlendingOp") {
+        max_trace: int(Prop::MaxTraceDistance, 1000) as f32,
+        fov: int(Prop::FOV, 0),
+        blending: match vm.store.get(actor, Prop::FrameBufferBlendingOp) {
             Some(Value::Byte(op)) => ProjectorBlending::from_byte(op),
             _ => ProjectorBlending::Modulate,
         },
-        material_blending: match vm.store.get(actor, "MaterialBlendingOp") {
+        material_blending: match vm.store.get(actor, Prop::MaterialBlendingOp) {
             Some(Value::Byte(op)) => ProjectorBlending::from_byte(op),
             _ => ProjectorBlending::None,
         },
         targets: ProjectTargets([
-            ("bProjectBSP", true, PROJECT_BSP),
-            ("bProjectTerrain", true, PROJECT_TERRAIN),
-            ("bProjectStaticMesh", true, PROJECT_STATIC_MESH),
-            ("bProjectActor", true, PROJECT_ACTOR),
-            ("bProjectOnUnlit", false, PROJECT_ON_UNLIT),
+            (Prop::bProjectBSP, true, PROJECT_BSP),
+            (Prop::bProjectTerrain, true, PROJECT_TERRAIN),
+            (Prop::bProjectStaticMesh, true, PROJECT_STATIC_MESH),
+            (Prop::bProjectActor, true, PROJECT_ACTOR),
+            (Prop::bProjectOnUnlit, false, PROJECT_ON_UNLIT),
         ]
         .into_iter()
-        .filter(|&(name, default, _)| match vm.store.get(actor, name) {
+        .filter(|&(property, default, _)| match vm.store.get(actor, property) {
             Some(Value::Bool(on)) => on,
             _ => default,
         })
         .fold(0, |bits, (_, _, bit)| bits | bit)),
-        tagged: matches!(vm.store.get(actor, "ProjectTag"), Some(Value::Name(tag)) if tag != p2_vm::NameId::NONE),
+        tagged: matches!(vm.store.get(actor, Prop::ProjectTag), Some(Value::Name(tag)) if tag != p2_vm::NameId::NONE),
         follows: vm.projector_follows(actor),
     })
 }

@@ -7,6 +7,7 @@ use p2_collision::{BspHulls, Hit, MeshCollision, model_triangles, static_mesh_co
 
 use p2_math::{HEX_ROW_SPACING, Rotator, Vector};
 use crate::enums::EPhysics;
+use crate::object_table::ObjectTable;
 use crate::{Kind, LoaderRef, ObjectId, Prop, Vm};
 
 type Triangles = Vec<[[f32; 3]; 3]>;
@@ -16,7 +17,21 @@ struct LocalShape {
     lines: Option<Triangles>,
     box_slots: Arc<[u32]>,
     line_slots: Arc<[u32]>,
+    box_bounds: Option<([f32; 3], [f32; 3])>,
 }
+
+impl LocalShape {
+    fn new(boxes: Triangles, lines: Option<Triangles>, box_slots: Arc<[u32]>, line_slots: Arc<[u32]>) -> Self {
+        let box_bounds = boxes.iter().flatten().fold(None, |bounds: Option<([f32; 3], [f32; 3])>, &p| {
+            let (min, max) = bounds.unwrap_or((p, p));
+            Some(([0, 1, 2].map(|i| min[i].min(p[i])), [0, 1, 2].map(|i| max[i].max(p[i]))))
+        });
+        Self { boxes, lines, box_slots, line_slots, box_bounds }
+    }
+}
+
+/// Fewer moved shapes than this are left to the placing itself: handing them to other threads costs more.
+const BOXES_AT_ONCE: usize = 4;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Placement {
@@ -42,7 +57,8 @@ pub(crate) struct PlacedShape {
 #[derive(Default)]
 pub(crate) struct Primitives {
     local: FxHashMap<ObjectId, Option<Arc<LocalShape>>>,
-    placed: FxHashMap<ObjectId, (Placement, PlacedShape)>,
+    placed: ObjectTable<(Placement, PlacedShape)>,
+    bounds: ObjectTable<(Placement, (Vector, Vector))>,
     models: FxHashMap<ObjectId, Option<Arc<Model>>>,
     hulls: FxHashMap<ObjectId, BspHulls>,
     pub(crate) physics_volumes: Option<Arc<[ObjectId]>>,
@@ -66,8 +82,59 @@ impl<L: LoaderRef> Vm<L> {
         let lines = local.lines.as_ref().map_or_else(|| boxes.clone(), |lines| place(lines, &local.line_slots));
         let shape = PlacedShape { boxes, lines, model: brush };
         self.world.primitives.placed.insert(actor, (placement, shape));
-        self.profile_phase("collision shape placed", phase);
+        if phase.is_some() {
+            let class = self.store.names[self.store.object(actor).class_name.0 as usize].as_str();
+            let name = format!("collision shape placed: {class}");
+            self.profile_phase(&name, phase);
+        }
         Some(placement)
+    }
+
+    /// The bounds of the shape `fill_shape` gives, without placing the triangles of an actor that has moved.
+    /// The collision boxes of actors about to be put at `places`, worked out on several threads and kept, so the
+    /// placing that follows (one actor after the other, with its script events) finds each one ready.
+    pub(crate) fn prepare_bounds(&mut self, places: &[(ObjectId, Vector, Rotator)]) {
+        use rayon::prelude::*;
+        let work: Vec<(ObjectId, Placement, Arc<LocalShape>)> = places
+            .iter()
+            .filter_map(|&(actor, location, rotation)| {
+                let (primitive, brush, placement) = self.primitive_placement(actor)?;
+                let placement = Placement { location, rotation, ..placement };
+                let kept = self.world.primitives.bounds.get(actor).is_some_and(|(placed, _)| *placed == placement);
+                if kept || self.placed_shape(actor, &placement).is_some() {
+                    return None;
+                }
+                Some((actor, placement, self.local_shape(primitive, brush)?))
+            })
+            .collect();
+        if work.len() < BOXES_AT_ONCE {
+            return;
+        }
+        let phase = self.profile_start();
+        let boxes: Vec<(Vector, Vector)> = work
+            .par_iter()
+            .map(|(_, placed, local)| MeshCollision::placed_bounds(&local.boxes, placed.location, placed.rotation, placed.scale, placed.pre_pivot))
+            .collect();
+        for ((actor, placement, _), bounds) in work.into_iter().zip(boxes) {
+            self.world.primitives.bounds.insert(actor, (placement, bounds));
+        }
+        self.profile_phase("collision boxes of moved shapes, at once", phase);
+    }
+
+    pub(crate) fn placed_bounds(&mut self, actor: ObjectId) -> Option<(Vector, Vector)> {
+        let (primitive, brush, placement) = self.primitive_placement(actor)?;
+        if let Some(shape) = self.placed_shape(actor, &placement) {
+            return Some(shape.boxes.bounds());
+        }
+        if let Some(&(_, bounds)) = self.world.primitives.bounds.get(actor).filter(|(placed, _)| *placed == placement) {
+            return Some(bounds);
+        }
+        let local = self.local_shape(primitive, brush)?;
+        let phase = self.profile_start();
+        let bounds = MeshCollision::placed_bounds(&local.boxes, placement.location, placement.rotation, placement.scale, placement.pre_pivot);
+        self.world.primitives.bounds.insert(actor, (placement, bounds));
+        self.profile_phase("collision box of a moved shape", phase);
+        Some(bounds)
     }
 
     /// The collision triangles in the actor's own frame (pre-pivot and scale applied), as pawns collide with them.
@@ -110,17 +177,32 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn placed_shape(&self, actor: ObjectId, placement: &Placement) -> Option<&PlacedShape> {
-        self.world.primitives.placed.get(&actor).filter(|(placed, _)| placed == placement).map(|(_, shape)| shape)
+        self.world.primitives.placed.get(actor).filter(|(placed, _)| placed == placement).map(|(_, shape)| shape)
     }
 
     pub(crate) fn forget_placed_shape(&mut self, actor: ObjectId) {
-        self.world.primitives.placed.remove(&actor);
+        self.world.primitives.placed.remove(actor);
+        self.world.primitives.bounds.remove(actor);
     }
 
     /// A mover or a volume can reach far beyond its cylinder, and its pivot can be anywhere.
     pub(crate) fn collision_reach(&mut self, actor: ObjectId) -> f32 {
         let placement = self.fill_shape(actor);
         self.reach_of(actor, placement.and_then(|placement| self.placed_shape(actor, &placement)))
+    }
+
+    /// At least `collision_reach`, without placing the triangles: the collision hash only picks cells by it, and an
+    /// actor that moves every frame would have its whole shape placed again for that alone.
+    pub(crate) fn moved_reach(&mut self, actor: ObjectId) -> f32 {
+        let radius = self.store.float_of(actor, Prop::CollisionRadius);
+        let Some((primitive, brush, placement)) = self.primitive_placement(actor) else { return self.reach_of(actor, None) };
+        let Some((min, max)) = self.local_shape(primitive, brush).and_then(|local| local.box_bounds) else { return radius };
+        let farthest = (0..8)
+            .map(|corner| placement.in_body([0, 1, 2].map(|i| if corner >> i & 1 == 0 { min[i] } else { max[i] })))
+            .map(|p| p.iter().map(|c| c * c).sum::<f32>())
+            .fold(0.0, f32::max)
+            .sqrt();
+        (farthest * std::f32::consts::SQRT_2).max(radius)
     }
 
     pub(crate) fn placed_reach(&self, actor: ObjectId) -> Option<f32> {
@@ -166,7 +248,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let phase = self.profile_start();
         let read = if model {
-            self.brush_model(primitive).map(|model| LocalShape { boxes: model_triangles(&model), lines: None, box_slots: Arc::default(), line_slots: Arc::default() })
+            self.brush_model(primitive).map(|model| LocalShape::new(model_triangles(&model), None, Arc::default(), Arc::default()))
         } else {
             let loader = self.loader.clone();
             let path = &self.store.object(primitive).path;
@@ -179,7 +261,8 @@ impl<L: LoaderRef> Vm<L> {
                 });
                 let (boxes, box_slots) = static_mesh_collision(&mesh, collision_model.as_ref(), false);
                 let (lines, line_slots) = static_mesh_collision(&mesh, collision_model.as_ref(), true);
-                Some(LocalShape { lines: (lines != boxes).then_some(lines), boxes, box_slots: box_slots.into(), line_slots: line_slots.into() })
+                let lines = (lines != boxes).then_some(lines);
+                Some(LocalShape::new(boxes, lines, box_slots.into(), line_slots.into()))
             })
         };
         let read = read.map(Arc::new);
@@ -282,11 +365,11 @@ impl<L: LoaderRef> Vm<L> {
     /// A static mesh uses its placed collision triangles' bounds (retail's placed box can be larger).
     /// A skeletal mesh, a ragdoll too, keeps the cylinder, not its Karma bodies.
     pub(crate) fn encroach_box(&mut self, actor: ObjectId) -> (Vector, Vector) {
-        if let Some(shape) = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement)).filter(|shape| !shape.model) {
-            let (min, max) = shape.boxes.bounds();
-            if min[0] <= max[0] {
-                return ([0, 1, 2].map(|i| (min[i] + max[i]) * 0.5).into(), [0, 1, 2].map(|i| (max[i] - min[i]) * 0.5).into());
-            }
+        if !self.store.is_a(actor, Kind::Brush)
+            && let Some((min, max)) = self.placed_bounds(actor)
+            && min[0] <= max[0]
+        {
+            return ([0, 1, 2].map(|i| (min[i] + max[i]) * 0.5).into(), [0, 1, 2].map(|i| (max[i] - min[i]) * 0.5).into());
         }
         let (radius, height) = self.store.collision_size(actor);
         (self.store.vector(actor, Prop::Location), [radius, radius, height].into())

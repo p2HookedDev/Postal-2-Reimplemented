@@ -1,6 +1,19 @@
 use super::*;
 
 impl Simulation {
+    fn log_census(&mut self) {
+        bevy::log::info!("karma bodies: {}", self.vm.karma_census());
+        let [skipped, written, always] = std::mem::take(&mut self.reads);
+        bevy::log::info!("actor reads since the last line: {skipped} skipped, {written} written or new, {always} always read");
+        for (reason, name) in ["written or new", "always read"].into_iter().enumerate() {
+            let mut classes: Vec<(u32, &str)> = self.reads_by_class.iter().map(|(&class, counts)| (counts[reason], self.vm.store.name(self.vm.store.class(class).name))).collect();
+            classes.sort_unstable_by(|a, b| b.cmp(a));
+            let top: Vec<String> = classes.iter().take(8).filter(|(count, _)| *count > 0).map(|(count, class)| format!("{class} {count}")).collect();
+            bevy::log::info!("actor reads {name}, by class: {}", top.join(", "));
+        }
+        self.reads_by_class.clear();
+    }
+
     fn set_vm_profile(&mut self, profile: VmProfile) {
         if profile == VmProfile::TickByClass {
             self.vm.diagnostics.tick_profile.get_or_insert_default();
@@ -37,6 +50,10 @@ impl Simulation {
         }
         let errors = self.vm.tick_level(job.step);
         frame.times.push(("vm tick", started.elapsed()));
+        if job.vm_profile == VmProfile::TickByClass && self.census_at.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+            self.census_at = Some(Instant::now());
+            self.log_census();
+        }
         for (actor, error) in errors.iter().take(3) {
             bevy::log::warn!("{actor}: {error}");
         }
@@ -89,6 +106,7 @@ impl Simulation {
         }
         frame.times.push(("vm view", started.elapsed()));
         let started = Instant::now();
+        self.begin_reads();
         let followed = &job.followed;
         let mut recent = std::mem::take(&mut self.recent_read);
         recent.clear();
@@ -127,14 +145,14 @@ impl Simulation {
             .last();
         if frame.travel.is_none() {
             let started = Instant::now();
-            frame.hud = self.hud(job.canvas).into();
+            self.draw_hud(&mut frame, job.canvas, job.step);
             frame.times.push(("hud scripts", started.elapsed()));
         }
         let started = Instant::now();
         self.read_after_hud(&mut frame, &job.watched, job.forces);
         frame.times.push(("vm read after hud", started.elapsed()));
         frame.profile = self.vm.diagnostics.tick_profile.take().unwrap_or_default();
-        let vm_time = frame.times.iter().map(|(_, time)| *time).sum();
+        let vm_time = frame.times.iter().filter(|(name, _)| !name.starts_with("after hud: ")).map(|(_, time)| *time).sum();
         self.log_work(vm_time);
         frame.job_buffers = JobBuffers { held: job.held, followed: job.followed, visible: job.visible, placed: job.placed, watched: job.watched };
         frame

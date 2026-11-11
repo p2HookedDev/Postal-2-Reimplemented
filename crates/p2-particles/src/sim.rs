@@ -85,6 +85,9 @@ struct Particle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteParticle {
     pub location: Vector,
+    /// Where the particle stood before the newest tick moved it: its birth place on the tick it was born, `location` once
+    /// it bounced or stopped.
+    pub previous: Vector,
     pub size: [f32; 2],
     /// Half axes of the quad, world coordinates, spin applied: the corners are `location ∓ up ∓ right`; the texture's
     /// `v0` edge is at `-up`, its `u0` edge at `-right`. Camera-facing sprites (`PTDU_None`) are squares of half size

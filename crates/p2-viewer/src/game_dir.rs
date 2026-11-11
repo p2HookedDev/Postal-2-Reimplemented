@@ -10,6 +10,7 @@ use crate::ViewerState;
 use crate::browser::Browser;
 use p2_engine::game_dir_form::GameDirForm;
 use p2_engine::game_dir::save_game_dir;
+use p2_engine::map::{Hud, Particles, SpawnedActors};
 
 pub struct GameDirPlugin;
 
@@ -48,12 +49,16 @@ fn form(
         form.check();
         let Some(dir) = form.info.as_ref().map(|info| info.dir.clone()) else { return Ok(()) };
         match Browser::new(dir.clone(), None, None) {
-            Ok(browser) => {
+            Ok((browser, session)) => {
                 if let Err(e) = save_game_dir(&dir) {
                     warn!("could not remember the game folder: {e}");
                 }
                 form.error = None;
                 commands.insert_resource(browser);
+                commands.insert_resource(session);
+                commands.insert_resource(Particles::default());
+                commands.insert_resource(SpawnedActors::default());
+                commands.insert_resource(Hud::default());
                 next.set(ViewerState::Browse);
             }
             Err(e) => form.error = Some(format!("{}: {e}", dir.display())),

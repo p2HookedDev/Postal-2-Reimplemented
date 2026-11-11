@@ -1,4 +1,5 @@
 use p2_math::Vector;
+use crate::states::Event;
 use crate::{Error, ObjectId, LoaderRef, Prop, Value, Vm};
 
 mod encroach;
@@ -16,8 +17,8 @@ fn add_time(profile: &mut rustc_hash::FxHashMap<String, std::time::Duration>, na
     }
 }
 
-const SPAWN_EVENTS: [&str; 3] = ["Spawned", "PreBeginPlay", "BeginPlay"];
-const BEGUN_EVENTS: [&str; 3] = ["PostBeginPlay", "SetInitialState", "PostNetBeginPlay"];
+const SPAWN_EVENTS: [Event; 3] = [Event::Spawned, Event::PreBeginPlay, Event::BeginPlay];
+const BEGUN_EVENTS: [Event; 3] = [Event::PostBeginPlay, Event::SetInitialState, Event::PostNetBeginPlay];
 const MIN_TICK: f32 = 0.0005;
 const MAX_TICK: f32 = 0.4;
 
@@ -93,8 +94,8 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) || self.store.object_of(actor, Prop::Base).is_none() || !self.on_bone(actor) {
             return;
         }
-        self.store.set(actor, Prop::Location, Value::Vector(location));
-        self.store.set(actor, Prop::Rotation, Value::Rotator(crate::natives::orthogonal_rotation(axes[0], axes[1], axes[2])));
+        self.store.set_undrawn(actor, Prop::Location, Value::Vector(location));
+        self.store.set_undrawn(actor, Prop::Rotation, Value::Rotator(crate::natives::orthogonal_rotation(axes[0], axes[1], axes[2])));
         self.volume_moved(actor);
         self.relocate(actor);
     }
@@ -200,8 +201,9 @@ mod tests {
 
     #[test]
     fn spawn_event_order() {
-        assert_eq!(SPAWN_EVENTS, ["Spawned", "PreBeginPlay", "BeginPlay"]);
-        assert_eq!(BEGUN_EVENTS, ["PostBeginPlay", "SetInitialState", "PostNetBeginPlay"]);
+        let names = |events: [crate::states::Event; 3]| events.map(|event| crate::states::EVENT_NAMES[event as usize]);
+        assert_eq!(names(SPAWN_EVENTS), ["Spawned", "PreBeginPlay", "BeginPlay"]);
+        assert_eq!(names(BEGUN_EVENTS), ["PostBeginPlay", "SetInitialState", "PostNetBeginPlay"]);
     }
 
     #[test]

@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 p2-assets.workspace = true
+p2-collision.workspace = true
 p2-math.workspace = true
 
 [dev-dependencies]

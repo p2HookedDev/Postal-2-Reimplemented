@@ -8,6 +8,7 @@ import bevy_pbr::render::{
     pbr_types,
 };
 import package::p2_engine::shader_layers::{detail, glow, specular};
+import package::p2_engine::color::{to_display, to_linear};
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_cube};
 @if(BINDLESS)
@@ -18,6 +19,7 @@ struct ShaderLayers {
     specular: vec4<f32>,
     specular_u: vec4<f32>,
     specular_v: vec4<f32>,
+    blend: vec4<f32>,
 }
 
 @if(BINDLESS) {
@@ -131,10 +133,34 @@ fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: 
     return vec4(out, alpha);
 }
 
+// A surface's colour under `light`. An `OB_Darken` surface (`blend.x`) multiplies the frame buffer by one minus its lit
+// colour, and its texture is stored as one minus the colour, both in display space.
+fn lit_color(layers: ShaderLayers, stored: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
+    if layers.blend.x == 0.0 {
+        return stored * light;
+    }
+    let lit = to_linear(1.0 - to_display(stored)) * light;
+    return to_linear(1.0 - min(to_display(lit), vec3(1.0)));
+}
+
 // Bevy's fog (`main_pass_post_lighting_processing`) on `color`. Bevy mixes towards the whole fog colour; a premultiplied
 // surface covers only its alpha's share of it, so the rest comes off (fog is affine in the colour; no tone mapping in
 // the shader). The specular fades with the fog as towards black (unverified).
 fn post_lighting(pbr_input: pbr_types::PbrInput, color: vec4<f32>) -> vec4<f32> {
+    let mode = pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
+    let added = mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD;
+    if added || mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_MULTIPLY {
+        // The driver fogs a pass that adds towards black and one that multiplies towards the colour that changes
+        // nothing, never towards the scene's fog colour: far away such a surface fades out instead of tinting
+        // what is behind it. What the fog leaves of a colour is the fogged white minus the fogged black.
+        let left = main_pass_post_lighting_processing(pbr_input, vec4(1.0, 1.0, 1.0, color.a)).rgb
+            - main_pass_post_lighting_processing(pbr_input, vec4(0.0, 0.0, 0.0, color.a)).rgb;
+        if added {
+            // Alpha 0: the blend is premultiplied, so any alpha left here would darken what is behind.
+            return vec4(color.rgb * left, 0.0);
+        }
+        return vec4(1.0 - (1.0 - color.rgb) * left, color.a);
+    }
     let out = main_pass_post_lighting_processing(pbr_input, color);
     if !premultiplied(pbr_input.material.flags) {
         return out;

@@ -12,9 +12,9 @@ impl<L: LoaderRef> Vm<L> {
             instance.linked.push(default);
             instance.rates.clear();
         }
-        let count = self.media.anims.instances.get(&actor)?.linked.len();
+        let count = self.media.anims.instances.get(actor)?.linked.len();
         (0..count).find_map(|index| {
-            let animation = *self.media.anims.instances.get(&actor)?.linked.get(index)?;
+            let animation = *self.media.anims.instances.get(actor)?.linked.get(index)?;
             let sequences = self.sequences(animation)?;
             sequences.iter().find(|s| s.name == name).map(|s| (index, read(s)))
         })
@@ -107,6 +107,6 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn has_animation(&self, actor: ObjectId) -> bool {
-        self.media.anims.instances.contains_key(&actor)
+        self.media.anims.instances.get(actor).is_some()
     }
 }

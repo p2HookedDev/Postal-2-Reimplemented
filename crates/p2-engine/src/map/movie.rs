@@ -15,8 +15,8 @@ use p2_movie::{RoqDecoder, SAMPLE_RATE};
 use p2_vm::{MovieState, ObjectId};
 use rustc_hash::FxHashMap;
 
-use super::SceneTargets;
-use crate::play::MovieSound;
+use super::AssetStores;
+use crate::play::{MovieSound, Play};
 
 struct Opened {
     bytes: Arc<[u8]>,
@@ -77,21 +77,23 @@ impl Movies {
         &mut self,
         root: &Path,
         contexts: &mut EguiContexts,
-        t: &mut SceneTargets,
+        play: &mut Play,
+        commands: &mut Commands,
+        assets: &mut AssetStores,
         hud_textures: &mut FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
     ) {
         let now = Instant::now();
         let delta = self.last.map_or(0.0, |last| now.duration_since(last).as_secs_f32());
         self.last = Some(now);
-        if self.playing.is_empty() && t.play.world().is_none_or(|world| world.movies().is_empty()) {
+        if self.playing.is_empty() && play.world().is_none_or(|world| world.movies().is_empty()) {
             return;
         }
-        let movies: Vec<(String, ObjectId, MovieState)> = t.play.world().map(|world| world.movies().to_vec()).unwrap_or_default();
+        let movies: Vec<(String, ObjectId, MovieState)> = play.world().map(|world| world.movies().to_vec()).unwrap_or_default();
         let state = |movie: ObjectId| movies.iter().find(|(_, m, _)| *m == movie);
         self.playing.retain(|&movie, slot| {
             let keep = state(movie).is_some_and(|(_, _, s)| s.plays == slot.plays() && (s.playing || matches!(slot, Slot::Ended(_))));
             if !keep {
-                slot.stop(&mut t.commands);
+                slot.stop(commands);
             }
             keep
         });
@@ -113,7 +115,9 @@ impl Movies {
                             let (width, height) = (opened.decoder.width(), opened.decoder.height());
                             bevy::log::info!("Movie {} opened: {width}x{height} at {} fps", s.file, opened.decoder.frame_rate());
                             reports.push(crate::play::MovieStatus { movie, width: width as i32, height: height as i32, playing: true });
-                            let shown = show(opened, movie, s.looping, texture, contexts, t, hud_textures);
+                            let shown = show(opened, movie, s.looping, commands, assets);
+                            let id = contexts.add_image(EguiTextureHandle::Weak(shown.image.id()));
+                            hud_textures.insert(texture.clone(), Some((id, egui::vec2(width as f32, height as f32))));
                             self.images.insert(texture.clone(), shown.image.clone());
                             Slot::Shown(plays, Box::new(shown))
                         }
@@ -125,41 +129,31 @@ impl Movies {
                     };
                 }
                 Slot::Shown(plays, shown) if !s.paused => {
-                    if !advance(shown, delta, s.looping, &mut t.assets.images) {
+                    if !advance(shown, delta, s.looping, &mut assets.images) {
                         reports.push(crate::play::MovieStatus { movie, width: shown.decoder.width() as i32, height: shown.decoder.height() as i32, playing: false });
                         let plays = *plays;
-                        slot.stop(&mut t.commands);
+                        slot.stop(commands);
                         *slot = Slot::Ended(plays);
                     }
                 }
                 _ => {}
             }
         }
-        if let Some(world) = t.play.world_mut() {
+        if let Some(world) = play.world_mut() {
             world.movie_status.extend(reports);
         }
     }
 }
 
-fn show(
-    opened: Opened,
-    movie: ObjectId,
-    looping: bool,
-    texture: &str,
-    contexts: &mut EguiContexts,
-    t: &mut SceneTargets,
-    hud_textures: &mut FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
-) -> Shown {
+fn show(opened: Opened, movie: ObjectId, looping: bool, commands: &mut Commands, assets: &mut AssetStores) -> Shown {
     let (width, height) = (opened.decoder.width(), opened.decoder.height());
     let size = Extent3d { width, height, depth_or_array_layers: 1 };
     let black = vec![0; width as usize * height as usize * 4];
-    let image = t.assets.images.add(Image::new(size, TextureDimension::D2, black, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()));
-    let id = contexts.add_image(EguiTextureHandle::Weak(image.id()));
-    hud_textures.insert(texture.to_owned(), Some((id, egui::vec2(width as f32, height as f32))));
-    let sound = match (opened.sound, t.assets.audio.as_mut()) {
+    let image = assets.images.add(Image::new(size, TextureDimension::D2, black, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()));
+    let sound = match (opened.sound, assets.audio.as_mut()) {
         (Some(wav), Some(sources)) => {
             let settings = if looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
-            Some(t.commands.spawn((AudioPlayer::new(sources.add(AudioSource { bytes: wav.into() })), settings, MovieSound(movie))).id())
+            Some(commands.spawn((AudioPlayer::new(sources.add(AudioSource { bytes: wav.into() })), settings, MovieSound(movie))).id())
         }
         _ => None,
     };
