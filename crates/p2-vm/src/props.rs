@@ -63,7 +63,7 @@ properties!(
     FlashFog, bFadeOut, EventName, CameraEffect, StartAlpha, EndAlpha, Alpha, DisableAfterDuration, Prop, bValue,
     MinAlpha, MaxAlpha, FadeInTimePercent, FadeOutTimePercent, OverlayMaterial, OverlaySizeFactor, OverlayXPos,
     OverlayYPos, OverlayStyle, PathList, End, RouteCache, bBlocked, bCanCrouch, MaxFallSpeed, ExtraCost, RouteDist,
-    bCanWalk, NextNode, HomeNodeLists, PathNodeList, Buoyancy, bWaterVolume, FluidFriction, bNoPhysicalLadder,
+    bCanWalk, NextNode, HomeNodeLists, PathNodeList, Buoyancy, bWaterVolume, bBounceVelocity, FluidFriction, bNoPhysicalLadder,
     LadderSpeed, bTrailerSameRotation, bTrailerPrePivot, Inventory, bTravel, ForceType,
     bOwnerNoSee, bOnlyOwnerSee, bDynamicLight,
     LightType, LightBrightness, LightHue, LightSaturation, LightRadius, LightCone, LightPeriod, LightPhase, LightEffect, bCorona,

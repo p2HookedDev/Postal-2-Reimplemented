@@ -206,6 +206,7 @@ mod ladder_spider;
 pub(crate) mod root_motion;
 mod base;
 mod falling;
+pub(crate) use falling::fall_velocity;
 mod pawn;
 mod rotation;
 mod sweep;

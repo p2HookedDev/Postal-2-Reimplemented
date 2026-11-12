@@ -7,6 +7,8 @@ use super::{
     SOFT_KILL_Z_GRACE, Sweep, SweepAgainst, VolumeProps, turned_velocity,
 };
 
+const BOUNCE_LIFT: f32 = 80.0;
+
 impl<L: LoaderRef> Vm<L> {
     pub(super) fn is_human_controlled(&self, pawn: ObjectId) -> bool {
         self.store.object_of(pawn, Prop::Controller).is_some_and(|c| self.store.is_a(c, Kind::PlayerController))
@@ -38,6 +40,39 @@ impl<L: LoaderRef> Vm<L> {
                 zone_velocity: Vector::ZERO,
             },
         }
+    }
+
+    /// The actor's lift and drag from the volumes it stands in: `Buoyancy` and the volume's `FluidFriction`, each times
+    /// the share of the actor that is inside. Out of water every touched physics volume with a brush counts, at half
+    /// that share: this is why trigger and interest volumes have twice the gravity.
+    pub(crate) fn volume_buoyancy(&mut self, actor: ObjectId) -> (f32, f32) {
+        let at = self.store.vector(actor, Prop::Location);
+        let (_, height) = self.store.collision_size(actor);
+        let (head, feet) = (Vector::new(at[0], at[1], at[2] + height), Vector::new(at[0], at[1], at[2] - height));
+        let own = self.store.object_of(actor, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some());
+        let found = match own.filter(|&volume| self.store.flag_of(volume, Prop::bWaterVolume)) {
+            Some(water) => Some((water, self.volume_line_time(water, head, feet).map_or(1.0, |time| 1.0 - time))),
+            None => {
+                let mut first: Option<(ObjectId, f32)> = None;
+                for volume in self.store.object_list(actor, Prop::Touching) {
+                    if self.store.is_a(volume, Kind::PhysicsVolume)
+                        && let Some(time) = self.volume_line_time(volume, head, feet)
+                        && first.is_none_or(|(_, least)| time < least)
+                    {
+                        first = Some((volume, time));
+                    }
+                }
+                first.map(|(volume, time)| (volume, (1.0 - time) * 0.5))
+            }
+        };
+        found.map_or((0.0, 0.0), |(volume, depth)| (self.store.float_of(actor, Prop::Buoyancy) * depth, self.store.float_of(volume, Prop::FluidFriction) * depth))
+    }
+
+    /// What an actor landing in a `bBounceVelocity` volume that pushes is thrown up with, instead of landing.
+    pub(crate) fn bounce_velocity(&self, actor: ObjectId) -> Option<Vector> {
+        let volume = self.store.object_of(actor, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some())?;
+        let push = self.store.vector(volume, Prop::ZoneVelocity);
+        (self.store.flag_of(volume, Prop::bBounceVelocity) && push != Vector::ZERO).then(|| push + Vector::new(0.0, 0.0, BOUNCE_LIFT))
     }
 
     pub(crate) fn gravity_of(&self, pawn: ObjectId) -> Vector {

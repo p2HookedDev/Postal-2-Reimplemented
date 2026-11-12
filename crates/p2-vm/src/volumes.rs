@@ -138,6 +138,15 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
+    /// When the line from `start` to `end` first is inside the volume's brush: 0 for a start inside.
+    pub(crate) fn volume_line_time(&mut self, volume: ObjectId, start: Vector, end: Vector) -> Option<f32> {
+        let frame = self.world.frame;
+        if !self.check_volume_place(volume, frame) {
+            return None;
+        }
+        self.world.primitives.volumes.get(&volume)?.line_time(start, end)
+    }
+
     pub(crate) fn first_water_volume(&mut self, start: Vector, end: Vector) -> Option<(ObjectId, f32)> {
         self.refresh_volume_table();
         let mut first: Option<(ObjectId, f32)> = None;

@@ -1,7 +1,7 @@
 //! Not modelled (unverified): `find_water_line` beyond water volumes and level geometry,
 //! and buoyancy depth: a pawn in water counts as fully in it.
 
-use super::{Bases, DEFAULT_GRAVITY, MoveHit, gravity_direction, horizontal_size, turned_velocity, two_wall_adjust};
+use super::{Bases, MoveHit, gravity_direction, horizontal_size, turned_velocity, two_wall_adjust};
 use p2_math::Vector;
 use crate::enums::EPhysics;
 use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
@@ -63,11 +63,11 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn phys_swimming(&mut self, pawn: ObjectId, delta: f32, iterations: u32) -> Result<(), Error> {
-        let (in_water, fluid_friction) = self.water(pawn);
+        let (_, fluid_friction) = self.water(pawn);
         let buoyancy = self.store.float_of(pawn, Prop::Buoyancy);
         let mut velocity = self.store.vector(pawn, Prop::Velocity);
         if velocity[2] > BUOYANT_RISE && buoyancy != 0.0 {
-            velocity[2] = velocity[2] * self.net_buoyancy(pawn, in_water, buoyancy) / buoyancy;
+            velocity[2] = velocity[2] * self.volume_buoyancy(pawn).0 / buoyancy;
             self.set_vector(pawn, Prop::Velocity, velocity);
         }
         let mut old_location = self.store.vector(pawn, Prop::Location);
@@ -208,16 +208,6 @@ impl<L: LoaderRef> Vm<L> {
         match self.store.object_of(pawn, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some()) {
             Some(v) => (self.store.flag_of(v, Prop::bWaterVolume), self.store.float_of(v, Prop::FluidFriction)),
             None => (false, DEFAULT_FLUID_FRICTION),
-        }
-    }
-
-    fn net_buoyancy(&self, pawn: ObjectId, in_water: bool, buoyancy: f32) -> f32 {
-        if in_water {
-            buoyancy
-        } else if self.gravity_of(pawn)[2] != DEFAULT_GRAVITY[2] {
-            0.5 * buoyancy
-        } else {
-            0.0
         }
     }
 

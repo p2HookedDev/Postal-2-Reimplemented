@@ -7,6 +7,12 @@ use super::{
     MoveHit, VolumeProps, horizontal_size, substep, two_wall_adjust,
 };
 
+/// The velocity at the middle of a fall step: `lift` (buoyancy over mass) takes its share off the acceleration, gravity
+/// included, and `fluid_friction` slows what the actor already had.
+pub(crate) fn fall_velocity(old: Vector, acceleration: Vector, tick: f32, lift: f32, fluid_friction: f32) -> Vector {
+    (acceleration * ((1.0 - lift) * 0.5 * tick)) + (old * (1.0 - fluid_friction * tick))
+}
+
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn begin_fall_step(&mut self, actor: ObjectId) -> (Vector, Vector) {
         let old_location = self.store.vector(actor, Prop::Location);
@@ -21,20 +27,22 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(super) fn phys_falling(&mut self, pawn: ObjectId, delta: f32, mut iterations: u32) -> Result<(), Error> {
-        let VolumeProps { gravity, terminal_velocity: terminal, zone_velocity, .. } = self.volume(pawn);
         let mut real_acceleration = self.store.vector(pawn, Prop::Acceleration);
         let accel_rate = self.store.float_of(pawn, Prop::AccelRate);
         let (mut acceleration, bound_speed) = self.air_acceleration(pawn, real_acceleration, accel_rate, delta);
         let constant = self.store.vector(pawn, Prop::ConstantAcceleration);
         let ai = self.store.object_of(pawn, Prop::Controller).is_some_and(|c| self.store.is_a(c, Kind::AIController));
+        let mass = self.store.float_of(pawn, Prop::Mass);
         let mut remaining = delta;
         while remaining > 0.0 && iterations < MAX_ITERATIONS {
             iterations += 1;
             let tick = substep(remaining);
             remaining -= tick;
             let (old_location, mut old_velocity) = self.begin_fall_step(pawn);
+            let VolumeProps { gravity, zone_velocity, .. } = self.volume(pawn);
             let total = (acceleration + gravity) + constant;
-            let mut velocity = old_velocity + (total * (0.5 * tick));
+            let (buoyancy, fluid_friction) = self.volume_buoyancy(pawn);
+            let mut velocity = fall_velocity(old_velocity, total, tick, if buoyancy == 0.0 { 0.0 } else { buoyancy / mass }, fluid_friction);
             if bound_speed != 0.0 && horizontal_size(velocity) > bound_speed {
                 let flat = Vector::new(velocity[0], velocity[1], 0.0).safe_normal() * bound_speed;
                 velocity = [flat[0], flat[1], velocity[2]].into();
@@ -80,6 +88,7 @@ impl<L: LoaderRef> Vm<L> {
                 old_velocity = [moved[0], moved[1], old_velocity[2]].into();
             }
             if !self.store.flag_of(pawn, Prop::bJustTeleported) {
+                let VolumeProps { terminal_velocity: terminal, zone_velocity, .. } = self.volume(pawn);
                 let moved = ((self.store.vector(pawn, Prop::Location) - old_location) * (1.0 / tick)) - zone_velocity;
                 let mut velocity = moved;
                 if moved[2] < old_velocity[2] || old_velocity[2] >= 0.0 {
@@ -145,5 +154,19 @@ impl<L: LoaderRef> Vm<L> {
             self.event(pawn, crate::states::Event::Landed, args)?;
         }
         self.start_new_physics(pawn, left, iterations)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pawn_inside_a_trigger_volume_falls_as_fast_as_outside() {
+        let (old, tick) = (Vector::new(100.0, 0.0, 550.0), 0.05);
+        let outside = fall_velocity(old, Vector::new(0.0, 0.0, -1500.0), tick, 0.0, 0.0);
+        assert_eq!(outside, Vector::new(100.0, 0.0, 550.0 - 1500.0 * 0.025));
+        let inside = fall_velocity(old, Vector::new(0.0, 0.0, -3000.0), tick, 99.0 * 0.5 / 100.0, 0.3 * 0.5);
+        assert!((inside[2] - (550.0 * 0.9925 - 3000.0 * 0.505 * 0.025)).abs() < 1e-3 && (inside[0] - 99.25).abs() < 1e-3, "{inside:?}");
     }
 }

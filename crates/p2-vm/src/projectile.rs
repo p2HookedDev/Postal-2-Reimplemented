@@ -1,7 +1,7 @@
 use p2_math::{Rotator, Vector};
 
 use crate::enums::{EDrawType, EPhysics};
-use crate::physics::{Bases, MAX_ITERATIONS, MIN_FLOOR_Z, MIN_LANDING_SECONDS, MIN_LANDING_TIME, MoveHit, VolumeProps, nearly_zero, substep, two_wall_adjust};
+use crate::physics::{Bases, fall_velocity, MAX_ITERATIONS, MIN_FLOOR_Z, MIN_LANDING_SECONDS, MIN_LANDING_TIME, MoveHit, VolumeProps, nearly_zero, substep, two_wall_adjust};
 use crate::{Encroachment, Error, LoaderRef, ObjectId, Value, Vm, Prop, Kind};
 
 impl<L: LoaderRef> Vm<L> {
@@ -118,7 +118,7 @@ impl<L: LoaderRef> Vm<L> {
         if self.below_kill_z(actor)? {
             return Ok(());
         }
-        let VolumeProps { gravity, terminal_velocity: terminal, zone_velocity, .. } = self.volume(actor);
+        let mass = self.store.float_of(actor, Prop::Mass);
         let mut remaining = delta;
         let mut bounces = 0;
         while remaining > 0.0 && iterations < MAX_ITERATIONS {
@@ -127,7 +127,10 @@ impl<L: LoaderRef> Vm<L> {
             remaining -= tick;
             let (old_location, mut old_velocity) = self.begin_fall_step(actor);
             let acceleration = self.store.vector(actor, Prop::Acceleration);
-            let velocity = old_velocity + ((acceleration + gravity) * (0.5 * tick));
+            let VolumeProps { gravity, zone_velocity, .. } = self.volume(actor);
+            let (buoyancy, fluid_friction) = self.volume_buoyancy(actor);
+            let lift = if buoyancy == 0.0 { 0.0 } else { buoyancy / mass };
+            let velocity = fall_velocity(old_velocity, (gravity * (1.0 - lift)) + acceleration, tick, 0.0, fluid_friction);
             let adjusted = (velocity + zone_velocity) * tick;
             let Some(hit) = self.fall_step_move(actor, velocity, adjusted)? else { return Ok(()) };
             if hit.time < 1.0 {
@@ -178,11 +181,12 @@ impl<L: LoaderRef> Vm<L> {
             }
             if !self.store.flag_of(actor, Prop::bBounce) && !self.store.flag_of(actor, Prop::bJustTeleported) {
                 let moved = self.store.vector(actor, Prop::Location) - old_location;
+                let VolumeProps { terminal_velocity: terminal, zone_velocity, .. } = self.volume(actor);
                 let mut velocity = (moved * (1.0 / tick)) - zone_velocity;
                 if velocity[2] < old_velocity[2] || old_velocity[2] >= 0.0 {
                     velocity = (velocity * 2.0) - old_velocity;
                 }
-                if terminal > 0.0 && velocity.size() > terminal {
+                if velocity.dot(velocity) > terminal * terminal {
                     velocity = velocity.safe_normal() * terminal;
                 }
                 self.set_vector(actor, Prop::Velocity, velocity);
@@ -199,6 +203,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn actor_landed(&mut self, actor: ObjectId, hit: MoveHit) -> Result<(), Error> {
+        if let Some(thrown) = self.bounce_velocity(actor) {
+            self.set_vector(actor, Prop::Velocity, thrown);
+            return Ok(());
+        }
         self.event(actor, crate::states::Event::Landed, [Value::Vector(hit.normal)])?;
         if !self.store.is_deleted(actor) && self.store.physics_of(actor) == Some(EPhysics::Falling) {
             self.set_physics(actor, EPhysics::None, Some((hit.actor, hit.normal)))?;
