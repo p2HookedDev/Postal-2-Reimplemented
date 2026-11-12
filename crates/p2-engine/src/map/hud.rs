@@ -219,15 +219,23 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
             CanvasItem::Tile { material, position, size, uv, color: c, style } => {
                 let Some((id, texels)) = session.cached_hud_texture(material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
                 let area = egui::Rect::from_min_size(rect.min + egui::vec2(position[0], position[1]), egui::vec2(size[0], size[1]));
-                let uv = egui::Rect::from_min_size(
-                    egui::pos2(uv[0] / texels.x, uv[1] / texels.y),
-                    egui::vec2(uv[2] / texels.x, uv[3] / texels.y),
-                );
+                let (u, v) = (inside_borders(uv[0], uv[2], texels.x, size[0]), inside_borders(uv[1], uv[3], texels.y, size[1]));
+                let uv = egui::Rect::from_min_size(egui::pos2(u[0] / texels.x, v[0] / texels.y), egui::vec2(u[1] / texels.x, v[1] / texels.y));
                 let tint = if ERenderStyle::from_byte(*style) == Some(ERenderStyle::Translucent) { egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], 0) } else { color(*c) };
                 painter.image(id, area, uv, tint);
             }
         }
     }
+}
+
+fn inside_borders(start: f32, length: f32, texels: f32, drawn: f32) -> [f32; 2] {
+    if length <= 0.0 || drawn <= length || drawn <= 1.0 {
+        return [start, length];
+    }
+    let inset = 0.5 * (drawn - length) / (drawn - 1.0);
+    let (end, at_border) = (start + length, |edge: f32| edge == 0.0 || edge == texels);
+    let (from, to) = (if at_border(start) { start + inset } else { start }, if at_border(end) { end - inset } else { end });
+    [from, to - from]
 }
 
 impl Session {
@@ -276,6 +284,15 @@ mod tests {
 
     fn text() -> CanvasItem {
         CanvasItem::Text { text: String::new(), position: [0.0; 2], scale: [1.0; 2], color: [0; 4], font: None }
+    }
+
+    #[test]
+    fn an_enlarged_tile_reads_no_texel_across_the_border() {
+        assert_eq!(inside_borders(0.0, 32.0, 32.0, 32.0), [0.0, 32.0]);
+        assert_eq!(inside_borders(8.0, 16.0, 32.0, 64.0), [8.0, 16.0]);
+        let [start, length] = inside_borders(0.0, 32.0, 32.0, 64.0);
+        let first_pixel = start + 0.5 * length / 64.0;
+        assert!((first_pixel - 0.5).abs() < 1e-4 && (start + length - (32.0 - start)).abs() < 1e-4);
     }
 
     #[test]
