@@ -132,7 +132,7 @@ impl Simulation {
         if let Some([x, y]) = job.cursor {
             self.vm.set_mouse_position(x, y);
         }
-        frame.shows_mouse = self.vm.shows_mouse();
+        frame.pointer = self.vm.pointer();
         if !job.typed.is_empty()
             && let Err(error) = self.vm.typed(&job.typed)
         {

@@ -54,7 +54,7 @@ properties!(
     Visibility, SightRadius, PeripheralVision, AutoAim, NavigationPointList, bTransientEndPoint, nextNavigationPoint,
     myHUD, Viewport, Font, Style, bCenter, CurX, CurY, CurYL, OrgX, OrgY, ClipX, ClipY, FontScaleX, FontScaleY, SpaceX,
     DrawColor, Console, InteractionMaster, BaseMenu,
-    bWindowsMouseAvailable, WindowsMouseX, WindowsMouseY, bShowWindowsMouse, GlobalInteractions, LocalInteractions,
+    bWindowsMouseAvailable, WindowsMouseX, WindowsMouseY, bShowWindowsMouse, bWindowVisible, GlobalInteractions, LocalInteractions,
     EyeHeight, DefaultFOV, bTeamGame, PlayerReplicationInfo, Team, ProjectionNormal, SightCounter, bAmbientCreature,
     RealProjectionNormal, MaxParticles, StartLocationOffset, LineStart, LineEnd, Actor, PlayerInput, Outer, Duration, IntPoint, PathStyle, PathLength, SampleLocations, PathVelocity, bConstantPathVelocity,
     TotalSceneTime, CurrentTime, PctStarting, PctEnding, PctDuration, Delay, Status, SubActions, bIsRunning,

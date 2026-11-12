@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn the_view_and_an_actor_stand_at_the_same_shown_time() {
-        let view = |x: f32| p2_vm::PlayerView { actor: None, location: [x, 0.0, 0.0].into(), rotation: [0; 3].into(), behind: false };
+        let view = |x: f32| p2_vm::PlayerView { actor: None, location: [x, 0.0, 0.0].into(), rotation: [0; 3].into(), behind: false, interpolating: false };
         let (old, new) = (VmFrame { view: Some(view(0.0)), ..VmFrame::default() }, VmFrame { view: Some(view(10.0)), ..VmFrame::default() });
         let mover = ObjectId::from_index(1);
         let (before, now) = (ActorFrame::kept_at([0.0; 3], None), ActorFrame::kept_at([10.0, 0.0, 0.0], None));

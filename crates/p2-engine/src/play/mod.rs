@@ -52,6 +52,7 @@ mod vm_thread;
 mod world;
 mod sound;
 
+pub use p2_vm::Pointer;
 pub use times::*;
 pub use vm_thread::*;
 pub use world::*;
@@ -231,9 +232,13 @@ fn shortest_turn(from: i32, to: i32) -> i32 {
 }
 
 impl LookAhead {
-    fn learn(&mut self, now: p2_math::Rotator, viewer: Option<ObjectId>) {
-        if self.viewer != viewer {
+    fn learn(&mut self, view: &p2_vm::PlayerView) {
+        let (now, viewer) = (view.rotation, view.actor);
+        if self.viewer != viewer || view.interpolating {
             *self = Self { in_flight: self.in_flight, viewer, ..Self::default() };
+        }
+        if view.interpolating {
+            return;
         }
         if let Some(before) = self.seen.replace(now) {
             let turns = [shortest_turn(before.yaw, now.yaw), shortest_turn(before.pitch, now.pitch)];
@@ -410,7 +415,7 @@ fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<Pl
         play.look.in_flight = sent;
     }
     if new && let Some(view) = world.frame.view {
-        play.look.learn(view.rotation, view.actor);
+        play.look.learn(&view);
     }
     if due {
         play.look.in_flight = if inline { [0.0; 2] } else { sent };

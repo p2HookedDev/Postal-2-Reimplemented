@@ -25,7 +25,7 @@ use p2_engine::diagnostics::{DiagnosticsPlugin, StageTimingPlugin, capture_layer
 use p2_engine::display::{self, Display, Settings};
 use p2_engine::game_dir::known_game_dir;
 use p2_engine::map::{MapFailed, MapLoadPlugin, MapSystems, SceneTargets, Session, map_package, start_map};
-use p2_engine::play::{Play, PlaySystems};
+use p2_engine::play::{Play, PlaySystems, Pointer};
 use p2_engine::P2EnginePlugins;
 use p2_package::Ini;
 
@@ -132,10 +132,15 @@ fn apply_display(
 fn grab_cursor(window: Single<(&Window, &mut CursorOptions)>, play: Res<Play>) {
     let Some(world) = play.world() else { return };
     let (window, mut cursor) = window.into_inner();
-    let free = world.shows_mouse() || !window.focused;
-    let grab_mode = if free { CursorGrabMode::None } else { CursorGrabMode::Locked };
-    if cursor.visible != free || cursor.grab_mode != grab_mode {
-        cursor.visible = free;
+    let pointer = if window.focused { world.pointer() } else { Pointer::System };
+    let visible = pointer == Pointer::System;
+    let grab_mode = match pointer {
+        // Not confined while hidden: Windows then holds the pointer at the window's centre.
+        Pointer::System | Pointer::Drawn => CursorGrabMode::None,
+        Pointer::Captured => CursorGrabMode::Locked,
+    };
+    if cursor.visible != visible || cursor.grab_mode != grab_mode {
+        cursor.visible = visible;
         cursor.grab_mode = grab_mode;
     }
 }

@@ -124,11 +124,18 @@ fn steps_are_even_over_alternating_frame_times() {
 fn the_look_runs_ahead_only_while_every_tick_turns_alike() {
     let mut look = LookAhead::default();
     let mut rotation = p2_math::Rotator { pitch: 0, yaw: 65000, roll: 0 };
-    look.learn(rotation, None);
-    for _ in 0..LOOK_SAMPLES {
-        look.in_flight = [10.0, -4.0];
-        rotation = p2_math::Rotator { pitch: rotation.pitch - 80, yaw: rotation.yaw + 200, roll: 0 };
-        look.learn(rotation, None);
+    let view = |rotation, interpolating| p2_vm::PlayerView { actor: None, location: p2_math::Vector::ZERO, rotation, behind: false, interpolating };
+    for interpolating in [true, false] {
+        look.learn(&view(rotation, interpolating));
+        for _ in 0..LOOK_SAMPLES {
+            look.in_flight = [10.0, -4.0];
+            rotation = p2_math::Rotator { pitch: rotation.pitch - 80, yaw: rotation.yaw + 200, roll: 0 };
+            look.learn(&view(rotation, interpolating));
+        }
+        if interpolating {
+            assert_eq!(look.ahead(rotation, rotation, [5.0, 2.0]), rotation, "a cutscene's own turn is not the mouse's");
+            rotation = p2_math::Rotator { pitch: 0, yaw: 65000, roll: 0 };
+        }
     }
     look.in_flight = [5.0, 0.0];
     let ahead = look.ahead(rotation, rotation, [5.0, 2.0]);
@@ -139,7 +146,7 @@ fn the_look_runs_ahead_only_while_every_tick_turns_alike() {
     for _ in 0..2 {
         look.in_flight = [10.0, 0.0];
         rotation.yaw += 900;
-        look.learn(rotation, None);
+        look.learn(&view(rotation, false));
     }
     assert_eq!(look.ahead(rotation, rotation, [5.0, 0.0]).yaw, rotation.yaw);
 }

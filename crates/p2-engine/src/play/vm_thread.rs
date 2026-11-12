@@ -25,7 +25,7 @@ pub struct VmFrame {
     pub(super) actor_changes: Vec<(ObjectId, ActorFrame)>,
     pub(super) poses: FxHashMap<ObjectId, Option<ActorPose>>,
     pub(super) ragdolls: FxHashMap<ObjectId, Vec<p2_assets::pose::Frame>>,
-    pub(super) shows_mouse: bool,
+    pub(super) pointer: Pointer,
     pub(super) travel: Option<String>,
     pub(super) hud: Arc<[CanvasItem]>,
     pub(super) canvas_models: Vec<(ObjectId, CanvasModel)>,
@@ -145,7 +145,7 @@ impl VmFrame {
         self.movies.clear();
         self.times.clear();
         self.profile.clear();
-        Self { step, view: None, hud_view: None, zone_sounds: None, zone_fogs: None, shows_mouse: false, travel: None, fov: None, overlay: None, quit: false, window: None, settings: None, set_mouse: None, ..self }
+        Self { step, view: None, hud_view: None, zone_sounds: None, zone_fogs: None, pointer: Pointer::Captured, travel: None, fov: None, overlay: None, quit: false, window: None, settings: None, set_mouse: None, ..self }
     }
 }
 

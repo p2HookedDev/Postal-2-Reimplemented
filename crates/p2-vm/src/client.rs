@@ -14,6 +14,17 @@ pub struct VideoMode {
     pub bit_depth: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Pointer {
+    /// The player's view: no cursor.
+    #[default]
+    Captured,
+    /// An interaction that draws a cursor of its own (the inventory selector, a vending machine).
+    Drawn,
+    /// The `UWindow` menus, which point with the system cursor.
+    System,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Client {
     pub master: Option<ObjectId>,
@@ -71,6 +82,15 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn shows_mouse(&self) -> bool {
         self.host.client.viewport.is_some_and(|viewport| self.store.flag_of(viewport, Prop::bShowWindowsMouse))
+    }
+
+    pub fn pointer(&self) -> Pointer {
+        let menu = self.host.client.master.and_then(|master| self.store.object_of(master, Prop::BaseMenu));
+        match (self.shows_mouse(), menu.is_some_and(|menu| self.store.flag_of(menu, Prop::bWindowVisible))) {
+            (false, _) => Pointer::Captured,
+            (true, false) => Pointer::Drawn,
+            (true, true) => Pointer::System,
+        }
     }
 
     pub fn set_video_modes(&mut self, modes: &'static [VideoMode]) {

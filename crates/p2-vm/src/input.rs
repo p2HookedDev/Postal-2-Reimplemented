@@ -16,6 +16,7 @@ pub struct PlayerView {
     pub location: Vector,
     pub rotation: Rotator,
     pub behind: bool,
+    pub interpolating: bool,
 }
 
 const AXIS_RATE: f32 = 20.0;
@@ -134,7 +135,8 @@ impl<L: LoaderRef> Vm<L> {
         };
         let location = crate::natives::vec3(out.get(1));
         let rotation = crate::natives::rot3(out.get(2));
-        Ok(Some(PlayerView { actor, location, rotation, behind: self.store.flag_of(player, Prop::bBehindView) }))
+        let interpolating = [Some(player), self.store.object_of(player, Prop::Pawn)].into_iter().flatten().any(|actor| self.store.flag_of(actor, Prop::bInterpolating));
+        Ok(Some(PlayerView { actor, location, rotation, behind: self.store.flag_of(player, Prop::bBehindView), interpolating }))
     }
 
     /// An actor on a bone of a skeletal base is drawn by its base, through the same filter (unverified),

@@ -78,7 +78,11 @@ impl PlayWorld {
     }
 
     pub fn shows_mouse(&self) -> bool {
-        self.frame.shows_mouse
+        self.frame.pointer != Pointer::Captured
+    }
+
+    pub fn pointer(&self) -> Pointer {
+        self.frame.pointer
     }
 
     /// In seconds, once: later calls return 0 until the next frame (egui may run a frame's UI pass twice, which must not

@@ -70,7 +70,7 @@ pub use natives::{AUDIO_DEFAULT_RADIUS, orthogonal_rotation};
 pub use matinee::{ScreenOverlay, TitleOverlay};
 pub use save::{SaveError, SaveGame, save_file_name, save_map};
 pub use actors::Encroachment;
-pub use client::{InteractionOrder, VideoMode};
+pub use client::{InteractionOrder, Pointer, VideoMode};
 pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
 pub use profiling::{FunctionProfiling, FunctionTime};

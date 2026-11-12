@@ -67,7 +67,7 @@ impl Simulation {
     pub(in crate::play) fn draw_hud(&mut self, frame: &mut VmFrame, canvas: [f32; 2], step: f32) {
         self.hud_age += step;
         // With a menu or the mouse shown the HUD's scripts answer input: they run every tick.
-        if self.hud_age >= HUD_PERIOD || frame.shows_mouse || self.hud_canvas != canvas || self.hud_kept.is_empty() {
+        if self.hud_age >= HUD_PERIOD || frame.pointer != Pointer::Captured || self.hud_canvas != canvas || self.hud_kept.is_empty() {
             self.hud_age = 0.0;
             self.hud_canvas = canvas;
             self.hud_kept = self.hud(canvas).into();
