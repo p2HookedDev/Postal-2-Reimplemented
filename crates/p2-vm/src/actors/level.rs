@@ -104,6 +104,13 @@ impl<L: LoaderRef> Vm<L> {
                 if post_begin_play && self.store.is_a(actor, Kind::SceneManager) && !self.store.is_deleted(actor) {
                     self.prepare_path(actor);
                 }
+                if post_begin_play
+                    && self.store.is_a(actor, Kind::Volume)
+                    && !self.store.is_deleted(actor)
+                    && let Err(e) = self.spawn_deco_list(actor)
+                {
+                    errors.push((self.store.object(actor).path.clone(), "DecoList", e));
+                }
             }
         }
         self.store.set(level, Prop::bStartup, Value::Bool(false));

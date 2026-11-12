@@ -23,7 +23,7 @@ const WALK_STEPS: usize = 100;
 const WALK_MIN_MOVE: f32 = 4.1;
 const WALK_MIN_LAST_MOVE: f32 = 8.0;
 const FLY_STEP: f32 = 200.0;
-/// How often one reach test may pass between its air and water halves: ours, so that a path along a water line ends.
+/// How often one reach test may pass between its air and water halves; retail has no limit and could recurse without end.
 const HAND_OFFS: u32 = 4;
 /// A swimmer that leaves the water tries to climb out only toward a goal lower than this above it.
 const SWIM_EXIT_HEIGHT: f32 = 78.0 + MAX_STEP_HEIGHT;
@@ -719,11 +719,15 @@ impl<L: LoaderRef> Vm<L> {
         rise.time >= 1.0 && self.fly_reachable(pawn, at, to, goal, hand_offs)
     }
 
-    /// In water a step that leaves the water stops there; the pull back to the water line is not done (unverified).
     fn fly_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32, medium: Medium) -> (Vector, bool) {
         let mut at = from;
         let hit = self.test_move(pawn, &mut at, step);
         if medium == Medium::Water && !self.water_at(at) {
+            let line = self.find_water_line(pawn, from, at);
+            if line != at {
+                let back = line - at;
+                self.test_move(pawn, &mut at, back);
+            }
             return (at, false);
         }
         if hit.time < 1.0 {
@@ -746,7 +750,7 @@ impl<L: LoaderRef> Vm<L> {
         hit
     }
 
-    /// A fall shortens the steps to 35 once; jumps are not tried (unverified).
+    /// A fall shortens the steps to 35 once; jumps are not tried, even for a pawn that can jump (unverified).
     fn walk_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
         let (radius, height) = self.store.collision_size(pawn);
         let mut step_size = radius.max(if self.store.flag_of(pawn, Prop::bCanJump) { 128.0 } else { 12.0 });
@@ -758,15 +762,28 @@ impl<L: LoaderRef> Vm<L> {
             }
             let (step, threshold) = test_step(Vector::new(direction.x, direction.y, 0.0), step_size);
             let ahead = location + step;
-            if self.trace_bsp(location, ahead, [radius * 0.5, radius * 0.5, height * 0.5].into()).is_some()
-                || self.trace_lines(location, ahead).is_some()
-            {
-                return false;
-            }
-            match self.walk_move(pawn, location, step, threshold) {
+            let blocked = self.trace_bsp(location, ahead, [radius * 0.5, radius * 0.5, height * 0.5].into()).is_some()
+                || self.trace_lines(location, ahead).is_some();
+            let walked = if blocked { WalkMove::Stopped } else { self.walk_move(pawn, location, step, threshold) };
+            let mut answer = None;
+            match walked {
                 WalkMove::Moved(next) => location = next,
+                _ if self.store.flag_of(pawn, Prop::bCanFly) => answer = Some(self.fly_reachable(pawn, location, to, goal, HAND_OFFS)),
                 WalkMove::Fell if step_size > MAX_STEP_HEIGHT => step_size = MAX_STEP_HEIGHT,
-                WalkMove::Fell | WalkMove::Stopped => return false,
+                WalkMove::Fell | WalkMove::Stopped => answer = Some(false),
+            }
+            let volume = self.physics_volume_at(location, None).ok().flatten();
+            if volume.is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume)) {
+                return if self.store.flag_of(pawn, Prop::bCanSwim) { self.swim_reachable(pawn, location, to, goal, HAND_OFFS) } else { answer.unwrap_or(false) };
+            }
+            if let Some(ladder) = volume.filter(|&volume| self.store.flag_of(pawn, Prop::bCanClimbLadders) && self.store.is_a(volume, "LadderVolume"))
+                && let Some(goal) = goal.filter(|&goal| self.store.object_of(goal, Prop::PhysicsVolume) == Some(ladder))
+            {
+                let reach = height.max(self.store.float_of(goal, Prop::CollisionHeight));
+                return self.store.vector(ladder, Prop::ClimbDir).dot(to - location).abs() < reach;
+            }
+            if let Some(answer) = answer {
+                return answer;
             }
         }
         false

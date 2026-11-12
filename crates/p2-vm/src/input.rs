@@ -182,7 +182,9 @@ impl<L: LoaderRef> Vm<L> {
         } else {
             self.store.flag_of(actor, Prop::bOnlyOwnerSee)
         };
-        owner_filtered || matches!(self.store.get(actor, Prop::Tag), Some(Value::Name(tag)) if self.host.input.cull_tags.contains(&tag))
+        owner_filtered
+            || (!self.store.flag_of(actor, Prop::bCorona)
+                && matches!(self.store.get(actor, Prop::Tag), Some(Value::Name(tag)) if self.host.input.cull_tags.contains(&tag)))
     }
 
     /// Takes the `CullTag` names of the volume the view target is in: until the next call an actor with one of them

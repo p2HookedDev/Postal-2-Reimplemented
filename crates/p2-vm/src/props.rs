@@ -97,7 +97,7 @@ pub(crate) const DRAWN: &[Prop] = &[
     Prop::bOnlyOwnerSee, Prop::Base, Prop::AttachmentBone, Prop::RelativeLocation, Prop::RelativeRotation, Prop::Emitters,
     Prop::Disabled, Prop::Mesh, Prop::StaticMesh, Prop::Skins, Prop::DrawType, Prop::bUnlit, Prop::AmbientGlow,
     Prop::MaxLights, Prop::StaticMeshInstance, Prop::bCollideActors, Prop::bBlockActors, Prop::ForcedVisibilityZoneTag,
-    Prop::bStatic, Prop::bAcceptsProjectors, Prop::Texture, Prop::Style, Prop::Tag,
+    Prop::bStatic, Prop::bAcceptsProjectors, Prop::Texture, Prop::Style, Prop::Tag, Prop::bCorona,
 ];
 
 macro_rules! kinds {

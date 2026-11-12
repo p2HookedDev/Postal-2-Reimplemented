@@ -42,6 +42,7 @@ mod find_spot;
 mod states;
 mod travel;
 mod util_natives;
+mod deco_list;
 mod volumes;
 pub use volumes::{warp_clip_plane, warp_view};
 mod profiling;

@@ -143,7 +143,7 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    fn find_water_line(&mut self, pawn: ObjectId, in_water: Vector, out_of_water: Vector) -> Vector {
+    pub(crate) fn find_water_line(&mut self, pawn: ObjectId, in_water: Vector, out_of_water: Vector) -> Vector {
         let Some((volume, time)) = self.first_water_volume(out_of_water, in_water) else { return out_of_water };
         if self.trace_world(out_of_water, in_water, Vector::ZERO).is_some_and(|hit| hit.time < time) {
             return out_of_water;
