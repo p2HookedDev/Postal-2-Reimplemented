@@ -3949,7 +3949,7 @@ dependencies = [
 
 [[package]]
 name = "p2-assets"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-math",
  "p2-package",
@@ -3959,7 +3959,7 @@ dependencies = [
 
 [[package]]
 name = "p2-bake"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lz4_flex",
  "p2-assets",
@@ -3972,7 +3972,7 @@ dependencies = [
 
 [[package]]
 name = "p2-bevy-assets"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "p2-assets",
@@ -3982,7 +3982,7 @@ dependencies = [
 
 [[package]]
 name = "p2-collision"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-assets",
  "p2-math",
@@ -3992,7 +3992,7 @@ dependencies = [
 
 [[package]]
 name = "p2-dump"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "p2-package",
@@ -4001,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "p2-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -4030,7 +4030,7 @@ dependencies = [
 
 [[package]]
 name = "p2-game"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bevy",
@@ -4041,18 +4041,18 @@ dependencies = [
 
 [[package]]
 name = "p2-math"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "p2-movie"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "p2-package"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "memmap2",
  "rustc-hash 2.1.3",
@@ -4061,7 +4061,7 @@ dependencies = [
 
 [[package]]
 name = "p2-particles"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-assets",
  "p2-math",
@@ -4072,7 +4072,7 @@ dependencies = [
 
 [[package]]
 name = "p2-physics"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-assets",
  "p2-math",
@@ -4083,7 +4083,7 @@ dependencies = [
 
 [[package]]
 name = "p2-render-cpu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-assets",
  "p2-collision",
@@ -4094,7 +4094,7 @@ dependencies = [
 
 [[package]]
 name = "p2-script"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-package",
  "rustc-hash 2.1.3",
@@ -4103,7 +4103,7 @@ dependencies = [
 
 [[package]]
 name = "p2-test-package"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "p2-package",
  "p2-script",
@@ -4111,7 +4111,7 @@ dependencies = [
 
 [[package]]
 name = "p2-viewer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -4126,7 +4126,7 @@ dependencies = [
 
 [[package]]
 name = "p2-vm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "p2-assets",
