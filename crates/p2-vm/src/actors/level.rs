@@ -66,6 +66,13 @@ impl<L: LoaderRef> Vm<L> {
         let level = self.level.ok_or(Error::Unsupported("map without a LevelInfo".to_owned()))?;
         self.url_options = crate::TravelUrl::parse(options).options;
         crate::natives::update_time(self, level);
+        // What a map was saved with is dropped: touch lists start empty and every actor in the default volume.
+        let default_volume = self.default_physics_volume()?;
+        for &actor in &actors {
+            self.store.set(actor, Prop::LastRenderTime, Value::Float(0.0));
+            self.store.set(actor, Prop::Touching, Value::Array(Vec::new()));
+            self.store.set(actor, Prop::PhysicsVolume, Value::Object(default_volume));
+        }
         let mut errors = Vec::new();
         // `LevelInfo.bStartup` is set while the map's actors begin play (pawns placed in the map spawn their
         // controllers in `PostBeginPlay` only then).

@@ -185,7 +185,7 @@ impl Graph {
                 }
                 visits = 200;
             }
-            if search.blocked[current] {
+            if search.blocked[current] || hurt_by_volume(store, pawn, self.nodes[current].actor) {
                 continue;
             }
             for spec in &self.nodes[current].specs {
@@ -344,6 +344,17 @@ pub(crate) enum LineOfSight {
 pub(crate) enum AnchorCheck {
     Checked,
     Skipped,
+}
+
+/// `actor` touches a pain volume that hurts `pawn`: one whose damage is not the pawn's `ReducedDamageType`.
+fn hurt_by_volume(store: &ObjectStore, pawn: ObjectId, actor: ObjectId) -> bool {
+    let spared = store.object_of(pawn, "ReducedDamageType");
+    store.object_list(actor, Prop::Touching).into_iter().any(|volume| {
+        store.is_a(volume, Kind::PhysicsVolume)
+            && store.flag_of(volume, "bPainCausing")
+            && store.object_of(volume, "DamageType") != spared
+            && store.float_of(volume, "DamagePerSec") > 0.0
+    })
 }
 
 impl<L: LoaderRef> Vm<L> {
@@ -576,7 +587,12 @@ impl<L: LoaderRef> Vm<L> {
         }
         let offset = there - location;
         let squared = offset.dot(offset);
-        if squared > REACH_DISTANCE_SQUARED || !(self.store.flag_of(pawn, Prop::bCanWalk) || self.store.flag_of(pawn, Prop::bCanFly)) {
+        if squared > REACH_DISTANCE_SQUARED || hurt_by_volume(&self.store, pawn, target) {
+            return false;
+        }
+        let in_water = self.store.object_of(target, Prop::PhysicsVolume).is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume));
+        let able = if in_water { self.store.flag_of(pawn, "bCanSwim") } else { self.store.flag_of(pawn, Prop::bCanWalk) || self.store.flag_of(pawn, Prop::bCanFly) };
+        if !able {
             return false;
         }
         if sight == LineOfSight::Unknown {
