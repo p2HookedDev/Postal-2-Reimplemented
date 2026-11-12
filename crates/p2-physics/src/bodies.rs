@@ -117,6 +117,14 @@ impl World {
         }
     }
 
+    /// An acceleration beside the world's gravity for the coming step; a sleeping body stays asleep.
+    pub fn add_acceleration(&mut self, id: BodyId, acceleration: p2_math::Vector) {
+        let Some(body) = self.bodies.get_mut(id.0).filter(|body| !body.is_sleeping()) else { return };
+        let force = to_rapier(acceleration) * body.mass();
+        body.add_force(force, false);
+        self.forced.push(id.0);
+    }
+
     pub fn add_torque(&mut self, id: BodyId, torque: p2_math::Vector) {
         self.wake(id);
         if let Some(body) = self.bodies.get_mut(id.0) {

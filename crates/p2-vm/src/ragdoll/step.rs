@@ -113,7 +113,7 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(actor, Prop::Velocity, velocity);
             self.store.set(actor, Prop::Rotation, Value::Rotator([0; 3].into()));
             if self.store.vector(actor, Prop::Location) != location
-                && let Err(e) = self.place_far_moved(actor, location, Encroachment::Ignored).and_then(|()| self.update_touching(actor))
+                && let Err(e) = self.place_far_moved(actor, location, Encroachment::Ignored).and_then(|()| self.update_touching(actor)).and_then(|()| self.set_zone(actor, crate::volumes::ZoneEvents::Sent, crate::volumes::OldZone::Region))
             {
                 errors.push((self.store.object(actor).path.clone(), e));
             }
@@ -212,7 +212,7 @@ impl<L: LoaderRef> Vm<L> {
             return;
         };
         let params = RagdollParams { parts: built.parts, joints: built.joint_params, linear_damping, angular_damping, friction, restitution, asleep };
-        self.karma_world(actor);
+        self.karma_world();
         let Some(world) = self.karma.world.as_mut() else { return };
         let all = world.add_ragdoll(&params);
         let parts = world.parts(&all);

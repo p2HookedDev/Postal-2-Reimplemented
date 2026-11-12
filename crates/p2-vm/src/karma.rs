@@ -219,7 +219,11 @@ impl<L: LoaderRef> Vm<L> {
             (body.location, body.rotation) = (location, rotation);
             moved
         });
-        if moved { self.update_touching(actor) } else { Ok(()) }
+        if !moved {
+            return Ok(());
+        }
+        self.update_touching(actor)?;
+        self.set_zone(actor, crate::volumes::ZoneEvents::Sent, crate::volumes::OldZone::Region)
     }
 
     fn karma_body(&mut self, actor: ObjectId) -> Option<BodyId> {
@@ -257,7 +261,7 @@ impl<L: LoaderRef> Vm<L> {
             stay_upright: params.stay_upright,
             allow_yaw: params.allow_rotate,
         };
-        self.karma_world(actor);
+        self.karma_world();
         let world = self.karma.world.as_mut()?;
         let id = world.add_body(&body);
         self.karma.bodies.insert(actor, Body { id, location, rotation });
@@ -265,12 +269,12 @@ impl<L: LoaderRef> Vm<L> {
         Some(id)
     }
 
-    pub(crate) fn karma_world(&mut self, actor: ObjectId) {
+    pub(crate) fn karma_world(&mut self) {
         if self.karma.world.is_some() {
             return;
         }
         let phase = self.profile_start();
-        let mut world = World::new(self.gravity_of(actor));
+        let mut world = World::new(crate::physics::DEFAULT_GRAVITY);
         for crate::world::LevelMesh { vertices, triangles } in self.level_meshes() {
             if let Err(e) = world.add_static_mesh(&vertices, triangles) {
                 self.diagnostics.log.push(format!("Karma level geometry: {e}"));
@@ -291,14 +295,18 @@ impl<L: LoaderRef> Vm<L> {
         self.profile_phase("load: karma world", phase);
     }
 
-    /// As retail, gravity per body from its actor's physics volume; only the vertical part is used (P2's volumes pull down).
+    /// As retail, gravity per body from its actor's physics volume: the vertical part as a scale of the world's, a
+    /// sideways part as an acceleration of its own.
     fn karma_gravity(&mut self) {
-        let Some(base) = self.karma.world.as_ref().map(|world| world.gravity().z).filter(|&z| z != 0.0) else { return };
+        let base = crate::physics::DEFAULT_GRAVITY.z;
         let props = self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id));
-        let scales: Vec<(BodyId, f32)> = props.chain(self.karma.ragdolls.bodies()).map(|(actor, id)| (id, self.gravity_of(actor).z / base)).collect();
+        let pulls: Vec<(BodyId, Vector)> = props.chain(self.karma.ragdolls.bodies()).map(|(actor, id)| (id, self.gravity_of(actor))).collect();
         let Some(world) = &mut self.karma.world else { return };
-        for (id, scale) in scales {
-            world.set_gravity_scale(id, scale);
+        for (id, pull) in pulls {
+            world.set_gravity_scale(id, pull.z / base);
+            if pull.x != 0.0 || pull.y != 0.0 {
+                world.add_acceleration(id, Vector::new(pull.x, pull.y, 0.0));
+            }
         }
     }
 

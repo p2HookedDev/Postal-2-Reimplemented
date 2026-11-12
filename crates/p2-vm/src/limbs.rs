@@ -241,7 +241,7 @@ impl<L: LoaderRef> Vm<L> {
             stay_upright: false,
             allow_yaw: false,
         };
-        self.karma_world(actor);
+        self.karma_world();
         let Some(world) = self.karma.world.as_mut() else { return };
         let id = world.add_body(&body);
         self.count(Work::LimbMade);
