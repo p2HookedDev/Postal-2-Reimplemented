@@ -1,5 +1,5 @@
 use super::*;
-use super::sprites::{drawn_location, fill_sprites, header_record, shown_part, sprite_record};
+use super::sprites::{drawn_location, fill_sprites, header_record, sprite_record};
 
 fn to_linear(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
@@ -296,16 +296,16 @@ fn sprite_records_keep_their_place_on_a_moved_grid() {
 
 #[test]
 fn sprites_move_evenly_every_frame_between_ticks() {
-    let (tick, frames) = (1.0 / 120.0, 3);
+    let frames = 3;
     let place = |ticks: usize| -> Vector { [10.0 * ticks as f32, 0.0, 0.0].into() };
     let mut drawn = Vec::new();
     for newest in 1..5 {
         for frame in 0..frames {
-            let shown = shown_part(frame as f32 * tick / frames as f32, tick);
+            let shown = frame as f32 / frames as f32 - 0.25;
             drawn.push(drawn_location(place(newest - 1), place(newest), shown).x);
         }
     }
-    assert_eq!(drawn[0], 0.0);
+    assert_eq!(drawn[0], -2.5);
     for pair in drawn.windows(2) {
         assert!((pair[1] - pair[0] - 10.0 / frames as f32).abs() < 1e-3, "{drawn:?}");
     }
@@ -330,14 +330,28 @@ fn newborn_sprites_do_not_move_before_their_birth_place() {
 }
 
 #[test]
-fn sprites_never_pass_their_newest_place() {
-    let tick = 1.0 / 120.0;
-    for since in [tick, 1.5 * tick, 10.0 * tick] {
-        assert_eq!(shown_part(since, tick), 1.0);
-    }
-    assert_eq!(shown_part(0.003, 0.0), 1.0);
+fn sprites_stand_at_the_time_the_world_is_shown_at() {
     let (previous, newest): (Vector, Vector) = ([0.0; 3].into(), [8.0, 0.0, -4.0].into());
-    assert_eq!(drawn_location(previous, newest, shown_part(3.0 * tick, tick)), newest);
+    assert_eq!(drawn_location(previous, newest, 1.0), newest);
+    assert_eq!(drawn_location(previous, newest, 0.0), previous);
+    assert_eq!(drawn_location(previous, newest, -0.25), Vector::from([-2.0, 0.0, 1.0]));
+}
+
+#[test]
+fn an_emitter_on_a_bone_is_never_drawn_or_stepped_where_the_game_keeps_its_actor() {
+    let kept_at = [5.0, 0.0, 0.0];
+    let flash = crate::play::ActorFrame::kept_at(kept_at, Some(ObjectId::from_index(2)));
+    let tick = 1.0 / 120.0;
+    let unplaced = emitter_turn(None, &flash, tick, 1.0);
+    assert!(unplaced.hidden);
+    assert_eq!(unplaced.step, None);
+    let muzzle = Vector::from([5.0, 0.0, 98.0]);
+    let placed = emitter_turn(Some((muzzle, [0; 3].into())), &flash, tick, 1.0);
+    assert!(!placed.hidden);
+    assert_eq!(placed.step, Some(tick));
+    assert_eq!(placed.owner.location, muzzle);
+    assert_ne!(placed.owner.location, Vector::from(kept_at));
+    assert_eq!(placed.here, Vec3::from(to_bevy(muzzle)));
 }
 
 #[test]
@@ -356,4 +370,62 @@ fn sprite_grids_grow_by_powers_of_two() {
     assert_eq!(positions[9], [2.0, 1.0, 0.0], "quad 2, corner 1");
     let indices: Vec<usize> = grid.indices().expect("indices").iter().collect();
     assert_eq!(indices[12..18], [8, 9, 10, 8, 10, 11]);
+}
+
+#[test]
+fn the_particle_step_never_draws_or_steps_a_flash_on_a_weapon_where_the_game_keeps_it() {
+    use bevy::app::{App, TaskPoolPlugin, Update};
+    use p2_particles::{EmitterProperties, EmitterSettings};
+    let (flash, weapon) = (ObjectId::from_index(1), ObjectId::from_index(2));
+    let (kept_at, tick) = ([5.0, 0.0, 0.0], 1.0 / 120.0);
+    let mut app = App::new();
+    app.add_plugins(TaskPoolPlugin::default());
+    app.init_resource::<Hud>().init_resource::<LevelCollision>().init_resource::<FrameTimes>().init_resource::<Assets<Mesh>>();
+    let mut play = Play::default();
+    play.set(Some(PlayWorld::with_actors([(flash, crate::play::ActorFrame::kept_at(kept_at, Some(weapon)))])));
+    app.insert_resource(play);
+    let parent = app.world_mut().spawn(Transform::default()).id();
+    app.world_mut().spawn((Transform::default(), SceneView::default()));
+    let props = EmitterProperties { max_particles: 1, ..EmitterProperties::default() };
+    let simulation = Emitter::new(EmitterSettings::default(), vec![props], 1);
+    let emitter = ParticleActor {
+        actor: flash,
+        simulation,
+        parent,
+        draws: Vec::new(),
+        objects: Vec::new(),
+        bounds: None,
+        drawn_bounds: None,
+        buffers: DrawBuffers::default(),
+        zone_box: None,
+        overlay: None,
+        name: String::new(),
+        zone_seen: true,
+        drawn: true,
+        born: std::time::Instant::now(),
+        peak: 0,
+        frames: ParticleFrames::default(),
+        turn: Turn::default(),
+    };
+    app.insert_resource(Particles { actors: vec![emitter], ..Particles::default() });
+    app.add_systems(Update, present_particles);
+    let frame = |app: &mut App| {
+        app.world_mut().resource_mut::<Play>().world_mut().expect("a world").present_step(tick);
+        app.update();
+        let turn = &app.world().resource::<Particles>().actors[0].turn;
+        (turn.hidden, turn.step, turn.owner.location)
+    };
+    let (hidden, stepped, _) = frame(&mut app);
+    assert!(hidden);
+    assert_eq!(stepped, None);
+    let muzzle = Vector::from([5.0, 0.0, 98.0]);
+    let on_bone = crate::animation::BoneFrame { location: muzzle, axes: [[1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into(), [0.0, 0.0, 1.0].into()] };
+    app.world_mut().resource_mut::<Play>().world_mut().expect("a world").shown.places.put_on_bone(flash, weapon, on_bone);
+    for _ in 0..3 {
+        let (hidden, stepped, at) = frame(&mut app);
+        assert!(!hidden);
+        assert_eq!(stepped, Some(tick));
+        assert_eq!(at, muzzle);
+        assert_ne!(at, Vector::from(kept_at));
+    }
 }

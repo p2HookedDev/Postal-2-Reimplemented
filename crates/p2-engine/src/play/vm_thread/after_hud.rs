@@ -75,6 +75,7 @@ impl Simulation {
     fn read_hud_actors(&mut self, frame: &mut VmFrame) {
         self.hud_drawn.clear();
         self.hud_drawn.extend(frame.hud.iter().filter_map(|item| if let CanvasItem::Actor { actor, .. } = item { Some(*actor) } else { None }));
+        self.view_key.hud = std::hash::BuildHasher::hash_one(&rustc_hash::FxBuildHasher, &self.hud_drawn);
         let drawn = &self.hud_drawn;
         self.hud_looks.retain(|actor, _| drawn.contains(actor));
         for index in 0..self.hud_drawn.len() {

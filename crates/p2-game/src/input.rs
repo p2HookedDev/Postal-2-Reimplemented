@@ -2,18 +2,17 @@ use bevy::ecs::prelude::{MessageReader, Res, ResMut, Single};
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseButton, MouseButtonInput, MouseWheel};
 use bevy::input::{ButtonInput, ButtonState};
-use bevy::window::{CursorGrabMode, CursorOptions, Window};
+use bevy::window::Window;
 use p2_engine::play::PlayerInput;
 
 pub fn read_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
-    window: Single<(&Window, &CursorOptions)>,
+    window: Single<&Window>,
     (mut keyboard, mut clicks, mut wheel): (MessageReader<KeyboardInput>, MessageReader<MouseButtonInput>, MessageReader<MouseWheel>),
     mut input: ResMut<PlayerInput>,
 ) {
-    let (window, cursor) = *window;
     if !window.focused {
         buttons.release_all();
     }
@@ -43,7 +42,7 @@ pub fn read_player_input(
     input.held.clear();
     input.held.extend(keys.get_pressed().filter(|&&key| key != KeyCode::F10).filter_map(|&key| engine_key(key)));
     input.held.extend(buttons.get_pressed().filter_map(|&button| mouse_key(button)));
-    input.mouse = if cursor.grab_mode == CursorGrabMode::None || !window.focused { [0.0, 0.0] } else { [motion.delta.x, -motion.delta.y] };
+    input.mouse = if window.focused { [motion.delta.x, -motion.delta.y] } else { [0.0, 0.0] };
 }
 
 fn mouse_key(button: MouseButton) -> Option<&'static str> {

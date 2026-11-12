@@ -236,8 +236,8 @@ fn heard_volume(
 ) {
     let (Some(world), Some(camera)) = (&play.world, cameras.iter().next()) else { return };
     for (mut heard, mut transform, mut sink) in &mut sounds {
-        if let Some(actor) = heard.actor.and_then(|actor| world.actor(actor)) {
-            heard.position = world.scene_position(actor.location);
+        if let Some((location, _)) = heard.actor.and_then(|actor| world.place(actor)) {
+            heard.position = world.scene_position(location);
         }
         if transform.translation != heard.position {
             transform.translation = heard.position;

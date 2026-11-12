@@ -36,7 +36,7 @@ properties!(
     bJustTeleported, bKAllowRotate, bKStayUpright, BlendChangeTime, bLOSflag, bLOSHearing, bMovable,
     bNeverUseStrafing, bNoVelocityUpdate, bPendingStasis, bPhysicsAnimUpdate, bPlayedDeath, bPreparingMove,
     bPushable, BreathTime, bReducedSpeed, bRotateToDesired, bSameZoneHearing, bSliderStasis, bSoftKillZ, bSpecialMove, bStartup,
-    bTearOff, bTryToUncrouch, bUpdateEyeheight, bWantsToCrouch, bWasCrouched, bWasOnGround, bWasWalking, ClimbDir,
+    bTearOff, bTryToUncrouch, bUpdateEyeheight, bWantsToCrouch, bWasCrouched, bWasDeathCrawling, bWasOnGround, bWasWalking, ClimbDir,
     ConstantAcceleration, ControllerList, CrouchHeight, CrouchRadius, CurrentPath, DesiredRotation, DesiredSpeed,
     Destination, DestinationOffset, Disabled, EffectClass, Emitters, Enemy, Floor, FocalPoint, Focus, Game, Gravity,
     GroundFriction, GroundSpeed, Health, HearingThreshold, Instigator, KarmaMaxSpeed, KeyNum, KillZ,

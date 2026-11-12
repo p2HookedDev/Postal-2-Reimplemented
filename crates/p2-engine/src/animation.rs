@@ -6,7 +6,7 @@ use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::asset::{Assets, Handle};
 use bevy::camera::primitives::Aabb;
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
-use bevy::ecs::prelude::{Added, Commands, Entity, Local, Query, Ref, Res, ResMut, Resource, SystemSet, With};
+use bevy::ecs::prelude::{Added, Commands, Entity, Has, Local, Query, Ref, Res, ResMut, Resource, SystemSet, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::camera::visibility::{Visibility, VisibilitySystems, calculate_bounds};
 use bevy::transform::TransformSystems;
@@ -25,7 +25,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::mesh_view::{FollowActor, SkinJoint};
 use crate::play::{ActorPose, ChannelPose, FrameTimes, Play, PlayWorld};
 use attachments::{follow_bones, place_attached};
-pub(crate) use attachments::{AttachmentPlaces, BoneFrame, attached_transform};
+pub(crate) use attachments::{BoneFrame, attached_transform};
 pub use attachments::attachment_frame;
 
 mod attachments;
@@ -42,7 +42,6 @@ impl Plugin for AnimationPlugin {
         crate::add_once(app, crate::FrameOrderPlugin);
         app.init_resource::<Animated>()
             .init_resource::<Poses>()
-            .init_resource::<AttachmentPlaces>()
             .add_systems(Update, (animate, pose_joints, follow_bones, place_attached).chain().in_set(AnimationSystems::Pose))
             .add_systems(
                 PostUpdate,
@@ -268,14 +267,25 @@ fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elap
             let mut local = std::mem::take(&mut item.local_scratch);
             let mut channel_pose = std::mem::take(&mut item.channel_scratch);
             local.clear();
+            let based = actor_pose.base.is_some();
+            if !based {
+                local.extend(item.mesh.bones.iter().map(|bone| (bone.orientation, bone.position)));
+            }
             for (index, (channel, alpha, bone)) in pose_channels(actor_pose).enumerate() {
                 let map = Arc::clone(item.vm_bone_maps.entry(Arc::clone(&channel.animation.path)).or_insert_with(|| map_bones(&item.bone_names, &channel.animation.bone_names).into()));
-                let pose = if index == 0 { &mut local } else { &mut channel_pose };
+                let is_base = based && index == 0;
+                let pose = if is_base { &mut local } else { &mut channel_pose };
                 item.local_pose(&channel.animation.animation, channel.sequence, shown(index, channel), &map, pose);
                 if let Some((from, weight)) = &channel.tween {
                     tween_pose(from, pose, *weight);
                 }
-                if index > 0 {
+                if !is_base {
+                    // A bone the channel's animation lacks keeps what is under it.
+                    for ((over, under), track) in channel_pose.iter_mut().zip(&local).zip(map.iter()) {
+                        if track.is_none() {
+                            *over = *under;
+                        }
+                    }
                     blend_local(&mut local, &channel_pose, alpha, &item.subtree(bone));
                 }
             }
@@ -302,7 +312,7 @@ fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elap
 }
 
 fn pose_channels(pose: &ActorPose) -> impl Iterator<Item = (&ChannelPose, f32, &str)> {
-    std::iter::once((&pose.base, 1.0, "")).chain(pose.blends.iter().map(|(channel, alpha, bone)| (channel, *alpha, &**bone)))
+    pose.base.iter().map(|channel| (channel, 1.0, "")).chain(pose.blends.iter().map(|(channel, alpha, bone)| (channel, *alpha, &**bone)))
 }
 
 fn pose_work<'a>(item: &AnimatedMesh, world: Option<&'a PlayWorld>, shown_times: &mut Vec<f32>) -> PoseWork<'a> {
@@ -315,7 +325,7 @@ fn pose_work<'a>(item: &AnimatedMesh, world: Option<&'a PlayWorld>, shown_times:
         Some(None) => PoseWork::Free,
         Some(Some(pose)) => {
             let from = shown_times.len();
-            shown_times.extend(pose_channels(pose).enumerate().map(|(index, (channel, ..))| world.map_or(channel.time, |world| world.shown_time(actor, index, channel))));
+            shown_times.extend(pose_channels(pose).enumerate().map(|(index, (channel, ..))| world.map_or(channel.time, |world| world.shown.channel_time(actor, index, channel))));
             PoseWork::Channels(pose, from)
         }
     }

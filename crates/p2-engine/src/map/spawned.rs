@@ -265,9 +265,9 @@ fn spawn_actor_model(spawned: SpawnedActor, origin: Vec3, t: &mut SpawnTargets) 
         }
         _ => return,
     };
-    let frame = t.play.world().and_then(|world| world.actor(actor)).map(|f| (f.gone || f.hidden, f.location, f.rotation));
+    let frame = t.play.world().and_then(|world| Some((world.actor(actor).is_some_and(|f| f.gone || f.hidden), world.tick_place(actor)?)));
     let (placed, shown) = match frame {
-        Some((hidden, location, rotation)) => (follow.transform(location, rotation), if hidden { Visibility::Hidden } else { Visibility::Inherited }),
+        Some((hidden, (location, rotation))) => (follow.transform(location, rotation), if hidden { Visibility::Hidden } else { Visibility::Inherited }),
         None => (Transform::default(), Visibility::Inherited),
     };
     let parent = t.commands.spawn((MapScoped, ActorModel(actor), Transform::from_translation(origin), Visibility::default())).id();
@@ -509,17 +509,17 @@ pub(super) fn update_projections(t: &mut ProjectionTargets) {
     });
     let origin = world.origin();
     projectors.mover_decals.retain(|projector, decal| {
-        let Some(frame) = world.actor(decal.mover).filter(|frame| !frame.gone) else {
+        if world.actor(decal.mover).is_none_or(|frame| frame.gone) {
             if let Some(entity) = projectors.dynamic_decals.remove(projector) {
                 t.commands.entity(entity).despawn();
             }
             world.unwatch(*projector);
             return false;
-        };
-        if (world.changed(decal.mover) || world.glides(decal.mover))
+        }
+        if (world.changed(decal.mover) || world.shown.places.glides(decal.mover))
             && let Some(&entity) = projectors.dynamic_decals.get(projector)
+            && let Some((location, rotation)) = world.place(decal.mover)
         {
-            let (location, rotation) = world.shown_place(decal.mover, frame);
             t.commands.entity(entity).try_insert(decal.place(mover_pose(origin, location, rotation)));
         }
         true
@@ -562,8 +562,9 @@ pub(super) fn update_projections(t: &mut ProjectionTargets) {
                 let Some((image, size, final_blend)) = found else { continue };
                 let transform = Transform::from_translation(origin) * projector_transform(&projector, size);
                 let mover = projector.follows.and_then(|mover| {
-                    let frame = t.play.world()?.actor(mover).filter(|frame| !frame.gone)?;
-                    Some(MoverDecal::new(mover, mover_pose(origin, frame.location, frame.rotation), transform))
+                    let world = t.play.world().filter(|world| !world.is_gone(mover))?;
+                    let (location, rotation) = world.tick_place(mover)?;
+                    Some(MoverDecal::new(mover, mover_pose(origin, location, rotation), transform))
                 });
                 let tag = projector_tag(&projector, final_blend) | if mover.is_some() { MOVER_ONLY_TAG } else { 0 };
                 bevy::log::debug!(

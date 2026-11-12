@@ -66,7 +66,7 @@ use p2_script::{Layouts, StructLayout, Type};
 pub use anim::AnimChannel;
 pub use bones::MeshAnimations;
 pub use game_natives::ParticleCommand;
-pub use natives::AUDIO_DEFAULT_RADIUS;
+pub use natives::{AUDIO_DEFAULT_RADIUS, orthogonal_rotation};
 pub use matinee::{ScreenOverlay, TitleOverlay};
 pub use save::{SaveError, SaveGame, save_file_name, save_map};
 pub use actors::Encroachment;

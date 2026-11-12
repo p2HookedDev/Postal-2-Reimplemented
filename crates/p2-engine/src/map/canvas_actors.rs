@@ -9,7 +9,6 @@ pub(super) struct HudTargets<'a, 'w, 's> {
     pub(super) view: &'a mut MeshView,
     pub(super) shown: &'a mut ResMut<'w, crate::shown_scene::ShownScene>,
     pub(super) canvas: &'a mut CanvasModels<'w, 's>,
-    pub(super) places: Option<&'a crate::animation::AttachmentPlaces>,
     pub(super) commands: &'a mut Commands<'w, 's>,
 }
 
@@ -24,7 +23,6 @@ pub(super) struct HudParams<'w, 's> {
     view: ResMut<'w, MeshView>,
     shown: ResMut<'w, crate::shown_scene::ShownScene>,
     canvas: CanvasModels<'w, 's>,
-    places: Option<Res<'w, crate::animation::AttachmentPlaces>>,
     commands: Commands<'w, 's>,
     times: ResMut<'w, FrameTimes>,
 }
@@ -40,7 +38,6 @@ impl<'w, 's> SceneTargets<'w, 's> {
             view: &mut self.view,
             shown: &mut self.shown,
             canvas: &mut self.canvas,
-            places: self.particle_view.places.as_deref(),
             commands: &mut self.commands,
         }
     }
@@ -66,7 +63,6 @@ pub(super) fn present_canvas_actors(mut t: HudParams) {
         view: &mut t.view,
         shown: &mut t.shown,
         canvas: &mut t.canvas,
-        places: t.places.as_deref(),
         commands: &mut t.commands,
     });
     t.times.add("canvas actors", started);
@@ -159,12 +155,11 @@ impl Session {
             .filter(|(_, drawn, _)| drawn.0 == 0)
             .filter_map(|(follow, _, _)| {
                 let Some(&(_, _, _, &CanvasItem::Actor { location, rotation, scale, .. })) = call_of(follow.actor, 0) else { return None };
-                let base = world.actor(follow.actor)?;
-                let left = follow.mesh_matrix(base.location, base.rotation)?;
+                let (stands, turned) = world.tick_place(follow.actor)?;
+                let left = follow.mesh_matrix(stands, turned)?;
                 Some((follow.actor, FollowActor { scale, ..*follow }.mesh_matrix(location, rotation)? * left.inverse()))
             })
             .collect();
-        let places = t.places;
         let overlays = RenderLayers::from_layers(&OVERLAY_LAYERS);
         for (entity, follow, mut transform, mut shown, layers) in &mut t.canvas.attached {
             let on_overlay = layers.is_some_and(|layers| layers.intersects(&overlays));
@@ -188,8 +183,8 @@ impl Session {
             if layers != Some(&layer) {
                 t.commands.entity(entity).try_insert(layer);
             }
-            if let (Some(&moved), Some(frame)) = (moves.get(&base.actor), places.and_then(|places| places.frame(follow.actor))) {
-                let placed = crate::animation::attached_transform(follow, moved * frame);
+            if let (Some(&moved), Some(frame)) = (moves.get(&base.actor), world.shown.places.bone_frame(follow.actor)) {
+                let placed = crate::animation::attached_transform(follow, moved * frame.matrix());
                 if *transform != placed {
                     *transform = placed;
                 }

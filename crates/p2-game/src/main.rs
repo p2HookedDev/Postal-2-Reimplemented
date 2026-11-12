@@ -59,6 +59,9 @@ fn run() {
 
     p2_engine::play::init_script_stacks();
     let mut app = App::new();
+    // Never the timed, event-woken updates Bevy runs a window without focus on: every mouse event then makes a frame
+    // of its own between the timed ones, and what moves on screen jitters.
+    app.insert_resource(bevy::winit::WinitSettings { focused_mode: bevy::winit::UpdateMode::Continuous, unfocused_mode: bevy::winit::UpdateMode::Continuous });
     app.add_plugins((
         DefaultPlugins
             // Without DX12 among the backends Bevy turns off wgpu's validation of every indirect draw.

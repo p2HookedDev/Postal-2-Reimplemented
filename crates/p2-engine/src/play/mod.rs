@@ -43,7 +43,7 @@ use crate::actors::{
     BoneAttachment, EmitterActor, MeshActor, ProjectorActor, SkeletalActor, actor_look, actor_scale, bone_attachment, emitter_actor,
     emitter_properties, emitters_disabled, location_rotation, mesh_actor, object_path, projector_actor, skeletal_actor, skin_paths,
 };
-use crate::animation::{AttachmentPlaces, BoneFrame, FollowBone};
+use crate::animation::{BoneFrame, FollowBone};
 use crate::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
 use crate::mesh_view::ShadowOnly;
 
@@ -111,7 +111,6 @@ impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         crate::add_once(app, sound::SoundPlugin);
         app.init_resource::<Play>()
-            .init_resource::<AttachmentPlaces>()
             .init_resource::<ShadowOnly>()
             .init_resource::<FrameTimes>()
             .init_resource::<PlayerInput>()
@@ -335,8 +334,10 @@ impl PlayCameras<'_, '_> {
             self.overlay_look.0 = held;
         }
         let Some(view) = view else { return };
-        let (location, rotation) = world.shown_view((view.location, view.rotation));
-        let shown = SceneView::look_from(location, look.ahead(view.rotation, rotation, waiting), world.origin);
+        let (location, rotation) = world.shown.view((view.location, view.rotation));
+        // With the cursor shown the mouse moves it, not the view.
+        let rotation = if world.shows_mouse() { rotation } else { look.ahead(view.rotation, rotation, waiting) };
+        let shown = SceneView::look_from(location, rotation, world.origin);
         for mut scene_view in &mut self.views {
             if scene_view.position != shown.position || scene_view.rotation != shown.rotation {
                 *scene_view = shown;
@@ -351,7 +352,6 @@ struct DrawnActors<'w, 's> {
     attached: Query<'w, 's, (Entity, &'static FollowBone, Option<&'static ChildOf>)>,
     cameras: Query<'w, 's, (&'static Camera, &'static VisibleEntities)>,
     shadow_only: Res<'w, ShadowOnly>,
-    places: ResMut<'w, AttachmentPlaces>,
 }
 
 /// Not `ViewVisibility`, which the sun's shadow cascades set too: retail draws no such shadows, so the modern graphics
@@ -369,16 +369,13 @@ fn gather_input(time: Res<Time>, mut play: ResMut<Play>, mut input: ResMut<Playe
     play.backlog.mouse = [0, 1].map(|i| play.backlog.mouse[i] + input.mouse[i]);
     play.unstepped += if play.smooth_step { play.frame_clock.step(time.delta_secs()) } else { time.delta_secs().min(MAX_STEP) };
     play.tick_debt = (play.tick_debt + time.delta_secs()).min(TICK_PERIOD * 2.0);
-    world.set_glide(time.delta_secs());
+    world.shown.frame(time.delta_secs());
 }
 
-fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, mut drawn: DrawnActors) {
+fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, drawn: DrawnActors) {
     let (threaded, canvas) = (play.threaded, play.canvas);
     let play = &mut *play;
-    let Some(world) = play.world.as_mut() else {
-        drawn.places.0.clear();
-        return;
-    };
+    let Some(world) = play.world.as_mut() else { return };
     if !world.wait(VmWait::Look) {
         world.changed.clear();
         world.frame.step = 0.0;
@@ -435,7 +432,7 @@ fn look_ahead(play: Res<Play>, input: Res<PlayerInput>, mut play_cameras: PlayCa
 }
 
 fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, backlog: &mut InputBacklog, times: &FrameTimes, step: f32, canvas: [f32; 2]) -> Job {
-    let DrawnActors { models, attached, cameras: drawing_cameras, shadow_only, mut places } = drawn;
+    let DrawnActors { models, attached, cameras: drawing_cameras, shadow_only } = drawn;
     world.followed.clear();
     world.visible.clear();
     // An inactive camera keeps the list it last had, so only the active ones count.
@@ -455,9 +452,8 @@ fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, back
     seen.clear();
     seen.extend(&world.visible);
     seen.extend(attached.iter().filter(|&(entity, _, parent)| drew(entity, parent)).map(|(_, follow, _)| follow.actor));
-    let visible = &world.visible;
     placed.clear();
-    placed.extend(places.0.drain().filter(|(_, (base, _))| visible.contains(base)).map(|(actor, (_, place))| (actor, place)));
+    world.shown.places.tell(&world.visible, &mut placed);
     held.clear();
     held.extend_from_slice(&input.held);
     watched.clear();
@@ -498,7 +494,7 @@ fn follow_actors(
         }
     }
     for (mut follow, mut transform, mut shown, canvas_drawn) in &mut models {
-        if !(follow.is_added() || world.changed(follow.actor) || world.glides(follow.actor)) {
+        if !(follow.is_added() || world.changed(follow.actor) || world.shown.places.glides(follow.actor)) {
             continue;
         }
         let Some(actor) = world.actor(follow.actor) else { continue };
@@ -512,8 +508,9 @@ fn follow_actors(
         if follow.pre_pivot != actor.pre_pivot {
             follow.pre_pivot = actor.pre_pivot;
         }
-        let (location, rotation) = if canvas_drawn { (actor.location, actor.rotation) } else { world.shown_place(follow.actor, actor) };
-        transform.set_if_neq(follow.transform(location, rotation));
+        if let Some((location, rotation)) = if canvas_drawn { world.tick_place(follow.actor) } else { world.place(follow.actor) } {
+            transform.set_if_neq(follow.transform(location, rotation));
+        }
     }
     times.add("follow actors", started);
 }
@@ -523,8 +520,10 @@ fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&crate::render::actor_l
     let world = play.world();
     for (lit, mut frame) in &mut lit {
         let actor = world.and_then(|world| world.actor(lit.actor));
+        // Lit where it stands at the newest tick: a place that changes every frame would light it again every frame.
+        let place = world.and_then(|world| world.tick_place(lit.actor));
         frame.set_if_neq(ActorFrame {
-            place: actor.map(|actor| ActorPlace { location: actor.location, rotation: actor.rotation, glow: actor.glow }),
+            place: actor.zip(place).map(|(actor, (location, rotation))| ActorPlace { location, rotation, glow: actor.glow }),
             base: actor.and_then(|actor| actor.attachment.as_ref().map(|attachment| attachment.base)),
         });
     }

@@ -56,14 +56,25 @@ pub struct VmFrame {
 /// What the host was last told of an actor, and what lets the next pass skip reading it again.
 pub(super) struct Sent {
     pub(super) frame: ActorFrame,
-    /// The pass's mark when it was read: a later write to the actor or its emitters has a later stamp.
+    /// The pass's mark when it was read: a later write to the actor or to `others` has a later stamp.
     pub(super) read_at: u64,
     /// Whether the frame depends on nothing but the actor's and its emitters' own memory and `time_dilation`: not
     /// hung on a bone (its base's flags and the HUD's list decide whether it shows) and with no owner-only flag (the
     /// view decides).
     pub(super) steady: bool,
+    pub(super) view: ViewKey,
     pub(super) time_dilation: u32,
-    pub(super) emitters: Vec<ObjectId>,
+    /// Its emitters and, unless `steady`, its owners and bone bases with theirs.
+    pub(super) others: Vec<ObjectId>,
+}
+
+/// What of the view decides whether an actor shows.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct ViewKey {
+    pub(super) viewed: Option<ObjectId>,
+    pub(super) behind: bool,
+    /// A hash of the HUD-drawn list.
+    pub(super) hud: u64,
 }
 
 pub(super) enum CanvasModel {
@@ -164,6 +175,7 @@ pub(super) struct Simulation {
     pub(super) player_pawn: Option<ObjectId>,
     pub(super) view: Option<p2_vm::PlayerView>,
     pub(super) hud_drawn: Vec<ObjectId>,
+    pub(super) view_key: ViewKey,
     /// The HUD its scripts last drew, the view they drew it for (the held weapon is placed for that view), the canvas
     /// size, and the game time since.
     pub(super) hud_kept: Arc<[CanvasItem]>,
@@ -191,9 +203,9 @@ pub(super) struct Simulation {
     /// The level's `TimeDilation` (its bits) as the running pass of reads began.
     pub(super) time_dilation: u32,
     /// For the profile log, since its last line: actor reads skipped, made because of a write (or a first read), and
-    /// made because the actor is always read.
+    /// made for an actor the view or another actor decides.
     pub(super) reads: [u32; 3],
-    /// With the tick profile on, the reads made by the actor's class: because of a write, because always read.
+    /// With the tick profile on, the reads made by the actor's class: of a steady actor, of another.
     pub(super) reads_by_class: FxHashMap<p2_vm::ClassId, [u32; 2]>,
     pub(super) lower_names: FxHashMap<p2_vm::NameId, Arc<str>>,
     pub(super) settings_sent: bool,

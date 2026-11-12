@@ -11,12 +11,13 @@ pub(in crate::play) struct ChannelTime {
     pub(in crate::play) sequence: usize,
     pub(in crate::play) time: f32,
     pub(in crate::play) length: f32,
+    pub(in crate::play) looping: bool,
 }
 
 impl ChannelTime {
     pub(in crate::play) fn of(channel: &ChannelPose) -> Self {
         let frames = channel.animation.animation.sequences.get(channel.sequence).map_or(1, |sequence| sequence.num_frames.max(1));
-        Self { animation: Arc::as_ptr(&channel.animation).addr(), sequence: channel.sequence, time: channel.time, length: frames as f32 }
+        Self { animation: Arc::as_ptr(&channel.animation).addr(), sequence: channel.sequence, time: channel.time, length: frames as f32, looping: channel.looping }
     }
 }
 
@@ -35,8 +36,7 @@ impl ChannelFrom {
     }
 
     /// How far `to` moves the channel on from the tick before, across a loop's wrap too; `None` for a new sequence, a
-    /// backward play or a restart. Only the times cross from the scripts, so a wrap is told by its step matching the
-    /// step before.
+    /// backward play or a restart. A loop started again is told from its wrap by the step not matching the step before.
     fn advance(&self, to: ChannelTime) -> Option<f32> {
         let mid = self.mid;
         if (mid.animation, mid.sequence) != (to.animation, to.sequence) {
@@ -46,7 +46,7 @@ impl ChannelFrom {
             return Some(to.time - mid.time);
         }
         let wrapped = to.time + to.length - mid.time;
-        (wrapped <= self.step * WRAP_STEP_LIMIT && wrapped < to.length * 0.5).then_some(wrapped)
+        (to.looping && wrapped <= self.step * WRAP_STEP_LIMIT && wrapped < to.length * 0.5).then_some(wrapped)
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
+use crate::components::CanvasDrawn;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct BoneFrame {
     pub(crate) location: Vector,
     pub(crate) axes: [Vector; 3],
@@ -11,18 +12,14 @@ fn axes_matrix(axes: [Vector; 3], origin: Vec3) -> Mat4 {
     Mat4::from_cols(x, y, z, origin.extend(1.0))
 }
 
-#[derive(Resource, Default)]
-pub(crate) struct AttachmentPlaces(pub(crate) FxHashMap<ObjectId, (ObjectId, BoneFrame)>);
-
-impl AttachmentPlaces {
-    fn record(&mut self, actor: ObjectId, base: ObjectId, frame: Mat4) {
+impl BoneFrame {
+    fn of(frame: Mat4) -> Self {
         let axes = [frame.x_axis, frame.y_axis, frame.z_axis].map(|axis| axis.truncate().to_array());
-        self.0.insert(actor, (base, BoneFrame { location: frame.w_axis.truncate().to_array().into(), axes: axes.map(Vector::from) }));
+        Self { location: frame.w_axis.truncate().to_array().into(), axes: axes.map(Vector::from) }
     }
 
-    pub(crate) fn frame(&self, actor: ObjectId) -> Option<Mat4> {
-        let (_, place) = self.0.get(&actor)?;
-        Some(axes_matrix(place.axes, Vec3::from_array(place.location.into())))
+    pub(crate) fn matrix(self) -> Mat4 {
+        axes_matrix(self.axes, Vec3::from_array(self.location.into()))
     }
 }
 
@@ -48,18 +45,14 @@ fn skeletal_transform(frame: Mat4, scale: Vector, pre_pivot: Vector, (mesh_scale
 pub(super) fn follow_bones(
     mut commands: Commands,
     poses: Res<Poses>,
-    play: Res<Play>,
-    mut places: ResMut<AttachmentPlaces>,
+    mut play: ResMut<Play>,
     mut attached: Query<(Entity, Ref<FollowBone>, &mut Transform, &mut Visibility)>,
 ) {
-    let world = play.world();
+    let mut world = play.world_mut();
     for (entity, follow, mut transform, mut shown) in &mut attached {
-        let changed = world.is_some_and(|world| world.changed(follow.base) || world.changed(follow.actor) || world.glides(follow.base));
-        if !(follow.is_added() || changed || poses.changed.contains(&follow.base)) {
-            continue;
-        }
-        let base = world.and_then(|world| world.actor(follow.base));
-        let own = world.and_then(|world| world.actor(follow.actor));
+        let world = world.as_deref_mut();
+        let base = world.as_deref().and_then(|world| world.actor(follow.base));
+        let own = world.as_deref().and_then(|world| world.actor(follow.actor));
         if base.is_some_and(|base| base.gone) || own.is_some_and(|own| own.gone) {
             commands.entity(entity).despawn();
             continue;
@@ -76,15 +69,14 @@ pub(super) fn follow_bones(
             shown.set_if_neq(if hidden { Visibility::Hidden } else { Visibility::Inherited });
         }
         let Some(&bone) = poses.bones.get(&follow.base).and_then(|pose| pose.get(follow.bone)) else { continue };
-        let body = match base {
-            Some(base) => {
-                let (location, rotation) = world.map_or((base.location, base.rotation), |world| world.shown_place(follow.base, base));
-                FollowActor { pre_pivot: base.pre_pivot, ..follow.base_follow }.mesh_matrix(location, rotation).unwrap_or(follow.body)
-            }
-            None => follow.body,
-        };
+        let placed = base.zip(world.as_deref().and_then(|world| world.place(follow.base)));
+        let body = placed
+            .and_then(|(base, (location, rotation))| FollowActor { pre_pivot: base.pre_pivot, ..follow.base_follow }.mesh_matrix(location, rotation))
+            .unwrap_or(follow.body);
         let frame = follow.frame(body, bone);
-        places.record(follow.actor, follow.base, frame);
+        if let Some(world) = world {
+            world.shown.places.put_on_bone(follow.actor, follow.base, BoneFrame::of(frame));
+        }
         transform.set_if_neq(follow.transform_at(frame));
     }
 }
@@ -92,19 +84,20 @@ pub(super) fn follow_bones(
 /// They sit at the bone's current frame instead of their actor's `Location`, which the VM does not move with the bone.
 pub(super) fn place_attached(
     mut poses: ResMut<Poses>,
-    play: Res<Play>,
-    mut places: ResMut<AttachmentPlaces>,
-    mut models: Query<(Entity, Ref<FollowActor>, &mut Transform)>,
+    mut play: ResMut<Play>,
+    mut models: Query<(Entity, Ref<FollowActor>, &mut Transform, Has<CanvasDrawn>)>,
     on_bones: Query<&FollowBone>,
     mut buffers: Local<AttachedBuffers>,
 ) {
-    let Some(world) = play.world() else { return };
+    let play_generation = play.generation();
+    let Some(world) = play.world_mut() else { return };
     let poses = &mut *poses;
-    let AttachedBuffers { generation, bone_bodies, bases, due_models, emitters } = &mut *buffers;
-    if *generation != play.generation() {
-        *generation = play.generation();
+    let AttachedBuffers { generation, bone_bodies, bases, due_models, emitters, placed } = &mut *buffers;
+    if *generation != play_generation {
+        *generation = play_generation;
         poses.slots.clear();
     }
+    placed.clear();
     bone_bodies.clear();
     bases.clear();
     due_models.clear();
@@ -112,28 +105,17 @@ pub(super) fn place_attached(
     // Bases themselves on a bone (a map pawn's head, drawn as `FollowBone`): without these a bolt-on hat stayed at its spawn
     // point in the air.
     bone_bodies.extend(on_bones.iter().filter_map(|follow| {
-        let place = places.0.get(&follow.actor)?.1;
+        let place = world.shown.places.bone_frame(follow.actor)?;
         let rotation = axes_matrix(place.axes, Vec3::ZERO);
         let body = unreal_mesh_matrix(place.location, rotation, follow.scale, follow.pre_pivot, follow.mesh_scale, follow.origin, follow.rot_origin);
         Some((follow.actor, body))
     }));
     let bone_bodies = &*bone_bodies;
-    let changed = &poses.changed;
-    let due = |follow: &FollowActor, added: bool| {
-        let attachment = world.actor(follow.actor)?.attachment.as_ref()?;
-        let base = attachment.base;
-        (added || world.changed(follow.actor) || world.changed(base) || changed.contains(&base) || bone_bodies.contains_key(&base))
-            .then_some(attachment)
-    };
     // Emitters on a bone have no model but are placed the same way. The first-person muzzle flash is one:
     // left at the weapon's origin, its sprite filled the screen.
-    emitters.extend(world.watched().filter_map(|actor| {
-        let attachment = world.actor(actor)?.attachment.as_ref()?;
-        (world.changed(actor) || world.changed(attachment.base) || changed.contains(&attachment.base) || bone_bodies.contains_key(&attachment.base))
-            .then_some((actor, attachment.base))
-    }));
-    for (entity, follow, _) in &models {
-        if let Some(attachment) = due(&follow, follow.is_added()) {
+    emitters.extend(world.watched().filter_map(|actor| Some((actor, world.actor(actor)?.attachment.as_ref()?.base))));
+    for (entity, follow, ..) in &models {
+        if let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) {
             due_models.push(entity);
             bases.insert(attachment.base, None);
         }
@@ -142,11 +124,11 @@ pub(super) fn place_attached(
     if bases.is_empty() {
         return;
     }
-    for (_, follow, _) in &models {
+    for (_, follow, _, canvas_drawn) in &models {
         if follow.skeletal.is_some()
             && let Some(base) = bases.get_mut(&follow.actor)
         {
-            *base = Some(*follow);
+            *base = Some((*follow, canvas_drawn));
         }
     }
     let (slots, names, aliases, bones) = (&mut poses.slots, &poses.names, &poses.aliases, &poses.bones);
@@ -154,9 +136,10 @@ pub(super) fn place_attached(
         let (index, tag) = bone_slot(slots, names, aliases, attachment)?;
         let bone = *bones.get(&attachment.base)?.get(index)? * tag;
         let body = match bases.get(&attachment.base).copied().flatten() {
-            Some(base) => {
-                let actor = world.actor(attachment.base)?;
-                base.mesh_matrix(actor.location, actor.rotation)?
+            // What the scripts draw themselves stands at the newest tick's place; the rest where it is shown.
+            Some((base, canvas_drawn)) => {
+                let (location, rotation) = if canvas_drawn { world.tick_place(attachment.base) } else { world.place(attachment.base) }?;
+                base.mesh_matrix(location, rotation)?
             }
             None => *bone_bodies.get(&attachment.base)?,
         };
@@ -166,15 +149,18 @@ pub(super) fn place_attached(
         if let Some(attachment) = world.actor(actor).and_then(|actor| actor.attachment.as_ref())
             && let Some(frame) = frame_of(attachment)
         {
-            places.record(actor, attachment.base, frame);
+            placed.push((actor, attachment.base, BoneFrame::of(frame)));
         }
     }
     for &entity in due_models.iter() {
-        let Ok((_, follow, mut transform)) = models.get_mut(entity) else { continue };
+        let Ok((_, follow, mut transform, _)) = models.get_mut(entity) else { continue };
         let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) else { continue };
         let Some(frame) = frame_of(attachment) else { continue };
-        places.record(follow.actor, attachment.base, frame);
+        placed.push((follow.actor, attachment.base, BoneFrame::of(frame)));
         transform.set_if_neq(attached_transform(&follow, frame));
+    }
+    for (actor, base, frame) in placed.drain(..) {
+        world.shown.places.put_on_bone(actor, base, frame);
     }
 }
 
@@ -182,9 +168,10 @@ pub(super) fn place_attached(
 pub(super) struct AttachedBuffers {
     generation: u64,
     bone_bodies: FxHashMap<ObjectId, Mat4>,
-    bases: FxHashMap<ObjectId, Option<FollowActor>>,
+    bases: FxHashMap<ObjectId, Option<(FollowActor, bool)>>,
     due_models: Vec<Entity>,
     emitters: Vec<(ObjectId, ObjectId)>,
+    placed: Vec<(ObjectId, ObjectId, BoneFrame)>,
 }
 
 fn bone_slot(

@@ -306,12 +306,17 @@ impl<L: LoaderRef> Vm<L> {
             if let Some((from, weight)) = state.tween() {
                 tween_pose(from, &mut posed, weight);
             }
-            match &mut local {
-                None => local = Some(posed),
-                Some(base) => {
-                    let start = (state.blend_bone != NameId::NONE).then(|| self.media.bone_data.mesh_bone(&self.store, mesh_object, mesh, state.blend_bone)).flatten();
-                    blend_local(base, &posed, channel_weight(state.blend_alpha, state.frame, state.blend_in_time), &subtree(&mesh.parents, start));
+            if channel == 0 {
+                local = Some(posed);
+            } else {
+                let base = local.get_or_insert_with(|| bind.clone());
+                for ((over, under), track) in posed.iter_mut().zip(base.iter()).zip(tracks.iter()) {
+                    if track.is_none() {
+                        *over = *under;
+                    }
                 }
+                let start = (state.blend_bone != NameId::NONE).then(|| self.media.bone_data.mesh_bone(&self.store, mesh_object, mesh, state.blend_bone)).flatten();
+                blend_local(base, &posed, channel_weight(state.blend_alpha, state.frame, state.blend_in_time), &subtree(&mesh.parents, start));
             }
         }
         local

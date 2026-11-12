@@ -8,6 +8,10 @@ pub(super) struct HudFont {
 
 type HudImage = (Handle<Image>, egui::Vec2);
 
+/// The least and the most main-thread time one frame gives to first reads of HUD textures and fonts (half the frame
+/// before, within these): what does not fit is drawn a frame later instead of holding this one.
+const FIRST_READS: [std::time::Duration; 2] = [std::time::Duration::from_millis(1), std::time::Duration::from_millis(8)];
+
 #[derive(Resource, Default)]
 pub struct Hud {
     pub(super) hud_textures: FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
@@ -21,6 +25,26 @@ pub struct Hud {
     /// Loading frames show it again: the engine does not clear the screen.
     pub(super) last_hud: Arc<[CanvasItem]>,
     pub(super) progress_bar: Option<Option<(ProgressBar, egui::TextureId)>>,
+    painted_at: Option<std::time::Instant>,
+    first_reads_left: std::time::Duration,
+}
+
+impl Hud {
+    pub(super) fn start_frame(&mut self, now: std::time::Instant) {
+        let [least, most] = FIRST_READS;
+        self.first_reads_left = self.painted_at.replace(now).map_or(most, |before| ((now - before) / 2).clamp(least, most));
+    }
+
+    /// `None` when this frame's time for first reads is spent.
+    fn first_read<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> Option<T> {
+        if self.first_reads_left.is_zero() {
+            return None;
+        }
+        let started = std::time::Instant::now();
+        let found = read(self);
+        self.first_reads_left = self.first_reads_left.saturating_sub(started.elapsed());
+        Some(found)
+    }
 }
 
 #[derive(Default)]
@@ -164,7 +188,8 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
                 let hud_font = match targets.hud.hud_fonts.get(path) {
                     Some(found) => found.as_ref(),
                     None => {
-                        let found = font.as_deref().and_then(|path| session.hud_font(path, &mut targets.hud, contexts, &mut targets.assets.images));
+                        let images = &mut targets.assets.images;
+                        let Some(found) = targets.hud.first_read(|hud| font.as_deref().and_then(|path| session.hud_font(path, hud, contexts, images))) else { continue };
                         targets.hud.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
                     }
                 };
@@ -227,7 +252,7 @@ impl Session {
         if let Some(found) = hud.hud_textures.get(material) {
             return *found;
         }
-        let found = self.hud_texture(material, hud, contexts, images);
+        let found = hud.first_read(|hud| self.hud_texture(material, hud, contexts, images))?;
         hud.hud_textures.insert(material.to_owned(), found);
         found
     }

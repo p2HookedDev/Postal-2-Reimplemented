@@ -122,8 +122,8 @@ pub fn draw_coronas(
 ) {
     let Some(view) = views.iter().next() else { return };
     let world = play.world();
-    let placed = |quad: &CoronaQuad| match world.and_then(|world| world.actor(quad.corona.object)) {
-        Some(frame) => (frame.gone, frame.location, frame.rotation),
+    let placed = |quad: &CoronaQuad| match world.and_then(|world| Some((world.is_gone(quad.corona.object), world.tick_place(quad.corona.object)?))) {
+        Some((gone, (location, rotation))) => (gone, location, rotation),
         None => (false, quad.corona.location, quad.corona.rotation),
     };
     let blocked = |quad: &CoronaQuad| world.is_some_and(|world| world.corona_blocked(quad.corona.object));

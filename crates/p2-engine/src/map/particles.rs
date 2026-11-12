@@ -19,7 +19,7 @@ mod bounds;
 use mesh_particles::{MeshPool, mesh_box, place_mesh_particles};
 pub(crate) use mesh_particles::PoolSlot;
 use sprites::{
-    MIN_QUADS, SpriteGrid, fill_draw_buffers, grid_capacity, grid_place, shown_part, sprite_box, sprite_grid, standard_alpha,
+    MIN_QUADS, SpriteGrid, fill_draw_buffers, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
     upload_sprites, write_sprite_records,
 };
 use bounds::{apply_bounds, particles_box};
@@ -46,7 +46,6 @@ pub(super) struct ParticleActor {
     buffers: DrawBuffers,
     zone_box: Option<[Vec3; 3]>,
     overlay: Option<usize>,
-    placed: bool,
     name: String,
     zone_seen: bool,
     drawn: bool,
@@ -137,8 +136,6 @@ pub struct Particles {
     pub(super) pool_materials: HashMap<PoolMaterialKey, Handle<StandardMaterial>>,
     pub(super) emitter_materials: FxHashMap<crate::render::particle_material::SharedParticleKey, Handle<ParticleMaterial>>,
     particle_records: Vec<[u32; RECORD_WORDS]>,
-    /// When the newest game tick reached the particles, and its step.
-    last_tick: Option<(std::time::Instant, f32)>,
     pub(super) corona_materials: FxHashMap<String, Option<Handle<ParticleMaterial>>>,
     pub(super) waiting_sprites: Vec<SpriteActor>,
     pub(super) waiting_coronas: Vec<CoronaActor>,
@@ -205,12 +202,12 @@ impl Session {
                 props.push(p);
             }
             let started = std::time::Instant::now();
-            let at = t.play.world().and_then(|world| world.actor(actor)).map(|frame| frame.location.map(|c| c.round()));
+            let at = t.play.world().and_then(|world| world.tick_place(actor)).map(|(location, _)| location.map(|c| c.round()));
             bevy::log::info!(target: "p2_engine::particles", "added {name} at {at:?}: {}", draws.iter().map(|draw| draw.name.as_str()).collect::<Vec<_>>().join("; "));
             t.times.add("spawned: emitters: log", started);
             let started = std::time::Instant::now();
             let seed = t.particles.actors.len() as u32 + 1;
-            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, placed: false, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default() });
+            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default() });
             t.times.add("spawned: emitters: simulation", started);
             let started = std::time::Instant::now();
             if let Some(world) = t.play.world_mut() {
@@ -242,7 +239,7 @@ impl Particles {
         let mut near: Vec<(f32, ParticleReport)> = (self.actors.iter())
             .filter_map(|p| {
                 let actor = world.actor(p.actor)?;
-                let offset = Vec3::from_array(actor.location.into()) - eye;
+                let offset = Vec3::from_array(world.place(p.actor)?.0.into()) - eye;
                 let distance = offset.length();
                 if distance > range {
                     return None;
@@ -255,7 +252,7 @@ impl Particles {
                         format!("{:?} {name}: {} live{paused}", e.props().kind, e.live_particles())
                     })
                     .collect();
-                let hidden = actor.hidden || !p.placed;
+                let hidden = actor.hidden;
                 Some((angle, ParticleReport { name: p.name.clone(), distance, hidden, unseen: !p.drawn, zone_culled: !p.zone_seen, overlay: p.overlay, emitters }))
             })
             .collect();
@@ -305,17 +302,22 @@ impl Particles {
     }
 }
 
-/// Where the actor is drawn, a little behind its newest tick, so new particles leave the source the player sees.
-fn drawn_owner((location, rotation): (Vector, p2_math::Rotator), place: Option<Vector>, velocity: Vector) -> Owner {
-    Owner { location: place.unwrap_or(location), rotation, velocity }
-}
-
-impl Particles {
-    fn shown_after(&mut self, step: f32) -> f32 {
-        if step > 0.0 {
-            self.last_tick = Some((std::time::Instant::now(), step));
-        }
-        self.last_tick.map_or(1.0, |(at, tick_step)| shown_part(at.elapsed().as_secs_f32(), tick_step))
+/// One emitter's frame. On a bone and not placed yet it is neither drawn nor stepped: where the game keeps its actor is
+/// where it was spawned, the weapon's origin by the eye, and a sprite left there fills the screen.
+fn emitter_turn(place: Option<(Vector, p2_math::Rotator)>, actor: &crate::play::ActorFrame, step: f32, shown: f32) -> Turn {
+    let (location, rotation) = place.unwrap_or_default();
+    // Player-owned emitters ignore `TimeDilation`. One simulation tick per game tick, as the engine's: host frames without a
+    // new game frame (step 0) do not tick. A tick with no time still runs the "all particles dead" test, and an emitter dies
+    // on its second dead tick (`AutoDestroy`): an empty gas trail, whose first splat comes one game tick later, died before
+    // it.
+    Turn {
+        owner: Owner { location, rotation, velocity: actor.velocity },
+        step: (step > 0.0 && place.is_some()).then_some(step * actor.time_scale),
+        shown,
+        hidden: actor.hidden || place.is_none(),
+        here: Vec3::from(to_bevy(location)),
+        seen: false,
+        seen_box: None,
     }
 }
 
@@ -373,7 +375,7 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
     // in its own scene node, so `Canvas.DrawActor` draws them at its FOV after its depth clear.
     let canvas = t.canvas;
     let particles = &mut *t.particles;
-    let (shown, mut records) = (particles.shown_after(step), std::mem::take(&mut particles.particle_records));
+    let (shown, mut records) = (1.0 - world.shown.clock.behind(), std::mem::take(&mut particles.particle_records));
     records.clear();
     particles.actors.retain_mut(|p| {
         let Some(actor) = world.actor(p.actor) else { return true };
@@ -405,13 +407,9 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
                 t.commands.entity(*entity).insert(layer.clone());
             }
         }
-        // Retail places an attachment as it draws it, the VM learns the place a frame later. Before its first place it is not
-        // drawn: spawned at the weapon's origin by the eye, its sprite would fill the screen.
-        let place = t.view.places.as_ref().and_then(|places| places.0.get(&p.actor)).map(|&(_, place)| place.location);
-        p.placed |= place.is_some() || actor.attachment.is_none();
-        let hidden = actor.hidden || !p.placed;
+        let turn = emitter_turn(world.place(p.actor), actor, step, shown);
+        let (hidden, here) = (turn.hidden, turn.here);
         let zone_seen = t.view.zone_culled.get(p.parent).ok().is_none_or(|shown| *shown != Visibility::Hidden);
-        let here = Vec3::from(to_bevy(actor.location));
         let with_here = |bounds: Option<(Vec3, Vec3)>| bounds.map(|(min, max)| (min.min(here), max.max(here)));
         let in_frustum_now = in_frustum(with_here(p.bounds));
         let drawn = !hidden && zone_seen && in_frustum_now;
@@ -428,12 +426,7 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
         if p.simulation.emitters().iter().any(|e| e.props().use_actor_forces) {
             p.simulation.set_actor_forces(forces.clone());
         }
-        let owner = drawn_owner(world.shown_place(p.actor, actor), place, actor.velocity);
-        // Player-owned emitters ignore `TimeDilation`. One simulation tick per game tick, as the engine's: host frames without a
-        // new game frame (step 0) do not tick. A tick with no time still runs the "all particles dead" test, and an emitter dies
-        // on its second dead tick (`AutoDestroy`): an empty gas trail, whose first splat comes one game tick later, died before
-        // it.
-        p.turn = Turn { owner, step: (step > 0.0).then_some(step * actor.time_scale), shown, hidden, here, seen: false, seen_box: None };
+        p.turn = turn;
         true
     });
     let simulate = |p: &mut ParticleActor| {

@@ -69,6 +69,11 @@ impl FootTwist {
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn pawn_tick_special(&mut self, pawn: ObjectId, delta: f32) -> Result<(), Error> {
         if !self.store.flag_of(pawn, Prop::bInterpolating) && self.store.flag_of(pawn, Prop::bPhysicsAnimUpdate) && self.store.object_of(pawn, Prop::Mesh).is_some() {
+            if self.store.flag_of(pawn, Prop::bIsDeathCrawling) != self.store.flag_of(pawn, Prop::bWasDeathCrawling) {
+                self.event(pawn, crate::states::Event::ChangeAnimation, Vec::new())?;
+                let crawling = self.store.flag_of(pawn, Prop::bIsDeathCrawling);
+                self.store.set(pawn, Prop::bWasDeathCrawling, Value::Bool(crawling));
+            }
             self.update_movement_animation(pawn, delta)?;
         }
         if let Some(weapon) = self.store.object_of(pawn, Prop::Weapon).filter(|&w| !self.store.is_deleted(w)) {

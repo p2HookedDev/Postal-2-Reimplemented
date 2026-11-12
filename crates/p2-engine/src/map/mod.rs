@@ -197,7 +197,6 @@ pub(crate) struct ParticleView<'w, 's> {
     pub(crate) cameras: Query<'w, 's, &'static Transform, With<SceneView>>,
     pub(crate) projections: Query<'w, 's, &'static Projection, With<SceneView>>,
     pub(crate) zone_culled: Query<'w, 's, &'static Visibility, With<ZoneCulled>>,
-    pub(crate) places: Option<Res<'w, crate::animation::AttachmentPlaces>>,
     pub(crate) pool_slots: Query<'w, 's, &'static mut Transform, (With<particles::PoolSlot>, Without<FollowActor>, Without<SceneView>)>,
 }
 
@@ -475,6 +474,7 @@ impl Session {
 
     pub fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut SceneTargets) {
         let started = std::time::Instant::now();
+        t.hud.start_frame(started);
         t.play.set_canvas_size([rect.width(), rect.height()]);
         t.view.canvas_below = [false; OVERLAY_LAYERS.len()];
         // Until a new map's first VM frame is presented, the last image (the load screen) stays up, as in the

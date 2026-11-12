@@ -5,15 +5,21 @@ use super::*;
 mod channel_glide;
 mod hand_off;
 mod sounds;
+mod places;
+mod shown;
 mod tick_clock;
 pub(super) use channel_glide::{ChannelFrom, ChannelTime, glided_time};
 pub(super) use sounds::{LoadedSound, loaded_sound, opens};
-pub(super) use tick_clock::{Glide, TickClock};
+pub(crate) use places::Places;
+pub(crate) use shown::Shown;
+pub(crate) use tick_clock::TickClock;
+pub(super) use tick_clock::Glide;
 
 #[derive(Clone, PartialEq)]
 pub struct ActorFrame {
-    pub location: Vector,
-    pub rotation: Rotator,
+    /// Where the game keeps it at the newest tick; where it is drawn is [`PlayWorld::place`].
+    pub(in crate::play) location: Vector,
+    pub(in crate::play) rotation: Rotator,
     pub scale: Vector,
     pub pre_pivot: Vector,
     /// An emitter spawns its particles along its path through the frame.
@@ -31,9 +37,9 @@ pub struct ActorFrame {
 }
 
 /// Channels above 0 blend over channel 0. Bone names are lower case and shared, so frames allocate
-/// no strings. An empty start bone means the root.
+/// no strings. An empty start bone means the root. Without a channel 0 they blend over the mesh's own pose.
 pub struct ActorPose {
-    pub base: ChannelPose,
+    pub base: Option<ChannelPose>,
     pub blends: Vec<(ChannelPose, f32, Arc<str>)>,
     pub scales: Vec<(Arc<str>, f32)>,
     pub turns: Vec<(Arc<str>, [i32; 3])>,
@@ -68,6 +74,50 @@ pub struct OverlayTitle {
     pub alpha: f32,
 }
 
+#[cfg(test)]
+impl ActorFrame {
+    /// One the game keeps at `location`, hung on a bone of `on`.
+    pub(crate) fn kept_at(location: [f32; 3], on: Option<ObjectId>) -> Self {
+        let attachment = on.map(|base| BoneAttachment {
+            base,
+            bone: Arc::from("cylinder01"),
+            bone_id: p2_vm::NameId::NONE,
+            relative_location: [0.0, 0.0, 98.0].into(),
+            relative_rotation: [0; 3].into(),
+        });
+        Self {
+            location: location.into(),
+            rotation: [0; 3].into(),
+            scale: [1.0; 3].into(),
+            pre_pivot: [0.0; 3].into(),
+            velocity: [0.0; 3].into(),
+            time_scale: 1.0,
+            gone: false,
+            hidden: false,
+            attachment,
+            emitters_disabled: Vec::new(),
+            look: 0,
+            glow: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+impl PlayWorld {
+    /// A world with no game behind it but these actors.
+    pub(crate) fn with_actors(actors: impl IntoIterator<Item = (ObjectId, ActorFrame)>) -> Self {
+        let loader = Arc::new(Loader::new(&std::env::temp_dir(), &[]).expect("an empty folder loads"));
+        let mut world = Self::new(Vm::new(Arc::clone(&loader)), loader, Vec3::ZERO, None, Vec::new(), PathBuf::new());
+        world.actors.extend(actors);
+        world
+    }
+
+    /// As if a game tick `step` seconds long had just been presented.
+    pub(crate) fn present_step(&mut self, step: f32) {
+        self.frame.step = step;
+    }
+}
+
 pub struct PlayWorld {
     pub(super) sim: Slot,
     pub(super) worker: Option<Worker>,
@@ -78,17 +128,7 @@ pub struct PlayWorld {
     pub(super) spare: Option<VmFrame>,
     pub(super) actors: FxHashMap<ObjectId, ActorFrame>,
     pub(super) changed: FxHashSet<ObjectId>,
-    /// Per actor still on its way: the place it showed at when the newest tick came and its place at the tick before.
-    /// It is drawn through both to the newest tick's place, so the world moves at the frame rate while ticks are
-    /// slower than frames.
-    pub(super) gliding: FxHashMap<ObjectId, [(Vector, Rotator); 2]>,
-    view_from: Option<[(Vector, Rotator); 2]>,
-    /// Per posed actor and channel: the animation (its address) and the sequence at the tick before the newest, the
-    /// time shown when the newest tick came and that tick's time.
-    pose_from: FxHashMap<ObjectId, Vec<ChannelFrom>>,
-    ragdoll_from: FxHashMap<ObjectId, [Vec<p2_assets::pose::Frame>; 2]>,
-    clock: TickClock,
-    glide: Glide,
+    pub(crate) shown: Shown,
     pub(super) attached: FxHashSet<ObjectId>,
     pub(super) canvas_models: FxHashMap<ObjectId, CanvasModel>,
     pub(super) origin: Vec3,
@@ -113,7 +153,7 @@ pub(super) fn glided(from: (Vector, Rotator), to: (Vector, Rotator), t: f32) -> 
 }
 
 fn channels(pose: &ActorPose) -> impl Iterator<Item = &ChannelPose> {
-    std::iter::once(&pose.base).chain(pose.blends.iter().map(|(channel, ..)| channel))
+    pose.base.iter().chain(pose.blends.iter().map(|(channel, ..)| channel))
 }
 
 /// Each axis keeps its length (a scaled mesh's bones are not unit) while it turns.
@@ -200,6 +240,7 @@ impl PlayWorld {
             work_second: Default::default(),
             census_at: None,
             hud_drawn: Vec::new(),
+            view_key: Default::default(),
             hud_kept: Arc::default(),
             hud_view: None,
             hud_canvas: [0.0; 2],
@@ -219,12 +260,7 @@ impl PlayWorld {
             spare: None,
             actors: FxHashMap::default(),
             changed: FxHashSet::default(),
-            gliding: FxHashMap::default(),
-            view_from: None,
-            pose_from: FxHashMap::default(),
-            ragdoll_from: FxHashMap::default(),
-            clock: TickClock::default(),
-            glide: Glide { to_mid: 1.0, to_newest: 1.0 },
+            shown: Shown::default(),
             attached: FxHashSet::default(),
             canvas_models: FxHashMap::default(),
             origin: -center,
@@ -293,20 +329,7 @@ impl PlayWorld {
     pub(super) fn present(&mut self) -> bool {
         self.changed.clear();
         let Some(mut frame) = self.ready.take() else { return false };
-        let (glide, actors) = (self.glide, &self.actors);
-        self.gliding.retain(|actor, [from, mid]| {
-            let on_its_way = actors.get(actor).filter(|_| glide.to_newest < 1.0);
-            on_its_way.is_some_and(|to| {
-                let to = (to.location, to.rotation);
-                *from = glide.pick(*from, *mid, to, glided);
-                *mid = to;
-                *from != to
-            })
-        });
-        let shown = self.frame.view.map(|view| (self.shown_view((view.location, view.rotation)), (view.location, view.rotation)));
-        self.view_from = shown.zip(frame.view).filter(|((_, mid), to)| (to.location - mid.0).size() <= GLIDE_REACH).map(|((from, mid), _)| [from, mid]);
-        self.clock.tick(frame.step);
-        self.glide = self.clock.glide();
+        self.shown.tick(&self.frame, &frame, &self.actors);
         let mut old = std::mem::take(&mut self.frame);
         if frame.travel.is_none() {
             frame.travel = old.travel.take();
@@ -334,13 +357,7 @@ impl PlayWorld {
         }
         for (actor, now) in frame.actor_changes.drain(..) {
             self.changed.insert(actor);
-            if let Some(before) = self.actors.get(&actor) {
-                if now.gone || (now.location - before.location).size() > GLIDE_REACH {
-                    self.gliding.remove(&actor);
-                } else if (before.location, before.rotation) != (now.location, now.rotation) {
-                    self.gliding.entry(actor).or_insert([(before.location, before.rotation); 2]);
-                }
-            }
+            self.shown.places.changed(actor, self.actors.get(&actor), &now);
             if now.attachment.is_some() {
                 self.attached.insert(actor);
             } else {
@@ -348,28 +365,6 @@ impl PlayWorld {
             }
             self.actors.insert(actor, now);
         }
-        let before = std::mem::take(&mut self.pose_from);
-        self.pose_from = old
-            .poses
-            .iter()
-            .filter_map(|(&actor, pose)| {
-                let pose = pose.as_ref()?;
-                frame.poses.get(&actor)?.as_ref()?;
-                let from = before.get(&actor);
-                let shown = channels(pose).enumerate().map(|(index, channel)| ChannelFrom::new(from.and_then(|from| from.get(index)), ChannelTime::of(channel), glide));
-                Some((actor, shown.collect()))
-            })
-            .collect();
-        let before = std::mem::take(&mut self.ragdoll_from);
-        self.ragdoll_from = old
-            .ragdolls
-            .iter()
-            .filter(|(actor, bones)| frame.ragdolls.get(*actor).is_some_and(|now| now.len() == bones.len()))
-            .map(|(&actor, bones)| {
-                let shown = before.get(&actor).map_or_else(|| bones.clone(), |[from, mid]| glide.pick(&from[..], &mid[..], &bones[..], glided_bones));
-                (actor, [shown, bones.clone()])
-            })
-            .collect();
         self.canvas_models.extend(frame.canvas_models.drain(..));
         self.spare = Some(old);
         self.frame = frame;
@@ -405,21 +400,15 @@ impl PlayWorld {
         self.changed.contains(&actor)
     }
 
-    pub(super) fn set_glide(&mut self, real_delta: f32) {
-        self.glide = self.clock.frame(real_delta);
+    /// Where the actor is drawn this frame: on its way between the last ticks, or on its bone. `None` for one the
+    /// game does not have, or on a bone that has no place yet: it is not drawn.
+    pub fn place(&self, actor: ObjectId) -> Option<(Vector, Rotator)> {
+        self.shown.actor_place(actor, self.actors.get(&actor)?)
     }
 
-    pub fn glides(&self, actor: ObjectId) -> bool {
-        self.gliding.contains_key(&actor)
-    }
-
-    pub fn shown_place(&self, actor: ObjectId, now: &ActorFrame) -> (Vector, Rotator) {
-        let to = (now.location, now.rotation);
-        self.gliding.get(&actor).map_or(to, |&[from, mid]| self.glide.pick(from, mid, to, glided))
-    }
-
-    pub(super) fn shown_view(&self, to: (Vector, Rotator)) -> (Vector, Rotator) {
-        self.view_from.map_or(to, |[from, mid]| self.glide.pick(from, mid, to, glided))
+    /// Its place at the newest tick: for what the game's scripts draw themselves, and for what is made once.
+    pub fn tick_place(&self, actor: ObjectId) -> Option<(Vector, Rotator)> {
+        self.shown.places.newest(actor, self.actors.get(&actor)?)
     }
 
     pub fn attached(&self, actor: ObjectId) -> bool {
@@ -432,15 +421,7 @@ impl PlayWorld {
     }
 
     pub fn shown_ragdoll(&self, actor: ObjectId) -> Option<std::borrow::Cow<'_, [p2_assets::pose::Frame]>> {
-        let to = self.frame.ragdolls.get(&actor)?;
-        let from = self.ragdoll_from.get(&actor).filter(|_| self.glide.to_newest < 1.0);
-        Some(from.map_or(to.into(), |[from, mid]| self.glide.pick(&from[..], &mid[..], &to[..], glided_bones).into()))
-    }
-
-    /// The time to show channel `index` of the actor's pose at: on its way from the last tick's while both play the
-    /// same sequence forward, across a loop's wrap too.
-    pub fn shown_time(&self, actor: ObjectId, index: usize, channel: &ChannelPose) -> f32 {
-        glided_time(self.pose_from.get(&actor).and_then(|from| from.get(index)), ChannelTime::of(channel), self.glide)
+        Some(self.shown.ragdoll(actor, self.frame.ragdolls.get(&actor)?))
     }
 
     pub fn canvas_mesh(&self, actor: ObjectId) -> Option<&CanvasMesh> {
@@ -480,7 +461,8 @@ impl PlayedAnimation {
         let (package, _) = loader.loaded_export_by_path_of_class(path, "MeshAnimation")?;
         let pkg = &loader.package(package).package;
         let bone_names = animation.bones.iter().map(|b| pkg.name(b.name).to_ascii_lowercase()).collect();
-        let sequences = animation.sequences.iter().enumerate().map(|(i, s)| (pkg.name(s.name).to_ascii_lowercase(), i)).collect();
+        // Of two sequences with one name the first plays, as the scripts' own lookup finds it.
+        let sequences = animation.sequences.iter().enumerate().rev().map(|(i, s)| (pkg.name(s.name).to_ascii_lowercase(), i)).collect();
         Some(Arc::new(Self { path: Arc::from(path), animation, bone_names, sequences }))
     }
 }
@@ -489,5 +471,6 @@ pub struct ChannelPose {
     pub animation: Arc<PlayedAnimation>,
     pub sequence: usize,
     pub time: f32,
+    pub looping: bool,
     pub tween: Option<(Arc<[p2_assets::pose::LocalBone]>, f32)>,
 }

@@ -290,7 +290,7 @@ fn milliseconds_since_2000<L: LoaderRef>(vm: &mut Vm<L>, level: Option<ObjectId>
     [whole_days as f32, seconds as f32, ((rest - f64::from(seconds)) * 1000.0) as i32 as f32]
 }
 
-pub(crate) fn orthogonal_rotation(x: Vector, y: Vector, z: Vector) -> Rotator {
+pub fn orthogonal_rotation(x: Vector, y: Vector, z: Vector) -> Rotator {
     let (pitch, yaw) = (units_truncated(x[2].atan2((x[0] * x[0] + x[1] * x[1]).sqrt())), units_truncated(x[1].atan2(x[0])));
     let unrolled = Rotator::new(pitch, yaw, 0).axes();
     let roll = units_truncated(z.dot(unrolled[1]).atan2(y.dot(unrolled[1])));

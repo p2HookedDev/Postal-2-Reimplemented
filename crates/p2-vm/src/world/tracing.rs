@@ -70,7 +70,7 @@ impl<L: LoaderRef> Vm<L> {
         self.world.line_grid.with_near(start, end, 0.0, f)
     }
 
-    fn owner_chain(&self, actor: ObjectId) -> impl Iterator<Item = ObjectId> {
+    pub(crate) fn owner_chain(&self, actor: ObjectId) -> impl Iterator<Item = ObjectId> {
         std::iter::successors(Some(actor), |&at| self.store.object_of(at, Prop::Owner)).take(OWNER_CHAIN)
     }
 

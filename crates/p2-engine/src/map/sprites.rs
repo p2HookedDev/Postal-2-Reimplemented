@@ -23,7 +23,7 @@ impl Session {
             let blend = sprite_blend(blending, sprite.style);
             let material = ParticleMaterial::sprite(image, blend);
             let follow = FollowActor { actor: sprite.object, scale: sprite.scale, pre_pivot: Vector::from([0.0; 3]), skeletal: None };
-            let frame = t.play.world().and_then(|world| world.actor(sprite.object)).map(|f| (f.gone || f.hidden, f.location));
+            let frame = t.play.world().and_then(|world| Some((world.actor(sprite.object).is_some_and(|f| f.gone || f.hidden), world.tick_place(sprite.object)?.0)));
             let (hidden, location) = frame.unwrap_or((sprite.hidden, sprite.location));
             let placed = follow.transform(location, Rotator::from([0; 3]));
             let shown = if hidden { Visibility::Hidden } else { Visibility::Inherited };

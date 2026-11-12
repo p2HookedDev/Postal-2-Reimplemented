@@ -5,8 +5,9 @@ use crate::anim::MAX_PASSES;
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn update_animation(&mut self, actor: ObjectId, delta: f32) -> Result<(), Error> {
-        let Some(count) = self.instance(actor).map(|instance| instance.channels.len()) else { return Ok(()) };
-        for index in 0..count {
+        // The count is read each pass: a channel started by a handler in this update moves on in it too.
+        let mut index = 0;
+        while self.instance(actor).is_some_and(|instance| index < instance.channels.len()) {
             if let Some(state) = self.channel_mut(actor, index as i32)
                 && let Some((target, left)) = state.blending
                 && delta > 0.0
@@ -74,6 +75,7 @@ impl<L: LoaderRef> Vm<L> {
                     self.notify_anim_end(actor, index)?;
                 }
             }
+            index += 1;
         }
         Ok(())
     }

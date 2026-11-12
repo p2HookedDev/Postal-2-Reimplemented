@@ -29,7 +29,7 @@ impl Glide {
 
 /// The game time frames show, in seconds: it runs with real time a little behind the newest tick, so ticks that come
 /// unevenly still show as even motion.
-pub(in crate::play) struct TickClock {
+pub(crate) struct TickClock {
     shown: f64,
     /// The game time shown when the newest tick came.
     from: f64,
@@ -64,6 +64,11 @@ impl TickClock {
         let speed = 1.0 + (behind / STEER_TIME).clamp(-STEER_LIMIT, STEER_LIMIT);
         self.shown = (self.shown + f64::from(real_delta) * speed).min(self.newest);
         self.glide()
+    }
+
+    /// Game ticks the shown time stands behind the newest tick, for what keeps only its last step (particle sprites).
+    pub(crate) fn behind(&self) -> f32 {
+        if self.newest > self.mid { ((self.newest - self.shown) / (self.newest - self.mid)).clamp(0.0, SNAP_TICKS) as f32 } else { 0.0 }
     }
 
     pub(in crate::play) fn glide(&self) -> Glide {

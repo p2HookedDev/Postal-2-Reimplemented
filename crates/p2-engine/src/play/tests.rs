@@ -241,7 +241,7 @@ fn with_the_look_ahead_off_a_steady_turn_never_steps_back() {
 const LOOP_FRAMES: f32 = 20.0;
 
 fn channel_at(sequence: usize, time: f32) -> ChannelTime {
-    ChannelTime { animation: 1, sequence, time, length: LOOP_FRAMES }
+    ChannelTime { animation: 1, sequence, time, length: LOOP_FRAMES, looping: true }
 }
 
 fn shown_channel(frames: usize, at: impl Fn(usize) -> ChannelTime) -> Vec<(f32, usize)> {
@@ -313,6 +313,13 @@ fn a_channel_that_drops_back_without_a_wrap_shows_the_tick_at_once() {
         let times = shown_in_tick(&shown, restart);
         assert!(!times.is_empty() && times.iter().all(|&time| time == 0.0), "tick {restart}: {times:?}");
     }
+}
+
+#[test]
+fn an_animation_played_once_and_started_again_shows_its_start_at_once() {
+    let shown = shown_channel(600, |tick| ChannelTime { looping: false, ..channel_at(0, (tick as f32 * 0.25) % LOOP_FRAMES) });
+    let times = shown_in_tick(&shown, 80);
+    assert!(!times.is_empty() && times.iter().all(|&time| time == 0.0), "{times:?}");
 }
 
 #[test]

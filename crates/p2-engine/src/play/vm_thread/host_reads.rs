@@ -7,16 +7,19 @@ impl Simulation {
         self.mark = self.vm.store.stamp();
         self.vm.store.next_stamp();
         self.time_dilation = self.vm.time_dilation().to_bits();
+        self.view_key = ViewKey { viewed: self.view.and_then(|view| view.actor), behind: self.view.is_some_and(|view| view.behind), ..self.view_key };
     }
 
     pub(in crate::play) fn pass_actor(&mut self, actor: ObjectId, changes: &mut Vec<(ObjectId, ActorFrame)>, restyled: &mut Vec<Spawned>) {
-        let store = &self.vm.store;
-        let time_dilation = self.time_dilation;
+        let (vm, store) = (&self.vm, &self.vm.store);
+        let (time_dilation, view_key) = (self.time_dilation, self.view_key);
         let undrawn = |sent: &Sent| {
-            sent.steady
+            (sent.steady || sent.view == view_key)
                 && sent.time_dilation == time_dilation
+                // Whether its owner is the player's is in no stamp of its own.
+                && (sent.frame.emitters_disabled.is_empty() || vm.particle_time_scale(actor) == sent.frame.time_scale)
                 && store.object(actor).drawn() <= sent.read_at
-                && sent.emitters.iter().all(|&emitter| store.object(emitter).drawn() <= sent.read_at)
+                && sent.others.iter().all(|&other| store.object(other).drawn() <= sent.read_at)
         };
         if self.sent.get(&actor).is_some_and(undrawn) {
             self.reads[0] += 1;
@@ -35,12 +38,13 @@ impl Simulation {
             (owner_only, actor_frame(vm, actor, view, hud_drawn, names))
         });
         let (read_at, steady) = (self.mark, now.attachment.is_none() && !owner_only);
-        let emitters = || self.vm.store.objects_of(actor, Prop::Emitters).flatten();
+        let vm = &self.vm;
+        let others = || vm.store.objects_of(actor, Prop::Emitters).flatten().chain((!steady).then(|| vm.view_chain(actor)).into_iter().flatten());
         match self.sent.get_mut(&actor) {
             Some(sent) => {
-                (sent.read_at, sent.steady, sent.time_dilation) = (read_at, steady, time_dilation);
-                sent.emitters.clear();
-                sent.emitters.extend(emitters());
+                (sent.read_at, sent.steady, sent.view, sent.time_dilation) = (read_at, steady, view_key, time_dilation);
+                sent.others.clear();
+                sent.others.extend(others());
                 if sent.frame == now {
                     return;
                 }
@@ -53,8 +57,8 @@ impl Simulation {
                 changes.push((actor, now));
             }
             None => {
-                let emitters = emitters().collect();
-                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, time_dilation, emitters });
+                let others = others().collect();
+                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, view: view_key, time_dilation, others });
                 changes.push((actor, now));
             }
         }
@@ -101,7 +105,8 @@ impl Simulation {
     }
 
     pub(in crate::play) fn actor_pose(&mut self, actor: ObjectId) -> Option<ActorPose> {
-        let base = self.pose_of(actor, 0)?;
+        self.vm.anim_channel(actor, 0)?;
+        let base = self.pose_of(actor, 0);
         let mut blends = Vec::new();
         for index in 1.. {
             let Some((channel, _)) = self.vm.anim_channel(actor, index) else { break };
@@ -130,7 +135,7 @@ impl Simulation {
 
     pub(in crate::play) fn pose_of(&mut self, actor: ObjectId, index: usize) -> Option<ChannelPose> {
         let (channel, animation) = self.vm.anim_channel(actor, index)?;
-        let (sequence, frame) = (channel.sequence, channel.frame.max(0.0));
+        let (sequence, frame, looping) = (channel.sequence, channel.frame.max(0.0), channel.looping);
         let tween = channel.tween().map(|(from, weight)| (Arc::clone(from), weight));
         let object = animation?;
         let vm = &mut self.vm;
@@ -145,7 +150,7 @@ impl Simulation {
         let index = *self.sequences.entry((object, sequence)).or_insert_with(|| animation.sequences.get(&self.vm.store.name(sequence).to_ascii_lowercase()).copied());
         let index = index?;
         let frames = animation.animation.sequences[index].num_frames.max(1) as f32;
-        Some(ChannelPose { animation, sequence: index, time: frame * frames, tween })
+        Some(ChannelPose { animation, sequence: index, time: frame * frames, looping, tween })
     }
 }
 

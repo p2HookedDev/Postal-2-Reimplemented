@@ -91,12 +91,8 @@ pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, se
     }
 }
 
-/// How far a frame stands from the tick before the newest (0) to the newest (1): the time since the newest tick over its
-/// step. The simulation itself only steps on ticks.
-pub(super) fn shown_part(since_tick: f32, step: f32) -> f32 {
-    if step > 0.0 { (since_tick / step).clamp(0.0, 1.0) } else { 1.0 }
-}
-
+/// `shown` 1 is the newest tick's place and 0 the one before. Below 0 the sprite is taken back along its last step, to
+/// the time the world is shown at: the simulation keeps no older place.
 pub(super) fn drawn_location(previous: Vector, newest: Vector, shown: f32) -> Vector {
     previous + (newest - previous) * shown
 }

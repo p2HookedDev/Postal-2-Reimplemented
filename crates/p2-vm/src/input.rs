@@ -154,10 +154,19 @@ impl<L: LoaderRef> Vm<L> {
         false
     }
 
-    fn bone_base(&self, actor: ObjectId) -> Option<ObjectId> {
+    /// The other actors whose memory decides [`Vm::filtered_from_view`]: the actor's owners, and the bases it hangs
+    /// from by a bone with theirs.
+    pub fn view_chain(&self, actor: ObjectId) -> impl Iterator<Item = ObjectId> {
+        std::iter::successors(Some(actor), |&at| self.base_by_bone(at)).take(9).flat_map(|at| self.owner_chain(at)).skip(1)
+    }
+
+    fn base_by_bone(&self, actor: ObjectId) -> Option<ObjectId> {
         let base = self.store.object_of(actor, Prop::Base)?;
-        let on_bone = matches!(self.store.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE);
-        (on_bone && self.skeletal_mesh(base).is_some()).then_some(base)
+        matches!(self.store.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE).then_some(base)
+    }
+
+    fn bone_base(&self, actor: ObjectId) -> Option<ObjectId> {
+        self.base_by_bone(actor).filter(|&base| self.skeletal_mesh(base).is_some())
     }
 
     fn filtered_alone(&self, actor: ObjectId, view: Option<&PlayerView>) -> bool {
@@ -230,6 +239,11 @@ impl<L: LoaderRef> Vm<L> {
             _ => crate::enums::EInputAction::Axis,
         };
         if self.interactions_key_event(key, code, delta)? {
+            return Ok(());
+        }
+        // With the cursor shown, mouse movement is for the interactions (a menu, the inventory selector) and does not turn
+        // the player: retail's own rule here is (unverified).
+        if action == Action::Axis && self.shows_mouse() {
             return Ok(());
         }
         match self.host.input.player {
@@ -466,6 +480,32 @@ fn exclusive_menu_button(commands: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_view_chain_is_the_owners_and_the_bone_bases_with_theirs() {
+        use p2_test_package::{PackageBuilder, PropertyType};
+        let mut package = PackageBuilder::new("Fixture");
+        let class = package.class("Actor", None);
+        for name in ["Owner", "Base"] {
+            package.property(class, name, PropertyType::Object, 0);
+        }
+        package.property(class, "AttachmentBone", PropertyType::Name, 0);
+        let dir = package.write_to_temp("view-chain").unwrap();
+        let mut loader = p2_package::Loader::new(&dir, &["*.u".into()]).unwrap();
+        loader.load_scripts().unwrap();
+        let mut vm = Vm::new(Arc::new(loader));
+        let class = vm.find_class("Fixture", "Actor").unwrap();
+        let [hat, wearer, head, body, player] = [(); 5].map(|()| vm.new_object(class, None));
+        let bone = vm.intern("Bip01 Head");
+        for (actor, name, other) in [(hat, Prop::Owner, wearer), (hat, Prop::Base, head), (head, Prop::Base, body), (body, Prop::Owner, player)] {
+            vm.store.set(actor, name, Value::Object(Some(other)));
+        }
+        vm.store.set(hat, Prop::AttachmentBone, Value::Name(bone));
+        assert_eq!(vm.view_chain(hat).collect::<Vec<_>>(), [wearer, head]);
+        vm.store.set(head, Prop::AttachmentBone, Value::Name(bone));
+        assert_eq!(vm.view_chain(hat).collect::<Vec<_>>(), [wearer, head, body, player]);
+        assert_eq!(vm.view_chain(player).count(), 0);
+    }
 
     #[test]
     fn parses_commands_and_options() {
