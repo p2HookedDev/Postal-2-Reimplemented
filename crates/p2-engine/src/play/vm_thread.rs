@@ -20,6 +20,7 @@ pub struct VmFrame {
     pub(super) ambients: Vec<(ObjectId, crate::actors::AmbientActor, Arc<str>)>,
     pub(super) zone_sounds: Option<Vec<ZoneSound>>,
     pub(super) zone_fogs: Option<Vec<Option<crate::actors::ZoneFog>>>,
+    pub(super) volume_fog: Option<crate::actors::ZoneFog>,
     pub(super) audio_channels: usize,
     pub(super) music: Vec<(MusicCommand, Option<Vector>, Option<Arc<[u8]>>)>,
     pub(super) actor_changes: Vec<(ObjectId, ActorFrame)>,

@@ -70,6 +70,15 @@ impl Simulation {
         self.read_audio(frame);
         self.read_settings(frame);
         self.read_zone_fogs(frame);
+        frame.volume_fog = self.volume_fog();
+    }
+
+    /// Of the view target's volume, a pawn's at its eyes.
+    fn volume_fog(&self) -> Option<crate::actors::ZoneFog> {
+        let vm = &self.vm;
+        let target = self.view?.actor?;
+        let volume = vm.store.object_of(target, if vm.store.is_a(target, Kind::Pawn) { Prop::HeadVolume } else { Prop::PhysicsVolume })?;
+        crate::actors::zone_fog(vm, volume)
     }
 
     fn read_hud_actors(&mut self, frame: &mut VmFrame) {

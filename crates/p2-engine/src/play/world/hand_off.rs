@@ -69,6 +69,10 @@ impl PlayWorld {
         self.frame.quit
     }
 
+    pub fn volume_fog(&self) -> Option<crate::actors::ZoneFog> {
+        self.frame.volume_fog
+    }
+
     pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<crate::actors::ZoneFog>>> {
         self.frame.zone_fogs.take()
     }

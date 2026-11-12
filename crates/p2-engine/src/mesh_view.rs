@@ -390,7 +390,7 @@ fn apply_change(
     let portals = collision.as_ref().map(|collision| Arc::new(ZonePortals::new(&collision.model, antiportals)));
     let start = start.map(|(position, yaw)| (position - center, yaw));
     *level = LevelCollision(collision.map(Arc::new));
-    *shown = ShownScene { fogs, origin: -center, portals, lighting, radius, start, light_maps, sky_zone };
+    *shown = ShownScene { fogs, volume_fog: None, origin: -center, portals, lighting, radius, start, light_maps, sky_zone };
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }

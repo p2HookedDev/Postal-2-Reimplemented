@@ -76,6 +76,10 @@ impl Session {
         if let Some(fogs) = t.play.world_mut().and_then(PlayWorld::take_zone_fogs) {
             t.shown.fogs = fogs;
         }
+        let volume_fog = t.play.world().and_then(PlayWorld::volume_fog);
+        if t.shown.volume_fog != volume_fog {
+            t.shown.volume_fog = volume_fog;
+        }
         if t.canvas.left.is_empty() || t.play.world().is_some_and(PlayWorld::presented) {
             t.view.overlays.clear();
             for &(item, slot) in &drawn {

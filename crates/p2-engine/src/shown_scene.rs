@@ -12,6 +12,8 @@ use crate::render::actor_light::LightEnvironment;
 #[derive(Resource, Default)]
 pub struct ShownScene {
     pub(crate) fogs: Vec<Option<ZoneFog>>,
+    /// The fog of the volume the viewer's head is in; it goes before the zone's.
+    pub(crate) volume_fog: Option<ZoneFog>,
     pub origin: Vec3,
     pub(crate) portals: Option<Arc<ZonePortals>>,
     pub lighting: Option<Arc<LightEnvironment>>,
