@@ -126,7 +126,8 @@ impl<L: LoaderRef> Vm<L> {
             self.set_vector(pawn, Prop::Velocity, entry_velocity(average, old_velocity, terminal));
         }
         let location = self.store.vector(pawn, Prop::Location);
-        let line = self.find_water_line(pawn, location, old_location);
+        let own = self.store.object_of(pawn, Prop::PhysicsVolume);
+        let line = self.find_water_line(own, location, old_location);
         let mut time_left = remaining;
         if line != location {
             time_left += (line - location).size() * tick / (location - old_location).size();
@@ -143,12 +144,13 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    pub(crate) fn find_water_line(&mut self, pawn: ObjectId, in_water: Vector, out_of_water: Vector) -> Vector {
+    /// `own` is the volume the mover counts as its own `PhysicsVolume` at `out_of_water`.
+    pub(crate) fn find_water_line(&mut self, own: Option<ObjectId>, in_water: Vector, out_of_water: Vector) -> Vector {
         let Some((volume, time)) = self.first_water_volume(out_of_water, in_water) else { return out_of_water };
         if self.trace_world(out_of_water, in_water, Vector::ZERO).is_some_and(|hit| hit.time < time) {
             return out_of_water;
         }
-        water_line_point(in_water, out_of_water, time, self.store.object_of(pawn, Prop::PhysicsVolume) == Some(volume))
+        water_line_point(in_water, out_of_water, time, own == Some(volume))
     }
 
     /// `advance` makes each further move (`MoveActor` flying, `Swim` swimming) and returns its time fraction; the result is
@@ -195,7 +197,8 @@ impl<L: LoaderRef> Vm<L> {
             return Ok((0.0, hit));
         }
         let location = self.store.vector(pawn, Prop::Location);
-        let line = self.find_water_line(pawn, start, location);
+        let own = self.store.object_of(pawn, Prop::PhysicsVolume);
+        let line = self.find_water_line(own, start, location);
         if line == location {
             return Ok((0.0, hit));
         }

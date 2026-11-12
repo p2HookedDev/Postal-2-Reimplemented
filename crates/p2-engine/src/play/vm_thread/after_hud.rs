@@ -73,7 +73,6 @@ impl Simulation {
         frame.volume_fog = self.volume_fog();
     }
 
-    /// Of the view target's volume, a pawn's at its eyes.
     fn volume_fog(&self) -> Option<crate::actors::ZoneFog> {
         let vm = &self.vm;
         let target = self.view?.actor?;

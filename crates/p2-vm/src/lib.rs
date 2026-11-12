@@ -28,6 +28,7 @@ mod natives;
 mod object_store;
 mod object_table;
 mod nav;
+mod nav_jump;
 mod pawn_anim;
 mod physics;
 mod projectile;

@@ -122,7 +122,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// `other` on `actor`'s touch list, with no event; nothing when it is there already.
     pub(crate) fn link_touching(&mut self, actor: ObjectId, other: ObjectId) -> bool {
         if self.touches(actor, other) {
             return false;

@@ -6,16 +6,9 @@ const FLOOR_TRACE: f32 = 524_288.0;
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn spawn_deco_list(&mut self, volume: ObjectId) -> Result<(), Error> {
         let Some(list) = self.store.object_of(volume, "DecoList") else { return Ok(()) };
-        let Some(model) = self.store.object_of(volume, Prop::Brush).and_then(|brush| self.brush_model(brush)) else { return Ok(()) };
-        let (min, max) = model
-            .points
-            .iter()
-            .fold(None, |bounds: Option<([f32; 3], [f32; 3])>, p| {
-                let p = [p[0], p[1], p[2]];
-                let (lo, hi) = bounds.unwrap_or((p, p));
-                Some(([0, 1, 2].map(|i| lo[i].min(p[i])), [0, 1, 2].map(|i| hi[i].max(p[i]))))
-            })
-            .unwrap_or_default();
+        let Some(([x0, y0, z0, x1, y1, z1], _)) = self.store.object_of(volume, Prop::Brush).and_then(|brush| self.saved_bounds(brush, "Model")) else {
+            return Ok(());
+        };
         let placement = self.placement(volume);
         let axes = placement.rotation.axes();
         let to_world = move |p: Vector| {
@@ -23,7 +16,7 @@ impl<L: LoaderRef> Vm<L> {
             placement.location + axes[0] * local[0] + axes[1] * local[1] + axes[2] * local[2]
         };
         // The extent is taken from the box already placed in the world, then placed a second time with each point.
-        let extent = (to_world(Vector::from(max)) - to_world(Vector::from(min))) * 0.5;
+        let extent = (to_world(Vector::new(x1, y1, z1)) - to_world(Vector::new(x0, y0, z0))) * 0.5;
         let class = self.find_class("Engine", "DecoVolumeObject")?;
         for index in 0.. {
             let Some(Value::Struct(entry)) = self.store.element_of(list, "Decorations", index) else { break };
@@ -63,9 +56,9 @@ impl<L: LoaderRef> Vm<L> {
         let mut extent = Vector::new(radius, radius, height);
         if extent == Vector::ZERO
             && let Some(mesh) = self.store.object_of(actor, Prop::StaticMesh)
-            && let Some([half_height, radius]) = self.mesh_extent(mesh)
+            && let Some((bounds, sphere)) = self.saved_bounds(mesh, "StaticMesh")
         {
-            extent = Vector::new(radius, radius, half_height);
+            extent = Vector::new(sphere[3], sphere[3], (bounds[5] - bounds[2]) * 0.5);
         }
         let start = self.store.vector(actor, Prop::Location);
         let end = start - Vector::new(0.0, 0.0, FLOOR_TRACE);
@@ -83,9 +76,9 @@ impl<L: LoaderRef> Vm<L> {
         Ok(true)
     }
 
-    /// Half the height of the mesh's own bounding box and its bounding sphere's radius, unscaled.
-    fn mesh_extent(&self, mesh: ObjectId) -> Option<[f32; 2]> {
-        let (package, export) = self.loader.loaded_export_by_path_of_class(&self.store.object(mesh).path, "StaticMesh")?;
+    /// The local bounding box (min then max) and bounding sphere a model or mesh saves first in its own data.
+    fn saved_bounds(&self, primitive: ObjectId, class: &str) -> Option<([f32; 6], [f32; 4])> {
+        let (package, export) = self.loader.loaded_export_by_path_of_class(&self.store.object(primitive).path, class)?;
         let loaded = self.loader.package(package);
         let mut r = loaded.package.native_reader(&loaded.data, &loaded.package.exports[export]).ok()?;
         let mut bounds = [0.0f32; 6];
@@ -97,7 +90,7 @@ impl<L: LoaderRef> Vm<L> {
         for value in &mut sphere {
             *value = r.f32().ok()?;
         }
-        Some([(bounds[5] - bounds[2]) * 0.5, sphere[3]])
+        Some((bounds, sphere))
     }
 }
 

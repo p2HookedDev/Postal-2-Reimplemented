@@ -20,11 +20,13 @@ const ANCHOR_REACH: f32 = 1201.0;
 const ANCHOR_GRID_LIMIT: f32 = 1_048_576.0;
 const REACH_DISTANCE_SQUARED: f32 = 1_000_000.0;
 const WALK_STEPS: usize = 100;
-const WALK_MIN_MOVE: f32 = 4.1;
+pub(crate) const WALK_MIN_MOVE: f32 = 4.1;
 const WALK_MIN_LAST_MOVE: f32 = 8.0;
 const FLY_STEP: f32 = 200.0;
-/// How often one reach test may pass between its air and water halves; retail has no limit and could recurse without end.
-const HAND_OFFS: u32 = 4;
+const FLOOR_DROP: f32 = MAX_STEP_HEIGHT + 2.0;
+/// How often one reach test may pass between its air and water halves. Retail has no limit and would run out of stack
+/// long after this many, so the answers are the same wherever retail gives one.
+const HAND_OFFS: u32 = 64;
 /// A swimmer that leaves the water tries to climb out only toward a goal lower than this above it.
 const SWIM_EXIT_HEIGHT: f32 = 78.0 + MAX_STEP_HEIGHT;
 const SKIP_ANCHOR_DISTANCE: f32 = 1200.0;
@@ -723,7 +725,8 @@ impl<L: LoaderRef> Vm<L> {
         let mut at = from;
         let hit = self.test_move(pawn, &mut at, step);
         if medium == Medium::Water && !self.water_at(at) {
-            let line = self.find_water_line(pawn, from, at);
+            let own = self.physics_volume_at(at, None).ok().flatten();
+            let line = self.find_water_line(own, from, at);
             if line != at {
                 let back = line - at;
                 self.test_move(pawn, &mut at, back);
@@ -739,36 +742,59 @@ impl<L: LoaderRef> Vm<L> {
         (at, moved.dot(moved) >= threshold * threshold)
     }
 
-    fn water_at(&mut self, point: Vector) -> bool {
+    pub(crate) fn water_at(&mut self, point: Vector) -> bool {
         self.physics_volume_at(point, None).ok().flatten().is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume))
     }
 
-    fn test_move(&mut self, pawn: ObjectId, at: &mut Vector, delta: Vector) -> MoveHit {
+    pub(crate) fn test_move(&mut self, pawn: ObjectId, at: &mut Vector, delta: Vector) -> MoveHit {
         let (radius, height) = self.store.collision_size(pawn);
         let hit = self.sweep(pawn, Sweep { start: *at, delta, radius, height }, SweepAgainst::WORLD, None);
         *at += delta * hit.time;
         hit
     }
 
-    /// A fall shortens the steps to 35 once; jumps are not tried, even for a pawn that can jump (unverified).
+    /// A failed step tries a jump when the pawn can jump; otherwise a fall shortens the steps to 35 once.
     fn walk_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
         let (radius, height) = self.store.collision_size(pawn);
-        let mut step_size = radius.max(if self.store.flag_of(pawn, Prop::bCanJump) { 128.0 } else { 12.0 });
+        let can_jump = self.store.flag_of(pawn, Prop::bCanJump);
+        let mut step_size = radius.max(if can_jump { 128.0 } else { 12.0 });
+        let jump_target = goal.map_or(to, |goal| Vector::new(to.x, to.y, to.z - self.store.float_of(goal, Prop::CollisionHeight) + height));
+        // Test moves leave the touch list alone, so a pawn already in a pain volume fails after its first step.
+        let hurt = hurt_by_volume(&self.store, pawn, pawn);
         let mut location = from;
         for _ in 0..WALK_STEPS {
             let direction = to - location;
             if self.reached_destination(pawn, direction, goal) {
                 return true;
             }
+            if hurt {
+                return false;
+            }
             let (step, threshold) = test_step(Vector::new(direction.x, direction.y, 0.0), step_size);
             let ahead = location + step;
             let blocked = self.trace_bsp(location, ahead, [radius * 0.5, radius * 0.5, height * 0.5].into()).is_some()
                 || self.trace_lines(location, ahead).is_some();
-            let walked = if blocked { WalkMove::Stopped } else { self.walk_move(pawn, location, step, threshold) };
+            let walked = if blocked {
+                WalkMove::Stopped
+            } else {
+                let walked;
+                (location, walked) = self.walk_move(pawn, location, step, threshold);
+                walked
+            };
             let mut answer = None;
             match walked {
-                WalkMove::Moved(next) => location = next,
+                WalkMove::Moved => {}
                 _ if self.store.flag_of(pawn, Prop::bCanFly) => answer = Some(self.fly_reachable(pawn, location, to, goal, HAND_OFFS)),
+                WalkMove::Stopped if can_jump => {
+                    let jumped;
+                    (location, jumped) = self.find_jump_up(pawn, location, step);
+                    answer = (!jumped).then_some(false);
+                }
+                WalkMove::Fell if can_jump => {
+                    let jumped;
+                    (location, jumped) = self.find_best_jump(pawn, location, jump_target);
+                    answer = (!jumped).then_some(false);
+                }
                 WalkMove::Fell if step_size > MAX_STEP_HEIGHT => step_size = MAX_STEP_HEIGHT,
                 WalkMove::Fell | WalkMove::Stopped => answer = Some(false),
             }
@@ -789,35 +815,40 @@ impl<L: LoaderRef> Vm<L> {
         false
     }
 
-    fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> WalkMove {
+    /// Where the test pawn is left, and the result; a fall or a bad floor after a step up puts it back to before its last move.
+    pub(crate) fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> (Vector, WalkMove) {
         let (radius, height) = self.store.collision_size(pawn);
         let mut at = from;
         let step = Vector::new(step.x, step.y, 0.0);
+        let volume = self.physics_volume_at(from, None).ok().flatten();
+        let down = crate::physics::gravity_direction(volume.map_or(crate::physics::DEFAULT_GRAVITY, |volume| self.store.vector(volume, Prop::Gravity)));
         let hit = self.test_move(pawn, &mut at, step);
         if hit.time < 1.0 {
+            let wall = at;
             let rest = step * (1.0 - hit.time);
-            self.test_move(pawn, &mut at, [0.0, 0.0, MAX_STEP_HEIGHT].into());
+            self.test_move(pawn, &mut at, down * -MAX_STEP_HEIGHT);
             self.test_move(pawn, &mut at, rest);
-            let down = self.test_move(pawn, &mut at, [0.0, 0.0, -MAX_STEP_HEIGHT].into());
-            if down.time < 1.0 && down.normal[2] < MIN_FLOOR_Z {
-                return WalkMove::Stopped;
+            let back = self.test_move(pawn, &mut at, down * MAX_STEP_HEIGHT);
+            if back.time < 1.0 && back.normal[2] < MIN_FLOOR_Z {
+                return (wall, WalkMove::Stopped);
             }
         }
-        let floor = self.test_move(pawn, &mut at, [0.0, 0.0, -MAX_STEP_HEIGHT].into());
+        let ledge = at;
+        let floor = self.test_move(pawn, &mut at, down * FLOOR_DROP);
         let embedded = self.find_floor(pawn, at, radius, height, 0.0).is_some_and(|f| f.distance <= 0.0 && f.normal[2] >= MIN_FLOOR_Z);
         if !embedded && (floor.time >= 1.0 || floor.normal[2] < MIN_FLOOR_Z) {
-            return WalkMove::Fell;
+            return (ledge, WalkMove::Fell);
         }
         let moved = at - from;
         if moved.dot(moved) < threshold * threshold {
-            return WalkMove::Stopped;
+            return (at, WalkMove::Stopped);
         }
-        WalkMove::Moved(at)
+        (at, WalkMove::Moved)
     }
 }
 
-enum WalkMove {
-    Moved(Vector),
+pub(crate) enum WalkMove {
+    Moved,
     Stopped,
     Fell,
 }
