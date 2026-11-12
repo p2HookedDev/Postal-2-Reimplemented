@@ -84,6 +84,7 @@ pub(crate) struct Input {
     player: Option<ObjectId>,
     held: Vec<Arc<str>>,
     in_alias: bool,
+    cull_tags: Vec<crate::NameId>,
 }
 
 impl Input {
@@ -176,10 +177,28 @@ impl<L: LoaderRef> Vm<L> {
             return true;
         }
         let viewer = view.and_then(|view| view.actor);
-        if viewer.is_some_and(|viewer| self.is_owned_by(actor, viewer)) {
+        let owner_filtered = if viewer.is_some_and(|viewer| self.is_owned_by(actor, viewer)) {
             self.store.flag_of(actor, Prop::bOwnerNoSee) && !view.is_some_and(|view| view.behind)
         } else {
             self.store.flag_of(actor, Prop::bOnlyOwnerSee)
+        };
+        owner_filtered || matches!(self.store.get(actor, Prop::Tag), Some(Value::Name(tag)) if self.host.input.cull_tags.contains(&tag))
+    }
+
+    /// Takes the `CullTag` names of the volume the view target is in: until the next call an actor with one of them
+    /// as its `Tag` is not drawn (it still ticks, collides and sounds). Returns that volume when it names any.
+    pub fn set_cull_view(&mut self, view_target: Option<ObjectId>) -> Option<ObjectId> {
+        let volume = view_target.and_then(|target| self.store.object_of(target, Prop::PhysicsVolume));
+        let tags = volume.map_or_else(Vec::new, |volume| self.cull_tags_of(volume));
+        self.host.input.cull_tags.clear();
+        self.host.input.cull_tags.extend(tags.iter().filter_map(|tag| if let &Value::Name(name) = tag { Some(name) } else { None }));
+        volume.filter(|_| !self.host.input.cull_tags.is_empty())
+    }
+
+    pub fn cull_tags_of(&self, volume: ObjectId) -> Vec<Value> {
+        match self.store.get(volume, Prop::CullTag) {
+            Some(Value::Array(tags)) => tags,
+            _ => Vec::new(),
         }
     }
 

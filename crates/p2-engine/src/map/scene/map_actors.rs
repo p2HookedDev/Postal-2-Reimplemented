@@ -73,6 +73,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
             _ => None,
         })
         .collect();
+    let cull_tags: Vec<p2_vm::Value> = vm.actors().flat_map(|volume| vm.cull_tags_of(volume)).collect();
     for object in vm.actors().filter(|&o| !vm.store.is_deleted(o)) {
         projectors.extend(projector_actor(&vm, object));
         antiportal_paths.extend(antiportal_actor(&vm, object));
@@ -108,7 +109,9 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
         // Merged sections take every untagged projector and no tagged one: a model of its own carries the actor's own answer
         // (`Session::update_projections`).
         let aimed_at = matches!(vm.store.get(actor.object, p2_vm::Prop::Tag), Some(p2_vm::Value::Name(tag)) if project_tags.contains(&tag));
-        let own_model = (!actor.accepts_projectors || aimed_at) && actor.forced_zone_tag.is_none();
+        // An actor a volume's `CullTag` names is hidden and shown by the game: it keeps a model of its own.
+        let cullable = vm.store.get(actor.object, p2_vm::Prop::Tag).is_some_and(|tag| cull_tags.contains(&tag));
+        let own_model = (!actor.accepts_projectors || aimed_at || cullable) && actor.forced_zone_tag.is_none();
         let follow =
             (actor.movable || own_model).then_some(FollowActor { actor: actor.object, scale: actor.scale, pre_pivot: actor.pre_pivot, skeletal: None });
         let only_from = actor.forced_zone_tag.as_ref().map(|tag| {

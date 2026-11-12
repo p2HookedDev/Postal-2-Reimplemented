@@ -7,15 +7,17 @@ impl Simulation {
         self.mark = self.vm.store.stamp();
         self.vm.store.next_stamp();
         self.time_dilation = self.vm.time_dilation().to_bits();
+        self.cull_volume = self.vm.set_cull_view(self.view.and_then(|view| view.actor));
         self.view_key = ViewKey { viewed: self.view.and_then(|view| view.actor), behind: self.view.is_some_and(|view| view.behind), ..self.view_key };
     }
 
     pub(in crate::play) fn pass_actor(&mut self, actor: ObjectId, changes: &mut Vec<(ObjectId, ActorFrame)>, restyled: &mut Vec<Spawned>) {
         let (vm, store) = (&self.vm, &self.vm.store);
-        let (time_dilation, view_key) = (self.time_dilation, self.view_key);
+        let (time_dilation, view_key, cull_volume) = (self.time_dilation, self.view_key, self.cull_volume);
         let undrawn = |sent: &Sent| {
             (sent.steady || sent.view == view_key)
                 && sent.time_dilation == time_dilation
+                && sent.cull_volume == cull_volume
                 // Whether its owner is the player's is in no stamp of its own.
                 && (sent.frame.emitters_disabled.is_empty() || vm.particle_time_scale(actor) == sent.frame.time_scale)
                 && store.object(actor).drawn() <= sent.read_at
@@ -42,7 +44,7 @@ impl Simulation {
         let others = || vm.store.objects_of(actor, Prop::Emitters).flatten().chain((!steady).then(|| vm.view_chain(actor)).into_iter().flatten());
         match self.sent.get_mut(&actor) {
             Some(sent) => {
-                (sent.read_at, sent.steady, sent.view, sent.time_dilation) = (read_at, steady, view_key, time_dilation);
+                (sent.read_at, sent.steady, sent.view, sent.time_dilation, sent.cull_volume) = (read_at, steady, view_key, time_dilation, cull_volume);
                 sent.others.clear();
                 sent.others.extend(others());
                 if sent.frame == now {
@@ -58,7 +60,7 @@ impl Simulation {
             }
             None => {
                 let others = others().collect();
-                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, view: view_key, time_dilation, others });
+                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, view: view_key, time_dilation, cull_volume, others });
                 changes.push((actor, now));
             }
         }

@@ -225,6 +225,7 @@ impl PlayWorld {
             sent: FxHashMap::default(),
             mark: 0,
             time_dilation: 0,
+            cull_volume: None,
             reads: [0; 3],
             reads_by_class: FxHashMap::default(),
             lower_names: FxHashMap::default(),

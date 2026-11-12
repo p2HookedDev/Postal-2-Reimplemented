@@ -65,6 +65,7 @@ pub(super) struct Sent {
     pub(super) steady: bool,
     pub(super) view: ViewKey,
     pub(super) time_dilation: u32,
+    pub(super) cull_volume: Option<ObjectId>,
     /// Its emitters and, unless `steady`, its owners and bone bases with theirs.
     pub(super) others: Vec<ObjectId>,
 }
@@ -203,6 +204,7 @@ pub(super) struct Simulation {
     pub(super) mark: u64,
     /// The level's `TimeDilation` (its bits) as the running pass of reads began.
     pub(super) time_dilation: u32,
+    pub(super) cull_volume: Option<ObjectId>,
     /// For the profile log, since its last line: actor reads skipped, made because of a write (or a first read), and
     /// made for an actor the view or another actor decides.
     pub(super) reads: [u32; 3],
