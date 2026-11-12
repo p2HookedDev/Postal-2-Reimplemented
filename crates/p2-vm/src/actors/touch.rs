@@ -122,9 +122,10 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    fn touch_side(&mut self, actor: ObjectId, other: ObjectId) -> Result<bool, Error> {
+    /// `other` on `actor`'s touch list, with no event; nothing when it is there already.
+    pub(crate) fn link_touching(&mut self, actor: ObjectId, other: ObjectId) -> bool {
         if self.touches(actor, other) {
-            return Ok(true);
+            return false;
         }
         let mut list = match self.store.get(actor, Prop::Touching) {
             Some(Value::Array(list)) => list,
@@ -133,6 +134,13 @@ impl<L: LoaderRef> Vm<L> {
         list.push(Value::Object(Some(other)));
         self.store.set(actor, Prop::Touching, Value::Array(list));
         self.link_static(actor);
+        true
+    }
+
+    fn touch_side(&mut self, actor: ObjectId, other: ObjectId) -> Result<bool, Error> {
+        if !self.link_touching(actor, other) {
+            return Ok(true);
+        }
         self.event(actor, crate::states::Event::Touch, [Value::Object(Some(other))])?;
         Ok(!self.store.is_deleted(actor) && self.touches(actor, other))
     }

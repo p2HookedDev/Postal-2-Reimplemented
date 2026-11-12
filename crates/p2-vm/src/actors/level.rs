@@ -85,6 +85,7 @@ impl<L: LoaderRef> Vm<L> {
                         errors.push((self.store.object(actor).path.clone(), "SetZone", e));
                     }
                 }
+                self.link_volumes(&actors);
             }
             for &actor in &actors {
                 if self.store.is_deleted(actor) {

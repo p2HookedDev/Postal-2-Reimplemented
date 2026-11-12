@@ -33,13 +33,17 @@ impl<L: LoaderRef> Vm<L> {
         Ok(Some(volume))
     }
 
-    /// With `use_touch` retail looks only at touched volumes; the VM takes the colliding volumes.
-    /// Flags and `Priority` are read live: a script may change them between two calls of a frame.
-    pub(crate) fn physics_volume_at(&mut self, point: Vector, use_touch: bool) -> Result<Option<ObjectId>, Error> {
+    /// With `touching` only the physics volumes on that actor's touch list are looked at, in its order; without, every
+    /// physics volume of the level. `Priority` is read live: a script may change it between two calls of a frame.
+    pub(crate) fn physics_volume_at(&mut self, point: Vector, touching: Option<ObjectId>) -> Result<Option<ObjectId>, Error> {
         let Some(default) = self.default_physics_volume()? else { return Ok(None) };
-        self.refresh_volume_table();
         let default = (default, self.priority(default));
-        let candidate = |vm: &Self, v: ObjectId| (!vm.store.is_deleted(v) && (!use_touch || vm.store.flag_of(v, Prop::bCollideActors))).then(|| vm.priority(v));
+        let candidate = |vm: &Self, v: ObjectId| (!vm.store.is_deleted(v) && vm.store.is_a(v, Kind::PhysicsVolume)).then(|| vm.priority(v));
+        if let Some(actor) = touching {
+            let touched = self.store.object_list(actor, Prop::Touching);
+            return Ok(Some(highest_priority(self, default, touched, candidate, |vm, v| vm.encompasses(v, point))));
+        }
+        self.refresh_volume_table();
         let table = std::mem::take(&mut self.world.primitives.volume_table);
         let mut held = 0;
         let in_box = table
@@ -138,6 +142,26 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
+    /// Level start: every colliding actor goes on the touch lists of the volumes that hold its location, and they on
+    /// its list, with no `Touch`; neither side's collision flags are asked. Volumes and the level are not linked.
+    pub(crate) fn link_volumes(&mut self, actors: &[ObjectId]) {
+        let frame = self.world.frame;
+        let linked = |vm: &Self, actor: ObjectId| !vm.store.is_deleted(actor) && !vm.store.is_a(actor, Kind::Volume) && !vm.store.is_a(actor, Kind::LevelInfo);
+        let inside: Vec<(ObjectId, Vector)> =
+            actors.iter().copied().filter(|&actor| linked(self, actor) && self.store.flag_of(actor, Prop::bCollideActors)).map(|actor| (actor, self.store.vector(actor, Prop::Location))).collect();
+        for &volume in actors {
+            if self.store.is_deleted(volume) || !self.store.is_a(volume, Kind::Volume) || !self.check_volume_place(volume, frame) {
+                continue;
+            }
+            for &(actor, at) in &inside {
+                if self.encompasses(volume, at) {
+                    self.link_touching(actor, volume);
+                    self.link_touching(volume, actor);
+                }
+            }
+        }
+    }
+
     /// When the line from `start` to `end` first is inside the volume's brush: 0 for a start inside.
     pub(crate) fn volume_line_time(&mut self, volume: ObjectId, start: Vector, end: Vector) -> Option<f32> {
         let frame = self.world.frame;
@@ -174,12 +198,11 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) || !self.store.is_a(actor, Kind::Actor) || self.store.is_a(actor, Kind::LevelInfo) {
             return Ok(());
         }
-        if self.store.is_a(actor, Kind::PhysicsVolume) {
+        let own_volume = self.store.is_a(actor, Kind::PhysicsVolume);
+        if own_volume {
             self.volume_moved(actor);
-            self.store.set(actor, Prop::PhysicsVolume, Value::Object(Some(actor)));
-            return Ok(());
         }
-        let use_touch = self.store.flag_of(actor, Prop::bCollideActors) && events == ZoneEvents::Sent && zone_from == OldZone::Region;
+        let touching = (self.store.flag_of(actor, Prop::bCollideActors) && events == ZoneEvents::Sent && zone_from == OldZone::Region).then_some(actor);
         let location = self.store.vector(actor, Prop::Location);
         let (zone, leaf, number) = self.region_at(location);
         let region = self.region_of(actor);
@@ -197,9 +220,13 @@ impl<L: LoaderRef> Vm<L> {
         if zone_changed && let Some(zone) = zone {
             self.event(zone, crate::states::Event::ActorEntered, [Value::Object(Some(actor))])?;
         }
+        if own_volume {
+            self.store.set(actor, Prop::PhysicsVolume, Value::Object(Some(actor)));
+            return Ok(());
+        }
         // The volume part reads `Location` again: a warp zone's `ActorEntered` may have moved the actor.
         let location = self.store.vector(actor, Prop::Location);
-        let new = self.physics_volume_at(location, use_touch)?;
+        let new = self.physics_volume_at(location, touching)?;
         let old = self.store.object_of(actor, Prop::PhysicsVolume);
         let object = |o: Option<ObjectId>| Value::Object(o);
         if !self.store.is_a(actor, Kind::Pawn) {
@@ -218,7 +245,7 @@ impl<L: LoaderRef> Vm<L> {
             return Ok(());
         }
         let eyes = [location[0], location[1], location[2] + self.store.float_of(actor, Prop::BaseEyeHeight)];
-        let head = self.physics_volume_at(eyes.into(), use_touch)?;
+        let head = self.physics_volume_at(eyes.into(), touching)?;
         if new != old {
             if events == ZoneEvents::Sent {
                 if let Some(old) = old {
