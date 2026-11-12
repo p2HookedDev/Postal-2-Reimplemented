@@ -8,7 +8,7 @@ use crate::native_id::Native;
 use crate::Prop;
 use crate::interp::{float, int};
 use crate::natives::{object_arg, vec3};
-use crate::physics::{MAX_STEP_HEIGHT, MIN_FLOOR_Z, Sweep, SweepAgainst};
+use crate::physics::{MAX_STEP_HEIGHT, MIN_FLOOR_Z, MoveHit, Sweep, SweepAgainst};
 use crate::{ClassNames, Error, Kind, LoaderRef, ObjectId, ObjectStore, Value, Vm};
 
 const UNVISITED: i32 = 10_000_000;
@@ -22,6 +22,11 @@ const REACH_DISTANCE_SQUARED: f32 = 1_000_000.0;
 const WALK_STEPS: usize = 100;
 const WALK_MIN_MOVE: f32 = 4.1;
 const WALK_MIN_LAST_MOVE: f32 = 8.0;
+const FLY_STEP: f32 = 200.0;
+/// How often one reach test may pass between its air and water halves: ours, so that a path along a water line ends.
+const HAND_OFFS: u32 = 4;
+/// A swimmer that leaves the water tries to climb out only toward a goal lower than this above it.
+const SWIM_EXIT_HEIGHT: f32 = 78.0 + MAX_STEP_HEIGHT;
 const SKIP_ANCHOR_DISTANCE: f32 = 1200.0;
 const SKIP_ANCHOR_SHARE: f32 = 0.85;
 const R_FORCED: i32 = 256;
@@ -627,10 +632,118 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
-        if self.store.physics_of(pawn) == Some(EPhysics::Flying) {
-            return self.trace_world(from, to, Vector::ZERO).is_none();
+        let volume = self.store.object_of(pawn, Prop::PhysicsVolume);
+        if volume.is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume)) {
+            return self.swim_reachable(pawn, from, to, goal, HAND_OFFS);
+        }
+        if volume.is_some_and(|volume| self.store.is_a(volume, "LadderVolume")) {
+            return self.ladder_reachable(pawn, from, to, goal);
+        }
+        match self.store.physics_of(pawn) {
+            Some(EPhysics::Walking | EPhysics::Falling | EPhysics::Swimming | EPhysics::Ladder) => self.walk_reachable(pawn, from, to, goal),
+            Some(EPhysics::Flying) => self.fly_reachable(pawn, from, to, goal, HAND_OFFS),
+            _ => false,
+        }
+    }
+
+    fn ladder_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
+        if let Some(goal) = goal
+            && let Some(ladder) = self.store.object_of(pawn, Prop::OnLadder)
+        {
+            let goal_ladder = if self.store.is_a(goal, "Ladder") {
+                self.store.object_of(goal, "MyLadder")
+            } else if self.store.physics_of(goal) == Some(EPhysics::Ladder) && self.store.is_a(goal, Kind::Pawn) {
+                self.store.object_of(goal, Prop::OnLadder)
+            } else {
+                None
+            };
+            if goal_ladder == Some(ladder) {
+                return true;
+            }
         }
         self.walk_reachable(pawn, from, to, goal)
+    }
+
+    fn fly_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32) -> bool {
+        let step_size = self.store.float_of(pawn, Prop::CollisionRadius).max(FLY_STEP);
+        let mut location = from;
+        for _ in 0..WALK_STEPS {
+            let direction = to - location;
+            if self.reached_destination(pawn, direction, goal) {
+                return true;
+            }
+            let (step, threshold) = test_step(direction, step_size);
+            let moved;
+            (location, moved) = self.fly_move(pawn, location, step, threshold, Medium::Air);
+            if !moved {
+                return false;
+            }
+            if self.water_at(location) {
+                return self.store.flag_of(pawn, Prop::bCanSwim) && !hurt_by_volume(&self.store, pawn, pawn) && hand_offs > 0 && self.swim_reachable(pawn, location, to, goal, hand_offs - 1);
+            }
+        }
+        false
+    }
+
+    fn swim_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32) -> bool {
+        let step_size = self.store.float_of(pawn, Prop::CollisionRadius).max(FLY_STEP);
+        let mut location = from;
+        for _ in 0..WALK_STEPS {
+            let direction = to - location;
+            if self.reached_destination(pawn, direction, goal) {
+                return true;
+            }
+            let (step, threshold) = test_step(direction, step_size);
+            let moved;
+            (location, moved) = self.fly_move(pawn, location, step, threshold, Medium::Water);
+            if !self.water_at(location) {
+                return hand_offs > 0 && self.leave_water_reachable(pawn, location, to, goal, hand_offs - 1);
+            }
+            if !moved || hurt_by_volume(&self.store, pawn, pawn) {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn leave_water_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32) -> bool {
+        if self.store.flag_of(pawn, Prop::bCanFly) {
+            return self.fly_reachable(pawn, from, to, goal, hand_offs);
+        }
+        if !self.store.flag_of(pawn, Prop::bCanWalk) || to.z >= from.z + SWIM_EXIT_HEIGHT {
+            return false;
+        }
+        let height = self.store.float_of(pawn, Prop::CollisionHeight);
+        let mut at = from;
+        let rise = self.test_move(pawn, &mut at, [0.0, 0.0, (height + MAX_STEP_HEIGHT).max(to.z - from.z)].into());
+        rise.time >= 1.0 && self.fly_reachable(pawn, at, to, goal, hand_offs)
+    }
+
+    /// In water a step that leaves the water stops there; the pull back to the water line is not done (unverified).
+    fn fly_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32, medium: Medium) -> (Vector, bool) {
+        let mut at = from;
+        let hit = self.test_move(pawn, &mut at, step);
+        if medium == Medium::Water && !self.water_at(at) {
+            return (at, false);
+        }
+        if hit.time < 1.0 {
+            let rest = step * (1.0 - hit.time);
+            self.test_move(pawn, &mut at, [0.0, 0.0, MAX_STEP_HEIGHT].into());
+            self.test_move(pawn, &mut at, rest);
+        }
+        let moved = at - from;
+        (at, moved.dot(moved) >= threshold * threshold)
+    }
+
+    fn water_at(&mut self, point: Vector) -> bool {
+        self.physics_volume_at(point, None).ok().flatten().is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume))
+    }
+
+    fn test_move(&mut self, pawn: ObjectId, at: &mut Vector, delta: Vector) -> MoveHit {
+        let (radius, height) = self.store.collision_size(pawn);
+        let hit = self.sweep(pawn, Sweep { start: *at, delta, radius, height }, SweepAgainst::WORLD, None);
+        *at += delta * hit.time;
+        hit
     }
 
     /// A fall shortens the steps to 35 once; jumps are not tried (unverified).
@@ -643,12 +756,7 @@ impl<L: LoaderRef> Vm<L> {
             if self.reached_destination(pawn, direction, goal) {
                 return true;
             }
-            let flat = Vector::new(direction.x, direction.y, 0.0);
-            let (step, threshold) = if flat.dot(flat) >= step_size * step_size {
-                ((flat.safe_normal() * step_size), WALK_MIN_MOVE)
-            } else {
-                (flat, WALK_MIN_LAST_MOVE)
-            };
+            let (step, threshold) = test_step(Vector::new(direction.x, direction.y, 0.0), step_size);
             let ahead = location + step;
             if self.trace_bsp(location, ahead, [radius * 0.5, radius * 0.5, height * 0.5].into()).is_some()
                 || self.trace_lines(location, ahead).is_some()
@@ -666,24 +774,19 @@ impl<L: LoaderRef> Vm<L> {
 
     fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> WalkMove {
         let (radius, height) = self.store.collision_size(pawn);
-        let go = |vm: &mut Self, at: &mut Vector, delta: Vector| {
-            let hit = vm.sweep(pawn, Sweep { start: *at, delta, radius, height }, SweepAgainst::WORLD, None);
-            *at += delta * hit.time;
-            hit
-        };
         let mut at = from;
         let step = Vector::new(step.x, step.y, 0.0);
-        let hit = go(self, &mut at, step);
+        let hit = self.test_move(pawn, &mut at, step);
         if hit.time < 1.0 {
             let rest = step * (1.0 - hit.time);
-            go(self, &mut at, [0.0, 0.0, MAX_STEP_HEIGHT].into());
-            go(self, &mut at, rest);
-            let down = go(self, &mut at, [0.0, 0.0, -MAX_STEP_HEIGHT].into());
+            self.test_move(pawn, &mut at, [0.0, 0.0, MAX_STEP_HEIGHT].into());
+            self.test_move(pawn, &mut at, rest);
+            let down = self.test_move(pawn, &mut at, [0.0, 0.0, -MAX_STEP_HEIGHT].into());
             if down.time < 1.0 && down.normal[2] < MIN_FLOOR_Z {
                 return WalkMove::Stopped;
             }
         }
-        let floor = go(self, &mut at, [0.0, 0.0, -MAX_STEP_HEIGHT].into());
+        let floor = self.test_move(pawn, &mut at, [0.0, 0.0, -MAX_STEP_HEIGHT].into());
         let embedded = self.find_floor(pawn, at, radius, height, 0.0).is_some_and(|f| f.distance <= 0.0 && f.normal[2] >= MIN_FLOOR_Z);
         if !embedded && (floor.time >= 1.0 || floor.normal[2] < MIN_FLOOR_Z) {
             return WalkMove::Fell;
@@ -700,4 +803,31 @@ enum WalkMove {
     Moved(Vector),
     Stopped,
     Fell,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Medium {
+    Air,
+    Water,
+}
+
+fn test_step(direction: Vector, step_size: f32) -> (Vector, f32) {
+    if direction.dot(direction) >= step_size * step_size {
+        (direction.safe_normal() * step_size, WALK_MIN_MOVE)
+    } else {
+        (direction, WALK_MIN_LAST_MOVE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_step_cuts_long_moves_and_keeps_the_last_one() {
+        let (step, threshold) = test_step(Vector::new(400.0, 0.0, 0.0), FLY_STEP);
+        assert_eq!((step.x, step.y, step.z, threshold), (FLY_STEP, 0.0, 0.0, WALK_MIN_MOVE));
+        let (step, threshold) = test_step(Vector::new(0.0, 30.0, 40.0), FLY_STEP);
+        assert_eq!((step.x, step.y, step.z, threshold), (0.0, 30.0, 40.0, WALK_MIN_LAST_MOVE));
+    }
 }
