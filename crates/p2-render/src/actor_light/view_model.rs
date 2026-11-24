@@ -1,11 +1,11 @@
 //! The first-person weapon's light under the modern look. Its camera sees neither the sun, the fills nor the map's lamps,
 //! so the light the world takes at the eye is picked here and `actor_light.wesl` lights the weapon as a world surface.
 
-use bevy::math::{Vec3, Vec4};
+use bevy::math::{BVec3, Vec3, Vec4};
 use p2_assets::poly_flags::FAKE_BACKDROP;
 use p2_bevy_assets::to_bevy;
 use p2_collision::{Sides, terrain_line_check};
-use p2_math::Vector;
+use p2_math::{Rotator, Vector};
 use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, MAX_HARDWARE_LIGHTS, MeshLight};
 
 use super::{HardwareLightUniform, LightEnvironment, SkinnedLighting};
@@ -76,10 +76,64 @@ fn nearest_lamps<'a>(environment: &'a LightEnvironment, level: &StaticCollision,
     lamps.into_iter().take(LAMP_CHECKS).filter(|(_, lamp)| reaches_lamp(level, eye, lamp.location)).map(|(_, lamp)| lamp).collect()
 }
 
+/// In world units from the eye: how far the level leaves free of walls, and that plus the most any part of the weapon
+/// runs on past its wall.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct WeaponReach {
+    pub(crate) reach: f32,
+    pub(crate) free: f32,
+}
+
+const WALL_MARGIN: f32 = 8.0;
+/// An open level's room eases toward this instead of its unbounded room; no weapon reaches that far.
+const REACH_SETTLED: f32 = 0.05;
+
+/// The centre and corners of the weapon's box under its place; without a mesh box, of the box inside its sphere.
+pub(crate) fn weapon_points(bounds: Option<[Vec3; 2]>, location: Vector, rotation: Rotator, radius: f32) -> [Vector; 9] {
+    let half = Vec3::splat(radius / 3.0f32.sqrt());
+    let [low, high] = bounds.unwrap_or([-half, half]);
+    let corner = |i: usize| Vec3::select(BVec3::new(i & 1 != 0, i & 2 != 0, i & 4 != 0), high, low);
+    std::array::from_fn(|i| {
+        let local = if i == 0 { (low + high) * 0.5 } else { corner(i - 1) };
+        location + rotation.rotate(Vector::from(local.to_array()))
+    })
+}
+
+/// `reach` past `free` is how far the deepest trace runs on past its own wall, from 0 as a part first touches one, so
+/// a wall beside the weapon that no part of it passes adds nothing.
+pub(crate) fn weapon_reach(level: &StaticCollision, eye: Vector, points: &[Vector]) -> WeaponReach {
+    let mut free = f32::MAX;
+    let mut past = 0.0f32;
+    for &end in points {
+        let to_end = end - eye;
+        let span = to_end.dot(to_end).sqrt();
+        if let Some(hit) = level.first_hit(eye, end) {
+            free = free.min((hit.time * span - WALL_MARGIN).max(0.0));
+            past = past.max(span * (1.0 - hit.time));
+        }
+    }
+    if free == f32::MAX {
+        return WeaponReach { reach: 0.0, free };
+    }
+    WeaponReach { reach: free + past, free }
+}
+
+/// One step of `shown` toward `target`, eased by its free room and its depth past a wall, and whether it arrived. Room
+/// past `farthest` (the weapon's farthest point from the eye) pulls nothing, so it eases from there, not from far off.
+pub(crate) fn ease_reach(shown: WeaponReach, target: WeaponReach, farthest: f32, step: f32) -> (WeaponReach, bool) {
+    let parts = |reach: WeaponReach| (reach.free.min(farthest), (reach.reach - reach.free).max(0.0));
+    let ((free, past), (to_free, to_past)) = (parts(shown), parts(target));
+    let toward = |from: f32, to: f32| {
+        let next = from + (to - from) * step;
+        if (to - next).abs() <= REACH_SETTLED { to } else { next }
+    };
+    let (free, past) = (toward(free, to_free), toward(past, to_past));
+    (WeaponReach { reach: free + past, free }, free == to_free && past == to_past)
+}
+
 /// Colours in linear light and the ambient in display light, as the world's lights carry them.
-pub fn view_model_lighting(environment: &LightEnvironment, map: &MapLights, level: &StaticCollision, origin: Vec3, eye: Vector) -> SkinnedLighting {
-    let zone = p2_collision::point_zone(&level.model, eye);
-    let ambient = environment.zone_ambients.get(usize::from(zone)).copied().unwrap_or_default();
+pub fn view_model_lighting(environment: &LightEnvironment, map: &MapLights, level: &StaticCollision, origin: Vec3, eye: Vector, glow: u8) -> SkinnedLighting {
+    let ambient = environment.ambient(p2_collision::point_zone(&level.model, eye), glow);
     let brightness = environment.level_brightness;
     let sun = map.sun.as_ref().map(|(_, hardware)| {
         let [r, g, b] = map.sun_color;
@@ -177,7 +231,7 @@ mod tests {
         let fill = MeshLight { effect: LE_SUNLIGHT, rotation: Rotator { pitch: -8192, yaw: 0, roll: 0 }, brightness: 64.0, ..MeshLight::default() };
         let special = MeshLight { special_lit: true, ..lamp(Vector::new(120.0, 0.0, 0.0)) };
         let environment = environment(vec![fill, lamp(Vector::new(100.0, 0.0, 0.0)), lamp(Vector::new(5000.0, 0.0, 0.0)), special]);
-        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO);
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO, 0);
         assert_eq!(kinds(&lighting), [SUN_KIND, FILL_KIND, LAMP_KIND]);
         assert_eq!(lighting.ambient, Vec3::new(0.1, 0.2, 0.3));
         let sun = lighting.lights[0];
@@ -190,7 +244,7 @@ mod tests {
     #[test]
     fn a_roof_takes_the_sun_the_sky_and_the_lamps_above_it() {
         let environment = environment(vec![lamp(Vector::new(0.0, 0.0, 200.0)), lamp(Vector::new(0.0, 0.0, 50.0))]);
-        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(vec![roof()]), Vec3::ZERO, Vector::ZERO);
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(vec![roof()]), Vec3::ZERO, Vector::ZERO, 0);
         assert_eq!(kinds(&lighting), [SUN_KIND, LAMP_KIND]);
         assert_eq!((lighting.lights[0].color.w, lighting.lights[0].attenuation.x), (0.0, 0.0));
         assert_eq!(lighting.lights[1].position.y, 50.0);
@@ -200,7 +254,7 @@ mod tests {
     fn a_spot_lamp_carries_its_cone() {
         let spot = MeshLight { effect: LE_SPOTLIGHT, cone: 64, rotation: DOWN, ..lamp(Vector::new(0.0, 0.0, 50.0)) };
         let environment = environment(vec![spot]);
-        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO);
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO, 0);
         let lamp = lighting.lights[1];
         assert_eq!((lamp.attenuation.x, lamp.attenuation.y), (0.75, 1.0));
         assert!(lamp.direction.y < -0.99);

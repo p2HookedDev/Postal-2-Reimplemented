@@ -1,7 +1,7 @@
-// The decals that may meet each screen tile of the world camera, after its depth prepass: a tile's list holds, in
-// ascending order, the index in Bevy's decal buffer of every decal whose box meets the slab of the tile between its
-// nearest and farthest depth. `projector.wesl` walks a pixel's list in place of Bevy's cluster list, whose sphere
-// around a decal is twice the box's own.
+// The decals that may meet each screen tile of the world camera, after its depth prepass: a tile's list holds the
+// index in Bevy's decal buffer of every decal whose box meets the slab of the tile between its nearest and farthest
+// depth, our liquid's decals first, then the rest, each in ascending order. `projector.wesl` walks a pixel's list in
+// place of Bevy's cluster list, whose sphere around a decal is twice the box's own.
 
 import bevy_render::view::View;
 
@@ -36,6 +36,11 @@ const LIST_TEXELS: u32 = 16u;
 const HEAD_TEXELS: u32 = 4u;
 const MOST_LISTED: u32 = 63u;
 const MASK_WORDS: u32 = 32u;
+// A tile's count texel holds its count plus this times its liquid decals' count.
+const LISTED_SPAN: u32 = 64u;
+// Matches `projector.wesl`: a decal of our liquid has these tag bits.
+const PROJECTOR: u32 = 0x80000000u;
+const FB_LIQUID: u32 = 7u;
 // Past the box's faces a decal still counts as meeting a tile, in its own units: rounding between the prepass's depth
 // and the main pass's position never drops one.
 const BOX_SLACK: f32 = 0.001;
@@ -44,8 +49,10 @@ var<workgroup> nearest: atomic<u32>;
 var<workgroup> farthest: atomic<u32>;
 var<workgroup> corners: array<vec3<f32>, 8>;
 var<workgroup> mask: array<atomic<u32>, MASK_WORDS>;
+var<workgroup> liquid_mask: array<atomic<u32>, MASK_WORDS>;
 var<workgroup> list: array<u32, 64>;
 var<workgroup> listed: u32;
+var<workgroup> liquids_listed: u32;
 
 fn book_at(texel: u32) -> vec2<u32> {
     return vec2(texel % BOOK_WIDTH, texel / BOOK_WIDTH);
@@ -72,9 +79,11 @@ fn bin(@builtin(workgroup_id) tile: vec3<u32>, @builtin(local_invocation_id) lan
         atomicStore(&nearest, 0u);
         atomicStore(&farthest, 0x7f800000u);
         listed = 0u;
+        liquids_listed = 0u;
     }
     if index < MASK_WORDS {
         atomicStore(&mask[index], 0u);
+        atomicStore(&liquid_mask[index], 0u);
     }
     workgroupBarrier();
     // Reverse depth: 0 is the sky, larger is nearer; a positive float orders as its bits do.
@@ -106,25 +115,36 @@ fn bin(@builtin(workgroup_id) tile: vec3<u32>, @builtin(local_invocation_id) lan
     if near_bits != 0u {
         for (var decal = index; decal < bins.grid.w; decal += 256u) {
             if meets(decal) {
-                atomicOr(&mask[decal / 32u], 1u << (decal % 32u));
+                if (decals[decal].tag & (PROJECTOR | 0x7u)) == (PROJECTOR | FB_LIQUID) {
+                    atomicOr(&liquid_mask[decal / 32u], 1u << (decal % 32u));
+                } else {
+                    atomicOr(&mask[decal / 32u], 1u << (decal % 32u));
+                }
             }
         }
     }
     workgroupBarrier();
     if index == 0u {
         var count = 0u;
-        for (var word = 0u; word < MASK_WORDS; word++) {
-            var bits = atomicLoad(&mask[word]);
-            while bits != 0u {
-                let bit = firstTrailingBit(bits);
-                bits &= bits - 1u;
-                if count < 64u {
-                    list[count] = word * 32u + bit;
+        var liquids = 0u;
+        for (var family = 0u; family < 2u; family++) {
+            for (var word = 0u; word < MASK_WORDS; word++) {
+                var bits = select(atomicLoad(&mask[word]), atomicLoad(&liquid_mask[word]), family == 0u);
+                while bits != 0u {
+                    let bit = firstTrailingBit(bits);
+                    bits &= bits - 1u;
+                    if count < 64u {
+                        list[count] = word * 32u + bit;
+                    }
+                    count++;
                 }
-                count++;
+            }
+            if family == 0u {
+                liquids = count;
             }
         }
         listed = count;
+        liquids_listed = liquids;
     }
     workgroupBarrier();
     // The header before the lists, which `decal_bins.rs` marks unwritten before the pass: the grid, the tile's side, the
@@ -135,14 +155,14 @@ fn bin(@builtin(workgroup_id) tile: vec3<u32>, @builtin(local_invocation_id) lan
         textureStore(book, book_at(head + 1u), view.clip_from_world[0]);
         textureStore(book, book_at(head + 2u), view.clip_from_world[3]);
     }
-    // A tile's texels: its count (-1 when more than its list holds), then the indices, four a texel.
+    // A tile's texels: its counts (-1 when more than its list holds), then the indices, four a texel.
     if index < LIST_TEXELS {
         let count = listed;
         var texel = vec4(0.0);
         for (var c = 0u; c < 4u; c++) {
             let slot = index * 4u + c;
             if slot == 0u {
-                texel[c] = select(f32(count), -1.0, count > MOST_LISTED);
+                texel[c] = select(f32(count + liquids_listed * LISTED_SPAN), -1.0, count > MOST_LISTED);
             } else if slot - 1u < min(count, MOST_LISTED) {
                 texel[c] = f32(list[slot - 1u]);
             }

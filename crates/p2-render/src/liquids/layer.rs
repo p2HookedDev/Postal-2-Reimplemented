@@ -301,6 +301,7 @@ struct Tile {
     /// The lowest and highest traced floor, Bevy heights.
     span: Option<[f32; 2]>,
     decal: Option<Entity>,
+    placed: Transform,
     /// Its decal carries the puke splat's decal as a child.
     puke: bool,
 }
@@ -352,6 +353,7 @@ pub struct LiquidLayer {
     level: u32,
     atlas: Option<Handle<Image>>,
     spare: f32,
+    no_room: bool,
 }
 
 /// A tile puke has reached takes the puke splat's decal, which the floors colour its puke from.
@@ -490,17 +492,18 @@ impl LiquidLayer {
         let Some(slot) = self.free_slot(level.now, commands) else { return };
         let lift = level.origin.y;
         let tracing = level.collision.cloned().map(|collision| AsyncComputeTaskPool::get().spawn(async move { trace_floor(&*collision, key, first_z, lift) }));
-        self.tiles.insert(key, Tile { slot, kind: FluidType::Urine, first_z, last_fed: level.now, burnt: f32::NEG_INFINITY, tracing, floors: None, span: None, decal: None, puke: false });
+        self.tiles.insert(key, Tile { slot, kind: FluidType::Urine, first_z, last_fed: level.now, burnt: f32::NEG_INFINITY, tracing, floors: None, span: None, decal: None, placed: Transform::IDENTITY, puke: false });
         cleared.push(slot);
     }
 
     /// A free slot; the tile idle longest, floor or plane, gives way when the slots run out.
     fn free_slot(&mut self, now: f32, commands: &mut Commands) -> Option<u32> {
-        if self.free.is_empty() {
+        // Feeds only make tiles fresher, so once none can give way none can until the frame ends.
+        if self.free.is_empty() && !self.no_room {
             match (idlest(&self.tiles, now), idlest(&self.planes, now)) {
                 (Some((key, fed)), plane) if plane.is_none_or(|(_, plane_fed)| fed <= plane_fed) => self.drop_tile(key, commands),
                 (_, Some((key, _))) => self.drop_plane(key, commands),
-                _ => return None,
+                _ => self.no_room = true,
             }
         }
         self.free.pop()
@@ -549,7 +552,7 @@ impl LiquidLayer {
         let Some(slot) = self.free_slot(level.now, commands) else { return };
         let shift = key.normal().dot(Vector::new(level.origin.x, level.origin.z, level.origin.y));
         let tracing = level.collision.cloned().map(|collision| AsyncComputeTaskPool::get().spawn(async move { trace_plane(&*collision, key, shift) }));
-        self.planes.insert(key, Tile { slot, kind: FluidType::Urine, first_z: key.plane(), last_fed: level.now, burnt: f32::NEG_INFINITY, tracing, floors: None, span: None, decal: None, puke: false });
+        self.planes.insert(key, Tile { slot, kind: FluidType::Urine, first_z: key.plane(), last_fed: level.now, burnt: f32::NEG_INFINITY, tracing, floors: None, span: None, decal: None, placed: Transform::IDENTITY, puke: false });
         cleared.push(slot);
     }
 
@@ -576,6 +579,7 @@ impl LiquidLayer {
         let atlas = self.atlas.get_or_insert_with(|| new_liquid_atlas(images)).clone();
         frame.floors.clear();
         frame.cleared.clear();
+        self.no_room = false;
         let mut by_slot: Vec<Vec<LayerSource>> = vec![Vec::new(); self.capacity as usize];
         for feeding in feeds {
             if feeding.face.is_some() {
@@ -618,7 +622,9 @@ impl LiquidLayer {
             take_trace(tile, frame);
             let span = tile.span.unwrap_or([tile.first_z + lift - STEP_UP, tile.first_z + lift + STEP_UP]);
             let transform = decal_transform(key, span, level.origin);
+            // An unchanged transform reinserted would mark the decal moved every frame.
             match tile.decal {
+                Some(_) if tile.placed == transform => {}
                 Some(decal) => {
                     commands.entity(decal).insert(transform);
                 }
@@ -627,6 +633,7 @@ impl LiquidLayer {
                     tile.decal = Some(commands.spawn((decal, transform)).id());
                 }
             }
+            tile.placed = transform;
         }
         frame.slots = vec![LayerSlot::default(); self.capacity as usize];
         frame.active.clear();
@@ -845,6 +852,25 @@ mod tests {
         layer.frame(&[ceiling], level, 0, &mut images, &mut commands, &mut frame);
         assert!(layer.planes.contains_key(&PlaneKey { yaw: 0, pitch: -9, offset: -150, u: 0, v: 0 }));
         assert_eq!(layer.tiles.len(), floors, "a ceiling is no floor");
+    }
+
+    #[test]
+    fn a_full_layer_gives_a_slot_again_once_a_tile_idles() {
+        let world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut images = Assets::<Image>::default();
+        let (mut layer, mut frame) = (LiquidLayer::default(), LayerFrame::default());
+        layer.reset(&mut commands, 1);
+        let at = |now: f32| Level { collision: None, origin: Vec3::ZERO, now };
+        let near = Feeding { at: Vector::new(128.0, 128.0, 0.0), radius: 3.0, kind: FluidType::Blood, feed: Feed::Add(5.0), burning: false, face: None };
+        let far = Feeding { at: Vector::new(128.0 + 10.0 * TILE, 128.0, 0.0), ..near };
+        let (near_key, far_key) = (TileKey { x: 0, y: 0, layer: 0 }, TileKey { x: 10, y: 0, layer: 0 });
+        layer.frame(&[near], at(0.0), 0, &mut images, &mut commands, &mut frame);
+        layer.frame(&[far, near, far], at(0.5), 0, &mut images, &mut commands, &mut frame);
+        assert!(layer.no_room && layer.tiles.contains_key(&near_key) && !layer.tiles.contains_key(&far_key));
+        layer.frame(&[far], at(2.0), 0, &mut images, &mut commands, &mut frame);
+        assert!(!layer.no_room && layer.tiles.contains_key(&far_key) && !layer.tiles.contains_key(&near_key));
     }
 
     #[test]

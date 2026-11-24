@@ -159,3 +159,124 @@ fn the_brightest_sun_is_picked_and_none_without_sun() {
     assert!(brightest_sun(&lights[..1], 1.0).is_none());
     assert!(brightest_sun(&[] as &[MeshLight], 1.0).is_none());
 }
+
+fn open_level(meshes: Vec<p2_collision::MeshCollision>) -> StaticCollision {
+    StaticCollision {
+        model: Model::default(),
+        hulls: p2_collision::BspHulls::default(),
+        terrains: Vec::new(),
+        mesh_set: p2_collision::MeshSet::new(&meshes),
+        meshes,
+        lamp_casters: Vec::new(),
+        lamp_masked: Vec::new(),
+        albedos: crate::level_collision::LevelAlbedos::default(),
+    }
+}
+
+fn wall_at(x: f32) -> p2_collision::MeshCollision {
+    let [a, b, c, d] = [[x, -1000.0, -1000.0], [x, 1000.0, -1000.0], [x, 1000.0, 1000.0], [x, -1000.0, 1000.0]];
+    p2_collision::MeshCollision::placed([[a, b, c], [a, c, d], [c, b, a], [d, c, a]], Vector::ZERO, Rotator::ZERO, Vector::new(1.0, 1.0, 1.0), Vector::ZERO)
+}
+
+fn floor_at(z: f32) -> p2_collision::MeshCollision {
+    let [a, b, c, d] = [[-1000.0, -1000.0, z], [1000.0, -1000.0, z], [1000.0, 1000.0, z], [-1000.0, 1000.0, z]];
+    p2_collision::MeshCollision::placed([[a, b, c], [a, c, d], [c, b, a], [d, c, a]], Vector::ZERO, Rotator::ZERO, Vector::new(1.0, 1.0, 1.0), Vector::ZERO)
+}
+
+#[test]
+fn a_wall_before_the_weapon_leaves_it_less_room() {
+    let reach = weapon_reach(&open_level(vec![wall_at(30.0)]), Vector::ZERO, &[Vector::new(40.0, 0.0, 0.0)]);
+    assert!((reach.free - 22.0).abs() < 0.5, "{reach:?}");
+    assert!((reach.reach - reach.free - 10.0).abs() < 0.5, "{reach:?}");
+}
+
+#[test]
+fn the_light_at_the_eye_ramps_up_from_nothing_as_the_weapon_touches_a_wall() {
+    let level = open_level(vec![wall_at(30.0)]);
+    let touching = weapon_reach(&level, Vector::ZERO, &[Vector::new(30.5, 0.0, 0.0)]);
+    assert!((touching.reach - touching.free - 0.5).abs() < 0.25, "{touching:?}");
+    assert_eq!(weapon_reach(&level, Vector::ZERO, &[Vector::new(29.5, 0.0, 0.0)]), WeaponReach { reach: 0.0, free: f32::MAX });
+}
+
+#[test]
+fn a_wall_only_one_side_of_the_weapon_passes_counts_by_that_side_alone() {
+    let side = Vector::new(10.0, 40.0, 0.0);
+    let reach = weapon_reach(&open_level(vec![wall_at(8.0)]), Vector::ZERO, &[Vector::new(0.0, 40.0, 0.0), side]);
+    let span = side.dot(side).sqrt();
+    assert!((reach.free - (span * 0.8 - 8.0)).abs() < 0.5, "{reach:?}");
+    assert!((reach.reach - reach.free - span * 0.2).abs() < 0.5, "{reach:?}");
+}
+
+#[test]
+fn an_open_level_leaves_the_weapon_all_the_room() {
+    let reach = weapon_reach(&open_level(Vec::new()), Vector::ZERO, &[Vector::new(40.0, 0.0, 0.0)]);
+    assert_eq!(reach, WeaponReach { reach: 0.0, free: f32::MAX });
+}
+
+#[test]
+fn the_weapon_traces_to_its_own_box_not_to_its_sphere() {
+    let points = weapon_points(Some([Vec3::splat(-5.0), Vec3::splat(5.0)]), Vector::new(40.0, 0.0, 0.0), Rotator::ZERO, 20.0);
+    assert_eq!(weapon_reach(&open_level(vec![floor_at(-12.0)]), Vector::ZERO, &points).free, f32::MAX);
+}
+
+#[test]
+fn the_weapons_box_turns_with_it() {
+    let quarter = Rotator { pitch: 0, yaw: 16384, roll: 0 };
+    let points = weapon_points(Some([Vec3::new(-30.0, -2.0, -2.0), Vec3::new(30.0, 2.0, 2.0)]), Vector::ZERO, quarter, 0.0);
+    assert!(points[1..].iter().all(|p| p.x.abs() < 2.5 && p.y.abs() > 27.5), "{points:?}");
+}
+
+#[test]
+fn the_room_eases_toward_an_open_level_and_arrives() {
+    let far = 51.0;
+    let (walled, open) = (WeaponReach { reach: 30.0, free: 22.0 }, WeaponReach { reach: 0.0, free: f32::MAX });
+    let (half, arrived) = ease_reach(walled, open, far, 0.5);
+    assert!(!arrived);
+    assert_eq!((half.free, half.reach - half.free), (22.0 + (far - 22.0) * 0.5, 4.0));
+    assert_eq!(ease_reach(half, open, far, 1.0), (WeaponReach { reach: far, free: far }, true));
+}
+
+#[test]
+fn a_first_room_starts_where_it_is() {
+    let walled = WeaponReach { reach: 30.0, free: 22.0 };
+    assert_eq!(ease_reach(walled, walled, 51.0, 0.1), (walled, true));
+}
+
+#[test]
+fn the_weapons_soft_edges_stay_wide_and_inside_the_lamp_atlas_guard_band() {
+    let (sun, lamp) = (include_str!("../sun_shadow.wesl"), include_str!("../lamp_shadow.wesl"));
+    let shader_const = crate::shaders::shader_const;
+    assert!((2.5..=3.0).contains(&shader_const(sun, "HELD_EDGE_LEAST_TEXELS")));
+    assert!((16.0..=24.0).contains(&shader_const(sun, "HELD_EDGE_TAPS")));
+    assert!(shader_const(lamp, "HELD_LAMP_EDGE_TEXELS") + 1.0 <= shader_const(lamp, "ATLAS_GUARD"));
+}
+
+#[test]
+fn the_weapon_takes_its_glow_as_the_retail_path_does() {
+    let environment = Arc::new(LightEnvironment::new(FxHashMap::default(), vec![[0.1, 0.2, 0.3]], 1.0));
+    let level = open_level(Vec::new());
+    for glow in [0, 40, 255] {
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level, Vec3::ZERO, Vector::ZERO, glow);
+        assert_eq!(lighting.ambient, Vec3::from(environment.ambient(0, glow)), "{glow}");
+    }
+    assert_eq!(environment.ambient(0, 40), actor_ambient([0.1, 0.2, 0.3], 40));
+}
+
+#[test]
+fn the_mark_follows_the_canvas_below_its_slot() {
+    let slot = RenderLayers::layer(OVERLAY_LAYERS[1]);
+    let mut below = [false; OVERLAY_LAYERS.len()];
+    assert_eq!(overlay_mark(Some(&slot), below), OverlayMark::WorldLit);
+    below[1] = true;
+    assert_eq!(overlay_mark(Some(&slot), below), OverlayMark::Flat);
+    assert_eq!(overlay_mark(Some(&RenderLayers::layer(OVERLAY_LAYERS[0])), below), OverlayMark::WorldLit);
+    assert_eq!(overlay_mark(Some(&RenderLayers::layer(0)), below), OverlayMark::Scene);
+    assert_eq!(overlay_mark(None, below), OverlayMark::Scene);
+}
+
+#[test]
+fn the_shader_reads_the_overlay_mark_and_the_poke_span_by_the_same_numbers() {
+    let shader = include_str!("../actor_light.wesl");
+    assert_eq!(crate::shaders::shader_const(shader, "OVERLAY_WORLD_LIT"), f64::from(OverlayMark::WorldLit as u32));
+    assert_eq!(crate::shaders::shader_const(shader, "POKE_SPAN"), 16.0);
+}

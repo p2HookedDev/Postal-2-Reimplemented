@@ -11,7 +11,7 @@ import package::p2_render::dynamic_light::dynamic_light;
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
 import package::p2_render::modern::{is_modern, is_see_through};
 import package::p2_render::relief::base_relief;
-import package::p2_render::sun_shadow::{sun_found, sun_index};
+import package::p2_render::sun_shadow::{sun_found, sun_index, world_lookup};
 import package::p2_render::surface::{modern_light, pooled_unlit, shade_surface};
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::layer_bindings::{apply_layers, base_tone, lit_color, post_lighting};
@@ -47,7 +47,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     mirror = select(0.0, pool_mirror(pool), pooled);
     if is_modern(layers.detail.z) && sun_found(sun) {
         let bumped = base_relief(in, pbr_input, normal, layers.detail.z);
-        let incoming = modern_light(in, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool);
+        let incoming = modern_light(in, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool, world_lookup());
         color = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), dynamic_light(pbr_input.world_position, normal, ranges));
     } else {
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);
@@ -67,7 +67,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         mirror = pool_mirror(pool);
         let sun = sun_index();
         if (pool.wet > 0.0 || any(pool.glow > vec3(0.0))) && is_modern(layers.detail.z) && sun_found(sun) {
-            let incoming = modern_light(in, pbr_input, sun, normal, normal, layers.detail.z, layers.blend, layers.blend.x != 0.0, pool);
+            let incoming = modern_light(in, pbr_input, sun, normal, normal, layers.detail.z, layers.blend, layers.blend.x != 0.0, pool, world_lookup());
             color = vec4(pooled_unlit(color.rgb, wet_normal(normal, pool), incoming), color.a);
         }
     }

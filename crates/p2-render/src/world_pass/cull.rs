@@ -77,7 +77,7 @@ pub(super) fn prepare_world_views(
     pass.level.slot = level;
 }
 
-pub(super) fn cull_world(_view: ViewQuery<Entity, With<WorldCamera>>, pass: Res<WorldPass>, cache: Res<PipelineCache>, mut context: RenderContext) {
+pub(super) fn cull_world(pass: &WorldPass, cache: &PipelineCache, context: &mut RenderContext<'_, '_>) {
     let (Some(built), Some((_, pipeline))) = (&pass.built, &pass.pipeline) else { return };
     let Some(pipeline) = cache.get_compute_pipeline(*pipeline) else { return };
     let diagnostics = context.diagnostic_recorder();

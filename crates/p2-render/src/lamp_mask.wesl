@@ -7,8 +7,9 @@ import package::p2_render::lamp_shadow::{
     ATLAS_UNITS, Book, COLUMN_UNREAD, LAMP_SMALLEST, SCREEN_CHECK_BYTE, SCREEN_LIST_LAMPS, SCREEN_SLOTS, SCREEN_SUN_FROM, SCREEN_SUN_PIXELS,
     book_texel, lamp_at, lamp_list, lamp_shadows, pass_atlas, pass_book, tile_column,
 };
+import package::p2_render::modern_base::LUMINANCE;
 import package::p2_render::sun_levels::LevelSource;
-import package::p2_render::sun_shadow::{sun_held, sun_index};
+import package::p2_render::sun_shadow::{sun_held, sun_index, world_lookup};
 
 // Group 0 is Bevy's mesh view bindings at their own numbers, which the sun's code reads.
 @group(1) @binding(0) var depth: texture_depth_2d;
@@ -20,6 +21,8 @@ const GROUP_SIDE: u32 = 8u;
 // The prepass holds the plain normal; the relief tilts a lit surface's off it by up to the angle whose tangent is this
 // (`relief.wesl`), so a lamp that far past the plain normal's side may still light the surface.
 const FACING_SLACK: f32 = 0.45;
+// Below every score: a faced lamp's is positive, a slack lamp's at least -1 / LAMP_SMALLEST.
+const UNRANKED: f32 = -1e30;
 
 var<workgroup> suns: array<array<u32, GROUP_SIDE>, GROUP_SIDE>;
 
@@ -65,48 +68,57 @@ fn screen_texel(pixel: vec2<u32>) -> vec4<f32> {
         column = tile_column(book, position);
         movers_near = column == 0u || book_texel(book, column).x != 0.0;
     }
-    // Lamps the plain normal faces take the slots first, those only the slack reaches what is left; the bytes follow
-    // the list's order, as the lit surfaces count them.
-    var facing = 0u;
-    var slack = 0u;
+    // The lamps that light the pixel most past the static world take the slots; a lamp only the slack reaches ranks
+    // below every faced one. A lamp left out gives the lit surface no light, so a walled one never needs a slot. The
+    // bytes follow the list's order, as the lit surfaces count them.
+    var best: array<f32, SCREEN_SLOTS>;
+    var which: array<u32, SCREEN_SLOTS>;
+    var shadows: array<vec2<f32>, SCREEN_SLOTS>;
+    for (var s = 0u; s < SCREEN_SLOTS; s++) {
+        best[s] = UNRANKED;
+    }
     for (var i = 0u; i < min(list.y, SCREEN_LIST_LAMPS); i++) {
         let lamp = lamp_at(book, list, i, position, normal, view.world_position, FACING_SLACK);
-        if lamp.share >= LAMP_SMALLEST {
-            if lamp.facing > 0.0 {
-                facing |= 1u << i;
-                if countOneBits(facing) == SCREEN_SLOTS {
-                    break;
-                }
-            } else {
-                slack |= 1u << i;
+        if lamp.share < LAMP_SMALLEST {
+            continue;
+        }
+        var through = lamp_shadows(book, lamp, position, normal, book.side, unit, &column, movers_near, world_lookup());
+        if through.x <= 0.0 {
+            continue;
+        }
+        var score = select(-1.0 / (lamp.share * through.x), dot(lamp.shown, LUMINANCE) * lamp.facing * through.x, lamp.facing > 0.0);
+        var index = i;
+        for (var s = 0u; s < SCREEN_SLOTS; s++) {
+            if score > best[s] {
+                let kept = best[s];
+                let kept_index = which[s];
+                let kept_through = shadows[s];
+                best[s] = score;
+                which[s] = index;
+                shadows[s] = through;
+                score = kept;
+                index = kept_index;
+                through = kept_through;
             }
         }
     }
-    let first = lowest_bits(facing, SCREEN_SLOTS);
-    let held = first | lowest_bits(slack, SCREEN_SLOTS - countOneBits(first));
+    var held = 0u;
+    for (var s = 0u; s < SCREEN_SLOTS; s++) {
+        if best[s] > UNRANKED {
+            held |= 1u << which[s];
+        }
+    }
     var bytes = vec3(0u);
-    var slot = 0u;
-    var rest = held;
-    while rest != 0u {
-        let i = firstTrailingBit(rest);
-        rest &= rest - 1u;
-        let lamp = lamp_at(book, list, i, position, normal, view.world_position, FACING_SLACK);
-        let through = lamp_shadows(book, lamp, position, normal, book.side, unit, &column, movers_near);
-        put_byte(&bytes, 2u * slot, shadow_byte(through.x));
-        put_byte(&bytes, 2u * slot + 1u, shadow_byte(through.y));
-        slot++;
+    for (var s = 0u; s < SCREEN_SLOTS; s++) {
+        if best[s] > UNRANKED {
+            let slot = countOneBits(held & ((1u << which[s]) - 1u));
+            put_byte(&bytes, 2u * slot, shadow_byte(shadows[s].x));
+            put_byte(&bytes, 2u * slot + 1u, shadow_byte(shadows[s].y));
+        }
     }
     let check = (list.x + 1u) & 0xffffu;
     put_byte(&bytes, SCREEN_CHECK_BYTE, check >> 8u);
     return vec4(f32((check & 255u) | (held << 8u)), vec3<f32>(bytes));
-}
-
-fn lowest_bits(bits: u32, count: u32) -> u32 {
-    var left = bits;
-    for (var n = 0u; n < count && left != 0u; n++) {
-        left &= left - 1u;
-    }
-    return bits ^ left;
 }
 
 fn shadow_byte(value: f32) -> u32 {
@@ -123,7 +135,7 @@ fn sun_bytes(pixel: vec2<u32>) -> u32 {
     if z <= 0.0 {
         return 0u;
     }
-    let held = sun_held(LevelSource(0u, 0u), sun_index(), vec4(pixel_position(pixel, z), 1.0), pixel_normal(pixel), vec2<f32>(pixel) + 0.5);
+    let held = sun_held(LevelSource(0u, 0u), sun_index(), vec4(pixel_position(pixel, z), 1.0), pixel_normal(pixel), vec2<f32>(pixel) + 0.5, world_lookup());
     let bytes = vec3<u32>(round(saturate(held) * 255.0));
     return bytes.x | (bytes.y << 8u) | (bytes.z << 16u);
 }

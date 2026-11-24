@@ -12,7 +12,7 @@ import package::p2_render::material_layers::material_layers;
 import package::p2_render::dynamic_light::dynamic_light;
 import package::p2_render::modern::is_modern;
 import package::p2_render::relief::base_relief;
-import package::p2_render::sun_shadow::{sun_found, sun_index};
+import package::p2_render::sun_shadow::{sun_found, sun_index, world_lookup};
 import package::p2_render::surface::{modern_light, retail_lit, shade_surface};
 @if(BINDLESS)
 import package::p2_render::layer_bindings::indices;
@@ -64,7 +64,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     if is_modern(layers.detail.z) && sun_found(sun) {
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
         // A terrain layer has no darken or see-through case.
-        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, false, pool);
+        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, false, pool, world_lookup());
         surface = shade_surface(incoming, layers, pbr_input.material.base_color, bumped, false, false, dynamic_light(pbr_input.world_position, normal, ranges)).rgb;
     } else {
         surface = retail_lit(wet_color(pbr_input.material.base_color.rgb, pool), light);

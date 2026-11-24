@@ -5,6 +5,7 @@ pub mod actor_light;
 pub mod asset_churn;
 pub mod blended;
 pub mod canvas;
+pub mod compiling;
 pub mod bsp_light;
 pub mod gamma;
 pub mod lamps;
@@ -16,11 +17,14 @@ pub mod modern;
 pub mod modern_bloom;
 pub mod material_class;
 pub(crate) mod lamp_size;
+pub(crate) mod overlay_route;
+pub(crate) mod overlay_sun;
 pub mod particle_draw;
 pub mod particle_frame;
 pub(crate) mod particle_throw;
 pub mod particle_material;
 pub mod probes;
+pub(crate) mod preprocess_reuse;
 pub(crate) mod sampler_refresh;
 pub mod shader_layers;
 pub(crate) mod tone;
@@ -99,7 +103,7 @@ impl bevy::app::Plugin for RetailRenderPlugin {
             sampler_refresh::SamplerRefreshPlugin,
         ));
         app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin, gpu_particles::GpuParticlesPlugin, debris::DebrisPlugin, liquids::LiquidsPlugin));
-        app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin, wet::WetPlugin));
+        app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin, wet::WetPlugin, compiling::CompilingPipelinesPlugin, preprocess_reuse::PreprocessReusePlugin));
     }
 }
 

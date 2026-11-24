@@ -15,8 +15,35 @@ const TAIL_POW: f32 = 0.6;
 const WOBBLE: f32 = 0.4;
 const ROOM: f32 = 1.25;
 
+// `drop_record` in `liquids/air_draw.rs`. The first record is a header holding only `count`.
+struct DropRecord {
+    center: vec3<f32>,
+    count: u32,
+    way: vec3<f32>,
+    seed: f32,
+    light: vec4<f32>,
+    look: vec4<f32>,
+}
+
+@group(3) @binding(15) var<storage, read> drops: array<DropRecord>;
+
+// A grid vertex: its quad and its corner.
+struct GridIn {
+    @location(0) position: vec3<f32>,
+}
+
 @vertex
-fn vertex(in: AirIn) -> AirOut {
+fn vertex(grid: GridIn) -> AirOut {
+    let quad = u32(grid.position.x + 0.5);
+    let corner = u32(grid.position.y + 0.5);
+    if quad >= drops[0].count {
+        var out: AirOut;
+        out.position = vec4(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
+    let record = drops[quad + 1u];
+    let corners = vec2(select(-1.0, 1.0, corner == 1u || corner == 2u), select(-1.0, 1.0, corner >= 2u));
+    let in = AirIn(record.center, record.way, corners, vec4(record.light.rgb, record.seed), record.look, vec4(0.0));
     let radius = max(in.look.x, pixel_units(in.center));
     // The axis runs from the tail to the front, back along the fall.
     let speed = length(in.way);

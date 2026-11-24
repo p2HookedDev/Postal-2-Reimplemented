@@ -29,6 +29,8 @@ pub enum CanvasItem {
 pub(crate) struct Canvas {
     pub(crate) object: Option<ObjectId>,
     items: Vec<CanvasItem>,
+    /// `DrawActor(None, _, true)` cleared the depth: the next call takes `ClearZ`.
+    clear_next: bool,
     paths: FxHashMap<ObjectId, Arc<str>>,
     fonts: FxHashMap<ObjectId, Option<Arc<Font>>>,
     hud_inset: f32,
@@ -67,6 +69,7 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(canvas, Prop::Viewport, Value::Object(Some(viewport)));
         }
         self.media.canvas.items.clear();
+        self.media.canvas.clear_next = false;
         self.process_interactions("Process_PreRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         if let Some(hud) = hud {
             let inset = self.media.canvas.hud_inset.clamp(0.0, width / 2.0).floor();
@@ -221,13 +224,16 @@ impl Canvas {
                 store.set(canvas, Prop::CurYL, Value::Float(size[1]));
             }
             Native::DrawActor => {
+                let clears = args.get(2).is_some_and(truthy);
                 if let Some(&Value::Object(Some(actor))) = args.first() {
-                    let clear_z = args.get(2).is_some_and(truthy);
+                    let clear_z = clears || std::mem::take(&mut self.clear_next);
                     let fov = args.get(3).map_or(0.0, float);
                     let draw_scale = store.float_of(actor, Prop::DrawScale);
                     let scale = store.vector(actor, Prop::DrawScale3D).map(|s| s * draw_scale);
                     let (location, rotation) = (store.location(actor), store.rotation(actor));
                     self.items.push(CanvasItem::Actor { actor, clear_z, fov, location, rotation, scale });
+                } else if clears {
+                    self.clear_next = true;
                 }
             }
             _ => {}

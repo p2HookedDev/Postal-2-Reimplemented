@@ -76,7 +76,7 @@ use buffers::{
 };
 use build::{extract_modified_meshes, rebuild_if_stale};
 use queue::queue_world;
-use cull::{cull_world, prepare_world_views};
+use cull::prepare_world_views;
 use draw::{DrawWorld, DrawWorldDepthOnly, DrawWorldPrepass};
 
 /// In Unreal units: small enough to cull well, large enough to keep draws few.
@@ -355,12 +355,11 @@ impl Plugin for WorldPassPlugin {
             // frame's cull and draw none of the world.
             .add_systems(
                 Core3d,
-                cull_world
+                level::cull_and_draw_level
                     .before(Core3dSystems::Prepass)
                     .before(bevy::pbr::per_view_shadow_pass::<{ bevy::pbr::EARLY_SHADOW_PASS }>)
                     .before(bevy::pbr::shared_shadow_pass::<{ bevy::pbr::EARLY_SHADOW_PASS }>),
-            )
-            .add_systems(Core3d, level::draw_level.after(cull_world).before(Core3dSystems::Prepass));
+            );
     }
 }
 

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bevy::asset::{Assets, Handle};
-use bevy::camera::visibility::{RenderLayers, Visibility};
+use bevy::camera::visibility::Visibility;
 use bevy::ecs::prelude::{AnyOf, ChildOf, Commands, Entity, Has, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::system::SystemParam;
 use bevy::image::Image;
@@ -12,11 +12,9 @@ use bevy::math::{Mat4, UVec2, Vec2, Vec3, Vec4};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Mesh, MeshTag};
 use bevy::transform::components::Transform;
-use bevy::camera::{Camera, Camera2d, CameraOutputMode, ClearColorConfig, Projection};
-use bevy::color::Color;
+use bevy::camera::Projection;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, PrimaryEguiContext, egui};
 use rustc_hash::{FxHashMap, FxHashSet};
-use wgpu_types::BlendState;
 use p2_assets::{MeshAnimation, Model, SkeletalMesh, StaticMesh, read_font, read_level, read_mesh_animation, read_model, read_static_mesh, read_static_mesh_materials, read_terrain};
 use p2_render_cpu::MeshPlacement;
 use p2_bevy_assets::{bone_matrices, rotator_matrix, to_bevy, unreal_mesh_matrix, unreal_to_bevy, unreal_transform};
@@ -136,24 +134,7 @@ impl bevy::app::Plugin for MapPresentPlugin {
 
 fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
     egui_settings.auto_create_primary_context = false;
-    commands.spawn((
-        PrimaryEguiContext,
-        Camera2d,
-        // Every camera on the window has the same sample count: 2D cameras on one target share a depth texture.
-        bevy::render::view::Msaa::Off,
-        RenderLayers::none(),
-        Camera {
-            // After the 3D view (0), the HUD's actors and canvas layers (1 to 8) and the gamma ramp (9).
-            order: 10,
-            // Additive canvas tiles have colour but no alpha.
-            output_mode: CameraOutputMode::Write {
-                blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                clear_color: ClearColorConfig::None,
-            },
-            clear_color: ClearColorConfig::Custom(Color::NONE),
-            ..Default::default()
-        },
-    ));
+    commands.spawn((PrimaryEguiContext, p2_render::view::hud_camera()));
 }
 
 /// Where the host shows the map, in egui points: its canvas is painted there. `None` paints nothing.
@@ -537,6 +518,7 @@ impl Session {
         if t.play.world().is_some_and(|world| !world.presented()) {
             let items = Arc::clone(&t.hud.last_hud);
             self.paint_items(ctx, rect, &items, contexts, t);
+            t.painter.paint_progress(ctx, rect, 1.0);
             t.times.add("hud paint", started);
             return;
         }

@@ -158,7 +158,7 @@ pub(super) fn attachments_with_their_base(
     models: Query<(Entity, &ActorModel)>,
     shown: Query<(&Visibility, Has<CastsUnseen>), With<ActorModel>>,
     attached: Query<(Entity, bevy::ecs::change_detection::Ref<FollowBone>, Option<&RenderLayers>, Option<&BaseModel>)>,
-    spawned: Query<(), bevy::ecs::query::Added<ActorModel>>,
+    spawned: Query<(), Added<ActorModel>>,
 ) {
     let retry = !spawned.is_empty();
     let mut by_actor: Option<(FxHashMap<ObjectId, Entity>, FxHashMap<ObjectId, ObjectId>)> = None;
@@ -219,7 +219,7 @@ pub(super) fn layers_by_zone(
     mut commands: Commands,
     shown: Res<ShownScene>,
     changed: Query<Entity, (Or<(With<ActorModel>, With<LayeredByZone>)>, Changed<ZoneCulled>)>,
-    joined: Query<Entity, (Or<(bevy::ecs::query::Added<ChildOf>, bevy::ecs::query::Added<Mesh3d>)>, Or<(With<Mesh3d>, With<RenderLayers>)>)>,
+    joined: Query<Entity, (Or<(Added<ChildOf>, Added<Mesh3d>)>, Or<(With<Mesh3d>, With<RenderLayers>)>)>,
     parents: Query<&ChildOf>,
     roots: Query<(&ZoneCulled, Has<CastsUnseen>), Or<(With<ActorModel>, With<LayeredByZone>)>>,
     children: Query<&Children>,

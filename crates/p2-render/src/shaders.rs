@@ -137,7 +137,7 @@ pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
     parsed.unwrap_or_else(|| panic!("const {name} = {value} is not a number"))
 }
 
-/// Whether a section material draws the sky zone, and whether it hands its pools to the screen reflections.
+/// Whether a section material draws the sky zone and whether it hands its pools to the screen reflections.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkyKey {
     pub sky: bool,

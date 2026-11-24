@@ -49,7 +49,7 @@ fn light_at_the_eye() -> (SkinnedLighting, Arc<LightEnvironment>, StaticCollisio
         lamp_masked: Vec::new(),
         albedos: LevelAlbedos::default(),
     };
-    (view_model_lighting(&environment, &MapLights::new(&environment), &level, Vec3::ZERO, Vector::ZERO), environment, level)
+    (view_model_lighting(&environment, &MapLights::new(&environment), &level, Vec3::ZERO, Vector::ZERO, 0), environment, level)
 }
 
 fn target(app: &mut App, frames: &Arc<Mutex<Vec<Vec<u8>>>>) -> Handle<Image> {

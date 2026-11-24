@@ -34,7 +34,7 @@ const BINS_SHADER: Handle<Shader> = uuid_handle!("4c8e2f71-9a3d-4b56-8e10-d7f2a6
 /// Texels before the tiles' lists: the grid, then two columns of the binned view's matrix. `decal_bins.wesl` and
 /// `projector.wesl` hold the same numbers.
 const HEAD_TEXELS: u32 = 4;
-/// A tile's texels: its count, then up to 63 decal indices, four a texel.
+/// A tile's texels: its counts, then up to 63 decal indices, four a texel.
 const LIST_TEXELS: u32 = 16;
 const TILE_PIXELS: u32 = 16;
 const MOST_TILES: u32 = 32_768;
@@ -180,6 +180,10 @@ mod tests {
         assert_eq!(shader_const(projector, "BIN_HEAD_TEXELS"), f64::from(HEAD_TEXELS));
         assert_eq!(shader_const(bins, "LIST_TEXELS"), f64::from(LIST_TEXELS));
         assert_eq!(shader_const(projector, "BIN_LIST_TEXELS"), f64::from(LIST_TEXELS));
+        assert_eq!(shader_const(bins, "LISTED_SPAN"), shader_const(projector, "BIN_LISTED_SPAN"));
+        assert!(shader_const(bins, "LISTED_SPAN") > shader_const(bins, "MOST_LISTED"));
+        assert_eq!(shader_const(bins, "PROJECTOR"), shader_const(projector, "PROJECTOR"));
+        assert_eq!(shader_const(bins, "FB_LIQUID"), shader_const(projector, "FB_LIQUID"));
         assert_eq!(shader_const(bins, "MASK_WORDS"), (MOST_DECALS / 32) as f64);
         assert_eq!(shader_const(bins, "BOOK_WIDTH"), BOOK_WIDTH as f64);
     }

@@ -1,5 +1,5 @@
 import package::p2_render::modern_base::{LUMINANCE, LampLight, fresnel_five, ggx, modern_bits, to_eye};
-import package::p2_render::sun_shadow::{SHADOW_BIAS, SHADOW_NORMAL_OFFSET, SOFT_EDGE_UNITS, SUN_FACING_FADE};
+import package::p2_render::sun_shadow::{SHADOW_BIAS, SHADOW_NORMAL_OFFSET, SOFT_EDGE_UNITS, SUN_FACING_FADE, ShadowLookup, disk_turn, held_lookup, vogel_tap};
 import package::p2_render::probes::read_probes;
 import bevy_pbr::render::{
     forward_io::VertexOutput,
@@ -143,6 +143,9 @@ fn atlas_quad(book: Book, side: f32, corner: vec2<f32>) -> vec4<f32> {
 // four at most, inside a face's guard band.
 const LAMP_EDGE_LEAST_TEXELS: f32 = 1.0;
 const LAMP_EDGE_MOST_TEXELS: f32 = 2.0;
+// A world-lit overlay's least soft edge in texels: inside the atlas's guard band less the bilinear texel.
+const HELD_LAMP_EDGE_TEXELS: f32 = 2.0;
+const HELD_LAMP_TAPS: i32 = 16;
 
 // A vector in the axes of one face of a lamp's cube: x right, y up, z out of the lamp. Matches `lamps/atlas.rs`.
 fn face_view(v: vec3<f32>, face: u32) -> vec3<f32> {
@@ -195,17 +198,27 @@ fn cube_face(from_lamp: vec3<f32>) -> u32 {
 // `from_lamp` the point seen from the lamp; a texel holds a distance over the radius, as `lamp_atlas.wesl` draws it.
 // `low` the face's corner and `size` its side, in texels; `side` the atlas's. A point just past the face's side reads
 // its guard band.
-fn face_shadow(book: Book, low: vec2<f32>, size: f32, face: u32, from_lamp: vec3<f32>, normal: vec3<f32>, radius: f32, texel_world: f32, margin: f32, side: f32) -> f32 {
-    return square_shadow(book, low, size, 0.5 * size - ATLAS_GUARD, face_view(from_lamp, face), face_view(normal, face), radius, texel_world, margin, side);
+fn face_shadow(book: Book, low: vec2<f32>, size: f32, face: u32, from_lamp: vec3<f32>, normal: vec3<f32>, radius: f32, texel_world: f32, margin: f32, side: f32, lookup: ShadowLookup) -> f32 {
+    return square_shadow(book, low, size, 0.5 * size - ATLAS_GUARD, face_view(from_lamp, face), face_view(normal, face), radius, texel_world, margin, side, lookup);
 }
 
 // The shadow read from one square of the atlas. `seen` and `tilted` are the point and its normal in the axes of the
 // view the square was drawn through: x right, y up, z out of the lamp; `span` is how many texels a slope of 1 covers.
-fn square_shadow(book: Book, low: vec2<f32>, size: f32, span: f32, seen: vec3<f32>, tilted: vec3<f32>, radius: f32, texel_world: f32, margin: f32, side: f32) -> f32 {
+fn square_shadow(book: Book, low: vec2<f32>, size: f32, span: f32, seen: vec3<f32>, tilted: vec3<f32>, radius: f32, texel_world: f32, margin: f32, side: f32, lookup: ShadowLookup) -> f32 {
     let at = low + 0.5 * size + vec2(seen.x, -seen.y) / max(seen.z, 1e-4) * span;
     let half = 0.5 * clamp(SOFT_EDGE_UNITS / texel_world, LAMP_EDGE_LEAST_TEXELS, LAMP_EDGE_MOST_TEXELS);
     let reach = length(seen);
     let plane = dot(tilted, seen);
+    if held_lookup(lookup) {
+        let wide = max(half, HELD_LAMP_EDGE_TEXELS);
+        let turn = disk_turn(lookup.seed);
+        var shown = 0.0;
+        for (var tap = 0; tap < HELD_LAMP_TAPS; tap++) {
+            let by = vogel_tap(tap, HELD_LAMP_TAPS, turn) * wide;
+            shown += atlas_blended(book, side, low, size, at + by, receiver_depth(seen, tilted, reach, plane, by, span, texel_world, margin, radius)).x;
+        }
+        return shown / f32(HELD_LAMP_TAPS);
+    }
     var lit = vec2(0.0);
     for (var corner = 0; corner < 4; corner++) {
         // One diagonal first: where its eight texels agree, no edge is near and the other two reads are saved.
@@ -220,15 +233,15 @@ fn square_shadow(book: Book, low: vec2<f32>, size: f32, span: f32, seen: vec3<f3
 
 // A lamp's shadow from one face of `size` texels a side. `plain` is the corner of the lamp's plain tile, which holds
 // its six faces side by side, and the face is the one the looked-up point lies in; a detail face has its own `corner`.
-fn tile_shadow(book: Book, corner: vec2<f32>, size: f32, face: u32, plain: bool, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32) -> f32 {
+fn tile_shadow(book: Book, corner: vec2<f32>, size: f32, face: u32, plain: bool, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
     let texel_world = 2.0 * distance_to / size;
-    let from_lamp = position + normal * (texel_world * SHADOW_NORMAL_OFFSET) - lamp_position;
-    let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt) + distance_to * DEPTH_STEP;
+    let from_lamp = position + normal * (texel_world * SHADOW_NORMAL_OFFSET * lookup.offset) - lamp_position;
+    let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt) * lookup.offset + distance_to * DEPTH_STEP;
     if !plain {
-        return face_shadow(book, corner, size, face, from_lamp, normal, lamp_radius, texel_world, margin, side);
+        return face_shadow(book, corner, size, face, from_lamp, normal, lamp_radius, texel_world, margin, side, lookup);
     }
     let own = cube_face(from_lamp);
-    return face_shadow(book, corner + vec2(f32(own % 3u), f32(own / 3u)) * size, size, own, from_lamp, normal, lamp_radius, texel_world, margin, side);
+    return face_shadow(book, corner + vec2(f32(own % 3u), f32(own / 3u)) * size, size, own, from_lamp, normal, lamp_radius, texel_world, margin, side, lookup);
 }
 
 // The detail square of one face of a lamp, from the last two texels of its record: its corner and its side in texels,
@@ -265,7 +278,7 @@ fn tile_column(book: Book, position: vec3<f32>) -> u32 {
 }
 
 // `lit` darkened by the tile whose two texels start at `at`.
-fn mover_tile_shadow(book: Book, at: u32, lit: f32, from_lamp: vec3<f32>, normal: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32) -> f32 {
+fn mover_tile_shadow(book: Book, at: u32, lit: f32, from_lamp: vec3<f32>, normal: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
     let aim = book_texel(book, at);
     let axis = aim.xyz;
     let along = dot(from_lamp, axis);
@@ -282,22 +295,22 @@ fn mover_tile_shadow(book: Book, at: u32, lit: f32, from_lamp: vec3<f32>, normal
     let up = cross(axis, right);
     let size = square.z;
     let texel_world = 2.0 * aim.w * distance_to / size;
-    let moved = from_lamp + normal * (texel_world * SHADOW_NORMAL_OFFSET);
+    let moved = from_lamp + normal * (texel_world * SHADOW_NORMAL_OFFSET * lookup.offset);
     let seen = vec3(dot(moved, right), dot(moved, up), dot(moved, axis));
     let span = (0.5 * size - ATLAS_GUARD) / aim.w;
     if seen.z <= 0.0 || any(abs(seen.xy) * span > vec2(seen.z * (0.5 * size - 1.0))) {
         return lit;
     }
     let tilted = vec3(dot(normal, right), dot(normal, up), dot(normal, axis));
-    let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt) + distance_to * DEPTH_STEP;
-    let shade = square_shadow(book, square.xy, size, span, seen, tilted, lamp_radius, texel_world, margin, side);
+    let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt) * lookup.offset + distance_to * DEPTH_STEP;
+    let shade = square_shadow(book, square.xy, size, span, seen, tilted, lamp_radius, texel_world, margin, side, lookup);
     return min(lit, mix(1.0, shade, saturate(square.w)));
 }
 
 // `held` the lamp's tiles' start and count; `column` the point's column of the tile grid, 0 outside it. The column's
 // texels name its tiles, read as far as its first empty name; below 0 first, or outside the grid, the point walks all
 // the lamp's tiles. The names are read here, not carried through the lamp loop, so the loop holds fewer registers.
-fn mover_shadow(book: Book, held: vec4<f32>, column: u32, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32) -> f32 {
+fn mover_shadow(book: Book, held: vec4<f32>, column: u32, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
     let start = u32(held.x);
     let count = u32(held.y);
     let row = (book.size.y - TILES_FROM_END) * BOOK_WIDTH;
@@ -309,7 +322,7 @@ fn mover_shadow(book: Book, held: vec4<f32>, column: u32, position: vec3<f32>, n
     var lit = 1.0;
     if names.x < 0.0 {
         for (var tile = 0u; tile < count && lit > 0.0; tile++) {
-            lit = mover_tile_shadow(book, row + (start + tile) * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side);
+            lit = mover_tile_shadow(book, row + (start + tile) * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
         }
         return lit;
     }
@@ -323,7 +336,7 @@ fn mover_shadow(book: Book, held: vec4<f32>, column: u32, position: vec3<f32>, n
         }
         let tile = name - 1u;
         if tile >= start && tile < start + count {
-            lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side);
+            lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
         }
     }
     return lit;
@@ -388,7 +401,7 @@ const COLUMN_UNREAD: u32 = 0xffffffffu;
 
 // What of `lamp` the static world lets through to `position` (x) and what the movers do (y). `column` is the point's
 // column of the movers' tile grid, read here on first need.
-fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, side: f32, unit: f32, column: ptr<function, u32>, movers_near: bool) -> vec2<f32> {
+fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, side: f32, unit: f32, column: ptr<function, u32>, movers_near: bool, lookup: ShadowLookup) -> vec2<f32> {
     let faces = dot(ground, lamp.to_lamp);
     let tilt = min(sqrt(saturate(1.0 - faces * faces)) / max(faces, 0.1), 4.0);
     // A face that would show its texels has a finer square of its own.
@@ -398,10 +411,10 @@ fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>
     let level = (packed >> 16u) & 15u;
     var walled = 1.0;
     if detail.z > 0.0 {
-        walled = tile_shadow(book, detail.xy, detail.z, face, false, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side);
+        walled = tile_shadow(book, detail.xy, detail.z, face, false, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
     } else if level != ATLAS_UNMAPPED {
         let corner = vec2(f32(packed & 255u), f32((packed >> 8u) & 255u)) * unit;
-        walled = tile_shadow(book, corner, unit * f32(1u << level), face, true, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side);
+        walled = tile_shadow(book, corner, unit * f32(1u << level), face, true, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
     }
     var movers = 1.0;
     if walled > 0.0 && movers_near {
@@ -410,7 +423,7 @@ fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>
             if *column == COLUMN_UNREAD {
                 *column = tile_column(book, position);
             }
-            movers = mover_shadow(book, held, *column, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side);
+            movers = mover_shadow(book, held, *column, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
         }
     }
     return vec2(walled, movers);
@@ -433,12 +446,15 @@ const SCREEN_DEPTH_SLACK: f32 = 0.0001;
 
 // Which of the pixel's lamps the screen pass holds and the channels of their shadows' bytes, all 0 where it holds none
 // for the surface at `frag` whose cell list starts at `start`, or for a surface the prepass did not draw there.
-fn screen_shadows(book: Book, frag: vec4<f32>, start: u32) -> vec4<u32> {
+// `unheld` becomes what a lamp it does not hold lets through once the pass ran for the view: nothing, as the pass holds
+// every lamp the static world lets through bar the weakest, and a pixel it could not match stays shadowed.
+fn screen_shadows(book: Book, frag: vec4<f32>, start: u32, unheld: ptr<function, vec2<f32>>) -> vec4<u32> {
 @if(BINDLESS && DEPTH_PREPASS) {
     let pixel = vec2<u32>(frag.xy);
     if !screen_written(book.screen, pixel) {
         return vec4(0u);
     }
+    *unheld = vec2(0.0);
     if abs(textureLoad(depth_prepass_texture, vec2<i32>(frag.xy), 0) - frag.z) > frag.z * SCREEN_DEPTH_SLACK {
         return vec4(0u);
     }
@@ -505,7 +521,7 @@ fn screen_byte(held: vec4<u32>, at: u32) -> u32 {
 // Light from the placed lamps and the probes, before the surface's colour: terrain's layers share one sum. `ground` is
 // the surface's own normal under any liquid on it: the shadow maps hold the surface, and a liquid's tilt read there
 // cuts acne into the highlight.
-fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: vec3<f32>, gloss: bool, surface: vec3<f32>, flag: f32) -> LampLight {
+fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: vec3<f32>, gloss: bool, surface: vec3<f32>, flag: f32, lookup: ShadowLookup) -> LampLight {
     var sum = no_lamps();
     // Special-lit surfaces take only special lights, and no lamp is one.
     if surface.z > 0.5 {
@@ -538,9 +554,10 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: 
 }
     // A surface drawn after the opaque pass is not the one the screen pass cast for.
     var screen = vec4(0u);
+    var unheld = vec2(1.0);
 @if(!P2_SEE_THROUGH && !SKY_VIEW) {
     if unit >= 1.0 && list.y > 0u {
-        screen = screen_shadows(book, in.position, list.x);
+        screen = screen_shadows(book, in.position, list.x, &unheld);
     }
 }
     for (var i = 0u; i < list.y; i++) {
@@ -551,13 +568,12 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: 
         var shadow = saturate(lamp.facing / SUN_FACING_FADE);
         var walled = shadow;
         if unit >= 1.0 {
-            var through = vec2(1.0);
+            var through = unheld;
             if i < SCREEN_LIST_LAMPS && (screen.x & (1u << i)) != 0u {
                 through = screen_shadow(screen, countOneBits(screen.x & ((1u << i) - 1u)));
             } else {
-                // Over the screen pass, a lamp it does not hold lights unshadowed, as the game's lamps do.
 @if(!SCREEN_SHADOWS_ONLY)
-                through = lamp_shadows(book, lamp, position, ground, side, unit, &column, movers_near);
+                through = lamp_shadows(book, lamp, position, ground, side, unit, &column, movers_near, lookup);
             }
             shadow *= through.x;
             walled = shadow;
@@ -581,7 +597,7 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: 
     // four alike in shadow would take 44 % of the light for its 25 %.
     sum.diffuse = unshaded * sqrt(reaching / max(given, vec3(1e-8)));
     sum.grounded = grounded(book, position, normal);
-    read_probes(in, position, normal, &sum);
+    read_probes(in, position, normal, &sum, lookup.offset);
     return sum;
 }
 

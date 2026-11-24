@@ -82,11 +82,12 @@ struct Around {
     ambient: vec3<f32>,
     sky: vec3<f32>,
     fills: vec3<f32>,
+    glow: vec3<f32>,
 }
 
 fn view_around(normal: vec3<f32>, lamps: LampLight, surface: vec3<f32>) -> Around {
     let special = surface.z > 0.5;
-    var around = Around(vec3(0.0), vec3(0.0, 1.0, 0.0), lights.ambient_color.rgb, vec3(0.0), vec3(0.0));
+    var around = Around(vec3(0.0), vec3(0.0, 1.0, 0.0), lights.ambient_color.rgb, vec3(0.0), vec3(0.0), vec3(0.0));
     let sun = sun_index();
     if sun < lights.n_directional_lights {
         // The map's sun is never special-lit, so such a surface only takes its own fills.
@@ -148,7 +149,7 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
     let probed = lamps.sky.x >= 0.0;
     let open = select(seen.z, saturate((seen.z - ROOFED_SKY) / (1.0 - ROOFED_SKY)), probed);
     let sky_seen = select(mix(SKY_SHADOWED, 1.0, seen.y) * open, 1.0, special);
-    let zone = select(around.ambient, vec3(0.0), probed);
+    let zone = select(around.ambient, vec3(0.0), probed) + around.glow;
     let sky = around.sky;
     let fills = around.fills;
     let ground = GROUND_ALBEDO * sun_color;

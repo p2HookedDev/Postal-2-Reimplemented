@@ -75,7 +75,12 @@ fn finish_loads(mut session: ResMut<Session>, mut t: SceneTargets, mut next: Res
     let package = session.loading_package().unwrap_or_default().to_owned();
     match session.finish_load(&mut t) {
         None => {}
-        Some(Ok(_)) => next.set(MapState::Shown),
+        Some(Ok(_)) => {
+            if let Some(world) = t.play.world_mut() {
+                world.hold_reveal();
+            }
+            next.set(MapState::Shown);
+        }
         Some(Err(error)) => {
             failed.write(MapFailed(format!("{package} could not be loaded: {error}")));
             next.set(MapState::Empty);

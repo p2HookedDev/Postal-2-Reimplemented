@@ -176,6 +176,49 @@ fn casters_carry_the_caster_layers_only_in_the_world() {
 }
 
 #[test]
+fn no_caster_lands_on_the_sun_view_layer() {
+    let sun_view = RenderLayers::layer(SUN_VIEW_LAYER);
+    for layers in [RenderLayers::layer(0), RenderLayers::layer(OVERLAY_LAYERS[0]), RenderLayers::from_layers(&[0, CASTER_LAYER, MOVER_LAYER])] {
+        for (casts, mover) in [(false, false), (true, false), (true, true)] {
+            assert!(!caster_layers(&layers, casts, mover).intersects(&sun_view));
+        }
+    }
+}
+
+#[test]
+fn overlays_see_the_sun_only_under_modern_with_at_most_one_casting_sun() {
+    let settings = |on: &'static str| Settings::read(move |query| if query == MODERN_GRAPHICS { on.to_owned() } else { String::new() });
+    let mut world = World::new();
+    let ambient = AmbientLight { color: Color::LinearRgba(LinearRgba::new(0.1, 0.2, 0.3, 4.0)), brightness: 1.0, affects_lightmapped_meshes: false };
+    world.spawn((SceneView::default(), ambient.clone(), ShadowFilteringMethod::Hardware2x2));
+    let own = RenderLayers::layer(OVERLAY_LAYERS[0]);
+    let overlay = world.spawn((OverlayCamera(0), own.clone(), AmbientLight::default(), ShadowFilteringMethod::Gaussian)).id();
+    world.spawn(DirectionalLight { shadow_maps_enabled: true, ..DirectionalLight::default() });
+    let layers = |world: &World| world.get::<RenderLayers>(overlay).cloned();
+    world.insert_resource(settings("True"));
+    world.run_system_once(overlay_light).expect("runs");
+    assert_eq!(layers(&world), Some(own.clone().with(SUN_VIEW_LAYER)));
+    assert_eq!(world.get::<ShadowFilteringMethod>(overlay).copied(), Some(ShadowFilteringMethod::Hardware2x2));
+    assert!(world.get::<AmbientLight>(overlay).is_some_and(|light| light.color == ambient.color && light.brightness == ambient.brightness));
+    let second = world.spawn(DirectionalLight { shadow_maps_enabled: true, ..DirectionalLight::default() }).id();
+    world.run_system_once(overlay_light).expect("runs");
+    assert_eq!(layers(&world), Some(own.clone()));
+    if let Some(mut light) = world.get_mut::<DirectionalLight>(second) {
+        light.shadow_maps_enabled = false;
+    }
+    world.run_system_once(overlay_light).expect("runs");
+    assert_eq!(layers(&world), Some(own.clone().with(SUN_VIEW_LAYER)));
+    for mut light in world.query::<&mut DirectionalLight>().iter_mut(&mut world) {
+        light.shadow_maps_enabled = false;
+    }
+    world.run_system_once(overlay_light).expect("runs");
+    assert_eq!(layers(&world), Some(own.clone().with(SUN_VIEW_LAYER)), "an unshadowed sun lights the weapon as it lights the world");
+    world.insert_resource(settings("False"));
+    world.run_system_once(overlay_light).expect("runs");
+    assert_eq!(layers(&world), Some(own));
+}
+
+#[test]
 fn see_through_surfaces_do_not_cast() {
     for mode in [AlphaMode::Blend, AlphaMode::Premultiplied, AlphaMode::Add, AlphaMode::Multiply, AlphaMode::Mask(2.0)] {
         assert!(see_through_mode(mode));

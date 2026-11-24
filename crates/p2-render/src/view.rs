@@ -34,12 +34,14 @@ use bevy::ecs::prelude::{
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::prelude::resource_exists;
-use bevy::ecs::prelude::Mut;
+use bevy::ecs::prelude::{Added, Mut};
 use bevy::ecs::message::Messages;
 use bevy::ecs::system::{EntityCommands, SystemParam};
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats, Image};
 use bevy::light::cluster::{ClusterConfig, ClusterZConfig, GlobalClusterSettings};
-use bevy::light::{AmbientLight, CascadeShadowConfig, ClusteredDecal};
+use bevy::light::{AmbientLight, CascadeShadowConfig, ClusteredDecal, ShadowFilteringMethod};
+use bevy::render::RenderApp;
+use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::material::AlphaMode;
 use bevy::math::{Affine2, Mat3, Quat, UVec2, Vec2, Vec3, Vec4};
 use bevy::mesh::skinning::SkinnedMesh;
@@ -142,7 +144,7 @@ impl Plugin for MeshViewPlugin {
                 Update,
                 (SceneViewSystems::Place, SceneViewSystems::Fog, SceneViewSystems::Zones, SceneViewSystems::Light).chain().in_set(MeshViewSystems::Camera),
             )
-            .add_plugins((camera::ViewCameraPlugin, fog::FogPlugin, zone_culling::ZoneCullingPlugin, MoverSightPlugin));
+            .add_plugins((camera::ViewCameraPlugin, fog::FogPlugin, zone_culling::ZoneCullingPlugin, MoverSightPlugin, ExtractComponentPlugin::<OverlayCamera>::default()));
     }
 }
 
@@ -178,8 +180,10 @@ fn steady_decal_order(settings: Option<ResMut<GlobalClusterSettings>>) {
 
 /// The cameras, 2D ones included, draw into one target, so they must agree. Off unless set, as Bevy's default 4× costs every pass (the
 /// depth prepass included); a host without settings (the asset viewer) keeps it off. Ambient occlusion needs it off.
-fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera>>) {
-    let Some(settings) = settings.filter(|settings| settings.is_changed()) else { return };
+/// A camera spawned after the setting last changed (the HUD's, which draws over the frame) takes it too: cameras of one
+/// target with different sample counts draw into different images, and the later one's write covers the earlier's.
+fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera>>, added: Query<(), Added<Camera>>) {
+    let Some(settings) = settings.filter(|settings| settings.is_changed() || !added.is_empty()) else { return };
     let wanted = Msaa::from_samples(settings.msaa_samples());
     for mut msaa in &mut cameras {
         msaa.set_if_neq(wanted);
@@ -214,9 +218,13 @@ impl MeshView {
         }
     }
 
-    fn set_fov(&self, projection: &mut Mut<Projection>, degrees: f32) {
+    fn vertical_fov(&self, degrees: f32) -> f32 {
         let aspect = self.bevy_viewport().map_or(1.0, |viewport| viewport.physical_size.x as f32 / viewport.physical_size.y.max(1) as f32);
-        let fov = crate::modern_view::vertical_fov(degrees, aspect, self.modern.wide);
+        crate::modern_view::vertical_fov(degrees, aspect, self.modern.wide)
+    }
+
+    fn set_fov(&self, projection: &mut Mut<Projection>, degrees: f32) {
+        let fov = self.vertical_fov(degrees);
         if matches!(&**projection, Projection::Perspective(perspective) if perspective.fov != fov)
             && let Projection::Perspective(perspective) = &mut **projection
         {
@@ -248,8 +256,41 @@ pub struct MapModel;
 
 /// Retail renders each `DrawActor` call as a scene of its own and clears the depth only with `ClearZ`
 /// (or `DrawActor(None, false, true)`), so a call without it is depth-tested against what came before.
+#[derive(Component, Clone, ExtractComponent)]
+#[extract_app(RenderApp)]
+pub(crate) struct OverlayCamera(pub(crate) usize);
+
+/// The camera of the window's own egui context, last of all. It also draws the last `DrawActor` slot while it
+/// may, so it is an `OverlayCamera` and takes the overlays' sun and ambient.
 #[derive(Component)]
-struct OverlayCamera(usize);
+pub(crate) struct HudCamera;
+
+pub fn hud_camera() -> impl Bundle {
+    let (clear_color, output_mode) = hud_alone();
+    (
+        Camera3d::default(),
+        plain_output(),
+        // After the 3D view (0), the HUD's actors and canvas layers (1 to 8) and the gamma ramp (9).
+        Camera { order: 10, output_mode, clear_color, ..Default::default() },
+        Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 10_000.0, ..Default::default() }),
+        Transform::default(),
+        RenderLayers::none(),
+        ClusterConfig::Single,
+        OverlayCamera(crate::overlay_route::HUD_SLOT),
+        HudCamera,
+        ShadowFilteringMethod::default(),
+        AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
+    )
+}
+
+/// Additive canvas tiles have colour but no alpha: alone, the HUD paints over a cleared image laid over the frame.
+fn hud_alone() -> (ClearColorConfig, bevy::camera::CameraOutputMode) {
+    let output = bevy::camera::CameraOutputMode::Write {
+        blend_state: Some(bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        clear_color: ClearColorConfig::None,
+    };
+    (ClearColorConfig::Custom(Color::NONE), output)
+}
 
 #[derive(Resource)]
 struct MissingTextureMaterial(Handle<StandardMaterial>);
@@ -310,6 +351,8 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
             RenderLayers::layer(layer),
             ClusterConfig::Single,
             OverlayCamera(slot),
+            ShadowFilteringMethod::default(),
+            AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
         ));
     }
 }

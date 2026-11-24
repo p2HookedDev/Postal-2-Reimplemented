@@ -141,7 +141,7 @@ impl PlayWorld {
     }
 
     pub fn presented(&self) -> bool {
-        self.presented
+        self.presented && self.reveal.is_none()
     }
 
     pub fn hud_items(&self) -> Arc<[CanvasItem]> {

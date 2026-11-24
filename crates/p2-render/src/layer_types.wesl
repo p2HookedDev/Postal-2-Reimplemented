@@ -46,4 +46,7 @@ struct ActorShading {
     lighting: Lighting,
     layers: ShaderLayers,
     overlay: u32,
+    reach: f32,
+    free: f32,
+    glow: f32,
 }

@@ -6,7 +6,7 @@ use bevy::asset::{AssetEvent, AssetId, Assets};
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::{InheritedVisibility, RenderLayers, Visibility};
 use bevy::camera::{Camera, Projection};
-use bevy::ecs::prelude::{ChildOf, DetectChanges, DetectChangesMut, Entity, Local, MessageReader, Or, Query, Ref, Res, ResMut, With};
+use bevy::ecs::prelude::{Changed, ChildOf, DetectChanges, DetectChangesMut, Entity, Local, MessageReader, Or, Query, Ref, RemovedComponents, Res, ResMut, With};
 use bevy::math::{Mat4, Vec2, Vec3};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
@@ -111,6 +111,10 @@ struct MoverState {
     near: bool,
     resting: bool,
     eye_distance: f32,
+    /// Its lamps scoring above 0 before the wall checks, best first, with their place in the lamp list, for the middle's
+    /// bits and lamp list it was made for.
+    scored: Vec<(u32, Lit)>,
+    scored_for: Option<([u32; 3], u32)>,
 }
 
 struct Bounds {
@@ -125,12 +129,13 @@ impl Bounds {
     }
 }
 
-/// A column's side in world units, unless the movers spread wider than `LAMP_COLUMNS_MOST` of them.
+/// A column's side in world units, unless the lamps reach wider than `LAMP_COLUMNS_MOST` of them.
 const LAMP_COLUMN: f32 = 512.0;
-const LAMP_COLUMNS_MOST: f32 = 64.0;
+const LAMP_COLUMNS_MOST: f32 = 256.0;
 
-/// The lamps that may reach each column of a grid in x and z over the near movers' middles, each column's list in the
-/// lamps' own order, so a mover scores them as it would score the whole list.
+/// The lamps that may reach each column of a grid in x and z over every lamp's reach, each column's list in the lamps'
+/// own order, so a mover scores them as it would score the whole list. A point outside the grid, which no lamp reaches,
+/// takes an edge column.
 #[derive(Default)]
 struct LampGrid {
     low: Vec2,
@@ -147,17 +152,20 @@ impl LampGrid {
         ((at - low) / self.side).floor().clamp(0.0, count.saturating_sub(1) as f32) as usize
     }
 
-    /// The columns a lamp may reach, with the same slack as `may_light`.
     fn reach(&self, lamp: &Lit) -> (Range<usize>, Range<usize>) {
-        let reach = lamp.range.abs() * 1.001 + 1.0;
+        let reach = lamp_reach(lamp);
         let xs = self.column(lamp.at.x - reach, self.low.x, self.across)..self.column(lamp.at.x + reach, self.low.x, self.across) + 1;
         let zs = self.column(lamp.at.z - reach, self.low.y, self.down)..self.column(lamp.at.z + reach, self.low.y, self.down) + 1;
         (xs, zs)
     }
 
-    fn build(&mut self, lamps: &[Lit], low: Vec3, high: Vec3) {
-        self.low = Vec2::new(low.x, low.z);
-        let size = Vec2::new(high.x - low.x, high.z - low.z).max(Vec2::ZERO);
+    fn build(&mut self, lamps: &[Lit]) {
+        let (low, high) = lamps.iter().fold((Vec2::MAX, Vec2::MIN), |(low, high), lamp| {
+            let (at, reach) = (Vec2::new(lamp.at.x, lamp.at.z), Vec2::splat(lamp_reach(lamp)));
+            (low.min(at - reach), high.max(at + reach))
+        });
+        self.low = low;
+        let size = (high - low).max(Vec2::ZERO);
         self.side = LAMP_COLUMN.max(size.max_element() / LAMP_COLUMNS_MOST);
         (self.across, self.down) = ((size.x / self.side) as usize + 1, (size.y / self.side) as usize + 1);
         self.starts.clear();
@@ -206,7 +214,12 @@ pub(super) struct PickState {
     near: Vec<(f32, Entity)>,
     /// This frame's casting meshes and their movers, in the meshes' order.
     casting: Vec<(Entity, Entity)>,
+    /// Every lamp, shown or not, remade only when one is placed, moved or removed; `lamps_made` counts the remakes. Whether
+    /// each is shown follows the view every frame, so it is read apart (`shown`, in the same order).
     lamps: Vec<Lit>,
+    lamp_entities: Vec<Entity>,
+    shown: Vec<bool>,
+    lamps_made: u32,
     lamp_grid: LampGrid,
     scored: Vec<Lit>,
     order: Vec<(f32, Entity)>,
@@ -233,10 +246,14 @@ fn lamp_score(lamp: &Lit, middle: Vec3) -> f32 {
     lamp.strength * lamp_falloff(lamp.at, lamp.range, lamp.spot, middle)
 }
 
-/// Whether the lamp may score above 0 somewhere in the box; the slack covers rounding, so it never says no to such a lamp.
-fn may_light(lamp: &Lit, low: Vec3, high: Vec3) -> bool {
-    let gap = (low - lamp.at).max(lamp.at - high).max(Vec3::ZERO);
-    gap.length_squared() <= (lamp.range.abs() * 1.001 + 1.0).powi(2)
+/// Best first; equal scores by lamp number, so the order never follows the query's.
+fn by_score(a: &Lit, b: &Lit) -> std::cmp::Ordering {
+    b.score.total_cmp(&a.score).then(a.lamp.cmp(&b.lamp))
+}
+
+/// How far the lamp may score above 0; the slack covers rounding, so it never falls short.
+fn lamp_reach(lamp: &Lit) -> f32 {
+    lamp.range.abs() * 1.001 + 1.0
 }
 
 fn bits<const N: usize>(floats: [f32; N]) -> [u32; N] {
@@ -427,9 +444,6 @@ impl PickState {
         self.near.extend(self.bounds.iter().map(|(&root, bounds)| (bounds.sphere().0.distance(eye), root)).filter(|&(distance, _)| distance <= MOVER_REACH));
         self.near.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         self.near.truncate(MOST_MOVERS);
-        let (low, high) = self.near.iter().filter_map(|(_, root)| self.bounds.get(root)).map(|bounds| bounds.sphere().0).fold((Vec3::MAX, Vec3::MIN), |(low, high), middle| (low.min(middle), high.max(middle)));
-        self.lamps.retain(|lamp| may_light(lamp, low, high));
-        self.lamp_grid.build(&self.lamps, low, high);
 
         for mover in self.movers.values_mut() {
             mover.near = false;
@@ -439,13 +453,19 @@ impl PickState {
             let middle = bounds.sphere().0;
             let mover = self.movers.entry(root).or_default();
             mover.near = true;
+            let scored_for = Some((bits(middle.to_array()), self.lamps_made));
+            if mover.scored_for != scored_for {
+                mover.scored_for = scored_for;
+                mover.scored.clear();
+                mover.scored.extend(self.lamp_grid.near(middle).iter().filter_map(|&index| {
+                    let lamp = self.lamps.get(index as usize)?;
+                    let score = lamp_score(lamp, middle);
+                    (score > 0.0).then_some((index, Lit { score, ..*lamp }))
+                }));
+                mover.scored.sort_unstable_by(|(_, a), (_, b)| by_score(a, b));
+            }
             self.scored.clear();
-            self.scored.extend(self.lamp_grid.near(middle).iter().filter_map(|&index| {
-                let lamp = self.lamps.get(index as usize)?;
-                let score = lamp_score(lamp, middle);
-                (score > 0.0).then_some(Lit { score, ..*lamp })
-            }));
-            self.scored.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+            self.scored.extend(mover.scored.iter().filter(|(index, _)| self.shown.get(*index as usize).is_some_and(|&shown| shown)).map(|&(_, lit)| lit));
             let mut walled = false;
             for lamp in self.scored.iter_mut().take(WALL_CHECKED) {
                 if !mover.lamp_clear(lamp, middle, now, walls) {
@@ -454,7 +474,7 @@ impl PickState {
                 }
             }
             if walled {
-                self.scored.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+                self.scored.sort_unstable_by(by_score);
             }
             let score_of = |lamp: Option<u32>| lamp.and_then(|lamp| self.scored.iter().find(|lit| lit.lamp == lamp)).map_or(0.0, |lit| lit.score);
             mover.primary = hold_primary(mover.primary, self.scored.first().map(|lit| (lit.lamp, lit.score)), score_of(mover.primary.lamp), dt);
@@ -575,7 +595,11 @@ pub(super) fn pick_mover_tiles(
     shown: Option<Res<ShownScene>>,
     bindposes: Res<Assets<SkinnedMeshInverseBindposes>>,
     cameras: Query<(&Transform, &Projection, &Camera), With<SceneView>>,
-    lamps: Query<(&Transform, &Placed, &InheritedVisibility), With<Lamp>>,
+    (lamps, changed_lamps, mut gone_lamps): (
+        Query<(Entity, &Transform, &Placed, &InheritedVisibility), With<Lamp>>,
+        Query<(), (With<Lamp>, Or<(Changed<Transform>, Changed<Placed>)>)>,
+        RemovedComponents<Lamp>,
+    ),
     meshes: Query<
         (Entity, Option<&ChildOf>, &Mesh3d, &Aabb, &GlobalTransform, &RenderLayers, Option<&Visibility>, Option<&StillProp>, Option<&SkinnedMesh>, Option<&BaseModel>),
         Or<(With<FollowActor>, With<FollowBone>)>,
@@ -590,6 +614,19 @@ pub(super) fn pick_mover_tiles(
         base.and_then(|base| base.0).or(own).unwrap_or(entity)
     };
     let state = &mut *state;
+    // Before any early return, since the change ticks and the removals are only seen at this run.
+    if gone_lamps.read().count() > 0 || !changed_lamps.is_empty() {
+        state.lamps.clear();
+        state.lamp_entities.clear();
+        for (entity, at, placed, _) in &lamps {
+            state.lamp_entities.push(entity);
+            state.lamps.push(Lit { lamp: placed.number, at: at.translation, range: placed.range, strength: placed.strength, spot: placed.spot, score: 0.0 });
+        }
+        state.lamp_grid.build(&state.lamps);
+        state.lamps_made = state.lamps_made.wrapping_add(1);
+    }
+    state.shown.clear();
+    state.shown.extend(state.lamp_entities.iter().map(|&entity| lamps.get(entity).is_ok_and(|(.., seen)| seen.get())));
     std::mem::swap(&mut state.skins.last, &mut state.skins.now);
     state.skins.now.clear();
     if bindpose_events.read().count() > 0 {
@@ -613,16 +650,6 @@ pub(super) fn pick_mover_tiles(
     let casting = RenderLayers::from_layers(&[MOVER_LAYER, RESTING_PROP_LAYER]);
     let resting_layer = RenderLayers::layer(RESTING_PROP_LAYER);
     let casts = |layers: &RenderLayers, seen: Option<&Visibility>| layers.intersects(&casting) && seen != Some(&Visibility::Hidden);
-
-    state.lamps.clear();
-    state.lamps.extend(lamps.iter().filter(|(.., seen)| seen.get()).map(|(at, placed, _)| Lit {
-        lamp: placed.number,
-        at: at.translation,
-        range: placed.range,
-        strength: placed.strength,
-        spot: placed.spot,
-        score: 0.0,
-    }));
 
     state.bounds.clear();
     state.casting.clear();
@@ -702,10 +729,9 @@ mod tests {
         let lamps: Vec<Lit> = (0..200)
             .map(|number| Lit { lamp: number, at: Vec3::new(unit() * 9000.0 - 4500.0, unit() * 400.0, unit() * 9000.0 - 4500.0), range: 100.0 + unit() * 1500.0, strength: 1.0, spot: None, score: 0.0 })
             .collect();
-        let points: Vec<Vec3> = (0..300).map(|_| Vec3::new(unit() * 8192.0 - 4096.0, unit() * 400.0, unit() * 8192.0 - 4096.0)).collect();
-        let (low, high) = points.iter().fold((Vec3::MAX, Vec3::MIN), |(low, high), &point| (low.min(point), high.max(point)));
+        let points: Vec<Vec3> = (0..300).map(|_| Vec3::new(unit() * 16384.0 - 8192.0, unit() * 400.0, unit() * 16384.0 - 8192.0)).collect();
         let mut grid = LampGrid::default();
-        grid.build(&lamps, low, high);
+        grid.build(&lamps);
         for &point in &points {
             let near = grid.near(point);
             assert!(near.windows(2).all(|pair| pair[0] < pair[1]));
@@ -715,10 +741,9 @@ mod tests {
             }
         }
         let fewer = &lamps[..lamps.len() / 3];
-        let (low, high) = (low * 0.5, high * 0.5);
         let mut new_grid = LampGrid::default();
-        new_grid.build(fewer, low, high);
-        grid.build(fewer, low, high);
+        new_grid.build(fewer);
+        grid.build(fewer);
         for &point in &points {
             assert_eq!(grid.near(point), new_grid.near(point), "{point}");
         }
@@ -742,38 +767,40 @@ mod tests {
     }
 
     #[test]
-    fn a_lamp_left_out_by_the_movers_box_scores_nothing_at_any_of_them() {
-        let mut seed = 11u32;
-        let mut next = || {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 8) as f32 / 16_777_216.0
+    fn a_mover_scores_its_lamps_again_only_when_it_moves_or_the_lamps_change() {
+        let brute = |lamps: &[Lit], middle: Vec3| {
+            let mut scored: Vec<Lit> = lamps.iter().filter_map(|lamp| {
+                let score = lamp_score(lamp, middle);
+                (score > 0.0).then_some(Lit { score, ..*lamp })
+            }).collect();
+            scored.sort_unstable_by(by_score);
+            scored
         };
-        let (mut left_out, mut kept) = (0, 0);
-        for _ in 0..200 {
-            let centre = Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * 20000.0;
-            let middles: Vec<Vec3> = (0..8).map(|_| centre + Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * 3000.0).collect();
-            let (low, high) = middles.iter().fold((Vec3::MAX, Vec3::MIN), |(low, high), &middle| (low.min(middle), high.max(middle)));
-            for _ in 0..50 {
-                let at = centre + Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * 9000.0;
-                let spot = (next() < 0.5).then(|| (Vec3::new(next() - 0.5, -1.0, next() - 0.5).normalize(), next()));
-                let lit = Lit { range: 50.0 + next() * 3000.0, ..lamp(at, spot) };
-                if may_light(&lit, low, high) {
-                    kept += 1;
-                } else {
-                    left_out += 1;
-                    assert!(middles.iter().all(|&middle| lamp_score(&lit, middle) <= 0.0), "{lit:?} {low} {high}");
-                }
-            }
+        let lamps = (0..6).map(|number| Lit { lamp: number, at: Vec3::new(number as f32 * 300.0, 100.0, 0.0), range: 900.0, strength: 1.0, spot: None, score: 0.0 }).collect();
+        let mut state = PickState { lamps, shown: vec![true; 6], ..PickState::default() };
+        state.lamp_grid.build(&state.lamps);
+        let (still, moving) = (Entity::from_raw_u32(1).unwrap(), Entity::from_raw_u32(2).unwrap());
+        let place = |state: &mut PickState, mover: Entity, at: Vec3| {
+            state.bounds.insert(mover, Bounds { min: at - Vec3::splat(20.0), max: at + Vec3::splat(20.0), resting: false });
+        };
+        place(&mut state, still, Vec3::new(100.0, 0.0, 0.0));
+        place(&mut state, moving, Vec3::new(1200.0, 0.0, 0.0));
+        state.choose_lamps(Vec3::ZERO, 0.0, 0.016, None, MOST_EXTRAS);
+        let made = |state: &PickState, mover: Entity| state.movers[&mover].scored_for;
+        let still_made = made(&state, still);
+        place(&mut state, moving, Vec3::new(400.0, 0.0, 0.0));
+        state.choose_lamps(Vec3::ZERO, 0.016, 0.016, None, MOST_EXTRAS);
+        assert_eq!(made(&state, still), still_made);
+        let held = |state: &PickState, mover: Entity| state.movers[&mover].scored.iter().map(|&(_, lit)| lit).collect::<Vec<Lit>>();
+        assert_eq!(held(&state, moving), brute(&state.lamps, Vec3::new(400.0, 0.0, 0.0)));
+        state.lamps.truncate(2);
+        state.lamp_grid.build(&state.lamps);
+        state.lamps_made += 1;
+        state.choose_lamps(Vec3::ZERO, 0.032, 0.016, None, MOST_EXTRAS);
+        assert_ne!(made(&state, still), still_made);
+        for (mover, middle) in [(still, Vec3::new(100.0, 0.0, 0.0)), (moving, Vec3::new(400.0, 0.0, 0.0))] {
+            assert_eq!(held(&state, mover), brute(&state.lamps, middle));
         }
-        assert!(left_out > 0 && kept > 0, "{left_out} {kept}");
-    }
-
-    #[test]
-    fn a_lamp_just_out_of_reach_of_the_box_is_left_out_and_one_just_inside_is_kept() {
-        let (low, high) = (Vec3::new(-100.0, 0.0, -100.0), Vec3::new(100.0, 50.0, 100.0));
-        let inside = lamp(Vec3::new(1099.0, 20.0, 0.0), None);
-        assert!(may_light(&inside, low, high) && lamp_score(&inside, Vec3::new(100.0, 20.0, 0.0)) > 0.0);
-        assert!(!may_light(&lamp(Vec3::new(1200.0, 20.0, 0.0), None), low, high));
     }
 
     #[test]

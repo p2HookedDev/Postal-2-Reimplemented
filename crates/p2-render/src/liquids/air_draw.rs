@@ -5,6 +5,7 @@
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
 use bevy::camera::visibility::{NoFrustumCulling, Visibility};
+use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::message::MessageWriter;
 use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -18,11 +19,14 @@ use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin,
 use bevy::reflect::TypePath;
 use bevy::render::RenderApp;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError};
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::{Shader, ShaderRef};
 use bevy::time::Time;
+use bevy::transform::TransformSystems;
 use bevy::transform::components::Transform;
 use p2_bevy_assets::to_bevy;
 use p2_host::display::{MODERN_GPU_PARTICLES, MODERN_LIQUIDS, Settings};
+use p2_host::frame_times::{MeshWrite, mesh_written};
 use p2_math::Vector;
 use p2_vm::FluidType;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -36,6 +40,7 @@ use crate::frame_facts::FrameFacts;
 use crate::glow_lights::GlowLights;
 use crate::level_collision::LevelCollision;
 use crate::particle_draw::light::{ActorLight, ParticleLights};
+use crate::particle_draw::sprites::{grid_capacity, sprite_grid, upload_records};
 use crate::particle_draw::{ParticleDrawSystems, draw_particles};
 use crate::particle_frame::{DrawnActor, DrawnParticles, Liquid, LiquidRole, Pour};
 use crate::screen_pass::modern_level;
@@ -44,6 +49,9 @@ use crate::sun_levels::SunLevelAtlas;
 
 const RIBBON_SHADER: Handle<Shader> = uuid_handle!("b2d84f61-7a3e-4c95-8e10-5f6c29a1d7e3");
 const DROPS_SHADER: Handle<Shader> = uuid_handle!("4c7e1a92-d35b-4f08-a6e2-91b0c84f3d56");
+const AIR_DROPS: Handle<ShaderBuffer> = uuid_handle!("e5a1c3d7-2b94-4f60-8d1e-7c3f95a0b2e8");
+/// `DropRecord` in `liquid_drops.wesl`; the first record is a header holding the count in word 3.
+const DROP_WORDS: usize = 16;
 /// `sun_levels.wesl` reads the material's bindings 5 and 6.
 const PARTICLE_LEVELS: &str = "P2_PARTICLE_LEVELS";
 /// A wound's drops for each particle its emitter spawns, and their speed between beats against the systole's.
@@ -96,12 +104,17 @@ impl Plugin for AirLiquidsPlugin {
                 (DROPS_SHADER, shader_file("liquid_drops.wesl")),
             ],
         );
+        let drops = ShaderBuffer::new(vec![[0u32; DROP_WORDS]], RenderAssetUsages::default());
+        if let Err(error) = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().insert(AIR_DROPS.id(), drops) {
+            bevy::log::error!("liquid drop buffer: {error}");
+        }
         app.add_plugins(MaterialPlugin::<LiquidAirMaterial>::default());
         app.init_resource::<AirLiquids>().add_systems(
             PostUpdate,
             (follow_air_lights.run_if(resource_exists::<FrameLights>).run_if(resource_exists::<GlowLights>), fly_liquids)
                 .chain()
                 .after(draw_particles)
+                .before(TransformSystems::Propagate)
                 .in_set(ParticleDrawSystems),
         );
     }
@@ -126,6 +139,8 @@ pub struct LiquidAirMaterial {
     #[texture(13)]
     #[sampler(14)]
     puke_splat: Option<Handle<Image>>,
+    #[storage(15, read_only)]
+    drops: Handle<ShaderBuffer>,
     pass: AirPass,
 }
 
@@ -163,14 +178,18 @@ impl Material for LiquidAirMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
-        descriptor.vertex.buffers = vec![layout.0.get_layout(&[
+        // The drops' mesh is a grid of quad and corner numbers; the shader reads each drop from its record.
+        let grid = [Mesh::ATTRIBUTE_POSITION.at_shader_location(0)];
+        let vertices = [
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
             Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
             Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
             Mesh::ATTRIBUTE_TANGENT.at_shader_location(3),
             Mesh::ATTRIBUTE_COLOR.at_shader_location(4),
             ATTRIBUTE_AXIS.at_shader_location(5),
-        ])?];
+        ];
+        let attributes: &[_] = if key.bind_group_data == AirPass::Drops { &grid } else { &vertices };
+        descriptor.vertex.buffers = vec![layout.0.get_layout(attributes)?];
         descriptor.vertex.shader_defs.push(PARTICLE_LEVELS.into());
         if key.bind_group_data == AirPass::Ribbon {
             descriptor.vertex.shader = RIBBON_SHADER;
@@ -230,14 +249,6 @@ impl AirMesh {
         self.axes.push(axis.to_array());
     }
 
-    fn quad(&mut self, center: Vec3, way: Vec3, light: Vec3, look: [f32; 4], seed: f32) {
-        let first = self.vertex_count();
-        for corner in [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
-            self.vertex(center, way, corner, light.extend(seed), look, Vec4::ZERO);
-        }
-        self.indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
-    }
-
     fn into_mesh(self) -> Option<Mesh> {
         (!self.indices.is_empty()).then(|| {
             Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -250,6 +261,16 @@ impl AirMesh {
                 .with_inserted_indices(Indices::U32(self.indices))
         })
     }
+}
+
+fn drop_record(center: Vec3, way: Vec3, light: Vec3, look: [f32; 4], seed: f32) -> [u32; DROP_WORDS] {
+    let mut record = [0; DROP_WORDS];
+    record[0..3].copy_from_slice(&center.to_array().map(f32::to_bits));
+    record[4..7].copy_from_slice(&way.to_array().map(f32::to_bits));
+    record[7] = seed.to_bits();
+    record[8..11].copy_from_slice(&light.to_array().map(f32::to_bits));
+    record[12..16].copy_from_slice(&look.map(f32::to_bits));
+    record
 }
 
 struct Source {
@@ -325,9 +346,10 @@ struct AirInputs<'w> {
 struct AirAssets<'w, 's> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<LiquidAirMaterial>>,
+    buffers: ResMut<'w, Assets<ShaderBuffer>>,
     atlas: Option<Res<'w, SunLevelAtlas>>,
     textures: Res<'w, LiquidTextures>,
-    drawn: Query<'w, 's, (&'static mut Visibility, &'static Mesh3d, &'static MeshMaterial3d<LiquidAirMaterial>, &'static AirPass)>,
+    drawn: Query<'w, 's, (&'static mut Visibility, &'static Mesh3d, &'static MeshMaterial3d<LiquidAirMaterial>, &'static mut Transform, &'static AirPass)>,
 }
 
 /// One frame of a feeder's pour: where it starts and its aim, in Bevy coordinates from the world's origin.
@@ -353,7 +375,7 @@ fn fly_liquids(
     let Some(drawn) = inputs.drawn.as_deref().filter(|_| level > 0 && inputs.facts.in_play) else {
         air.drops.list.clear();
         show_mesh(&mut assets, &mut commands, AirPass::Ribbon, AirMesh::default());
-        show_mesh(&mut assets, &mut commands, AirPass::Drops, AirMesh::default());
+        show_drops(&mut assets, &mut commands, &mut [[0; DROP_WORDS]]);
         return;
     };
     if air.level != drawn.level {
@@ -384,18 +406,18 @@ fn fly_liquids(
     for landing in landed {
         landings.write(landing);
     }
-    let mut beads = AirMesh::default();
+    let mut beads = vec![[0; DROP_WORDS]];
     for drop in &air.drops.list {
         let light = air.sources.get(&drop.source).map_or(Vec3::ONE, |source| source.shown);
         // The seed must stay with the drop for its life, or its ragged edge shimmers.
         let seed = (drop.radius * 7919.0 * 0.618_034).fract();
-        beads.quad(drop.at, drop.velocity * SHUTTER, light, Shape::Fall.look(drop.radius, drop.kind, 0.0), seed);
+        beads.push(drop_record(drop.at, drop.velocity * SHUTTER, light, Shape::Fall.look(drop.radius, drop.kind, 0.0), seed));
     }
     for actor in drawn.actors.iter().filter(|actor| actor.drawn) {
         script_drops(actor, origin, seconds, &air.sources, &mut beads);
     }
     show_mesh(&mut assets, &mut commands, AirPass::Ribbon, ribbons);
-    show_mesh(&mut assets, &mut commands, AirPass::Drops, beads);
+    show_drops(&mut assets, &mut commands, &mut beads);
 }
 
 fn pour_feeder(air: &mut AirLiquids, pouring: &Pouring, hit: &impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>, ribbons: &mut AirMesh, chunks: &mut Vec<PieceBirth>) {
@@ -477,7 +499,7 @@ fn aimed(from: Vec3, velocity: Vec3, gravity: Vec3, hit: &impl Fn(Vec3, Vec3) ->
 /// The scripts' splash droplets and a pour's droplet sprites, drawn as drops where the scripts move them: a splash's
 /// first emitter (a later one is a ripple lying on the ground) and a pour's emitters after its stream, but for
 /// gasoline's, whose are the pour's own blobs.
-fn script_drops(actor: &DrawnActor, origin: Vec3, seconds: f32, sources: &FxHashMap<u64, Source>, beads: &mut AirMesh) {
+fn script_drops(actor: &DrawnActor, origin: Vec3, seconds: f32, sources: &FxHashMap<u64, Source>, beads: &mut Vec<[u32; DROP_WORDS]>) {
     let Some(liquid) = actor.liquid else { return };
     let emitters = match liquid.role {
         LiquidRole::Splash => &actor.emitters[..actor.emitters.len().min(1)],
@@ -491,17 +513,16 @@ fn script_drops(actor: &DrawnActor, origin: Vec3, seconds: f32, sources: &FxHash
         let [least, most] = if liquid.kind == FluidType::Blood { SPRITE_RADII } else { OTHER_SPRITE_RADII };
         let radius = (sprite.size[0] * SPRITE_RADIUS).clamp(least, most);
         let seed = (sprite.serial as f32 * 0.618_034).fract();
-        beads.quad(at + origin, moved, light, Shape::Fall.look(radius, liquid.kind, 0.0), seed);
+        beads.push(drop_record(at + origin, moved, light, Shape::Fall.look(radius, liquid.kind, 0.0), seed));
     }
 }
 
 fn show_mesh(assets: &mut AirAssets, commands: &mut Commands, pass: AirPass, mesh: AirMesh) {
     let levels = assets.atlas.as_deref().and_then(|atlas| atlas.image.clone());
     let built = mesh.into_mesh();
-    let Some((mut visibility, shown, material, _)) = assets.drawn.iter_mut().find(|(.., drawn)| **drawn == pass) else {
+    let Some((mut visibility, shown, material, ..)) = assets.drawn.iter_mut().find(|(.., drawn)| **drawn == pass) else {
         if let Some(built) = built {
-            let (puke_pour, puke_splat) = (assets.textures.puke_pour.clone(), assets.textures.puke_splat.clone());
-            let material = assets.materials.add(LiquidAirMaterial { sun_levels: levels, puke_pour, puke_splat, pass });
+            let material = air_material(&mut assets.materials, &assets.textures, levels, pass);
             commands.spawn((Mesh3d(assets.meshes.add(built)), MeshMaterial3d(material), Transform::IDENTITY, NoFrustumCulling, pass));
         }
         return;
@@ -514,8 +535,53 @@ fn show_mesh(assets: &mut AirAssets, commands: &mut Commands, pass: AirPass, mes
     if let Err(error) = assets.meshes.insert(shown.0.id(), built) {
         bevy::log::error!("liquid mesh: {error}");
     }
-    let textures = &assets.textures;
-    if let Some(mut material) = assets.materials.get_mut(material.0.id())
+    mesh_written(MeshWrite::AirLiquid);
+    follow_textures(&mut assets.materials, &assets.textures, levels, &material.0);
+}
+
+/// Uploads the drops' records, header first, and draws them over a grid of quads that is only rebuilt when it grows.
+fn show_drops(assets: &mut AirAssets, commands: &mut Commands, records: &mut [[u32; DROP_WORDS]]) {
+    let levels = assets.atlas.as_deref().and_then(|atlas| atlas.image.clone());
+    let [header, drops @ ..] = records else { return };
+    let centre = |record: &[u32; DROP_WORDS]| Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));
+    let bounds = drops.iter().map(centre).fold(None, |bounds: Option<(Vec3, Vec3)>, at| Some(bounds.map_or((at, at), |(min, max)| (min.min(at), max.max(at)))));
+    let count = drops.len();
+    let found = assets.drawn.iter_mut().find(|(.., drawn)| **drawn == AirPass::Drops);
+    let Some((min, max)) = bounds else {
+        if let Some((mut visibility, ..)) = found {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+        return;
+    };
+    header[3] = u32::try_from(count).unwrap_or(u32::MAX);
+    upload_records(&mut assets.buffers, &AIR_DROPS, records);
+    // A transparent mesh sorts by its bounds' centre: the grid's sits at its transform, the middle of the drops.
+    let place = Transform::from_translation((min + max) / 2.0);
+    let Some((mut visibility, shown, material, mut transform, _)) = found else {
+        let material = air_material(&mut assets.materials, &assets.textures, levels, AirPass::Drops);
+        commands.spawn((Mesh3d(assets.meshes.add(sprite_grid(grid_capacity(0, count)))), MeshMaterial3d(material), place, NoFrustumCulling, AirPass::Drops));
+        mesh_written(MeshWrite::AirLiquid);
+        return;
+    };
+    visibility.set_if_neq(Visibility::Inherited);
+    transform.set_if_neq(place);
+    let quads = assets.meshes.get(&shown.0).map_or(0, |grid| grid.count_vertices() as u32 / 4);
+    if grid_capacity(quads, count) != quads
+        && let Some(mut grid) = assets.meshes.get_mut(&shown.0)
+    {
+        *grid = sprite_grid(grid_capacity(quads, count));
+        mesh_written(MeshWrite::AirLiquid);
+    }
+    follow_textures(&mut assets.materials, &assets.textures, levels, &material.0);
+}
+
+fn air_material(materials: &mut Assets<LiquidAirMaterial>, textures: &LiquidTextures, sun_levels: Option<Handle<Image>>, pass: AirPass) -> Handle<LiquidAirMaterial> {
+    let (puke_pour, puke_splat) = (textures.puke_pour.clone(), textures.puke_splat.clone());
+    materials.add(LiquidAirMaterial { sun_levels, puke_pour, puke_splat, drops: AIR_DROPS, pass })
+}
+
+fn follow_textures(materials: &mut Assets<LiquidAirMaterial>, textures: &LiquidTextures, levels: Option<Handle<Image>>, material: &Handle<LiquidAirMaterial>) {
+    if let Some(mut material) = materials.get_mut(material)
         && (material.sun_levels != levels || material.puke_pour != textures.puke_pour || material.puke_splat != textures.puke_splat)
     {
         material.sun_levels = levels;
@@ -553,10 +619,10 @@ mod tests {
         assert!(points.len() > 2 && points.len() <= AIMED_POINTS + 1);
         let last = points[points.len() - 1];
         assert!(last.y.abs() < 1e-4 && last.x > 0.0, "{last}");
-        let mut quads = AirMesh::default();
-        quads.quad(Vec3::ZERO, Vec3::Y, Vec3::ONE, Shape::Fall.look(1.0, FluidType::Urine, 0.0), 0.25);
-        assert_eq!((quads.vertex_count(), quads.indices.len()), (4, 6));
-        assert_eq!((quads.lights[0], quads.axes[0]), ([1.0, 1.0, 1.0, 0.25], [0.0; 4]));
-        assert!(quads.into_mesh().is_some() && AirMesh::default().into_mesh().is_none());
+        let record = drop_record(Vec3::X, Vec3::Y, Vec3::ONE, Shape::Fall.look(1.0, FluidType::Urine, 0.0), 0.25);
+        let floats = record.map(f32::from_bits);
+        assert_eq!(floats[0..8], [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25]);
+        assert_eq!(floats[8..16], [1.0, 1.0, 1.0, 0.0, 1.0, f32::from(FluidType::Urine as u8), f32::from(Shape::Fall as u8), 0.0]);
+        assert!(AirMesh::default().into_mesh().is_none());
     }
 }

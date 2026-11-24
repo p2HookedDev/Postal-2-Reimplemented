@@ -8,17 +8,20 @@ use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::asset::{Asset, AssetEvent, AssetEventSystems, AssetId, Assets};
 use bevy::camera::{Camera, Camera3d, CameraOutputMode, ClearColorConfig};
 use bevy::camera::Hdr;
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::visibility::{RenderLayers, VisibilitySystems};
 use bevy::color::{Color, LinearRgba};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, Mut, Or, Query, Ref, Res, ResMut, SystemSet, With, Without};
 use bevy::ecs::message::{MessageCursor, Messages};
-use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleCleanupPolicy};
 use bevy::ecs::schedule::common_conditions::{resource_changed, resource_exists_and_changed};
 use bevy::ecs::world::EntityWorldMut;
-use bevy::light::{AmbientLight, CascadeShadowConfig, CascadeShadowConfigBuilder, Cascades, DirectionalLight, DirectionalLightShadowMap, ShadowFilteringMethod, SimulationLightSystems};
+use bevy::light::{
+    AmbientLight, CascadeShadowConfig, CascadeShadowConfigBuilder, Cascades, DirectionalLight, DirectionalLightShadowMap, ShadowFilteringMethod, SimulationLightSystems,
+    check_dir_light_mesh_visibility,
+};
 use bevy::log::info;
 use bevy::material::AlphaMode;
 use bevy::math::{Quat, Vec3};
@@ -26,6 +29,7 @@ use bevy::mesh::Mesh3d;
 use bevy::pbr::{ContactShadows, ExtendedMaterial, MaterialExtension, MeshMaterial3d, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, StandardMaterial};
 use bevy::render::occlusion_culling::OcclusionCulling;
 use bevy::time::Time;
+use bevy::transform::TransformSystems;
 use bevy::transform::components::Transform;
 use p2_math::Vector;
 use p2_render_cpu::MeshLight;
@@ -37,7 +41,7 @@ use p2_host::display::{
 };
 use crate::material_class::level_bits;
 use crate::level_collision::LevelCollision;
-use crate::view::NoSunCast;
+use crate::view::{NoSunCast, OverlayCamera};
 use crate::tone::ToneCamera;
 use crate::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step};
 use crate::blended::{OpaqueDecals, TerrainLayerMaterial};
@@ -64,6 +68,8 @@ impl Plugin for ModernGraphicsPlugin {
         app.add_plugins(crate::lamps::LampsPlugin);
         app.add_plugins(crate::probes::ProbesPlugin);
         app.add_plugins(SunCachePlugin);
+        // With the overlay light below: an overlay that sees a shadowed sun needs its cascades shared, or Bevy panics.
+        app.add_plugins(crate::overlay_sun::OverlaySunPlugin);
         app.add_systems(Update, crate::lamps::set_load_light_levels.run_if(resource_exists_and_changed::<Settings>));
         app.add_systems(
             Update,
@@ -72,6 +78,7 @@ impl Plugin for ModernGraphicsPlugin {
                 (follow_map_lights, sun_shadows, follow_sun).chain(),
                 view_ambient.after(crate::probes::follow_probes),
                 (watch_props, sun_casters).chain(),
+                overlay_light.after(apply).after(sun_shadows).after(view_ambient),
             )
                 .in_set(ModernGraphicsSystems::Apply),
         );
@@ -91,6 +98,22 @@ impl Plugin for ModernGraphicsPlugin {
             )
                 .before(AssetEventSystems),
         );
+    }
+
+    // In cleanup: Bevy's light plugin has added the system this replaces, and removing a system sets up the whole schedule.
+    fn cleanup(&self, app: &mut App) {
+        if app.remove_systems_in_set(PostUpdate, check_dir_light_mesh_visibility, ScheduleCleanupPolicy::RemoveSystemsOnly).is_ok_and(|removed| removed > 0) {
+            app.add_systems(
+                PostUpdate,
+                sun_sight::see_sun_casters
+                    .in_set(SimulationLightSystems::CheckLightVisibility)
+                    .after(VisibilitySystems::CalculateBounds)
+                    .after(TransformSystems::Propagate)
+                    .after(SimulationLightSystems::UpdateLightFrusta)
+                    .after(VisibilitySystems::CheckVisibility)
+                    .before(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible),
+            );
+        }
     }
 }
 
@@ -537,11 +560,33 @@ fn sun_shadows(
     }
 }
 
-/// Only the scene camera shares a layer with the sun, so the other cameras' cascades would be culled for nothing.
+/// The overlays borrow the scene camera's cascades in the render world, so only the scene camera keeps its own.
 fn sun_view_cascades(mut suns: Query<&mut Cascades, With<SunShadow>>, views: Query<(), With<SceneView>>) {
     for mut cascades in &mut suns {
         if cascades.cascades.keys().any(|&camera| !views.contains(camera)) {
             cascades.cascades.retain(|&camera, _| views.contains(camera));
+        }
+    }
+}
+
+/// The overlay cameras (the weapon, the foot) light their actors as the scene camera does. They see the sun only while
+/// at most one sun casts, as they borrow its cascades from the scene camera.
+fn overlay_light(
+    settings: Res<Settings>,
+    suns: Query<&DirectionalLight>,
+    scenes: Query<(&AmbientLight, Option<&ShadowFilteringMethod>), (With<SceneView>, Without<OverlayCamera>)>,
+    mut overlays: Query<(&mut RenderLayers, &mut AmbientLight, &mut ShadowFilteringMethod), (With<OverlayCamera>, Without<SceneView>)>,
+) {
+    let scene = scenes.single().ok();
+    // Two shadowed suns would not line up in the one shared cascade texture (`overlay_sun.rs`).
+    let sees_sun = scene.is_some() && settings.modern_graphics() && suns.iter().filter(|sun| sun.shadow_maps_enabled).count() <= 1;
+    for (mut layers, mut own_ambient, mut own_filter) in &mut overlays {
+        let wanted = if sees_sun { layers.clone().with(SUN_VIEW_LAYER) } else { layers.clone().without(SUN_VIEW_LAYER) };
+        layers.set_if_neq(wanted);
+        let Some((ambient, filter)) = scene else { continue };
+        own_filter.set_if_neq(filter.copied().unwrap_or_default());
+        if own_ambient.color != ambient.color || own_ambient.brightness != ambient.brightness {
+            *own_ambient = ambient.clone();
         }
     }
 }
@@ -680,6 +725,8 @@ fn caster_layers(layers: &RenderLayers, casts: bool, mover: bool) -> RenderLayer
     let tagged = on_layer(on_layer(layers.clone(), CASTER_LAYER, casts), MOVER_LAYER, casts && mover);
     on_layer(tagged, STATIC_CASTER_LAYER, casts && !mover)
 }
+
+mod sun_sight;
 
 #[cfg(test)]
 mod tests;

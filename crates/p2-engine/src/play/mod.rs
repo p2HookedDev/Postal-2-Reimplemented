@@ -50,6 +50,7 @@ use p2_render::view::{MoversSeen, ShadowOnly};
 use p2_host::frame_times::{FrameTimes, VmProfile, end_frame};
 
 pub(crate) mod photo;
+mod reveal;
 mod vm_thread;
 mod world;
 mod sound;
@@ -125,6 +126,7 @@ impl Plugin for PlayPlugin {
                     .before(sound::SoundSystems::Mix),
             )
             .add_systems(Update, photo::request_screenshot.after(hand_off).in_set(PlaySystems::Tick))
+            .add_systems(Update, reveal::release_reveal.before(PlaySystems::Tick))
             // The renderer copies a changed asset only in the frame its change event is sent; unordered, that ran
             // before the particle meshes were rewritten on some frames, and those frames showed the previous ones.
             .configure_sets(PostUpdate, PlaySystems::Present.before(AssetEventSystems).before(TransformSystems::Propagate));
@@ -400,7 +402,16 @@ fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<Pl
     let (threaded, canvas) = (play.threaded, play.canvas);
     let play = &mut *play;
     let Some(world) = play.world.as_mut() else { return };
-    if !world.wait(VmWait::Look) {
+    let held = world.holding();
+    if held || !world.wait(VmWait::Look) {
+        // The time behind the load screen is not game time, and what was pressed there is not play: the first tick after
+        // it is an ordinary step. A release still goes through, so a key held across the load is not left down.
+        if held {
+            play.waited = 0.0;
+            play.backlog.mouse = [0.0; 2];
+            play.backlog.typed.clear();
+            play.backlog.key_events.retain(|&(_, pressed)| !pressed);
+        }
         world.changed.clear();
         world.frame.step = 0.0;
         world.fresh = false;

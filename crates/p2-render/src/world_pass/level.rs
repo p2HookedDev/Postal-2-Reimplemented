@@ -2,6 +2,7 @@
 //! copied into its tile of our atlas. The record row follows the levels every frame.
 
 use super::*;
+use super::cull::cull_world;
 use super::draw::{draw_bucket, material_group};
 use super::queue::{shadow_pipelines, with_buckets};
 use bevy::camera::Exposure;
@@ -190,7 +191,13 @@ fn level_view(record: &SunLevelRecord, size: u32, camera: Option<&ExtractedView>
     }
 }
 
-pub(super) fn draw_level(_view: ViewQuery<Entity, With<WorldCamera>>, sources: LevelSources, mut context: RenderContext) {
+/// One system, so the cull and the level that reads its draws share one command buffer at the frame's submit.
+pub(super) fn cull_and_draw_level(_view: ViewQuery<Entity, With<WorldCamera>>, sources: LevelSources, mut context: RenderContext) {
+    cull_world(&sources.pass, &sources.cache, &mut context);
+    draw_level(sources, &mut context);
+}
+
+fn draw_level(sources: LevelSources, context: &mut RenderContext<'_, '_>) {
     let LevelSources { pass, frame, atlas, props, images, meshes, allocator, materials, cache, device, queue, bindings, mut state } = sources;
     let (Some(frame), Some(atlas)) = (frame, atlas) else { return };
     let (Some(image), Some((layout, format))) = (&atlas.image, atlas.made) else { return };

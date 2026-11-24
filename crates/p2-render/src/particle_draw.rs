@@ -17,7 +17,7 @@ use p2_particles::{EmitterKind, StripPoint};
 use rustc_hash::FxHashMap;
 
 use super::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook};
-use super::particle_material::{ParticleMaterial, RECORD_WORDS, SharedParticleKey, sprite_light};
+use super::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS, SharedParticleKey, sprite_light};
 use super::translucent_order::TranslucentDraw;
 use crate::components::OverlaySlot;
 use crate::fire_volume::VolumeFires;
@@ -30,7 +30,7 @@ use bounds::apply_bounds;
 use fire::is_fire;
 use light::{ActorLight, ParticleLights};
 use mesh_particles::{MeshPool, PoolMaterialKey, PoolSlot};
-use sprites::{MIN_QUADS, SpriteGrid, grid_capacity, sprite_box, sprite_grid, upload_sprites, write_sprite_records};
+use sprites::{MIN_QUADS, SpriteGrid, grid_capacity, sprite_box, sprite_grid, upload_records, write_sprite_records};
 use strips::{empty_quads, fill_beams, fill_smooth_strip, fill_strip};
 
 pub mod bounds;
@@ -138,7 +138,7 @@ pub fn draw_particles(
         apply_bounds(&mut writes, actor, changed);
     }
     if !records.is_empty() && let Some(buffers) = assets.sprite_buffers.as_deref_mut() {
-        upload_sprites(buffers, &records);
+        upload_records(buffers, &PARTICLE_SPRITES, &records);
     }
     draws.records = records;
     times.add("particle drawing", started);

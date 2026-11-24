@@ -15,7 +15,7 @@ import package::p2_render::layer_bindings::post_lighting;
 import package::p2_render::modern::with_light;
 import package::p2_render::modern_base::{LUMINANCE, MODERN_ON, NO_RELIEF};
 import package::p2_render::relief::{relief_from, relief_shows};
-import package::p2_render::sun_shadow::{sun_found, sun_index};
+import package::p2_render::sun_shadow::{sun_found, sun_index, world_lookup};
 import package::p2_render::surface::{ModernLight, modern_light, pooled_surface_lit, retail_lit};
 import package::p2_render::sky_view::sky_true_position;
 @if(BINDLESS)
@@ -186,7 +186,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var dynamic = vec3(0.0);
     if modern {
         // Terrain has no material class and no darken case.
-        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false, pool);
+        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false, pool, world_lookup());
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
     }
     var color = vec3(0.0);

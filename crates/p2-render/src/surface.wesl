@@ -9,7 +9,7 @@ import package::p2_render::layer_bindings::lit_color;
 import package::p2_render::layer_types::ShaderLayers;
 import package::p2_render::modern::{Lit, allows_gloss, ambient_occlusion, classed_surface, modern_glass, surface_light, view_around, with_light};
 import package::p2_render::modern_base::LampLight;
-import package::p2_render::sun_shadow::{sun_faced, sun_seen_from, sun_visibility};
+import package::p2_render::sun_shadow::{ShadowLookup, sun_faced, sun_seen_from, sun_visibility};
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::lamp_shadow::lamp_light;
 @if(SCREEN_SHADOWS_ONLY)
@@ -41,6 +41,8 @@ struct ModernLight {
     lamps: LampLight,
     surface: vec3<f32>,
     pool: Pool,
+    // In display light, added to the ambient: a glowing weapon's AmbientGlow.
+    glow: vec3<f32>,
 }
 
 const POOL_REFLECTANCE: f32 = 0.02;
@@ -61,20 +63,20 @@ fn pooled_surface(surface: vec3<f32>, pool: Pool) -> vec3<f32> {
 
 // The sun sees `normal`, the lamps light `bumped`, or the liquid's surface where `pool` stands. The lamps' shadows read
 // `normal`, the one the prepass holds for the screen pass that casts them.
-fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool) -> ModernLight {
+fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool, lookup: ShadowLookup) -> ModernLight {
     let position = pbr_input.world_position.xyz;
 @if(SCREEN_SHADOWS_ONLY)
     let seen = sun_faced(sun, normal, screen_sun(in, pbr_input.frag_coord.xy));
 @else
-    let seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
+    let seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy, lookup);
     var standing = pool;
     if darken {
         standing = no_pool(normal);
     }
     let gloss = (allows_gloss(flag) || standing.wet > 0.0) && !darken;
     let surface = pooled_surface(classed_surface(flag, blend), standing);
-    let lamps = lamp_light(in, position, wet_normal(bumped, standing), normal, gloss, surface, flag);
-    return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface, standing);
+    let lamps = lamp_light(in, position, wet_normal(bumped, standing), normal, gloss, surface, flag, lookup);
+    return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface, standing, vec3(0.0));
 }
 
 // A darken surface takes the light alone, as it took the light map: `lit` is then the surface lit white.
@@ -98,7 +100,8 @@ fn shade_surface(incoming: ModernLight, layers: ShaderLayers, color: vec4<f32>, 
 // `modern_surface` with the pool's sheen on the highlight and the reflection, and the light it gives off.
 fn pooled_surface_lit(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, incoming: ModernLight) -> vec3<f32> {
     let display = to_display(color);
-    let around = view_around(normal, incoming.lamps, incoming.surface);
+    var around = view_around(normal, incoming.lamps, incoming.surface);
+    around.glow = incoming.glow;
     let lit = surface_light(display * display, position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, around);
     let shine = select(lit.shine, pool_shine(lit, incoming.pool), incoming.pool.wet > 0.0);
     return to_linear(sqrt(max(lit.matte + shine, vec3(0.0)))) + incoming.pool.glow;
@@ -112,7 +115,8 @@ fn pool_shine(lit: Lit, pool: Pool) -> vec3<f32> {
 // and a fire on it glows.
 fn pooled_unlit(color: vec3<f32>, normal: vec3<f32>, incoming: ModernLight) -> vec3<f32> {
     let display = to_display(color);
-    let around = view_around(normal, incoming.lamps, incoming.surface);
+    var around = view_around(normal, incoming.lamps, incoming.surface);
+    around.glow = incoming.glow;
     let lit = surface_light(display * display, incoming.position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, around);
     return to_linear(sqrt(display * display + pool_shine(lit, incoming.pool) * incoming.pool.wet)) + incoming.pool.glow;
 }

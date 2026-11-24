@@ -68,6 +68,37 @@ const ROOFED_SKY: f32 = 0.1;
 // The sun's cascade overlap, which also tells it from the fills when it draws no shadow map. Matches `modern.rs`.
 const SUN_OVERLAP: f32 = 0.1;
 
+// A world-lit overlay, the first-person weapon, is magnified many times: its soft edges reach at least this far, in
+// more taps, turned by a pattern fixed to the mesh.
+const HELD_EDGE_LEAST_TEXELS: f32 = 2.75;
+const HELD_EDGE_TAPS: i32 = 20;
+const GOLDEN_ANGLE: f32 = 2.3999632;
+
+// How a surface reads the shadows. `offset` scales its moves off the surface: 1 on the world, 0 on a world-lit
+// overlay, which casts into no map; that one takes `sky`, the open sky picked once for it, and turns its taps by `seed`.
+struct ShadowLookup {
+    offset: f32,
+    sky: f32,
+    seed: vec2<f32>,
+}
+
+fn world_lookup() -> ShadowLookup {
+    return ShadowLookup(1.0, 1.0, vec2(0.0));
+}
+
+fn held_lookup(lookup: ShadowLookup) -> bool {
+    return lookup.offset == 0.0;
+}
+
+fn disk_turn(seed: vec2<f32>) -> f32 {
+    return 6.2831853 * fract(52.9829189 * fract(dot(seed, vec2(0.06711056, 0.00583715))));
+}
+
+fn vogel_tap(tap: i32, count: i32, turn: f32) -> vec2<f32> {
+    let angle = f32(tap) * GOLDEN_ANGLE + turn;
+    return vec2(cos(angle), sin(angle)) * sqrt((f32(tap) + 0.5) / f32(count));
+}
+
 fn casts_shadow(i: u32) -> bool {
     return (lights.directional_lights[i].flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u;
 }
@@ -146,13 +177,13 @@ fn shadow_tap(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>, offset: vec
 }
 
 // Sharp on purpose: a rim that settles most pixels, then a 3 x 3 texel filter in four bilinear taps.
-fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, normal: vec3<f32>, sharp: bool) -> f32 {
+fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, normal: vec3<f32>, sharp: bool, lookup: ShadowLookup) -> f32 {
     let to_sun = shade.to_sun;
     let facing = dot(normal, to_sun);
     let tilt = min(sqrt(saturate(1.0 - facing * facing)) / max(facing, 0.1), 4.0);
     let texel_world = shade.texel_world;
     let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt);
-    let moved = vec4(position + normal * min(texel_world * SHADOW_NORMAL_OFFSET, SHADOW_NORMAL_OFFSET_MOST) + to_sun * margin, 1.0);
+    let moved = vec4(position + normal * (min(texel_world * SHADOW_NORMAL_OFFSET, SHADOW_NORMAL_OFFSET_MOST) * lookup.offset) + to_sun * (margin * lookup.offset), 1.0);
     var local = level_local(shade.record, moved);
     if !shade.level {
         local = shadows::world_to_directional_light_local(shade.sun, shade.cascade, moved);
@@ -168,10 +199,12 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
     let cap = SHADOW_SLOPE_CAP_TEXELS * texel_world * length(along_z) / texel;
     let depth_step = max(dot(normal, along_z) / dot(along_z, along_z), 1e-6);
     let slope = clamp(vec2(-2.0, 2.0) * vec2(dot(normal, along_x) / dot(along_x, along_x), dot(normal, along_y) / dot(along_y, along_y)) / depth_step, vec2(-cap), vec2(cap));
-    if !sharp {
+    let held = held_lookup(lookup);
+    if !sharp && !held {
         return shadow_tap(atlas, shade, local.xy, vec2(0.0), local.z, slope);
     }
-    let radius = clamp(SOFT_EDGE_UNITS / texel_world, SOFT_EDGE_LEAST_TEXELS, SOFT_EDGE_MOST_TEXELS) * texel;
+    let least = select(SOFT_EDGE_LEAST_TEXELS, HELD_EDGE_LEAST_TEXELS, held);
+    let radius = clamp(SOFT_EDGE_UNITS / texel_world, least, SOFT_EDGE_MOST_TEXELS) * texel;
     let rim = radius + texel;
     let settled = shadow_tap(atlas, shade, local.xy, vec2(0.0), local.z, slope)
         + shadow_tap(atlas, shade, local.xy, vec2(rim, 0.0), local.z, slope)
@@ -184,10 +217,18 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
     if settled > 5.0 - 1e-3 {
         return 1.0;
     }
+    if held {
+        let turn = disk_turn(lookup.seed);
+        var lit = 0.0;
+        for (var tap = 0; tap < HELD_EDGE_TAPS; tap++) {
+            lit += shadow_tap(atlas, shade, local.xy, vogel_tap(tap, HELD_EDGE_TAPS, turn) * radius, local.z, slope);
+        }
+        return lit / f32(HELD_EDGE_TAPS);
+    }
     // A disk of taps turned by a pattern fixed to the screen, so the edge is grain that stands still, not bands.
     let clip = view.clip_from_world * vec4(position, 1.0);
     let pixel = (clip.xy / clip.w * 0.5 + 0.5) * view.viewport.zw;
-    let turn = 6.2831853 * fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+    let turn = disk_turn(pixel);
     let spin = mat2x2<f32>(cos(turn), sin(turn), -sin(turn), cos(turn));
     var lit = 0.0;
     for (var tap = 0; tap < SOFT_EDGE_TAPS; tap++) {
@@ -198,7 +239,7 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
 
 // The finest level holding the point, fading into the next one near its edge. Past the last level there is no shadow.
 // Each level is tested with two rows of its matrix; only the chosen pair is read whole.
-fn static_sun_map(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>) -> f32 {
+fn static_sun_map(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: ShadowLookup) -> f32 {
     if !levels_read(sun) {
         return 1.0;
     }
@@ -243,28 +284,28 @@ fn static_sun_map(source: LevelSource, sun: u32, position: vec4<f32>, normal: ve
         if fade >= 1.0 {
             return 1.0;
         }
-        return mix(cascade_shadow(atlas, level_source(best_record), position.xyz, normal, sharp_filter()), 1.0, fade);
+        return mix(cascade_shadow(atlas, level_source(best_record), position.xyz, normal, sharp_filter(), lookup), 1.0, fade);
     }
-    let shadow = cascade_shadow(atlas, level_source(best_record), position.xyz, normal, sharp_filter());
+    let shadow = cascade_shadow(atlas, level_source(best_record), position.xyz, normal, sharp_filter(), lookup);
     if best_edge <= LEVEL_FADE_FROM {
         return shadow;
     }
     let next_record = level_record(atlas, next);
-    return mix(shadow, cascade_shadow(atlas, level_source(next_record), position.xyz, normal, sharp_filter()), (best_edge - LEVEL_FADE_FROM) / (LEVEL_USABLE - LEVEL_FADE_FROM));
+    return mix(shadow, cascade_shadow(atlas, level_source(next_record), position.xyz, normal, sharp_filter(), lookup), (best_edge - LEVEL_FADE_FROM) / (LEVEL_USABLE - LEVEL_FADE_FROM));
 }
 
-fn sun_map(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>) -> f32 {
+fn sun_map(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: ShadowLookup) -> f32 {
     if !casts_shadow(sun) {
         return 1.0;
     }
-    let world = static_sun_map(source, sun, position, normal);
+    let world = static_sun_map(source, sun, position, normal, lookup);
     if world <= 0.0 {
         return 0.0;
     }
-    return min(world, mover_sun_map(sun, position, normal));
+    return min(world, mover_sun_map(sun, position, normal, lookup));
 }
 
-fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>) -> f32 {
+fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: ShadowLookup) -> f32 {
     let light = &lights.directional_lights[sun];
     let view_z = view_z_of(position);
     let index = shadows::get_cascade_index(sun, view_z);
@@ -274,13 +315,13 @@ fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>) -> f32 {
     // The sun's own cascades read no level.
     let atlas = LevelAtlas();
     // Past the nearest cascade a shadow is small on screen: one filtered tap.
-    var shadow = cascade_shadow(atlas, cascade_source(sun, index), position.xyz, normal, index == 0u && sharp_filter());
+    var shadow = cascade_shadow(atlas, cascade_source(sun, index), position.xyz, normal, index == 0u && sharp_filter(), lookup);
     let next = index + 1u;
     if next < (*light).num_cascades {
         let far_bound = (*light).cascades[index].far_bound;
         let next_near = (1.0 - (*light).cascades_overlap_proportion) * far_bound;
         if -view_z >= next_near {
-            shadow = mix(shadow, cascade_shadow(atlas, cascade_source(sun, next), position.xyz, normal, false), (-view_z - next_near) / (far_bound - next_near));
+            shadow = mix(shadow, cascade_shadow(atlas, cascade_source(sun, next), position.xyz, normal, false, lookup), (-view_z - next_near) / (far_bound - next_near));
         }
     } else {
         let far_bound = (*light).cascades[index].far_bound;
@@ -338,16 +379,20 @@ fn sky_open(source: LevelSource, sun: u32, position: vec3<f32>, normal: vec3<f32
 
 // x the sun's direct share, contact shadow in. y the sun map alone. z the sky left by what stands above the point.
 fn sun_seen(source: LevelSource, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
-    return sun_seen_from(source, sun_index(), position, normal, frag_coord);
+    return sun_seen_from(source, sun_index(), position, normal, frag_coord, world_lookup());
 }
 
-fn sun_seen_from(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
-    return sun_faced(sun, normal, sun_held(source, sun, position, normal, frag_coord));
+fn sun_seen_from(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>, lookup: ShadowLookup) -> vec3<f32> {
+    return sun_faced(sun, normal, sun_held(source, sun, position, normal, frag_coord, lookup));
 }
 
 // `sun_seen_from` before its fades by how squarely the point faces the sun: what the screen pass holds for a pixel.
-fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
-    let open = mix(ROOFED_SKY, 1.0, sky_open(source, sun, position.xyz, normal));
+fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>, lookup: ShadowLookup) -> vec3<f32> {
+    var sky = lookup.sky;
+    if !held_lookup(lookup) {
+        sky = sky_open(source, sun, position.xyz, normal);
+    }
+    let open = mix(ROOFED_SKY, 1.0, sky);
     if sun >= lights.n_directional_lights {
         return vec3(0.0, 1.0, open);
     }
@@ -355,7 +400,7 @@ fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32
     if dot(normal, to_sun) <= 0.0 {
         return vec3(0.0, 1.0, open);
     }
-    let map = sun_map(source, sun, position, normal);
+    let map = sun_map(source, sun, position, normal, lookup);
     var direct = map;
     let contact = 1.0 - smoothstep(CONTACT_NEAR, CONTACT_FAR, distance(view.world_position.xyz, position.xyz));
     if direct > 0.0 && contact > 0.0 {
@@ -383,7 +428,7 @@ fn sun_map_visibility(source: LevelSource, sun: u32, world_position: vec4<f32>, 
     }
     let view_z = view_z_of(world_position);
     // The sun's cascades hold movers only; the static world is in the cached levels.
-    return min(static_sun_map(source, sun, world_position, normal), shadows::fetch_directional_shadow(sun, world_position, normal, view_z, frag_coord));
+    return min(static_sun_map(source, sun, world_position, normal, world_lookup()), shadows::fetch_directional_shadow(sun, world_position, normal, view_z, frag_coord));
 }
 
 fn contact_sun_index() -> u32 {

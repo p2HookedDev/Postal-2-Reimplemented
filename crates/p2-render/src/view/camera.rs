@@ -1,5 +1,9 @@
 use super::*;
 use bevy::math::Mat4;
+use bevy::camera::visibility::RenderLayers;
+use crate::components::{OVERLAY_LAYERS, SUN_VIEW_LAYER};
+use crate::overlay_route::overlay_routes;
+use bevy::camera::{CameraOutputMode, RenderTarget};
 
 /// The Bevy camera rotation of an Unreal view rotation (pitch, yaw, roll; 65536 a turn): Unreal looks
 /// along X with Z up and Y right, a Bevy camera along −Z with Y up and X right, Y and Z swapped.
@@ -53,24 +57,58 @@ impl Plugin for ViewCameraPlugin {
     }
 }
 
+/// The HUD draws the whole window, and the gamma ramp's image is not its target: it takes the last group only where the
+/// overlay camera would draw the same pixels to the same target.
+pub(super) fn hud_may_carry(overlay_target: &RenderTarget, viewport: Option<&Viewport>, hud_size: Option<UVec2>) -> bool {
+    !matches!(overlay_target, RenderTarget::Image(_)) && viewport.is_some_and(|v| v.physical_position == UVec2::ZERO && Some(v.physical_size) == hud_size)
+}
+
+/// Carrying a group, the HUD draws on the frame itself as an overlay camera does, so its actors blend against the world.
+fn set_hud_output(camera: &mut Mut<Camera>, routed: &[usize]) {
+    let carries = !routed.is_empty();
+    if matches!(camera.clear_color, ClearColorConfig::None) == carries {
+        return;
+    }
+    let (clear_color, output_mode) = if carries { (ClearColorConfig::None, CameraOutputMode::default()) } else { hud_alone() };
+    camera.clear_color = clear_color;
+    camera.output_mode = output_mode;
+}
+
+/// Each slot draws on its own camera after that slot's canvas layer; the last slot goes to the HUD's camera while it may.
+/// The carry hangs only on the slot count and the targets, so it holds from frame to frame.
 fn place_overlay_cameras(
     view: Res<MeshView>,
     hud: Res<HudView>,
     facts: Res<FrameFacts>,
     look: Res<crate::components::OverlayLook>,
     cameras: Query<&Transform, (With<SceneView>, Without<OverlayCamera>)>,
-    mut overlays: Query<(&mut Camera, &mut Transform, &mut Projection, &OverlayCamera), Without<SceneView>>,
+    mut overlays: Query<(&mut Camera, &mut Transform, &mut Projection, &mut RenderLayers, &OverlayCamera, &RenderTarget, Has<HudCamera>), Without<SceneView>>,
 ) {
     let viewport = view.bevy_viewport();
     let view_transform = look.0.or_else(|| cameras.iter().next().copied());
-    for (mut camera, mut transform, mut projection, OverlayCamera(slot)) in &mut overlays {
-        let fov = hud.overlays.get(*slot).copied();
-        view.set_fov(&mut projection, fov.filter(|&fov| fov > 0.0).unwrap_or(view.view_fov(&facts)));
-        set_camera(&mut camera, viewport.is_some() && fov.is_some(), viewport.as_ref());
-        if let Some(view) = view_transform
-            && *transform != view
+    let fov_of = |slot: usize| hud.overlays.get(slot).copied().filter(|&fov| fov > 0.0).unwrap_or(view.view_fov(&facts));
+    let shown = hud.overlays.len().min(OVERLAY_LAYERS.len());
+    let overlay_target = overlays.iter().find(|(.., is_hud)| !is_hud).map(|(.., target, _)| target.clone());
+    let hud_size = overlays.iter().find(|(.., is_hud)| *is_hud).and_then(|(camera, ..)| camera.physical_target_size());
+    let routes = overlay_routes(shown, overlay_target.is_some_and(|target| hud_may_carry(&target, viewport.as_ref(), hud_size)));
+    for (mut camera, mut transform, mut projection, mut layers, OverlayCamera(slot), _, is_hud) in &mut overlays {
+        let routed: Vec<usize> = (0..shown).filter(|&other| routes[other] == *slot).collect();
+        view.set_fov(&mut projection, routed.last().map_or(view.view_fov(&facts), |&last| fov_of(last)));
+        if is_hud {
+            set_hud_output(&mut camera, &routed);
+        } else {
+            set_camera(&mut camera, viewport.is_some() && !routed.is_empty(), viewport.as_ref());
+        }
+        let own = OVERLAY_LAYERS.get(*slot).map_or_else(RenderLayers::none, |&layer| RenderLayers::layer(layer));
+        let mut seen = routed.iter().filter_map(|&other| OVERLAY_LAYERS.get(other)).fold(own, |seen, &layer| seen.with(layer));
+        if layers.intersects(&RenderLayers::layer(SUN_VIEW_LAYER)) {
+            seen = seen.with(SUN_VIEW_LAYER);
+        }
+        layers.set_if_neq(seen);
+        if let Some(placed) = view_transform
+            && *transform != placed
         {
-            *transform = view;
+            *transform = placed;
         }
     }
 }
@@ -129,6 +167,41 @@ fn place_camera(
         let placed = Transform::from_matrix(Mat4::from_translation(eye) * Mat4::from_quat(turn.inverse()) * Mat4::from_translation(shown.origin - sky_eye));
         for mut transform in &mut sky_roots {
             transform.set_if_neq(placed);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::camera::ImageRenderTarget;
+    use bevy::ecs::world::World;
+
+    #[test]
+    fn the_hud_carries_only_where_the_overlay_would_draw_the_same_pixels() {
+        let size = UVec2::new(1920, 1080);
+        let full = Viewport { physical_size: size, ..Default::default() };
+        let window = RenderTarget::default();
+        assert!(hud_may_carry(&window, Some(&full), Some(size)));
+        let ramped = RenderTarget::Image(ImageRenderTarget { handle: Handle::default(), scale_factor: 1.0 });
+        assert!(!hud_may_carry(&ramped, Some(&full), Some(size)));
+        assert!(!hud_may_carry(&window, Some(&full), Some(UVec2::new(2560, 1080))));
+        assert!(!hud_may_carry(&window, Some(&Viewport { physical_position: UVec2::new(200, 0), ..full }), Some(size)));
+        assert!(!hud_may_carry(&window, None, Some(size)));
+    }
+
+    #[test]
+    fn the_hud_draws_on_the_frame_only_while_it_carries() {
+        let mut world = World::new();
+        let (clear_color, output_mode) = hud_alone();
+        let hud = world.spawn(Camera { clear_color, output_mode, ..Default::default() }).id();
+        for (routed, loads) in [(&[0usize][..], true), (&[], false)] {
+            if let Some(mut camera) = world.get_mut::<Camera>(hud) {
+                set_hud_output(&mut camera, routed);
+            }
+            let camera = world.get::<Camera>(hud).expect("spawned");
+            assert_eq!(matches!(camera.clear_color, ClearColorConfig::None), loads);
+            assert_eq!(matches!(camera.output_mode, CameraOutputMode::Write { blend_state: None, .. }), loads);
         }
     }
 }

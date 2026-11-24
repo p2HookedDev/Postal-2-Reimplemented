@@ -2,6 +2,7 @@ use std::sync::mpsc::TryRecvError;
 
 use p2_math::{Rotator, Vector};
 use super::*;
+use super::reveal::RevealHold;
 mod channel_glide;
 mod hand_off;
 mod sounds;
@@ -114,6 +115,7 @@ pub struct PlayWorld {
     pub(super) frame: VmFrame,
     pub(super) ready: Option<VmFrame>,
     pub(super) presented: bool,
+    pub(super) reveal: Option<RevealHold>,
     pub(super) spare: Option<VmFrame>,
     pub(super) actors: FxHashMap<ObjectId, ActorFrame>,
     pub(super) changed: FxHashSet<ObjectId>,
@@ -249,6 +251,7 @@ impl PlayWorld {
             frame: VmFrame::default(),
             ready: None,
             presented: false,
+            reveal: None,
             spare: None,
             actors: FxHashMap::default(),
             changed: FxHashSet::default(),

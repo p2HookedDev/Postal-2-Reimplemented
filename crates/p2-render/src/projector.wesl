@@ -104,7 +104,8 @@ fn cluster_ranges(pbr_input: PbrInput) -> ClusterableObjectIndexRanges {
 }
 
 // Where a pixel finds the decals over it: its screen tile's list in the lamp book (`decal_bins.wesl`), entries `start`
-// to `end` from texel `binned`, or with `binned` below 0 Bevy's cluster list between those offsets.
+// to `end` from texel `binned` with our liquid's decals before `start`, or with `binned` below 0 Bevy's cluster list
+// between those offsets.
 struct DecalList {
     book: Book,
     binned: i32,
@@ -115,6 +116,7 @@ struct DecalList {
 // Matches `decal_bins.wesl`.
 const BIN_HEAD_TEXELS: u32 = 4u;
 const BIN_LIST_TEXELS: u32 = 16u;
+const BIN_LISTED_SPAN: u32 = 64u;
 
 fn cluster_decals(book: Book, ranges: ClusterableObjectIndexRanges) -> DecalList {
 @if(SKY_VIEW) {
@@ -140,11 +142,28 @@ fn decal_list(in: VertexOutput, pbr_input: PbrInput, ranges: ClusterableObjectIn
     }
     let tile = vec2<u32>(pbr_input.frag_coord.xy / grid.y);
     let start = head + BIN_HEAD_TEXELS + (tile.y * u32(grid.x) + tile.x) * BIN_LIST_TEXELS;
-    let count = book_texel(book, start).x;
-    if count < 0.0 {
+    let counts = book_texel(book, start).x;
+    if counts < 0.0 {
         return clusters;
     }
-    return DecalList(book, i32(start), 0, i32(count));
+    let packed = u32(counts);
+    return DecalList(book, i32(start), i32(packed / BIN_LISTED_SPAN), i32(packed % BIN_LISTED_SPAN));
+}
+
+// All of `list`, our liquid's decals with the rest.
+fn whole_list(list: DecalList) -> DecalList {
+    if list.binned < 0 {
+        return list;
+    }
+    return DecalList(list.book, list.binned, 0, list.end);
+}
+
+// Of `list`, the part that holds our liquid's decals.
+fn liquid_list(list: DecalList) -> DecalList {
+    if list.binned < 0 {
+        return list;
+    }
+    return DecalList(list.book, list.binned, 0, list.start);
 }
 
 // The index in Bevy's decal buffer of the `at`th decal of `list`.
@@ -573,8 +592,9 @@ const PUKE_UNSOUGHT: i32 = -2;
 // The puke splat decal's texture index among the decals at `world`, or -1.
 @if(CLUSTERED_DECALS_ARE_USABLE)
 fn puke_splat_index(world: vec3<f32>, list: DecalList) -> i32 {
-    var walk = decal_walk(list, world);
-    while next_decal(&walk, list) {
+    let liquids = liquid_list(list);
+    var walk = decal_walk(liquids, world);
+    while next_decal(&walk, liquids) {
         if (walk.tag & (PROJECTOR | 0x7u | PUKE_SPLAT)) == (PROJECTOR | FB_LIQUID | PUKE_SPLAT) {
             return walk.metallic_roughness_texture_index;
         }
@@ -680,8 +700,9 @@ fn pool_at(pbr_input: PbrInput, list: DecalList, normal: vec3<f32>, receiver: u3
     // Sought only once puke is found here, as few places hold any.
     var puke = PUKE_UNSOUGHT;
     var splats = SplatSum(0.0, 0.0, 0.0, vec3(0.0));
-    var walk = decal_walk(list, world);
-    while next_pool_decal(&walk, list, true, on_floor) {
+    let whole = whole_list(list);
+    var walk = decal_walk(whole, world);
+    while next_pool_decal(&walk, whole, true, on_floor) {
         if (walk.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) {
             add_blood_splat(&splats, pbr_input, walk.tag, walk.base_color_texture_index, walk.decal, walk.uv, receiver);
             continue;

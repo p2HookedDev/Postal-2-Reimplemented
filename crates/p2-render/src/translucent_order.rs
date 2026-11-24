@@ -11,7 +11,7 @@ use bevy::ecs::prelude::{Changed, Component, Entity, Local, Query, RemovedCompon
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::{Quat, Vec3, Vec4};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
-use bevy::render::render_phase::{SortedPhaseItem, ViewSortedRenderPhases, sort_phase_system};
+use bevy::render::render_phase::{SortedPhaseItem, SortedRenderPhase, ViewSortedRenderPhases, sort_phase_system};
 use bevy::render::sync_world::MainEntity;
 use bevy::render::view::ExtractedView;
 use bevy::render::{Render, RenderApp, RenderSystems};
@@ -229,31 +229,59 @@ fn insert_at(list: &[Entry], eye: Vec3, center: Vec3, distance: f32) -> usize {
 
 type ItemKey = (Entity, MainEntity);
 
-fn engine_translucent_order(views: Query<&ExtractedView>, mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>, order: Res<TranslucentOrder>) {
+#[derive(Default)]
+struct Partition {
+    sky: Vec<(ItemKey, TransparentSortingInfo3d)>,
+    level: Vec<(ItemKey, TransparentSortingInfo3d)>,
+}
+
+fn engine_translucent_order(
+    views: Query<&ExtractedView>,
+    mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
+    order: Res<TranslucentOrder>,
+    mut partition: Local<Partition>,
+) {
     for view in &views {
         let Some(phase) = phases.get_mut(&view.retained_view_entity) else { continue };
-        let eye = view.world_from_view.translation();
         let ranks = order.ranks.get(&view.retained_view_entity.main_entity.id());
-        let (sky, level): (Vec<_>, Vec<_>) = phase.items.iter().map(|(&key, item)| (key, item.sorting_info)).partition(|(key, _)| order.sky.contains(&key.1.id()));
-        // As retail draws the sky's scene before the level's, from the sky's eye.
-        let sky = match order.sky_place {
-            Some((sky_eye, turn)) => engine_list(&order, sky, order.sky_ranks.as_ref(), sky_eye, |center| sky_eye + turn * (center - eye)),
-            None => engine_list(&order, sky, ranks, eye, |center| center),
-        };
-        let listed = sky.into_iter().chain(engine_list(&order, level, ranks, eye, |center| center));
-        let place: FxHashMap<ItemKey, usize> = listed.enumerate().map(|(place, key)| (key, place)).collect();
-        for (key, item) in phase.items.iter_mut() {
-            item.distance = place.get(key).copied().unwrap_or_default() as f32;
-        }
-        phase.items.sort_by_key(|_, item| item.sort_key());
+        order_phase(phase, &order, view.world_from_view.translation(), ranks, &mut partition);
     }
+}
+
+fn order_phase(
+    phase: &mut SortedRenderPhase<Transparent3d>,
+    order: &TranslucentOrder,
+    eye: Vec3,
+    ranks: Option<&FxHashMap<usize, usize>>,
+    partition: &mut Partition,
+) {
+    if phase.items.is_empty() {
+        return;
+    }
+    for (&key, item) in &phase.items {
+        let side = if order.sky.contains(&key.1.id()) { &mut partition.sky } else { &mut partition.level };
+        side.push((key, item.sorting_info));
+    }
+    // As retail draws the sky's scene before the level's, from the sky's eye.
+    let sky = match order.sky_place {
+        Some((sky_eye, turn)) => engine_list(order, partition.sky.drain(..), order.sky_ranks.as_ref(), sky_eye, |center| sky_eye + turn * (center - eye)),
+        None => engine_list(order, partition.sky.drain(..), ranks, eye, |center| center),
+    };
+    let listed = sky.into_iter().chain(engine_list(order, partition.level.drain(..), ranks, eye, |center| center));
+    // Every item lands in exactly one list, so each gets its place once.
+    for (place, key) in listed.enumerate() {
+        if let Some(item) = phase.items.get_mut(&key) {
+            item.distance = place as f32;
+        }
+    }
+    phase.items.sort_by_key(|_, item| item.sort_key());
 }
 
 /// Terrain layers first, then the BSP nodes back to front with each translucent actor where the engine inserts it, then
 /// what draws after the scene. `true_center` takes a drawn centre to where it is seen from `eye`.
 fn engine_list(
     known: &TranslucentOrder,
-    items: Vec<(ItemKey, TransparentSortingInfo3d)>,
+    items: impl IntoIterator<Item = (ItemKey, TransparentSortingInfo3d)>,
     ranks: Option<&FxHashMap<usize, usize>>,
     eye: Vec3,
     true_center: impl Fn(Vec3) -> Vec3,
@@ -319,5 +347,38 @@ mod tests {
         let wanted = WantedNodes::new(&model, FxHashSet::from_iter([0, 1]));
         assert_eq!(back_to_front(&model, [0.0, 0.0, -10.0], &wanted), [1, 0], "eye below both planes: the upper node is farther");
         assert_eq!(back_to_front(&model, [0.0, 0.0, 100.0], &wanted), [0, 1], "eye above both: the lower node is farther");
+    }
+
+    fn item(id: u32, sorting_info: TransparentSortingInfo3d) -> (ItemKey, Transparent3d) {
+        let entity = Entity::from_raw_u32(id).unwrap();
+        let key = (entity, MainEntity::from(entity));
+        let item = Transparent3d {
+            sorting_info,
+            distance: -1.0,
+            pipeline: bevy::render::render_resource::CachedRenderPipelineId::INVALID,
+            entity: key,
+            draw_function: bevy::render::render_phase::DrawFunctionId(0),
+            batch_range: 0..1,
+            extra_index: bevy::render::render_phase::PhaseItemExtraIndex::None,
+            indexed: false,
+        };
+        (key, item)
+    }
+
+    #[test]
+    fn an_empty_view_is_skipped_and_the_next_view_is_ordered() {
+        let order = TranslucentOrder::default();
+        let mut partition = Partition::default();
+        let mut empty = SortedRenderPhase::<Transparent3d>::default();
+        order_phase(&mut empty, &order, Vec3::ZERO, None, &mut partition);
+        assert!(empty.items.is_empty());
+
+        let sorted = |z: f32| TransparentSortingInfo3d::Sorted { mesh_center: Vec3::Z * z, depth_bias: 0.0 };
+        let mut phase = SortedRenderPhase::<Transparent3d>::default();
+        phase.items.extend([item(1, sorted(10.0)), item(2, TransparentSortingInfo3d::AlwaysOnTop), item(3, sorted(500.0))]);
+        order_phase(&mut phase, &order, Vec3::ZERO, None, &mut partition);
+        let drawn: Vec<_> = phase.items.values().map(|item| (item.entity.0.index_u32(), item.distance)).collect();
+        assert_eq!(drawn, [(3, 0.0), (1, 1.0), (2, 2.0)]);
+        assert!(partition.sky.is_empty() && partition.level.is_empty());
     }
 }

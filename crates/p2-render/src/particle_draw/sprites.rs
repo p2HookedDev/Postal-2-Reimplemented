@@ -1,4 +1,4 @@
-use bevy::asset::{Assets, RenderAssetUsages};
+use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::camera::primitives::Aabb;
 use bevy::math::{Vec3, Vec3A};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
@@ -14,7 +14,7 @@ use super::bounds::occlusion_aabb;
 use super::{ActorDraw, EmitterMesh, MeshWrites};
 use crate::particle_frame::{DrawnActor, DrawnEmitter};
 use bevy::mesh::MeshTag;
-use crate::particle_material::{PARTICLE_SPRITES, RECORD_WORDS};
+use crate::particle_material::RECORD_WORDS;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SpriteGrid {
@@ -163,9 +163,10 @@ pub(crate) fn header_record(count: usize, light: Vec3, lamps: Vec3) -> [u32; REC
     record
 }
 
-pub(crate) fn upload_sprites(buffers: &mut Assets<ShaderBuffer>, records: &[[u32; RECORD_WORDS]]) {
-    let Some(mut buffer) = buffers.get_mut(PARTICLE_SPRITES.id()) else { return };
-    let record_bytes = (RECORD_WORDS * 4) as u64;
+/// Writes `records` into `buffer`, which only grows, so a frame of the same capacity reuses the GPU buffer.
+pub(crate) fn upload_records<T: bytemuck::NoUninit>(buffers: &mut Assets<ShaderBuffer>, buffer: &Handle<ShaderBuffer>, records: &[T]) {
+    let Some(mut buffer) = buffers.get_mut(buffer.id()) else { return };
+    let record_bytes = size_of::<T>() as u64;
     let capacity = grid_capacity(u32::try_from(buffer.buffer_size() / record_bytes).unwrap_or(u32::MAX), records.len());
     buffer.clear();
     buffer.extend_from_slice(records);

@@ -14,7 +14,7 @@ import package::p2_render::material_layers::material_layers;
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::modern::{is_modern, is_see_through, with_light};
 import package::p2_render::relief::base_relief;
-import package::p2_render::sun_shadow::{sun_found, sun_index};
+import package::p2_render::sun_shadow::{sun_found, sun_index, world_lookup};
 import package::p2_render::surface::{modern_light, shade_surface};
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -72,7 +72,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var alpha = color.a;
     if modern {
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
-        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool);
+        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool, world_lookup());
         let shaded = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), vec3(0.0));
         surface = shaded.rgb;
         alpha = shaded.a;

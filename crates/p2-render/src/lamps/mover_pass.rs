@@ -136,6 +136,7 @@ pub(super) struct MoverDraw {
     /// The capsules' rows as the book holds them.
     grounding: Vec<[f32; 4]>,
     tile_grid: Vec<[f32; 4]>,
+    tile_row: Vec<[f32; 4]>,
     layouts: Option<CasterLayouts>,
     /// By [`Skin`]; `None` for a mesh layout without the attributes its entry point reads.
     pipelines: [FxHashMap<MeshVertexBufferLayoutRef, Option<CachedRenderPipelineId>>; 2],
@@ -326,6 +327,7 @@ pub(super) fn draw_mover_tiles(
         state.ranges.clear();
         state.grounding.clear();
         state.tile_grid.clear();
+        state.tile_row.clear();
     }
     let height = book_image.texture_descriptor.size.height;
     if !movers.grounding.is_empty() && state.grounding != movers.grounding {
@@ -347,7 +349,7 @@ pub(super) fn draw_mover_tiles(
     if tiles.is_empty() {
         return;
     }
-    let MoverDraw { layouts, pipelines, uniforms, joints, held, by_mover, bytes, row, .. } = state;
+    let MoverDraw { layouts, pipelines, uniforms, joints, held, by_mover, bytes, row, tile_row, .. } = state;
     // A tile to draw again that cannot be drawn yet must not pass for what its square held before.
     for again in tiles.iter().filter(|tile| tile.drawn == Drawn::Again).map(Held::of) {
         forget_under(held, &again);
@@ -419,7 +421,10 @@ pub(super) fn draw_mover_tiles(
         }
         texels
     }));
-    write_rows(&queue, book_image, height.saturating_sub(TILES_FROM_END), row);
+    if *row != *tile_row {
+        write_rows(&queue, book_image, height.saturating_sub(TILES_FROM_END), row);
+        std::mem::swap(row, tile_row);
+    }
 }
 
 #[cfg(test)]

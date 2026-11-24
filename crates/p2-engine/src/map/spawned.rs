@@ -1,6 +1,8 @@
 use super::*;
 use super::scene::VmAnimations;
+use bevy::asset::RenderAssetUsages;
 use bevy::math::Affine3A;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -33,6 +35,12 @@ impl SpawnedActors {
     /// A model or a texture is still being built on another thread; which frame takes it depends on the machine.
     pub fn building(&self) -> bool {
         self.spawn_builds.iter().any(|build| !build.task.is_finished()) || self.texture_builds.iter().any(|build| !build.task.is_finished())
+    }
+
+    /// Builds and the actors waiting on them, finished or not, that the scene has not taken in yet: one finished model
+    /// is taken in a frame.
+    pub fn pending(&self) -> usize {
+        self.spawn_builds.len() + self.texture_builds.len() + self.spawn_waiting.len()
     }
 }
 
@@ -309,7 +317,7 @@ impl Session {
         let found: Vec<SpawnedActor> = spawned.into_iter().filter_map(|s| SpawnedActor::new(s.actor, s.mesh, s.skeletal)).collect();
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         let done: Vec<TextureBuild> = t.spawned.texture_builds.extract_if(.., |build| build.task.is_finished()).collect();
-        for TextureBuild { path, task, .. } in done {
+        for TextureBuild { path, image, task } in done {
             let texture = match block_on(task) {
                 Ok((built, assets, texture)) => {
                     assets.insert(&mut t.assets.meshes, &mut t.assets.images, &mut t.assets.bindposes, &mut t.assets.wet);
@@ -321,6 +329,11 @@ impl Session {
                     None
                 }
             };
+            // An emitter took the reserved handle while the read ran: left empty, its material would never be ready.
+            if !t.assets.images.contains(&image) {
+                let clear = Image::new_fill(Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2, &[0; 4], TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+                t.assets.images.insert(&image, clear).ok();
+            }
             t.spawned.actor_textures.insert(path, texture);
         }
         let (particles, textures) = (&mut *t.particles, &mut *t.spawned);
@@ -599,5 +612,22 @@ mod tests {
         assert!(placed.rotation.abs_diff_eq(turned.rotation, 1e-4));
         assert!(placed.scale.abs_diff_eq(decal.scale, 1e-4));
         assert!(on_mover.place(Transform::from_xyz(10.0, 0.0, 0.0)).translation.abs_diff_eq(decal.translation, 1e-4));
+    }
+
+    #[test]
+    fn a_texture_build_stays_pending_after_it_finishes_until_it_is_taken_in() {
+        let mut world = bevy::ecs::world::World::new();
+        world.init_resource::<SpawnedActors>();
+        assert_eq!(world.resource::<SpawnedActors>().pending(), 0);
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let task = pool.spawn(async { std::thread::Result::<(Game, PendingAssets, Option<ActorTexture>)>::Err(Box::new(())) });
+        let image = Assets::<Image>::default().reserve_handle();
+        world.resource_mut::<SpawnedActors>().texture_builds.push(TextureBuild { path: "Fx.Spark".to_owned(), image, task });
+        while world.resource::<SpawnedActors>().building() {
+            std::thread::yield_now();
+        }
+        assert_eq!(world.resource::<SpawnedActors>().pending(), 1);
+        world.resource_mut::<SpawnedActors>().texture_builds.clear();
+        assert_eq!(world.resource::<SpawnedActors>().pending(), 0);
     }
 }

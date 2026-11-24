@@ -275,7 +275,8 @@ fn draw_triangle(depths: &mut [f32], side: usize, corners: [[f32; 3]; 3], radius
 enum Reach {
     Out,
     Dark,
-    Lit,
+    /// The most light it may give in the box.
+    Lit(f32),
 }
 
 /// Whether the lamp's light gets into a box of this side whose low corner, seen from the lamp, is `corner`.
@@ -286,7 +287,8 @@ fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) 
     if nearest(0.0) >= lamp.radius {
         return Reach::Out;
     }
-    if lamp.most_light(low, high, nearest(0.0)) < DIM_SLACK * LAMP_SMALLEST {
+    let light = lamp.most_light(low, high, nearest(0.0));
+    if light < DIM_SLACK * LAMP_SMALLEST {
         return Reach::Dark;
     }
     let lights = cube.zip(lamp.face).is_none_or(|(cube, face)| {
@@ -296,12 +298,12 @@ fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) 
         let depth = (nearest(grown) - texel * LOOKUP_MARGIN_TEXELS - farthest * DEPTH_STEP) / lamp.radius;
         depth <= 0.0 || cube.open_to(low.map(|at| at - grown), high.map(|at| at + grown), depth)
     });
-    if lights { Reach::Lit } else { Reach::Dark }
+    if lights { Reach::Lit(light) } else { Reach::Dark }
 }
 
-/// The cells of `grid` a lamp lights, and how many lie within its radius. Cells are tried eight at a time as one box
-/// first: a box the lamp leaves dark holds no lit cell.
-fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<u32>, u64, [f32; 6]) {
+/// The cells of `grid` a lamp lights with the most light it gives each, and how many lie within its radius. Cells are
+/// tried eight at a time as one box first: a box the lamp leaves dark holds no lit cell.
+fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(u32, f32)>, u64, [f32; 6]) {
     let cube = lamp.face.map(|face| Cube::drawn(face as usize, lamp, vertices));
     let blocks = |axis: usize| {
         let cell = |at: f32| (((at - grid.origin[axis]) / grid.cell).floor().max(0.0) as u32).min(grid.dims[axis] - 1);
@@ -322,13 +324,13 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<u
                     if (0..3).any(|axis| cell[axis] >= grid.dims[axis]) {
                         continue;
                     }
-                    let reach = box_reach(lamp, cube.as_ref().filter(|_| matches!(whole, Reach::Lit)), corner(cell), grid.cell);
+                    let reach = box_reach(lamp, cube.as_ref().filter(|_| matches!(whole, Reach::Lit(_))), corner(cell), grid.cell);
                     if matches!(reach, Reach::Out) {
                         continue;
                     }
                     in_reach += 1;
-                    if matches!(whole, Reach::Lit) && matches!(reach, Reach::Lit) {
-                        lit.push(grid.index(cell) as u32);
+                    if let (Reach::Lit(_), Reach::Lit(light)) = (&whole, reach) {
+                        lit.push((grid.index(cell) as u32, light));
                     }
                 }
             }
@@ -346,24 +348,28 @@ pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cel
     let lit = super::on_threads(lamps.len(), threads, |lamp| lit_cells(&grid, &lamps[lamp], vertices));
     let cells = grid.dims.iter().product::<u32>() as usize;
     let mut starts = vec![0u32; cells + 1];
-    for &cell in lit.iter().flat_map(|(cells, ..)| cells) {
+    for &(cell, _) in lit.iter().flat_map(|(cells, ..)| cells) {
         starts[cell as usize + 1] += 1;
     }
     for cell in 0..cells {
         starts[cell + 1] += starts[cell];
     }
     let mut filled = starts.clone();
-    let mut listed = vec![0u32; starts[cells] as usize];
+    let mut listed = vec![(0u32, 0.0f32); starts[cells] as usize];
     for (lamp, (cells, ..)) in lit.iter().enumerate() {
-        for &cell in cells {
-            listed[filled[cell as usize] as usize] = lamp as u32;
+        for &(cell, light) in cells {
+            listed[filled[cell as usize] as usize] = (lamp as u32, light);
             filled[cell as usize] += 1;
         }
+    }
+    // The screen pass holds only a list's first lamps: the strongest in the cell come first.
+    for cell in 0..cells {
+        listed[starts[cell] as usize..starts[cell + 1] as usize].sort_by(|a, b| b.1.total_cmp(&a.1));
     }
     grid.in_reach = lit.iter().map(|(_, in_reach, _)| in_reach).sum();
     grid.reach = lit.iter().map(|&(_, _, reach)| reach).collect();
     grid.starts = starts;
-    grid.lamps = listed;
+    grid.lamps = listed.into_iter().map(|(lamp, _)| lamp).collect();
     grid
 }
 
@@ -450,6 +456,14 @@ mod tests {
     }
 
     #[test]
+    fn a_cell_lists_its_strongest_lamp_first() {
+        let lamp = |x: f32, strength: f32| CellLamp { position: [x, 0.0, 0.0], radius: 1000.0, face: None, casters: &[], strength, spot: None };
+        let cells = lamp_cells(&[], &[lamp(0.0, 0.5), lamp(0.0, 2.0), lamp(800.0, 1.0)], 128.0, 2);
+        assert_eq!(cells.of(cell_at(&cells, [10.0, 10.0, 10.0])), [1, 0, 2]);
+        assert_eq!(cells.of(cell_at(&cells, [790.0, 10.0, 10.0])), [2, 1, 0]);
+    }
+
+    #[test]
     fn a_wall_takes_the_lamp_off_the_cells_behind_it_and_keeps_those_before_and_across_it() {
         let cells = cells_of(&wall(300.0), Some(64));
         assert_eq!(cells.of(cell_at(&cells, [200.0, 10.0, 10.0])), [0]);
@@ -483,7 +497,7 @@ mod tests {
             for y in 0..cells.dims[1] {
                 for x in 0..cells.dims[0] {
                     let corner = std::array::from_fn(|axis| cells.origin[axis] + [x, y, z][axis] as f32 * cells.cell - lamp.position[axis]);
-                    if matches!(box_reach(&lamp, Some(&cube), corner, cells.cell), Reach::Lit) {
+                    if matches!(box_reach(&lamp, Some(&cube), corner, cells.cell), Reach::Lit(_)) {
                         alone.push(cells.index([x, y, z]));
                     }
                 }

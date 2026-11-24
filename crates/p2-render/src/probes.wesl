@@ -49,7 +49,7 @@ fn probe_tap(atlas: ProbeAtlas, volume: f32, layer: f32, x: f32, z: f32) -> vec4
 }
 
 // The surface's own side of the grid: half a step out of the wall it lies on.
-fn read_probes(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, sum: ptr<function, LampLight>) {
+fn read_probes(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, sum: ptr<function, LampLight>, offset: f32) {
     let spacing = lights.ambient_color.a;
     let atlas = probe_atlas(in);
     let size = atlas.size;
@@ -57,7 +57,7 @@ fn read_probes(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, sum: pt
         return;
     }
     let columns = size.x / (2.0 * PROBE_TILES_WIDE) - 2.0;
-    let cell = position / spacing + normal * 0.5;
+    let cell = position / spacing + normal * (0.5 * offset);
     let layer = floor(cell.y);
     let x = cell.x - columns * floor(cell.x / columns);
     let z = cell.z - columns * floor(cell.z / columns);

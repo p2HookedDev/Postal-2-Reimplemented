@@ -372,3 +372,17 @@ fn a_draws_layers_follow_its_overlay_slot() {
     world.entity_mut(attached).insert(OverlaySlot(Some(0)));
     assert_eq!(world.get::<RenderLayers>(attached), Some(&RenderLayers::layer(OVERLAY_LAYERS[0])));
 }
+
+#[test]
+fn a_camera_spawned_after_the_setting_takes_its_sample_count() {
+    let mut world = bevy::ecs::world::World::new();
+    world.insert_resource(Settings::default());
+    let early = world.spawn((Camera::default(), Msaa::Sample4)).id();
+    world.run_system_cached(follow_msaa).expect("runs");
+    let wanted = Msaa::from_samples(world.resource::<Settings>().msaa_samples());
+    assert_eq!(world.get::<Msaa>(early), Some(&wanted));
+    world.run_system_cached(follow_msaa).expect("runs");
+    let late = world.spawn((Camera::default(), Msaa::Sample4)).id();
+    world.run_system_cached(follow_msaa).expect("runs");
+    assert_eq!(world.get::<Msaa>(late), Some(&wanted), "a later camera draws into the same image as the rest");
+}

@@ -7,7 +7,7 @@ use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::camera::{Camera, Camera2d, Camera3d, ClearColorConfig, ImageRenderTarget, RenderTarget};
 use bevy::color::Color;
 use bevy::ecs::change_detection::DetectChanges;
-use bevy::ecs::prelude::{Commands, Has, Or, Query, Res, ResMut, Resource, Single, SystemSet, With};
+use bevy::ecs::prelude::{Commands, Has, Or, Query, Res, ResMut, Resource, Single, SystemSet, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
 use bevy::math::Vec4;
@@ -23,6 +23,7 @@ use bevy::window::{PrimaryWindow, Window};
 use p2_host::display::{BRIGHTNESS, CONTRAST, GAMMA, Settings};
 use crate::components::{CanvasLayer, SceneView};
 use crate::tone::{ToneCamera, ToneFrame, TonePlugin};
+use crate::view::HudCamera;
 use crate::shaders::{add_shaders, shader_file};
 
 const GAMMA_SHADER: Handle<Shader> = uuid_handle!("3b8e5a14-6c27-4f0d-9d52-71a4c0e8b6f3");
@@ -98,7 +99,8 @@ fn apply(
     window: Single<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<GammaMaterial>>,
-    mut cameras: Query<(&mut RenderTarget, Has<SceneView>), Or<(With<Camera3d>, With<CanvasLayer>, With<ToneCamera>)>>,
+    // The HUD stays on the window, after the ramp.
+    mut cameras: Query<(&mut RenderTarget, Has<SceneView>), (Or<(With<Camera3d>, With<CanvasLayer>, With<ToneCamera>)>, Without<HudCamera>)>,
     mut ramp_camera: Query<&mut Camera>,
 ) {
     let last = gamma.ramp;
@@ -154,7 +156,7 @@ mod tests {
     use super::*;
     use p2_host::display::MODERN_GRAPHICS;
 
-    fn wired(modern: &str, brightness: &str) -> (Handle<Image>, Handle<Image>, [Option<Handle<Image>>; 3]) {
+    fn wired(modern: &str, brightness: &str) -> (Handle<Image>, Handle<Image>, [Option<Handle<Image>>; 4]) {
         let mut world = World::new();
         world.insert_resource(Settings::read(|query| match query {
             MODERN_GRAPHICS => modern.to_owned(),
@@ -176,6 +178,7 @@ mod tests {
             world.spawn((Camera3d::default(), SceneView::default())).id(),
             world.spawn((Camera3d::default(), CanvasLayer(0))).id(),
             world.spawn((Camera2d, ToneCamera)).id(),
+            world.spawn((Camera3d::default(), HudCamera)).id(),
         ];
         world.run_system_once(apply).expect("runs");
         let targets = cameras.map(|camera| match world.get::<RenderTarget>(camera) {
@@ -188,13 +191,13 @@ mod tests {
     #[test]
     fn world_cameras_draw_into_the_tone_image_under_modern() {
         let (_, _, targets) = wired("False", "");
-        assert_eq!(targets, [None, None, None]);
+        assert_eq!(targets, [None, None, None, None]);
         let (toned, _, targets) = wired("True", "");
-        assert_eq!(targets, [Some(toned), None, None]);
+        assert_eq!(targets, [Some(toned), None, None, None]);
         let (toned, ramped, targets) = wired("True", "0.7");
-        assert_eq!(targets, [Some(toned), Some(ramped.clone()), Some(ramped)]);
+        assert_eq!(targets, [Some(toned), Some(ramped.clone()), Some(ramped), None]);
         let (_, ramped, targets) = wired("False", "0.7");
-        assert_eq!(targets, [Some(ramped.clone()), Some(ramped.clone()), Some(ramped)]);
+        assert_eq!(targets, [Some(ramped.clone()), Some(ramped.clone()), Some(ramped), None]);
     }
 
     #[test]
