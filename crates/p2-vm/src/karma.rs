@@ -207,10 +207,15 @@ impl<L: LoaderRef> Vm<L> {
         world.limit_speed(id, max_speed);
         let (Some((location, quat)), Some(velocity)) = (world.pose(id), world.velocity(id)) else { return Ok(()) };
         let rotation = quat_to_rotator(quat);
+        self.set_vector(actor, Prop::Velocity, velocity);
+        let shown = (self.store.vector(actor, Prop::Location), self.store.rotator_of(actor, Prop::Rotation));
+        // As retail's move of a Karma actor: blockers in the way are pushed and told, and a refusal leaves it in place.
+        if shown != (location, rotation) && self.check_encroachment(actor, location, rotation)? {
+            return Ok(());
+        }
         self.set_vector(actor, Prop::Location, location);
         self.store.set(actor, Prop::Rotation, Value::Rotator(rotation));
         self.relocate(actor);
-        self.set_vector(actor, Prop::Velocity, velocity);
         let moved = self.karma.bodies.get_mut(&actor).is_some_and(|body| {
             let moved = body.location != location;
             (body.location, body.rotation) = (location, rotation);

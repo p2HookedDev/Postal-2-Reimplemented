@@ -99,7 +99,7 @@ impl<L: LoaderRef> Vm<L> {
 
     /// Brushes and volumes are not tested. Retail touches the overlapped actors that do not block here;
     /// [`Vm::move_encroacher`] updates touching after the move instead.
-    fn check_encroachment(&mut self, mover: ObjectId, location: Vector, rotation: Rotator) -> Result<bool, Error> {
+    pub(crate) fn check_encroachment(&mut self, mover: ObjectId, location: Vector, rotation: Rotator) -> Result<bool, Error> {
         let (old_location, old_rotation) = (self.store.vector(mover, Prop::Location), self.store.rotator_of(mover, Prop::Rotation));
         let overlapped = self.posed(mover, location, rotation, |vm| vm.encroached_blockers(mover));
         for &other in &overlapped {
