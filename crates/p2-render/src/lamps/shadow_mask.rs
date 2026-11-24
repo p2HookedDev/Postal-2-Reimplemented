@@ -21,7 +21,7 @@ use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BufferId, CachedComputePipelineId, ComputePassDescriptor,
-    ComputePipelineDescriptor, Extent3d, PipelineCache, SamplerBindingType, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
+    ComputePipeline, ComputePipelineDescriptor, Extent3d, PipelineCache, SamplerBindingType, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
     TextureSampleType, TextureUsages, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderQueue, ViewQuery};
@@ -29,6 +29,7 @@ use bevy::render::texture::{FallbackImage, GpuImage};
 use bevy::render::view::{Msaa, ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
+use p2_host::display::{MODERN_SHADOW_FILTER, Settings};
 
 use super::atlas::write_rows;
 use super::{AtlasSizeSystems, LampAtlas, MaterialAtlas, MaterialSlot, follow_atlas};
@@ -51,6 +52,8 @@ const SUN_PIXELS: u32 = 4;
 pub(super) struct ShadowMask {
     image: Option<Handle<Image>>,
     size: UVec2,
+    /// The shadow filter level: 0 sharp, 1 soft, 2 softer.
+    softness: u8,
 }
 
 impl MaterialAtlas for ShadowMask {
@@ -74,16 +77,25 @@ struct MaskPipeline {
 struct MaskKey {
     filter: &'static str,
     contact: bool,
+    softness: u8,
 }
 
 impl MaskKey {
-    fn for_view(filter: Option<&ShadowFilteringMethod>, contact: bool) -> Self {
+    fn for_view(filter: Option<&ShadowFilteringMethod>, contact: bool, softness: u8) -> Self {
         let filter = match filter.copied().unwrap_or_default() {
             ShadowFilteringMethod::Hardware2x2 => "SHADOW_FILTER_METHOD_HARDWARE_2X2",
             ShadowFilteringMethod::Gaussian => "SHADOW_FILTER_METHOD_GAUSSIAN",
             ShadowFilteringMethod::Temporal => "SHADOW_FILTER_METHOD_TEMPORAL",
         };
-        Self { filter, contact }
+        Self { filter, contact, softness }
+    }
+
+    fn softness_def(self) -> Option<&'static str> {
+        match self.softness {
+            0 => None,
+            1 => Some("SHADOW_SOFT"),
+            _ => Some("SHADOW_SOFTER"),
+        }
     }
 }
 
@@ -97,7 +109,7 @@ struct MaskGroups {
 pub(super) fn build(app: &mut App) {
     app.init_resource::<ShadowMask>();
     // After the camera's size is set this frame, so a resized frame's mask is as big as its prepass.
-    app.add_systems(PostUpdate, size_mask.after(CameraUpdateSystems).in_set(AtlasSizeSystems));
+    app.add_systems(PostUpdate, (size_mask.after(CameraUpdateSystems).in_set(AtlasSizeSystems), follow_softness));
     follow_atlas::<ShadowMask>(app);
     app.add_plugins(ExtractResourcePlugin::<ShadowMask>::default());
     add_shaders(app, [(MASK_SHADER, shader_file("lamp_mask.wesl"))]);
@@ -120,6 +132,13 @@ fn size_mask(mut mask: ResMut<ShadowMask>, cameras: Query<(&Camera, Has<NormalPr
     }
     mask.size = size;
     mask.image = (size != UVec2::ZERO).then(|| images.add(mask_image(size)));
+}
+
+fn follow_softness(settings: Option<Res<Settings>>, mut mask: ResMut<ShadowMask>) {
+    let softness = settings.map_or(0, |settings| settings.modern_level(MODERN_SHADOW_FILTER));
+    if mask.softness != softness {
+        mask.softness = softness;
+    }
 }
 
 fn mask_image(size: UVec2) -> Image {
@@ -181,21 +200,32 @@ fn init_mask_pipeline(mut commands: Commands) {
     commands.insert_resource(MaskPipeline { sun, sun_contact, layout, pipelines: HashMap::default() });
 }
 
-fn queue_mask_pipeline(cache: Res<PipelineCache>, mut pipeline: ResMut<MaskPipeline>, views: Query<(Option<&ShadowFilteringMethod>, Has<ContactShadows>), With<WorldCamera>>) {
+fn queue_mask_pipeline(
+    cache: Res<PipelineCache>,
+    mut pipeline: ResMut<MaskPipeline>,
+    mask: Res<ShadowMask>,
+    views: Query<(Option<&ShadowFilteringMethod>, Has<ContactShadows>), With<WorldCamera>>,
+) {
     let MaskPipeline { sun, sun_contact, layout, pipelines } = &mut *pipeline;
     // Every filter the settings pick (`modern.rs`), with and without contact shadows, is made before it is needed: a
-    // frame without the pass lights the world's surfaces with the sun unshadowed and the sky open.
-    let settings = [ShadowFilteringMethod::Hardware2x2, ShadowFilteringMethod::Gaussian].into_iter().flat_map(|filter| [false, true].map(|contact| MaskKey::for_view(Some(&filter), contact)));
+    // frame without the pass lights the world's surfaces with the sun unshadowed and the sky open. A new softness
+    // builds while the last one casts (`cast_shadows`).
+    let softness = mask.softness;
+    let settings = [ShadowFilteringMethod::Hardware2x2, ShadowFilteringMethod::Gaussian].into_iter().flat_map(|filter| [false, true].map(move |contact| MaskKey::for_view(Some(&filter), contact, softness)));
     if views.is_empty() {
         return;
     }
-    for key in settings.chain(views.iter().map(|(filter, contact)| MaskKey::for_view(filter, contact))) {
+    for key in settings.chain(views.iter().map(|(filter, contact)| MaskKey::for_view(filter, contact, softness))) {
         pipelines.entry(key).or_insert_with(|| {
             cache.queue_compute_pipeline(ComputePipelineDescriptor {
                 label: Some("lamp shadow mask".into()),
                 layout: vec![if key.contact { sun_contact.clone() } else { sun.clone() }, layout.clone()],
                 shader: MASK_SHADER,
-                shader_defs: [Some("LAMP_MASK_PASS"), Some("DEPTH_PREPASS"), Some(key.filter), key.contact.then_some("CONTACT_SHADOWS")].into_iter().flatten().map(Into::into).collect(),
+                shader_defs: [Some("LAMP_MASK_PASS"), Some("DEPTH_PREPASS"), Some(key.filter), key.contact.then_some("CONTACT_SHADOWS"), key.softness_def()]
+                    .into_iter()
+                    .flatten()
+                    .map(Into::into)
+                    .collect(),
                 entry_point: Some("shade".into()),
                 ..Default::default()
             })
@@ -208,6 +238,12 @@ fn queue_mask_pipeline(cache: Res<PipelineCache>, mut pipeline: ResMut<MaskPipel
 fn unmark_mask(mask: Res<ShadowMask>, images: Res<RenderAssets<GpuImage>>, queue: Res<RenderQueue>) {
     let Some(image) = mask.image.as_ref().and_then(|image| images.get(image)) else { return };
     write_rows(&queue, image, mask.size.y, &[[0.0; 4]]);
+}
+
+/// The pipeline for `key`, or while it builds one of another softness with the same filter.
+fn ready_pipeline<'a>(pipeline: &MaskPipeline, cache: &'a PipelineCache, key: MaskKey) -> Option<&'a ComputePipeline> {
+    let ready = |key: &MaskKey| pipeline.pipelines.get(key).and_then(|id| cache.get_compute_pipeline(*id));
+    ready(&key).or_else(|| (0..=2).map(|softness| MaskKey { softness, ..key }).find_map(|key| ready(&key)))
 }
 
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
@@ -229,7 +265,7 @@ fn cast_shadows(
     let (prepass, offset, lights_offset, shadow_bindings, contact_offset, filter) = view.into_inner();
     let contact = contact_offset.zip(contact_buffer.0.binding()).zip(contact_buffer.0.buffer());
     let (Some(compute), Some(depth), Some(normals), Some(uniform), Some(uniforms), Some(lights), Some(lights_buffer), Some(target)) = (
-        pipeline.pipelines.get(&MaskKey::for_view(filter, contact.is_some())).and_then(|id| cache.get_compute_pipeline(*id)),
+        ready_pipeline(&pipeline, &cache, MaskKey::for_view(filter, contact.is_some(), mask.softness)),
         prepass.depth_only_view(),
         prepass.normal_view(),
         view_uniforms.uniforms.binding(),

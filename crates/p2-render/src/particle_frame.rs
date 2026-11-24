@@ -185,6 +185,14 @@ fn nearest_discs(mut discs: Vec<Vec4>, eye: Vec3, cap: usize) -> Vec<Vec4> {
 }
 
 impl DrawnParticles {
+    /// The once-each lists are dropped and `level` moves on; the slots are refilled by the next frame.
+    pub fn leave_level(&mut self) {
+        self.born.clear();
+        self.born_meshes.clear();
+        self.blasts.clear();
+        self.level = self.level.wrapping_add(1);
+    }
+
     /// The drawn puddles' sprites as discs, the `cap` nearest to `eye`, for the reflection pass to mirror.
     pub fn puddle_discs(&self, origin: Vec3, eye: Vec3, cap: usize) -> Vec<Vec4> {
         let puddles = self.actors.iter().filter(|slot| slot.drawn && slot.overlay.is_none() && slot.puddle_seed.is_some());

@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, Hash};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bevy::asset::{AssetId, Handle};
 use bevy::image::Image;
@@ -12,41 +14,47 @@ use super::{PendingAssets, SceneAssets};
 use crate::level_collision::mean_albedo;
 use crate::scene::{MaterialImages, ModelView};
 
+/// Shared by the threads that build a scene: each entry is made once, by the first thread that asks; another thread
+/// asking meanwhile waits for it. Entries only point down (material, source, detail or specular), so no two waits cross.
 #[derive(Default)]
 pub struct MaterialCache {
-    cache: HashMap<(PackageId, i32), Option<MaterialImages>>,
-    images: HashMap<TextureSource, Option<MaterialImages>>,
-    details: FxHashMap<(PackageId, usize), Option<Handle<Image>>>,
-    speculars: FxHashMap<SpecularSource, Option<Handle<Image>>>,
+    cache: Mutex<HashMap<(PackageId, i32), Arc<OnceLock<Option<MaterialImages>>>>>,
+    images: Mutex<HashMap<TextureSource, Arc<OnceLock<Option<MaterialImages>>>>>,
+    details: Mutex<FxHashMap<(PackageId, usize), Arc<OnceLock<Option<Handle<Image>>>>>>,
+    speculars: Mutex<FxHashMap<SpecularSource, Arc<OnceLock<Option<Handle<Image>>>>>>,
+}
+
+fn cell<K: Hash + Eq, V, S: BuildHasher>(map: &Mutex<HashMap<K, Arc<OnceLock<V>>, S>>, key: K) -> Arc<OnceLock<V>> {
+    Arc::clone(map.lock().unwrap_or_else(PoisonError::into_inner).entry(key).or_default())
 }
 
 impl MaterialCache {
-    pub fn images(&mut self, game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32) -> Option<MaterialImages> {
-        let Self { cache, images, details, speculars } = self;
-        cache
-            .entry((package, material))
-            .or_insert_with(|| {
+    pub fn images(&self, game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32) -> Option<MaterialImages> {
+        cell(&self.cache, (package, material))
+            .get_or_init(|| {
                 let (source, state) = game.material_source(package, material)?;
-                let image = images.entry(source).or_insert_with(|| {
-                    let SourceLayers { image, glow, wet } = game.source_layers(source, TextureDecode::Keep)?;
-                    let albedo = mean_albedo(&image);
-                    let handle = t.add_image(image);
-                    t.albedos.insert(handle.id(), albedo);
-                    let glow = glow.map(|glow| t.add_image(glow));
-                    let detail = source.detail.and_then(|key| {
-                        details.entry(key).or_insert_with(|| game.detail_image(source).map(|detail| t.add_image(detail))).clone()
-                    });
-                    let specular = source.specular.and_then(|specular| {
-                        let key = SpecularSource { mask: SpecularMask::None, env_map: None, ..specular };
-                        let cube = speculars.entry(key).or_insert_with(|| game.specular_image(specular).map(|cube| t.add_image(cube))).clone()?;
-                        Some((cube, specular_params(source)?))
-                    });
-                    if let Some(wet) = wet {
-                        t.wet.push((handle.id(), wet));
-                    }
-                    Some(MaterialImages { image: handle, glow, detail, specular, state: RenderState::default() })
-                });
-                Some(MaterialImages { state, ..image.clone()? })
+                let image = cell(&self.images, source)
+                    .get_or_init(|| {
+                        let SourceLayers { image, glow, wet } = game.source_layers(source, TextureDecode::Keep)?;
+                        let albedo = mean_albedo(&image);
+                        let handle = t.add_image(image);
+                        t.set_albedo(handle.id(), albedo);
+                        let glow = glow.map(|glow| t.add_image(glow));
+                        let detail = source.detail.and_then(|key| {
+                            cell(&self.details, key).get_or_init(|| game.detail_image(source).map(|detail| t.add_image(detail))).clone()
+                        });
+                        let specular = source.specular.and_then(|specular| {
+                            let key = SpecularSource { mask: SpecularMask::None, env_map: None, ..specular };
+                            let cube = cell(&self.speculars, key).get_or_init(|| game.specular_image(specular).map(|cube| t.add_image(cube))).clone()?;
+                            Some((cube, specular_params(source)?))
+                        });
+                        if let Some(wet) = wet {
+                            t.wet.push((handle.id(), wet));
+                        }
+                        Some(MaterialImages { image: handle, glow, detail, specular, state: RenderState::default() })
+                    })
+                    .clone();
+                Some(MaterialImages { state, ..image? })
             })
             .clone()
     }
@@ -73,16 +81,17 @@ pub struct SwitchImage {
 }
 
 pub fn switched_images(game: &mut Game, materials: &MaterialCache) -> Vec<((PackageId, usize), SwitchImage)> {
-    let MaterialCache { cache, images, .. } = materials;
+    let cache = materials.cache.lock().unwrap_or_else(PoisonError::into_inner);
+    let images = materials.images.lock().unwrap_or_else(PoisonError::into_inner);
     let mut users_of: FxHashMap<AssetId<Image>, Vec<(PackageId, i32, &MaterialImages)>> = FxHashMap::default();
-    for (&(package, material), used) in cache {
-        if let Some(used) = used {
+    for (&(package, material), used) in cache.iter() {
+        if let Some(Some(used)) = used.get() {
             users_of.entry(used.image.id()).or_default().push((package, material, used));
         }
     }
     let mut switched = Vec::new();
     for (source, found) in images.iter().filter(|(source, _)| source.wet.is_none()) {
-        let (Some(switch), Some(found)) = (source.switch, found) else { continue };
+        let (Some(switch), Some(Some(found))) = (source.switch, found.get()) else { continue };
         let image = found.image.id();
         let users = users_of.get(&image).map_or(&[][..], Vec::as_slice);
         let whole = !users.is_empty() && users.iter().all(|&(package, material, _)| game.export_of(package, material) == Some(switch));

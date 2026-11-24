@@ -25,6 +25,8 @@ pub enum ResolveError {
     BadImport(String),
     #[error("object reference {0} out of range")]
     BadReference(i32),
+    #[error("package {0} is not loaded, and this loader loads no more")]
+    Frozen(String),
 }
 
 /// Export indices sorted by name, any case; every call takes the package it was built from.
@@ -87,6 +89,7 @@ pub struct Loader {
     ids_by_address: FxHashMap<usize, PackageId>,
     /// Successes only: a package's imports never change and ids only grow, while a failure may resolve after a later load.
     resolved_imports: Vec<Box<[OnceLock<Resolved>]>>,
+    frozen: bool,
 }
 
 pub fn search_paths(ini: &str) -> Vec<String> {
@@ -146,6 +149,9 @@ impl Loader {
         if let Some(id) = self.loaded_id(name) {
             return Ok(id);
         }
+        if self.frozen {
+            return Err(ResolveError::Frozen(name.to_owned()));
+        }
         let (key, path) = self.files.get_key_value(&name as &dyn Text).ok_or_else(|| ResolveError::PackageNotFound(name.to_owned()))?;
         let (key, path) = (key.clone(), path.clone());
         let data = map_file(&path).map_err(|source| ResolveError::Io { path: path.clone(), source })?;
@@ -154,6 +160,12 @@ impl Loader {
         let exports_by_name = ExportsByName::new(&package);
         let name = path.file_stem().map_or_else(|| name.to_owned(), |s| s.to_string_lossy().into_owned());
         Ok(self.push(key, Arc::new(LoadedPackage { name, path, package, data, exports_by_name })))
+    }
+
+    /// From now on only packages already loaded resolve. A clone working beside the original is frozen so that it
+    /// never gives a [`PackageId`] the original gives to another package.
+    pub fn freeze(&mut self) {
+        self.frozen = true;
     }
 
     fn push(&mut self, key: Caseless, loaded: Arc<LoadedPackage>) -> PackageId {
@@ -455,5 +467,12 @@ mod tests {
         let loader = Loader::open_with(&system, &[format!("{}/*.u", extra.display())]).unwrap();
         assert!(loader.find("P2Modern").is_some_and(|path| path.starts_with(&extra)));
         assert!(loader.find("Shell").is_some_and(|path| path.starts_with(&system)));
+    }
+
+    #[test]
+    fn a_frozen_loader_loads_no_new_package() {
+        let mut loader = Loader { files: [(Caseless("Engine".into()), PathBuf::from("Engine.u"))].into_iter().collect(), ..Loader::default() };
+        loader.freeze();
+        assert!(matches!(loader.load("Engine"), Err(ResolveError::Frozen(name)) if name == "Engine"));
     }
 }

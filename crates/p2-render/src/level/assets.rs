@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use bevy::asset::{AssetHandleProvider, AssetId, Assets, Handle};
 use bevy::image::Image;
@@ -17,16 +18,17 @@ pub trait SceneAssets {
     fn image_size(&self, image: &Handle<Image>) -> Option<UVec2>;
 }
 
+/// Image sizes and albedos are shared by every fork: a texture one fork made is read back by another.
 pub struct PendingAssets {
     mesh_ids: AssetHandleProvider,
     image_ids: AssetHandleProvider,
     bindpose_ids: AssetHandleProvider,
     pub(super) meshes: Vec<(Handle<Mesh>, Mesh)>,
     pub(super) images: Vec<(Handle<Image>, Image)>,
-    image_sizes: HashMap<AssetId<Image>, UVec2>,
+    image_sizes: Arc<Mutex<HashMap<AssetId<Image>, UVec2>>>,
     bindposes: Vec<(Handle<SkinnedMeshInverseBindposes>, SkinnedMeshInverseBindposes)>,
     pub wet: Vec<(AssetId<Image>, p2_bevy_assets::library::WetSource)>,
-    pub(super) albedos: HashMap<AssetId<Image>, [f32; 3]>,
+    albedos: Arc<Mutex<HashMap<AssetId<Image>, [f32; 3]>>>,
 }
 
 impl PendingAssets {
@@ -37,15 +39,45 @@ impl PendingAssets {
             bindpose_ids: bindposes.get_handle_provider(),
             meshes: Vec::new(),
             images: Vec::new(),
-            image_sizes: HashMap::new(),
+            image_sizes: Arc::default(),
             bindposes: Vec::new(),
             wet: Vec::new(),
-            albedos: HashMap::new(),
+            albedos: Arc::default(),
         }
     }
 
+    /// Fills on another thread; [`PendingAssets::merge`] takes its assets back.
+    pub fn fork(&self) -> Self {
+        Self {
+            mesh_ids: self.mesh_ids.clone(),
+            image_ids: self.image_ids.clone(),
+            bindpose_ids: self.bindpose_ids.clone(),
+            meshes: Vec::new(),
+            images: Vec::new(),
+            image_sizes: Arc::clone(&self.image_sizes),
+            bindposes: Vec::new(),
+            wet: Vec::new(),
+            albedos: Arc::clone(&self.albedos),
+        }
+    }
+
+    pub fn merge(&mut self, fork: Self) {
+        self.meshes.extend(fork.meshes);
+        self.images.extend(fork.images);
+        self.bindposes.extend(fork.bindposes);
+        self.wet.extend(fork.wet);
+    }
+
+    pub(super) fn albedo(&self, image: AssetId<Image>) -> Option<[f32; 3]> {
+        self.albedos.lock().unwrap_or_else(PoisonError::into_inner).get(&image).copied()
+    }
+
+    pub(super) fn set_albedo(&self, image: AssetId<Image>, albedo: [f32; 3]) {
+        self.albedos.lock().unwrap_or_else(PoisonError::into_inner).insert(image, albedo);
+    }
+
     pub fn add_image_as(&mut self, handle: Handle<Image>, image: Image) -> Handle<Image> {
-        self.image_sizes.insert(handle.id(), image.size());
+        self.image_sizes.lock().unwrap_or_else(PoisonError::into_inner).insert(handle.id(), image.size());
         self.images.push((handle.clone(), image));
         handle
     }
@@ -90,7 +122,7 @@ impl SceneAssets for PendingAssets {
     }
 
     fn image_size(&self, image: &Handle<Image>) -> Option<UVec2> {
-        self.image_sizes.get(&image.id()).copied()
+        self.image_sizes.lock().unwrap_or_else(PoisonError::into_inner).get(&image.id()).copied()
     }
 }
 

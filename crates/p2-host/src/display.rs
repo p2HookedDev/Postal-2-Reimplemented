@@ -93,6 +93,7 @@ pub const QUERIES: &[&str] = &[
     MODERN_PRESET,
     MODERN_SHADOWS,
     MODERN_SHADOW_DISTANCE,
+    MODERN_SHADOW_FILTER,
     MODERN_LAMP_SHADOWS,
     MODERN_CONTACT_SHADOWS,
     MODERN_AO,
@@ -180,6 +181,8 @@ pub const MODERN_GRAPHICS: &str = "ini:Engine.Engine.RenderDevice ModernGraphics
 pub const MODERN_PRESET: &str = "ini:Engine.Engine.RenderDevice ModernPreset";
 pub const MODERN_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernSunShadows";
 pub const MODERN_SHADOW_DISTANCE: &str = "ini:Engine.Engine.RenderDevice ModernShadowDistance";
+/// The shadow edge's width: 0 sharp, 1 soft, 2 softer.
+pub const MODERN_SHADOW_FILTER: &str = "ini:Engine.Engine.RenderDevice ModernShadowFilter";
 pub const MODERN_LAMP_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernLampShadows";
 pub const MODERN_CONTACT_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernContactShadows";
 pub const MODERN_AO: &str = "ini:Engine.Engine.RenderDevice ModernAO";
@@ -259,14 +262,14 @@ const PHOTO_FOV_LEAST: u8 = 10;
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 52] = [
+const LEVELS: [(&str, u8, u8); 53] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
     (MODERN_CONTACT_SHADOWS, 1, 2),
     (MODERN_AO, 2, 3),
     (MODERN_INDIRECT, 2, 2),
-    (MODERN_ANTI_ALIASING, 2, 4),
+    (MODERN_ANTI_ALIASING, 2, 2),
     (MODERN_BLOOM, 5, 10),
     (MODERN_SHARPEN, 4, 10),
     (MODERN_GOD_RAYS, 5, 10),
@@ -314,10 +317,9 @@ const LEVELS: [(&str, u8, u8); 52] = [
     (MODERN_PHOTO_SHARPEN, 4, 10),
     (MODERN_PHOTO_WARMTH, NEUTRAL_LEVEL, 10),
     (MODERN_PHOTO_HIDE_PLAYER, 0, 1),
+    (MODERN_SHADOW_FILTER, 0, 2),
 ];
 
-const ANTI_ALIASING_MSAA_2X: u8 = 3;
-const ANTI_ALIASING_MSAA_4X: u8 = 4;
 
 /// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
 /// changing.
@@ -362,16 +364,11 @@ impl Settings {
         self.number(DISPLAY_NUMBER, 0.0) as usize
     }
 
-    /// Under modern graphics the anti-aliasing level picks the samples; ambient occlusion and temporal anti-aliasing
-    /// need them off.
+    /// Modern graphics draw without MSAA: their screen passes (lamp shadows, ambient occlusion, pools, reflections)
+    /// read single-sample depth and normals.
     pub fn msaa_samples(&self) -> u32 {
         if self.modern_graphics() {
-            let single = self.modern_level(MODERN_AO) > 0 || self.modern_level(MODERN_TEMPORAL_AA) > 0;
-            return match self.modern_level(MODERN_ANTI_ALIASING) {
-                ANTI_ALIASING_MSAA_2X if !single => 2,
-                ANTI_ALIASING_MSAA_4X if !single => 4,
-                _ => 1,
-            };
+            return 1;
         }
         match self.number(MSAA, 1.0) as u32 {
             samples @ (2 | 4 | 8) => samples,
@@ -601,9 +598,9 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 6, 0, 0, 5, 1, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 6, 0, 0, 5, 1, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0, 0]);
         let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
-        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 10, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]);
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 2, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 10, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1, 2]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
         assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 0);
         assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);
@@ -655,22 +652,19 @@ mod tests {
     }
 
     #[test]
-    fn msaa_follows_the_anti_aliasing_level_under_modern() {
-        let msaa = |master: &str, ao: &str, aa: &str, retail: &str| {
+    fn msaa_is_the_retail_setting_and_off_under_modern() {
+        let msaa = |master: &str, aa: &str, retail: &str| {
             Settings::read(|query| match query {
                 MODERN_GRAPHICS => master.to_owned(),
-                MODERN_AO => ao.to_owned(),
                 MODERN_ANTI_ALIASING => aa.to_owned(),
                 MSAA => retail.to_owned(),
                 _ => String::new(),
             })
             .msaa_samples()
         };
-        assert_eq!(msaa("False", "0", "4", "8"), 8);
-        assert_eq!(msaa("True", "0", "4", "8"), 4);
-        assert_eq!(msaa("True", "0", "3", ""), 2);
-        assert_eq!(msaa("True", "0", "2", "4"), 1);
-        assert_eq!(msaa("True", "1", "4", ""), 1);
-        assert_eq!(msaa("True", "", "4", ""), 1);
+        assert_eq!(msaa("False", "4", "8"), 8);
+        assert_eq!(msaa("False", "4", "3"), 1);
+        assert_eq!(msaa("True", "4", "8"), 1);
+        assert_eq!(msaa("True", "3", ""), 1);
     }
 }

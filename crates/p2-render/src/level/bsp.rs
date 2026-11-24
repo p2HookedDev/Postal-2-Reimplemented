@@ -100,8 +100,8 @@ pub fn bsp_models(
             state.two_sided |= flags & poly_flags::TWO_SIDED != 0;
         }
         textured += polygons.len() * usize::from(found.is_some());
-        if let Some(albedo) = found.as_ref().and_then(|found| t.albedos.get(&found.image.id())) {
-            material_albedos.insert(material, *albedo);
+        if let Some(albedo) = found.as_ref().and_then(|found| t.albedo(found.image.id())) {
+            material_albedos.insert(material, albedo);
         }
         let masked = found.as_ref().filter(|_| !in_sky).and_then(|found| match crate::scene::alpha_mode(&found.state) {
             AlphaMode::Mask(cutoff @ ..=1.0) => Some((found.image.clone(), cutoff)),

@@ -24,9 +24,6 @@ use crate::modern::sun_color;
 use crate::view::ShownScene;
 use bake::{ProbeBake, ProbeGrid, ProbeWorld, bake_probes};
 
-/// Left to the game while a bake runs: the slowest machine it must run on has four threads.
-const THREADS_KEPT: usize = 2;
-
 fn probe_grid(level: u8) -> Option<ProbeGrid> {
     match level {
         0 => None,
@@ -61,8 +58,8 @@ pub(crate) struct ProbeJob {
 /// Keyed by the grid's columns.
 pub(crate) type ProbePrebake = crate::lamps::Prebaked<i32, Option<ProbeBake>>;
 
-pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8) -> ProbePrebake {
-    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, world, origin, grid)))
+pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8, threads: usize) -> ProbePrebake {
+    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, world, origin, grid, threads)))
 }
 
 fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
@@ -73,7 +70,7 @@ fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
     image
 }
 
-fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, grid: ProbeGrid) -> Option<ProbeBake> {
+fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, grid: ProbeGrid, threads: usize) -> Option<ProbeBake> {
     let lamps = map_lamps(environment);
     let sun = environment.sun.as_ref().map(|(_, hardware)| {
         (-Vec3::from(p2_bevy_assets::to_bevy(hardware.direction)).normalize_or_zero(), sun_color(environment.sun_set()))
@@ -93,7 +90,6 @@ fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: 
         let at = Vector::from(p2_bevy_assets::to_bevy((point - origin).to_array()));
         p2_collision::line_check(&collision.model, at, Vector::new(at.x, at.y, at.z + 1.0)).is_some_and(|hit| hit.time == 0.0)
     };
-    let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(THREADS_KEPT).max(1));
     bake_probes(&world, grid, threads, solid)
 }
 
@@ -113,7 +109,7 @@ pub(crate) fn follow_probes(settings: Res<Settings>, shown: Option<Res<ShownScen
             let origin = shown.origin;
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.probes.take(&grid.columns));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { bake_map(&environment, &collision, &world_triangles(&collision, origin), origin, grid) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { bake_map(&environment, &collision, &world_triangles(&collision, origin), origin, grid, crate::lamps::bake_threads()) }));
             }
         }
     }

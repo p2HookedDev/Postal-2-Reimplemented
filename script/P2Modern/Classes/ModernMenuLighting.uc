@@ -1,8 +1,11 @@
 class ModernMenuLighting extends ModernMenuPage;
 
+var localized string    FilterNames[3];
+
 function CreateMenuContents()
 {
 	local UWindowComboControl Combo;
+	local int i;
 
 	Super.CreateMenuContents();
 
@@ -12,19 +15,29 @@ function CreateMenuContents()
 	Combo = AddLevelCombo(0, "ModernSunShadows", 3, 4);
 	AddNames(Combo, 0, 4);
 	AddLevelSlider(1, "ModernShadowDistance", 1, 5, 4);
-	Combo = AddLevelCombo(2, "ModernLampShadows", 3, 4);
+	Combo = AddLevelCombo(2, "ModernShadowFilter", 0, 2);
+	for (i = 0; i < ArrayCount(FilterNames); i++)
+		Combo.AddItem(FilterNames[i]);
+	Combo = AddLevelCombo(3, "ModernLampShadows", 3, 4);
 	AddNames(Combo, 0, 4);
-	Combo = AddLevelCombo(3, "ModernContactShadows", 1, 2);
+	AddLevelSlider(4, "ModernLampSize", 0, 10, 5);
+	Combo = AddLevelCombo(5, "ModernContactShadows", 1, 2);
 	AddNames(Combo, 0, 1);
 	Combo.AddItem(LevelNames[3]);
-	Combo = AddLevelCombo(4, "ModernAO", 2, 3);
+	Combo = AddLevelCombo(6, "ModernAO", 2, 3);
 	AddNames(Combo, 0, 3);
-	Combo = AddLevelCombo(5, "ModernIndirect", 2, 2);
+	Combo = AddLevelCombo(7, "ModernIndirect", 2, 2);
 	AddNames(Combo, 0, 1);
 	Combo.AddItem(LevelNames[3]);
-	AddBox(6, "ModernTerrainDetail");
 	AddBack();
 	LoadRows();
+}
+
+// No preset writes the shadow filter or the light source size, so changing them keeps the preset.
+function RowChanged(int i)
+{
+	if (RowKeys[i] != "ModernShadowFilter" && RowKeys[i] != "ModernLampSize")
+		Super.RowChanged(i);
 }
 
 defaultproperties
@@ -32,19 +45,25 @@ defaultproperties
 	TitleText="Shadows and Lighting"
 	BackHelp="Return to the Modern Graphics menu."
 
+	FilterNames(0)="Sharp"
+	FilterNames(1)="Soft"
+	FilterNames(2)="Softer"
+
 	Labels(0)="Sun shadows"
 	Labels(1)="Shadow distance"
-	Labels(2)="Lamp shadows"
-	Labels(3)="Contact shadows"
-	Labels(4)="Ambient occlusion"
-	Labels(5)="Indirect lighting"
-	Labels(6)="Terrain tessellation"
+	Labels(2)="Shadow filter"
+	Labels(3)="Lamp shadows"
+	Labels(4)="Light source size"
+	Labels(5)="Contact shadows"
+	Labels(6)="Ambient occlusion"
+	Labels(7)="Indirect lighting"
 
 	Helps(0)="Sun shadows from characters and moving objects; higher is sharper."
 	Helps(1)="How far away sun shadows are drawn."
-	Helps(2)="Shadows from lamps and other lights in the level."
-	Helps(3)="Small sharp shadows where objects touch the ground and walls."
-	Helps(4)="Darkens corners, creases and gaps; turns MSAA off."
-	Helps(5)="Light bounced around the level brightens shaded areas."
-	Helps(6)="Hills and slopes look rounded instead of faceted; applies when a level loads."
+	Helps(2)="How soft shadow edges are; lamp shadows soften less than the sun's."
+	Helps(3)="Shadows from lamps and other lights in the level."
+	Helps(4)="Larger lamps give wider, softer highlights on surfaces."
+	Helps(5)="Small sharp shadows where objects touch the ground and walls."
+	Helps(6)="Darkens corners, creases and gaps."
+	Helps(7)="Light bounced around the level brightens shaded areas."
 }

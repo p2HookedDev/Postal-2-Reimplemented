@@ -162,7 +162,7 @@ fn static_mesh_models(
             for (index, triangle) in placed.triangles().iter().enumerate() {
                 let Some(view) = placed.slot(index).and_then(|slot| views.get(slot as usize)).filter(|view| view.alpha_mode == AlphaMode::Opaque) else { continue };
                 parts.lamp_casters.push(*triangle);
-                parts.lamp_caster_albedos.push(view.texture.as_ref().and_then(|image| t.albedos.get(&image.id())).copied().unwrap_or(GREY_ALBEDO));
+                parts.lamp_caster_albedos.push(view.texture.as_ref().and_then(|image| t.albedo(image.id())).unwrap_or(GREY_ALBEDO));
             }
         }
         parts.collisions.extend(collision);

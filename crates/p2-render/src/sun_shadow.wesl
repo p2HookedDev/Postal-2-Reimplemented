@@ -16,7 +16,12 @@ import bevy_pbr::{render::{mesh_view_bindings::depth_prepass_texture, utils::int
 const SHADOW_BIAS: f32 = 1.0;
 const SHADOW_NORMAL_OFFSET: f32 = 1.5;
 // The radius of a shadow's soft edge in world units, the same in every level and cascade. A level whose texels are
-// wider than this takes the least radius its texels allow.
+// wider than this takes the least radius its texels allow. Only the shadow mask pass takes the wider choices.
+@if(SHADOW_SOFTER)
+const SOFT_EDGE_UNITS: f32 = 8.0;
+@if(SHADOW_SOFT && !SHADOW_SOFTER)
+const SOFT_EDGE_UNITS: f32 = 4.0;
+@if(!SHADOW_SOFT && !SHADOW_SOFTER)
 const SOFT_EDGE_UNITS: f32 = 1.5;
 const SOFT_EDGE_LEAST_TEXELS: f32 = 0.75;
 const SOFT_EDGE_MOST_TEXELS: f32 = 8.0;

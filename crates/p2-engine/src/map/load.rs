@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn without_an_area_the_canvas_is_left_alone() {
         let mut app = host();
-        app.init_resource::<CanvasArea>().init_resource::<bevy_egui::EguiUserTextures>().add_systems(EguiPrimaryContextPass, paint_map_canvas);
+        app.init_resource::<CanvasArea>().init_resource::<bevy_egui::EguiUserTextures>().add_systems(EguiPrimaryContextPass, canvas::paint_map_canvas);
         let canvas = app.world().resource::<Play>().canvas();
         app.world_mut().run_schedule(EguiPrimaryContextPass);
         assert_eq!(app.world().resource::<Play>().canvas(), canvas);

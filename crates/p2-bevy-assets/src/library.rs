@@ -249,14 +249,21 @@ impl Game {
 
     pub fn add_map(mut loader: Loader, map: &str, progress: &LoadProgress) -> Result<(Arc<Loader>, PackageId), ResolveError> {
         let id = loader.load(map)?;
-        loader.load_imports_with(id, |done, known| progress.set(0.4 * done as f32 / known as f32))?;
+        loader.load_imports_with(id, |done, known| progress.set(0.02 * done as f32 / known as f32))?;
         loader.load_imported(&["MeshAnimation", "SkeletalMesh", "Texture"])?;
-        progress.set(0.45);
+        progress.set(0.02);
         Ok((Arc::new(loader), id))
     }
 
     pub fn adopt(&mut self, clone: &Self) {
         self.loader.adopt(&clone.loader);
+    }
+
+    /// A copy for another thread that loads no more packages, so every id it hands out is this one's.
+    pub fn frozen_clone(&self) -> Self {
+        let mut game = self.clone();
+        game.loader.freeze();
+        game
     }
 
     pub fn adopt_loader(&mut self, loader: &Loader) {

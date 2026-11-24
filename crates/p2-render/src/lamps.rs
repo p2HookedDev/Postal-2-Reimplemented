@@ -65,9 +65,13 @@ const LAMP_SEEN_RADII: f32 = 30.0;
 /// Without an atlas a lamp lights through walls and a cell lists every lamp in reach, so the cells are larger.
 const SHADOWED_CELL: f32 = 128.0;
 const UNSHADOWED_CELL: f32 = 512.0;
-/// Left to the game while the lists are made: the slowest machine it must run on has four threads.
-const THREADS_KEPT: usize = 2;
 const ITEMS_PER_BATCH: usize = 8;
+
+/// The threads a light bake may take: all but two, left to the game (the slowest machine it must run on has four).
+/// Bakes that run together share them.
+pub(crate) fn bake_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(2).max(1))
+}
 
 /// `work` on each of `count` items, on `threads` threads, the results in the items' order.
 fn on_threads<T: Send>(count: usize, threads: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
@@ -247,10 +251,9 @@ struct LampJob {
     ready: Option<LampJobResult>,
 }
 
-fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], origin: Vec3, side: u32) -> LampJobResult {
+fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], origin: Vec3, side: u32, threads: usize) -> LampJobResult {
     let lamps = map_lamps(environment);
     let spheres: Vec<_> = lamps.iter().map(|light| (scene_place(light, origin).0.to_array(), light.world_radius())).collect();
-    let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(THREADS_KEPT).max(1));
     let bake = (side > 0).then(|| lamp_bake(triangles, &world_masked(collision, origin), &spheres, threads));
     let records: Vec<_> = lamps.iter().enumerate().map(|(index, light)| lamp_record(light, environment.level_brightness, origin, bake.as_ref().map_or(UNMAPPED, |bake| bake.tile_bits(index)))).collect();
     let cells = {
@@ -319,16 +322,23 @@ pub struct LightBakes {
     pub(crate) probes: crate::probes::ProbePrebake,
 }
 
+pub fn bakes_at_load() -> bool {
+    LOAD_LEVELS.load(Ordering::Relaxed) & LOAD_MODERN != 0
+}
+
 pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCollision, origin: Vec3) -> Option<Arc<LightBakes>> {
-    let levels = LOAD_LEVELS.load(Ordering::Relaxed);
-    if levels & LOAD_MODERN == 0 {
+    if !bakes_at_load() {
         return None;
     }
+    let levels = LOAD_LEVELS.load(Ordering::Relaxed);
     let side = lamp_quality((levels & 255) as u8).atlas_side;
     let world = world_triangles(collision, origin);
+    let threads = bake_threads();
+    let probe_threads = (threads / 2).max(1);
     let (lamps, probes) = std::thread::scope(|scope| {
-        let probes = scope.spawn(|| crate::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8));
-        (lamp_job(environment, collision, &world.triangles, origin, side), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+        let probes = scope.spawn(|| crate::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8, probe_threads));
+        let lamps = lamp_job(environment, collision, &world.triangles, origin, side, threads.saturating_sub(probe_threads).max(1));
+        (lamps, probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
     });
     Some(Arc::new(LightBakes { lamps: Prebaked::new(side, lamps), probes }))
 }
@@ -389,7 +399,7 @@ fn follow_lamps(
             let origin = shown.origin;
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.lamps.take(&side));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, origin, side) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, origin, side, bake_threads()) }));
             }
         }
     }

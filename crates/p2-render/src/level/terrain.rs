@@ -254,7 +254,7 @@ pub fn terrain_models(
         terrains += 1;
         // Its first layer stands for all of them: the layers' maps stay unread here.
         let base = terrain.layers.iter().find(|layer| layer.texture != 0).and_then(|layer| texture(game, t, id, layer.texture));
-        terrain_albedos.push(base.and_then(|base| t.albedos.get(&base.image.id()).copied()).unwrap_or(GREY_ALBEDO));
+        terrain_albedos.push(base.and_then(|base| t.albedo(base.image.id())).unwrap_or(GREY_ALBEDO));
         // A terrain belongs to the zone its `TerrainInfo` stands in (`ZoneInfo.Terrains`): in the sky zone it is part
         // of the sky (some `SkyZoneInfo`s are `bTerrainZone`).
         let zone = p2_collision::point_zone(zones.model, terrain.location);

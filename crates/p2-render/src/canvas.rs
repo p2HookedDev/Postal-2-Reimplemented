@@ -81,12 +81,17 @@ fn registered(kept: &mut Vec<Handle<Image>>, image: Handle<Image>, contexts: &mu
 }
 
 impl CanvasPainter {
-    /// At a map change. The loading bar stays: it is the same for every map.
-    pub fn forget(&mut self) {
-        self.textures.clear();
-        self.fonts.clear();
-        self.images.clear();
-        self.nearest = sharp::NearestImages::default();
+    /// At a map change: what the map left drew from its own package goes, and a read that failed is tried again. The
+    /// fonts and textures of the other packages, the same for every map, and the loading bar stay.
+    pub fn forget_map(&mut self, map: &str) {
+        let own = |path: &String| path.split_once('.').is_some_and(|(package, _)| package.eq_ignore_ascii_case(map));
+        self.textures.retain(|path, painted| painted.is_some() && !own(path));
+        self.fonts.retain(|path, painted| painted.is_some() && !own(path));
+    }
+
+    /// The texture and font paths already painted, which a map's start need not read ahead.
+    pub fn painted(&self) -> std::collections::HashSet<String> {
+        self.textures.keys().chain(self.fonts.keys()).cloned().collect()
     }
 
     pub fn set_progress_bar(&mut self, bar: ProgressBar, image: Handle<Image>, contexts: &mut EguiContexts) {
@@ -97,7 +102,8 @@ impl CanvasPainter {
     pub fn paint_progress(&self, ctx: &egui::Context, rect: egui::Rect, progress: f32) {
         if let Some((bar, texture)) = &self.progress {
             let shapes = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, "progress".into())).with_clip_rect(rect);
-            shapes.add(bar.mesh(rect, progress, *texture));
+            // The engine never draws the bar full.
+            shapes.add(bar.mesh(rect, progress.min(0.99), *texture));
         }
     }
 
@@ -252,6 +258,17 @@ fn inside_borders(start: f32, length: f32, texels: f32, drawn: f32) -> [f32; 2] 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_map_change_keeps_the_shared_paintings_only() {
+        let mut painter = CanvasPainter::default();
+        let painted = Some((egui::TextureId::User(1), egui::Vec2::ONE));
+        for (path, found) in [("P2Misc.Hud.Ammo", painted), ("Suburbs-3.Signs.Door", painted), ("Missing.Tex", None)] {
+            painter.textures.insert(path.to_owned(), found);
+        }
+        painter.forget_map("suburbs-3");
+        assert_eq!(painter.painted(), ["P2Misc.Hud.Ammo".to_owned()].into_iter().collect());
+    }
 
     #[test]
     fn an_enlarged_tile_reads_no_texel_across_the_border() {

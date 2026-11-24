@@ -42,6 +42,7 @@ use crate::play::{Play, PlayWorld};
 use p2_render::level_collision::LevelCollision;
 use p2_render::canvas::CanvasStores;
 
+mod canvas;
 mod canvas_actors;
 mod coronas;
 mod decal_aging;
@@ -58,6 +59,7 @@ mod sprites;
 
 use hud::{HudAssets, LibraryReads};
 pub use hud::Hud;
+pub use canvas::CanvasArea;
 pub use load::{LoadMap, MapFailed, MapLoadPlugin, MapState};
 use load::{configs, play_loader, spawn_play_loader};
 use movie::Movies;
@@ -85,9 +87,9 @@ pub enum MapSystems {
 impl bevy::app::Plugin for MapPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
-        app.add_plugins(MapPresentPlugin).init_resource::<CanvasArea>().add_systems(bevy::app::Startup, spawn_hud_camera).add_systems(
+        app.add_plugins(MapPresentPlugin).init_resource::<CanvasArea>().add_systems(bevy::app::Startup, canvas::spawn_hud_camera).add_systems(
             bevy_egui::EguiPrimaryContextPass,
-            paint_map_canvas
+            canvas::paint_map_canvas
                 .in_set(MapSystems::Paint)
                 .after(MapSystems::Load)
                 .run_if(bevy::ecs::schedule::common_conditions::resource_exists::<Session>),
@@ -130,36 +132,6 @@ impl bevy::app::Plugin for MapPresentPlugin {
                     .in_set(MapSystems::Present),
             );
     }
-}
-
-fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
-    egui_settings.auto_create_primary_context = false;
-    commands.spawn((PrimaryEguiContext, p2_render::view::hud_camera()));
-}
-
-/// Where the host shows the map, in egui points: its canvas is painted there. `None` paints nothing.
-#[derive(Resource, Default)]
-pub struct CanvasArea(pub Option<egui::Rect>);
-
-#[derive(SystemParam)]
-struct CanvasTargets<'w, 's> {
-    assets: AssetStores<'w>,
-    view: ResMut<'w, MeshView>,
-    times: ResMut<'w, FrameTimes>,
-    play: ResMut<'w, Play>,
-    commands: Commands<'w, 's>,
-    hud: ResMut<'w, Hud>,
-    painter: ResMut<'w, p2_render::canvas::CanvasPainter>,
-}
-
-fn paint_map_canvas(area: Res<CanvasArea>, mut session: ResMut<Session>, mut contexts: EguiContexts, mut t: CanvasTargets) -> bevy::ecs::error::Result {
-    let Some(rect) = area.0 else { return Ok(()) };
-    let ctx = contexts.ctx_mut()?.clone();
-    match session.loading() {
-        Some(progress) => session.loading_frame(&ctx, rect, progress, &mut contexts, &mut t),
-        None => session.frame(&ctx, rect, &mut contexts, &mut t),
-    }
-    Ok(())
 }
 
 /// What loading a map fills and dropping it empties.
@@ -359,7 +331,7 @@ fn start_vm(
     configs: Vec<(&'static str, Ini)>,
     progress: &LoadProgress,
 ) -> StartedVm {
-    progress.set(0.5);
+    progress.set(0.03);
     let fresh = previous.is_none();
     let mut vm = match previous {
         Some(mut vm) => {
@@ -431,7 +403,7 @@ fn start_vm(
             }
         }
     };
-    progress.set(0.8);
+    progress.set(0.08);
     // The camera is the player's eyes, so its own pawn is not drawn.
     if fresh && let Err(error) = vm.init_client().and_then(|()| vm.add_viewport_interaction("P2Modern", "ModernPhotoMode")) {
         bevy::log::warn!("client: {error}");
@@ -448,7 +420,7 @@ fn start_vm(
         }
     }
     vm.prewarm();
-    progress.set(0.9);
+    progress.set(scene::SCENE_START);
     StartedVm { vm, loader, id, script_errors, player }
 }
 
@@ -480,80 +452,19 @@ impl Session {
     pub fn clear(&mut self, t: &mut SceneTargets) {
         t.animated.0.clear();
         t.play.set(None);
-        self.map = None;
+        let map = self.map.take();
+        if let Some(map) = map.as_deref() {
+            t.painter.forget_map(map_name(map));
+        }
         self.map_system = None;
-        t.painter.forget();
-        let hud = &mut *t.hud;
-        hud.hud_assets = HudAssets::default();
-        hud.movies.stop(&mut t.commands);
-        hud.canvas_actors.clear();
-        hud.failed_canvas_meshes.clear();
+        t.hud.leave_map(map.as_deref().map(map_name), &mut t.commands);
         t.commands.queue(despawn_map_scoped);
         *t.projectors = Projectors::default();
         *t.spawned = SpawnedActors::default();
         t.assets.actor_materials.forget_spawned();
-        let particles = &mut *t.particles;
-        particles.waiting_sprites.clear();
-        particles.waiting_coronas.clear();
-        particles.actors.clear();
-        particles.particle_emitters.clear();
-        particles.born.clear();
-        particles.born_meshes.clear();
-        particles.blasts.clear();
-        t.particle_frame.born.clear();
-        t.particle_frame.blasts.clear();
-        t.particle_frame.born_meshes.clear();
-        t.particle_frame.level = t.particle_frame.level.wrapping_add(1);
+        *t.particles = Particles::default();
+        t.particle_frame.leave_level();
         *t.fluids = Fluids::default();
-    }
-
-    fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut CanvasTargets) {
-        let started = std::time::Instant::now();
-        t.hud.start_frame(started);
-        t.play.set_canvas_size([rect.width(), rect.height()]);
-        t.play.set_hud_inset(if t.view.modern.safe_area { p2_render::modern_view::hud_area(rect).min.x - rect.min.x } else { 0.0 });
-        t.view.hide_canvas_layers();
-        // Until a new map's first VM frame is presented, the last image (the load screen) stays up, as in the
-        // engine's frame buffer; its canvas actors belong to the level left.
-        if t.play.world().is_some_and(|world| !world.presented()) {
-            let items = Arc::clone(&t.hud.last_hud);
-            self.paint_items(ctx, rect, &items, contexts, t);
-            t.painter.paint_progress(ctx, rect, 1.0);
-            t.times.add("hud paint", started);
-            return;
-        }
-        let items = t.play.world().map(PlayWorld::hud_items).unwrap_or_default();
-        t.hud.movies.update(&self.root, contexts, &mut t.play, &mut t.commands, &mut t.assets, &mut t.painter);
-        let mut stores = CanvasStores { contexts, images: &mut t.assets.images };
-        let mut source = LibraryReads { session: self, hud: &mut t.hud };
-        if let Some(overlay) = t.play.world().and_then(PlayWorld::screen_overlay) {
-            t.painter.paint_overlay(ctx, rect, overlay, &mut source, &mut stores);
-        }
-        if !items.is_empty() {
-            t.painter.paint_canvas(ctx, rect, &items, &mut t.view, &mut source, &mut stores);
-        }
-        t.times.add("hud paint", started);
-        t.hud.last_hud = items;
-    }
-
-    fn paint_items(&mut self, ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], contexts: &mut EguiContexts, t: &mut CanvasTargets) {
-        let mut stores = CanvasStores { contexts, images: &mut t.assets.images };
-        t.painter.paint(ctx, rect, items, &t.view.modern, &mut LibraryReads { session: self, hud: &mut t.hud }, &mut stores);
-    }
-
-    fn loading_frame(&mut self, ctx: &egui::Context, rect: egui::Rect, progress: f32, contexts: &mut EguiContexts, t: &mut CanvasTargets) {
-        t.play.set_canvas_size([rect.width(), rect.height()]);
-        t.view.hide_canvas_layers();
-        let items = Arc::clone(&t.hud.last_hud);
-        self.paint_items(ctx, rect, &items, contexts, t);
-        if !std::mem::replace(&mut t.hud.progress_bar_read, true) {
-            let entry = map_package("Entry");
-            if let Some((bar, image)) = self.library.open(&self.root, &entry).ok().and_then(|(game, id)| read_progress_bar(game, id)) {
-                let image = t.assets.images.add(image);
-                t.painter.set_progress_bar(bar, image, contexts);
-            }
-        }
-        t.painter.paint_progress(ctx, rect, progress);
     }
 
     /// Viewer-only (and the real-data tests of this crate, which cannot use `p2-viewer`): loads on this thread, blocking.
@@ -592,7 +503,7 @@ impl Session {
             let started = std::time::Instant::now();
             let vm = start_vm(previous, url.as_deref(), loader, id, configs, &thread_progress);
             bevy::log::info!("load: VM started in {} ms", started.elapsed().as_millis());
-            prepare(vm)
+            prepare(vm, &thread_progress)
         });
         self.pending = Some(PendingLoad { package: package.to_owned(), progress, task });
         Ok(())

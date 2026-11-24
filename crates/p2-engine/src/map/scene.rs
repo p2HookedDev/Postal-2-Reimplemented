@@ -54,9 +54,28 @@ pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option
     Some(location_rotation(vm, sky))
 }
 
-pub(super) fn scene_preparer(game: &Game, id: PackageId, package: &str, t: &SceneTargets) -> impl FnOnce(StartedVm) -> Result<PreparedScene, LoadError> + Send + 'static {
+/// Where the scene build starts on the load bar, after the packages and the VM.
+pub(super) const SCENE_START: f32 = 0.1;
+const BAKE_PHASE: &str = "lamps and probes";
+/// The scene build's phases and their time in ms on a large map (suburbs-3), so the bar moves as the time goes. The
+/// engine weights its loading phases too. The BSP builds beside them on its own thread.
+const SCENE_PHASES: [(&str, f32); 9] = [
+    ("map file", 7.0),
+    ("HUD", 10.0),
+    ("actors", 20.0),
+    ("projectors and meshes found", 5.0),
+    ("terrain", 490.0),
+    ("static meshes", 320.0),
+    ("pawns", 235.0),
+    ("rest", 1.0),
+    (BAKE_PHASE, 2200.0),
+];
+
+pub(super) fn scene_preparer(game: &Game, id: PackageId, package: &str, t: &SceneTargets) -> impl FnOnce(StartedVm, &LoadProgress) -> Result<PreparedScene, LoadError> + Send + 'static {
     let (game, package, assets) = (game.clone(), package.to_owned(), PendingAssets::new(&t.assets.meshes, &t.assets.images, &t.assets.bindposes));
-    move |started| PreparedScene::build(game, id, &package, started, assets)
+    let mut painted = t.painter.painted();
+    painted.extend(t.hud.hud_assets.paths().cloned());
+    move |started, progress| PreparedScene::build(game, id, &package, started, assets, &painted, progress)
 }
 
 impl Session {
@@ -65,8 +84,9 @@ impl Session {
         let prepare = scene_preparer(game, id, package, t);
         let map_name = map_name(package);
         let (loader, id) = play_loader(game, map_name).map_err(|source| LoadError::Play { package: package.to_owned(), source })?;
-        let started = start_vm(None, None, loader, id, configs(game), &LoadProgress::default());
-        let prepared = prepare(started)?;
+        let progress = LoadProgress::default();
+        let started = start_vm(None, None, loader, id, configs(game), &progress);
+        let prepared = prepare(started, &progress)?;
         self.show_scene(prepared, t)
     }
 
@@ -77,7 +97,7 @@ impl Session {
             spawned::keep_static_meshes(&mut t.assets.meshes, model.as_ref());
         }
         t.spawned.spawn_models.extend(emitter_models);
-        t.hud.hud_assets = hud;
+        t.hud.hud_assets.add(hud);
         let (game, _) = self.library.open(&self.root, &package)?;
         game.adopt(&built);
         *t.switches = MaterialSwitches::default();
@@ -123,20 +143,59 @@ pub(super) fn present_material_switches(mut session: ResMut<Session>, mut t: Swi
     t.times.add("material switches", started);
 }
 
+struct BspBuilt {
+    parts: Option<BspParts>,
+    drawn: usize,
+    polygons: usize,
+}
+
+/// The level's BSP surfaces build on their own thread while the actors, terrain, static meshes and pawns build on this
+/// one. Its copy of the game loads no package, so every package id it hands out is ours; the material cache is shared,
+/// so no texture is made twice.
+fn spawn_bsp(
+    game: &Game,
+    t: &PendingAssets,
+    materials: &Arc<MaterialCache>,
+    model: Model,
+    sky_zone: Option<u8>,
+    id: PackageId,
+) -> Result<std::thread::JoinHandle<(BspBuilt, PendingAssets)>, LoadError> {
+    let (mut game, mut t, materials) = (game.frozen_clone(), t.fork(), Arc::clone(materials));
+    std::thread::Builder::new()
+        .name("map loading: BSP".into())
+        .spawn(move || {
+            let polygons = model.polygons();
+            let groups = bsp_groups(&model, &polygons, sky_zone);
+            let drawn = groups.values().map(Vec::len).sum();
+            let mut texture = |game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32| materials.images(game, t, package, material);
+            let parts = (drawn > 0).then(|| bsp_models(&mut game, &mut t, &mut texture, id, &model, &groups));
+            (BspBuilt { parts, drawn, polygons: polygons.len() }, t)
+        })
+        .map_err(LoadError::Thread)
+}
+
 impl PreparedScene {
-    #[expect(clippy::too_many_lines, reason = "phase timings; split when the phases build in parallel")]
+    #[expect(clippy::too_many_lines, reason = "phase timings")]
     fn build(
         mut built: Game,
         id: PackageId,
         package: &str,
         started: StartedVm,
         mut assets: PendingAssets,
+        painted: &HashSet<String>,
+        progress: &LoadProgress,
     ) -> Result<Self, LoadError> {
         let (game, t) = (&mut built, &mut assets);
         let (clock, mut lap, mut times) = (std::time::Instant::now(), std::time::Instant::now(), Vec::new());
+        let bakes = p2_render::lamps::bakes_at_load();
+        let weight = |name: &str| SCENE_PHASES.iter().find(|(phase, _)| *phase == name).map_or(0.0, |&(phase, ms)| if phase == BAKE_PHASE && !bakes { 0.0 } else { ms });
+        let total: f32 = SCENE_PHASES.iter().map(|(name, _)| weight(name)).sum();
+        let mut done = 0.0;
         let mut phase = |name: &str| {
             times.push(format!("{name} {} ms", lap.elapsed().as_millis()));
             lap = std::time::Instant::now();
+            done += weight(name);
+            progress.set(SCENE_START + (1.0 - SCENE_START) * done / total);
         };
         game.adopt_loader(&started.loader);
         let map_loader = Arc::clone(&started.loader);
@@ -144,21 +203,15 @@ impl PreparedScene {
         let (pkg, file) = (&loaded.package, &*loaded.data);
         let (name, model) = read_map_model(pkg, file, package)?;
         phase("map file");
-        let mut materials = MaterialCache::default();
+        let materials = Arc::new(MaterialCache::default());
         let mut texture = |game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32| materials.images(game, t, package, material);
 
         let map_name = map_name(package);
         let sky_info = sky_zone_info(&started.vm, map_name);
-        let hud = HudAssets::read(game, &started.vm, |image| t.add_image(image));
         let sky_zone = sky_info.map(|(location, _)| p2_collision::point_zone(&model, location));
-        let polygons = model.polygons();
-        let groups = bsp_groups(&model, &polygons, sky_zone);
-        let drawn: usize = groups.values().map(Vec::len).sum();
-        if drawn == 0 {
-            return Err(LoadError::NoPolygons { name });
-        }
-        let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos } = bsp_models(game, t, &mut texture, id, &model, &groups);
-        phase("HUD and BSP");
+        let bsp = spawn_bsp(game, t, &materials, model.clone(), sky_zone, id)?;
+        let hud = HudAssets::read(game, &started.vm, painted, |image| t.add_image(image));
+        phase("HUD");
 
         let mut placements: HashMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>> = HashMap::new();
         let mut missing = 0;
@@ -204,8 +257,6 @@ impl PreparedScene {
         let zones = TerrainZones { model: &model, sky_zone, terrain_zones: &terrain_zones };
         let TerrainParts { models: terrain_drawn, sky_models: terrain_sky, static_terrains, terrain_albedos, terrain_sectors, terrains, hidden_terrains, drawn_decorations } =
             terrain_models(game, t, &mut texture, id, &zones, terrain_infos);
-        models.extend(terrain_drawn);
-        sky_models.extend(terrain_sky);
         phase("terrain");
         let actors: usize = placements.values().map(Vec::len).sum();
         let meshes = placements.keys().map(|(mesh, _)| mesh).collect::<HashSet<_>>().len();
@@ -216,9 +267,6 @@ impl PreparedScene {
         let (parts, static_missing, static_batches) = static_models(game, t, &mut texture, &level, placements);
         missing += static_missing;
         let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lamp_casters, lamp_caster_albedos, lamp_masked, lit_actors, .. } = parts;
-        lamp_masked_all.extend(lamp_masked.into_values());
-        models.extend(static_drawn);
-        sky_models.extend(static_sky);
         phase("static meshes");
 
         let vm_animations = VmAnimations::of(&played.0, &played.1);
@@ -228,6 +276,17 @@ impl PreparedScene {
         let animated_meshes = pawn_parts.animated;
         let (attached, drawn_pawns, drawn_attachments) = (pawn_parts.attached, pawn_parts.drawn_pawns, pawn_parts.drawn_attachments);
         phase("pawns");
+        let (bsp, bsp_assets) = bsp.join().map_err(|_| LoadError::Panicked { package: package.to_owned() })?;
+        let BspBuilt { parts, drawn, polygons } = bsp;
+        let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos } =
+            parts.ok_or_else(|| LoadError::NoPolygons { name: name.clone() })?;
+        t.merge(bsp_assets);
+        models.extend(terrain_drawn);
+        models.extend(static_drawn);
+        sky_models.extend(terrain_sky);
+        sky_models.extend(static_sky);
+        lamp_masked_all.extend(lamp_masked.into_values());
+        phase("BSP, waited for");
         let switches = switched_images(game, &materials);
         keep_restyled_out_of_world_pass(&mut models, switches.iter().map(|(_, switch)| switch));
         let blocking = collisions.len();
@@ -235,7 +294,7 @@ impl PreparedScene {
             "{name}: {drawn} of {} BSP polygons ({textured} textured, {lit} light-mapped); \
              {actors} static mesh actors ({lit_actors} lit, {blocking} blocking, static ones in {static_batches} merged meshes), {meshes} meshes ({missing} not found); {emitter_count} particle emitter actors,{} of {projector_count} projectors; \
              {terrains} terrains ({hidden_terrains} in zones without terrain, {drawn_decorations} decorations), {drawn_pawns} pawns (posed by their scripts while playing), {drawn_attachments} attachments; {script_errors} start-up script errors",
-            polygons.len(),
+            polygons,
             decals.len(),
         );
         let sky = sky_info.zip(sky_zone).map(|((location, rotation), zone)| Sky {
