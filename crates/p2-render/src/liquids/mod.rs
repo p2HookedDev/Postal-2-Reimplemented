@@ -11,6 +11,7 @@ use bevy::core_pipeline::schedule::Core3d;
 
 use crate::MainPassExtraSystems;
 
+pub mod deposits;
 pub mod stream;
 pub mod surface;
 
@@ -21,6 +22,8 @@ pub const LIQUID_KIND_MASK: u32 = 0xF;
 /// Set once the particle lies on a surface.
 pub const LIQUID_LANDED: u32 = 1 << 4;
 pub const LIQUID_BURNING: u32 = 1 << 5;
+/// Set on a puddle's or trail's blob: a thin film on the surface under it rather than a landed drop.
+pub const LIQUID_DEPOSIT: u32 = 1 << 7;
 
 /// The render world's liquid particles, stepped by `stream` and drawn by `surface`. Absent while no liquid lives.
 #[derive(Resource)]
@@ -29,6 +32,13 @@ pub struct LiquidParticles {
     pub capacity: u32,
     /// Particles from the start of `buffer` the surface pass draws; 0 draws nothing.
     pub live: u32,
+}
+
+/// The render world's puddle and trail blobs, drawn by `surface` with the stream. Absent while there are none.
+#[derive(Resource)]
+pub struct LiquidDeposits {
+    pub buffer: Buffer,
+    pub count: u32,
 }
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,7 +51,7 @@ pub struct LiquidsPlugin;
 
 impl Plugin for LiquidsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((stream::LiquidStreamPlugin, surface::LiquidSurfacePlugin));
+        app.add_plugins((stream::LiquidStreamPlugin, deposits::LiquidDepositsPlugin, surface::LiquidSurfacePlugin));
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.configure_sets(Core3d, (LiquidPassSystems::Step, LiquidPassSystems::Surface).chain().in_set(MainPassExtraSystems::Liquids));
         }

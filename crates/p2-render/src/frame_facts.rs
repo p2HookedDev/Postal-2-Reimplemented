@@ -29,6 +29,18 @@ pub struct FrameFacts {
     pub volume_fog: Option<ZoneFog>,
 }
 
+impl FrameFacts {
+    /// The game seconds this frame moves on: none while paused.
+    pub fn step(&self) -> f32 {
+        if self.paused { 0.0 } else { self.game_step }
+    }
+
+    /// `real` host seconds, at most `most`, while the game runs: for motion that keeps to the host's clock.
+    pub fn capped_step(&self, real: f32, most: f32) -> f32 {
+        if self.paused { 0.0 } else { real.min(most) }
+    }
+}
+
 /// What the HUD's frame told the view; the overlay cameras take it in the frame it is written.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
 pub struct HudView {

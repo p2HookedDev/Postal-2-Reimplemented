@@ -33,6 +33,7 @@ use bevy::ecs::prelude::{
 };
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::prelude::resource_exists;
 use bevy::ecs::prelude::Mut;
 use bevy::ecs::message::Messages;
 use bevy::ecs::system::{EntityCommands, SystemParam};
@@ -53,7 +54,7 @@ use p2_bevy_assets::{MODULATE_2X, rotator_matrix, to_bevy};
 
 use crate::actor_light::{ActorLit, animate_actor_speculars, settle_step};
 use crate::components::FollowBone;
-use crate::blended::{BlendedMaterial, OpaqueDecals, TerrainLayer, TerrainLayerMaterial};
+use crate::blended::{BlendedMaterial, OpaqueDecals, SkyStandard, SkyStandardMaterial, TerrainLayer, TerrainLayerMaterial};
 use crate::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::shader_layers::{Layers, ShaderLayers};
@@ -68,6 +69,7 @@ mod animated_materials;
 mod restyle;
 mod fog;
 mod zone_culling;
+mod sky_copies;
 mod mover_sight;
 mod shown;
 pub use mover_sight::{MoverSightPlugin, MoversSeen};
@@ -122,6 +124,20 @@ impl Plugin for MeshViewPlugin {
             .configure_sets(Update, (MeshViewSystems::Apply, MeshViewSystems::Control, MeshViewSystems::Camera).chain())
             .add_systems(Startup, (setup, steady_decal_order))
             .add_systems(Update, (apply_change, animate_materials, animate_actor_speculars, follow_msaa).chain().in_set(MeshViewSystems::Apply))
+            .add_systems(
+                PostUpdate,
+                (
+                    sky_copies::sky_copies,
+                    (
+                        sky_copies::follow_sky_material::<StandardMaterial>.run_if(resource_exists::<Assets<StandardMaterial>>),
+                        sky_copies::follow_sky_material::<MeshLitMaterial>.run_if(resource_exists::<Assets<MeshLitMaterial>>),
+                        sky_copies::follow_sky_material::<crate::actor_light::ActorLitMaterial>.run_if(resource_exists::<Assets<crate::actor_light::ActorLitMaterial>>),
+                        sky_copies::follow_sky_material::<crate::particle_material::ParticleMaterial>.run_if(resource_exists::<Assets<crate::particle_material::ParticleMaterial>>),
+                    ),
+                )
+                    .chain()
+                    .before(bevy::transform::TransformSystems::Propagate),
+            )
             .configure_sets(
                 Update,
                 (SceneViewSystems::Place, SceneViewSystems::Fog, SceneViewSystems::Zones, SceneViewSystems::Light).chain().in_set(MeshViewSystems::Camera),
@@ -223,10 +239,9 @@ impl SceneView {
     }
 }
 
+/// The parent of the sky zone's models, apart from the level's so that it can carry the sky's placement.
 #[derive(Component)]
-struct SkyCamera {
-    position: Option<(Vec3, Quat)>,
-}
+struct SkyRoot;
 
 #[derive(Component)]
 pub struct MapModel;
@@ -253,22 +268,13 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
         Transform::default(),
         SceneView::default(),
+        // The sky zone too, squeezed behind the level by its materials.
+        RenderLayers::from_layers(&[0, SKY_LAYER]),
         crate::world_pass::WorldCamera,
         // Assigning lights costs by the clusters they cover, on the main thread; a longer list per pixel costs far less.
         ClusterConfig::FixedZ { total: 1536, z_slices: 16, z_config: ClusterZConfig::default(), dynamic_resizing: true },
         DistanceFog { color: Color::NONE, ..Default::default() },
         AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
-    ));
-    commands.spawn((
-        Camera3d::default(),
-        plain_output(),
-        AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
-        Camera { is_active: false, order: -2, ..Default::default() },
-        Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
-        Transform::default(),
-        SkyCamera { position: None },
-        ClusterConfig::None,
-        RenderLayers::layer(SKY_LAYER),
     ));
     for (slot, layer) in OVERLAY_LAYERS.into_iter().enumerate() {
         let order = 2 * slot as isize;
@@ -316,7 +322,7 @@ fn apply_change(
     shown_level: ShownLevel,
     mut world: WorldTargets,
 ) {
-    let SceneCameras { mut views, mut skies } = cameras;
+    let SceneCameras { mut views } = cameras;
     let ShownLevel { mut shown, mut level } = shown_level;
     if changes.is_empty() {
         return;
@@ -331,22 +337,14 @@ fn apply_change(
     for entity in &map_models {
         commands.entity(entity).despawn();
     }
-    let SceneChange::Show(scene) = change else {
-        for mut sky_camera in &mut skies {
-            sky_camera.position = None;
-        }
-        return;
-    };
+    let SceneChange::Show(scene) = change else { return };
     let Scene { models, center, radius, sky, start, collision, fogs, decals, actors, attachments, lighting, light_bakes, antiportals, light_maps } = *scene;
     let sky_zone = sky.as_ref().map(|sky| sky.zone);
     let (sky, sky_models) = sky.map_or((None, Vec::new()), |sky| (Some((sky.position - center, sky.rotation)), sky.models));
-    for mut sky_camera in &mut skies {
-        sky_camera.position = sky;
-    }
     let portals = collision.as_ref().map(|collision| Arc::new(ZonePortals::new(&collision.model, antiportals)));
     let start = start.map(|(position, yaw)| (position - center, yaw));
     *level = LevelCollision(collision.map(Arc::new));
-    *shown = ShownScene { fogs, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone };
+    *shown = ShownScene { fogs, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone, sky_place: sky };
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }
@@ -355,6 +353,7 @@ fn apply_change(
     // whose transforms changed, so the static scene costs nothing while actors move.
     let root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
     let attachments_root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
+    let sky_root = commands.spawn((MapModel, SkyRoot, Transform::from_translation(-center), Visibility::default())).id();
     for MovingModel { sections, transform, follow, lit } in attachments {
         spawn_actor_sections(&mut commands, attachments_root, sections, transform, (follow.actor, follow), (&mut section_materials.actors, ActorLook::Follower), lit, ());
     }
@@ -372,7 +371,7 @@ fn apply_change(
                 .sections
                 .into_iter()
                 .map(|section| {
-                    let material = scene_section_material(&section, center, &mut section_materials, &mut cache);
+                    let material = scene_section_material(&section, center, sky.filter(|_| in_sky), &mut section_materials, &mut cache);
                     let lightmap = section.lightmap.map(|image| Lightmap {
                         image,
                         uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
@@ -402,7 +401,7 @@ fn apply_change(
                         entity.insert(lightmap.clone());
                     }
                     if in_sky {
-                        entity.insert(RenderLayers::layer(SKY_LAYER));
+                        entity.insert((RenderLayers::layer(SKY_LAYER), ChildOf(sky_root)));
                     }
                     if !model.casts {
                         entity.insert(NoSunCast);

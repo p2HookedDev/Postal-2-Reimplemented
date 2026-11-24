@@ -400,6 +400,8 @@ fn liquid_role(is_a: impl Fn(Kind) -> bool) -> Option<LiquidRole> {
         LiquidRole::Drip
     } else if is_a(Kind::FluidFeeder) {
         LiquidRole::Stream
+    } else if is_a(Kind::FluidSplashEmitter) {
+        LiquidRole::Splash
     } else {
         return None;
     })
@@ -552,6 +554,7 @@ mod tests {
         assert_eq!(role(&[Kind::FluidDripTrail]), Some(LiquidRole::Trail));
         assert_eq!(role(&[Kind::FluidDripFeeder, Kind::FluidFeeder]), Some(LiquidRole::Drip));
         assert_eq!(role(&[Kind::FluidFeeder]), Some(LiquidRole::Stream));
+        assert_eq!(role(&[Kind::FluidSplashEmitter]), Some(LiquidRole::Splash));
         assert_eq!(role(&[Kind::Emitter]), None);
     }
 

@@ -7,6 +7,7 @@ use bevy::app::{App, Update};
 use bevy::asset::{Assets, Handle};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{Camera, Camera3d, ClearColorConfig, RenderTarget};
+use bevy::color::Color;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::observer::On;
 use bevy::image::Image;
@@ -33,7 +34,8 @@ fn image_of(app: &App, camera: Entity) -> Option<Handle<Image>> {
 }
 
 /// The red of the world's quad, the gap between the quads and the sky's quad, as the frame before the HUD shows them.
-fn world_gap_sky() -> [u8; 3] {
+/// The scene camera draws the sky quad too, through a sky material.
+fn world_gap_sky(sky_at: Vec3, sky_color: Color) -> [u8; 3] {
     let mut app = App::new();
     common::headless_renderer(&mut app);
     app.add_plugins((GammaPlugin, MeshLightPlugin));
@@ -49,8 +51,7 @@ fn world_gap_sky() -> [u8; 3] {
     world.spawn((Window { resolution: WindowResolution::new(SIZE, SIZE), ..Window::default() }, PrimaryWindow));
     let place = Transform::from_xyz(0.0, 0.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y);
     let lens = (Camera3d::default(), Tonemapping::None, DebandDither::Disabled, Msaa::Off, place);
-    world.spawn((lens.clone(), Camera { order: -2, ..Camera::default() }, RenderLayers::layer(SKY_LAYER)));
-    world.spawn((lens.clone(), Camera { order: -1, clear_color: ClearColorConfig::None, ..Camera::default() }, SceneView::default()));
+    world.spawn((lens.clone(), Camera { order: -1, ..Camera::default() }, SceneView::default(), RenderLayers::from_layers(&[0, SKY_LAYER])));
     let canvas = world.spawn((lens, Camera { order: 1, clear_color: ClearColorConfig::None, ..Camera::default() }, RenderLayers::layer(OVERLAY_LAYERS[0]))).id();
     let sun = DirectionalLight { shadow_maps_enabled: false, affects_lightmapped_mesh_diffuse: false, ..DirectionalLight::default() };
     let cascades = CascadeShadowConfigBuilder { overlap_proportion: 0.1, ..CascadeShadowConfigBuilder::default() }.build();
@@ -58,9 +59,11 @@ fn world_gap_sky() -> [u8; 3] {
     let quad = world.resource_mut::<Assets<Mesh>>().add(common::quad(3.0, 0.0, [1.0; 4]));
     let mut extension = DynamicLit::default();
     extension.layers.detail.z = 7.0;
+    let sky_look = MeshLitMaterial { base: StandardMaterial { base_color: sky_color, ..StandardMaterial::default() }, extension: DynamicLit { sky: true, ..extension.clone() } };
+    let sky_lit = world.resource_mut::<Assets<MeshLitMaterial>>().add(sky_look);
     let lit = world.resource_mut::<Assets<MeshLitMaterial>>().add(MeshLitMaterial { base: StandardMaterial::default(), extension });
-    world.spawn((Mesh3d(quad.clone()), MeshMaterial3d(lit.clone()), Transform::from_xyz(-4.0, 0.0, 0.0)));
-    world.spawn((Mesh3d(quad), MeshMaterial3d(lit), Transform::from_xyz(4.0, 0.0, 0.0), RenderLayers::layer(SKY_LAYER)));
+    world.spawn((Mesh3d(quad.clone()), MeshMaterial3d(lit), Transform::from_xyz(-4.0, 0.0, 0.0)));
+    world.spawn((Mesh3d(quad), MeshMaterial3d(sky_lit), Transform::from_translation(sky_at), RenderLayers::layer(SKY_LAYER)));
 
     let frames = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
     let start = Instant::now();
@@ -95,7 +98,15 @@ fn world_gap_sky() -> [u8; 3] {
 #[test]
 #[ignore = "needs a GPU"]
 fn the_world_and_the_sky_both_show_through_the_tone_pass() {
-    let [world, gap, sky] = world_gap_sky();
+    let [world, gap, sky] = world_gap_sky(Vec3::new(4.0, 0.0, 0.0), Color::WHITE);
     assert!(world > gap.saturating_add(50), "the world's quad is not in the frame: {world} against the empty {gap}");
     assert!(sky > gap.saturating_add(50), "the sky's quad is not in the frame: {sky} against the empty {gap}");
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn a_sky_quad_nearer_than_the_world_stays_behind_it() {
+    let [plain, ..] = world_gap_sky(Vec3::new(4.0, 0.0, 0.0), Color::WHITE);
+    let [covered, ..] = world_gap_sky(Vec3::new(-4.0, 0.0, 10.0), Color::srgb(0.0, 0.0, 1.0));
+    assert!(covered.abs_diff(plain) <= 2, "the nearer sky quad covered the world's: red {covered} against {plain}");
 }

@@ -15,7 +15,7 @@ fn erased_key(bucket: &Bucket, mesh_key: MeshPipelineKey) -> ErasedMaterialPipel
     ErasedMaterialPipelineKey { type_id: bucket.type_id, mesh_key: ErasedMeshPipelineKey::new(mesh_key), material_key: bucket.properties.material_key.clone() }
 }
 
-fn with_buckets<R>(world: &mut World, work: impl FnOnce(&mut World, &[Bucket]) -> R) -> Option<R> {
+pub(super) fn with_buckets<R>(world: &mut World, work: impl FnOnce(&mut World, &[Bucket]) -> R) -> Option<R> {
     let built = world.resource_mut::<WorldPass>().built.take()?;
     let result = work(world, &built.buckets);
     world.resource_mut::<WorldPass>().built = Some(built);
@@ -112,10 +112,8 @@ fn queue_prepass(world: &mut World, buckets: &[Bucket], view: RetainedViewEntity
     }
 }
 
-/// Opaque buckets draw depth only; masked ones run their material's fragment to discard.
-fn queue_shadow(world: &mut World, buckets: &[Bucket], view: RetainedViewEntity, light_key: MeshPipelineKey) {
-    let draw_full = world.resource::<DrawFunctions<Shadow>>().read().id::<DrawWorldPrepass>();
-    let draw_depth = world.resource::<DrawFunctions<Shadow>>().read().id::<DrawWorldDepthOnly>();
+/// Opaque buckets draw depth only; masked ones run their material's fragment to discard. Bucket, pipeline, depth only.
+pub(super) fn shadow_pipelines(world: &mut World, buckets: &[Bucket], light_key: MeshPipelineKey) -> Vec<(usize, CachedRenderPipelineId, bool)> {
     let mut items = Vec::new();
     for (index, bucket) in buckets.iter().enumerate() {
         if !bucket.casts || !bucket.properties.shadows_enabled {
@@ -138,62 +136,7 @@ fn queue_shadow(world: &mut World, buckets: &[Bucket], view: RetainedViewEntity,
             Err(error) => error!("world pass: {error}"),
         }
     }
-    if let Some(phase) = world.resource_mut::<ViewBinnedRenderPhases<Shadow>>().get_mut(&view) {
-        phase.non_mesh_items.clear();
-        for (index, pipeline, only_depth) in items {
-            let bucket = &buckets[index];
-            let key = ShadowBatchSetKey {
-                pipeline,
-                draw_function: if only_depth { draw_depth } else { draw_full },
-                material_bind_group_index: (!only_depth).then_some(bucket.group.0),
-                slabs: bucket.slabs,
-            };
-            phase.non_mesh_items.insert((key, ShadowBinKey { asset_id: draw_key(index) }), one_item(bucket.entity));
-        }
-    }
-}
-
-/// The static world goes into a cached sun level's view on the frame that level redraws, and into no other shadow view:
-/// queued then, taken out again the frame after. Bevy drops the phase of a view that goes away, and with it our record.
-fn queue_shadows(world: &mut World, lights: &mut QueryState<(&ExtractedView, &LightEntity), With<ShadowView>>) {
-    let casts = world.get_resource::<WorldCasts>().is_some_and(|casts| casts.0);
-    world.resource_scope(|world, mut pass: Mut<WorldPass>| {
-        let phases = world.resource::<ViewBinnedRenderPhases<Shadow>>();
-        pass.shadow_queued.retain(|view, _| phases.contains_key(view));
-    });
-    let views: Vec<(RetainedViewEntity, bool)> = lights
-        .iter(world)
-        .filter_map(|(view, light)| {
-            let LightEntity::Directional { light_entity, .. } = light else { return None };
-            let drawn = casts && world.get::<DrawsStaticWorld>(*light_entity).is_some_and(|draws| draws.0);
-            Some((view.retained_view_entity, drawn))
-        })
-        .collect();
-    for (view, drawn) in views {
-        if !world.resource::<ViewBinnedRenderPhases<Shadow>>().contains_key(&view) {
-            if drawn {
-                redraw_levels(world);
-            }
-            continue;
-        }
-        if !drawn {
-            if world.resource_mut::<WorldPass>().shadow_queued.remove(&view).is_some()
-                && let Some(phase) = world.resource_mut::<ViewBinnedRenderPhases<Shadow>>().get_mut(&view)
-            {
-                phase.non_mesh_items.clear();
-            }
-            continue;
-        }
-        let Some(&light_key) = world.resource::<LightKeyCache>().get(&view) else {
-            redraw_levels(world);
-            continue;
-        };
-        if world.resource::<WorldPass>().shadow_queued.get(&view) == Some(&light_key) {
-            continue;
-        }
-        with_buckets(world, |world, buckets| queue_shadow(world, buckets, view, light_key));
-        world.resource_mut::<WorldPass>().shadow_queued.insert(view, light_key);
-    }
+    items
 }
 
 /// A level that redrew without the static world holds only the props' shadows until it is drawn again.
@@ -206,7 +149,6 @@ fn redraw_levels(world: &World) {
 pub(super) fn queue_world(
     world: &mut World,
     cameras: &mut QueryState<(&ExtractedView, Option<&Msaa>), With<WorldCamera>>,
-    lights: &mut QueryState<(&ExtractedView, &LightEntity), With<ShadowView>>,
 ) {
     let first_bucket = |world: &World| world.resource::<WorldPass>().built.as_ref().and_then(|built| built.buckets.first()).map(|bucket| bucket.entity);
     let before = first_bucket(world);
@@ -216,9 +158,7 @@ pub(super) fn queue_world(
     }
     world.resource_mut::<ModifiedMeshes>().0.clear();
     if world.resource::<WorldPass>().built.is_none() {
-        let level_draws = lights.iter(world).any(|(_, light)| {
-            matches!(light, LightEntity::Directional { light_entity, .. } if world.get::<DrawsStaticWorld>(*light_entity).is_some_and(|draws| draws.0))
-        });
+        let level_draws = world.get_resource::<SunLevelFrame>().is_some_and(|frame| frame.drawing.is_some());
         if level_draws && world.get_resource::<WorldDraws>().is_some_and(|draws| !draws.sections.is_empty()) {
             redraw_levels(world);
         }
@@ -247,5 +187,5 @@ pub(super) fn queue_world(
         });
         world.resource_mut::<WorldPass>().queued.insert(view, (view_key, prepass_key));
     }
-    queue_shadows(world, lights);
+    level::queue_level(world);
 }

@@ -13,6 +13,7 @@ bevy_egui.workspace = true
 chrono.workspace = true
 rustc-hash.workspace = true
 wgpu-types.workspace = true
+bytemuck.workspace = true
 p2-assets.workspace = true
 p2-bevy-assets.workspace = true
 p2-package.workspace = true

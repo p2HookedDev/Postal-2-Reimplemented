@@ -274,7 +274,7 @@ fn terrain(world: &mut World, look: Look, texture: Handle<Image>) {
     let mut v = [Vec4::ZERO; MAX_LAYERS];
     [u[0], v[0]] = [Vec4::new(0.05, 0.0, 0.0, 0.5), Vec4::new(0.0, -0.05, 0.0, 0.5)];
     [u[1], v[1]] = [Vec4::new(0.07, 0.03, 0.0, 0.2), Vec4::new(-0.03, 0.08, 0.0, 0.1)];
-    let params = TerrainParams { u, v, count: UVec4::new(2, u32::from(look == Look::Modern), 0, 0) };
+    let params = TerrainParams { u, v, count: UVec4::new(2, u32::from(look == Look::Modern), 0, 0), ..Default::default() };
     let extension = TerrainLayers { params, texture_0: Some(texture), texture_1: Some(second), alpha_map_1: Some(alpha_map), ..Default::default() };
     let material = world.resource_mut::<Assets<TerrainMaterial>>().add(TerrainMaterial { base: StandardMaterial::default(), extension });
     let mesh = world.resource_mut::<Assets<Mesh>>().add(quad(TERRAIN_LIGHT));

@@ -45,7 +45,7 @@ pub(crate) fn set_specular_uv<M: bevy::asset::Asset>(
 pub(super) fn animate_materials(
     (time, facts, mut clock): (Res<Time>, Res<FrameFacts>, bevy::ecs::system::Local<f32>),
     animated: Res<AnimatedMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    (mut materials, mut sky_standard): (ResMut<Assets<StandardMaterial>>, ResMut<Assets<SkyStandardMaterial>>),
     mut lightmapped: ResMut<Assets<LightmappedMaterial>>,
     mut mesh_lit: ResMut<Assets<MeshLitMaterial>>,
     mut blended: ResMut<Assets<BlendedMaterial>>,
@@ -60,6 +60,7 @@ pub(super) fn animate_materials(
         let transform = Affine2::from_cols(Vec2::new(a, d), Vec2::new(b, e), Vec2::new(c, f));
         match material {
             SectionMaterial::Standard(handle) => set_uv_transform(&mut materials, handle, transform, |m| m, |m| m),
+            SectionMaterial::SkyStandard(handle) => set_uv_transform(&mut sky_standard, handle, transform, |m| &m.base, |m| &mut m.base),
             SectionMaterial::Lightmapped(handle) => set_uv_transform(&mut lightmapped, handle, transform, |m| &m.base, |m| &mut m.base),
             SectionMaterial::MeshLit(handle) => set_uv_transform(&mut mesh_lit, handle, transform, |m| &m.base, |m| &mut m.base),
             SectionMaterial::Blended(handle) => set_uv_transform(&mut blended, handle, transform, |m| &m.base, |m| &mut m.base),
@@ -74,7 +75,7 @@ pub(super) fn animate_materials(
             SectionMaterial::MeshLit(handle) => set_specular_uv(&mut mesh_lit, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
             SectionMaterial::Blended(handle) => set_specular_uv(&mut blended, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
             SectionMaterial::Terrain(handle) => set_specular_uv(&mut terrain_layers, handle, uv, |m| &m.extension.layers, |m| &mut m.extension.layers),
-            SectionMaterial::Standard(_) | SectionMaterial::TerrainPass(_) => {}
+            SectionMaterial::Standard(_) | SectionMaterial::SkyStandard(_) | SectionMaterial::TerrainPass(_) => {}
         }
     }
 }

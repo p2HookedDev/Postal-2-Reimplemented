@@ -114,7 +114,7 @@ macro_rules! kinds {
 kinds!(
     Actor, Pawn, Controller, PlayerController, Brush, Mover, Projectile, KConstraint, Volume, BlockingVolume,
     SceneManager, FPSPawn, NavigationPoint, AIController, Decoration, LevelInfo, KarmaParamsSkel, PhysicsVolume,
-    FluidPuddle, FluidTrail, FluidDripTrail, FluidFeeder, FluidDripFeeder, Emitter, Projector, Movie, CameraTitle, FireEmitter, XMuzzleFlashEmitter, MuzzleFlashAttachment,
+    FluidPuddle, FluidTrail, FluidDripTrail, FluidFeeder, FluidDripFeeder, FluidSplashEmitter, Emitter, Projector, Movie, CameraTitle, FireEmitter, XMuzzleFlashEmitter, MuzzleFlashAttachment,
     ActionMoveCamera, SubActionOrientation, SubActionFade, SubActionFOV, SubActionSceneSpeed, SubActionGameSpeed, SubActionCameraShake, SubActionTrigger, SubActionCameraEffect, SubActionTitle, SubActionSceneProps,
 );
 

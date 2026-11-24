@@ -4,23 +4,19 @@
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
-use bevy::camera::Camera;
-use bevy::core_pipeline::prepass::{DepthPrepass, ViewPrepassTextures};
+use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::lifetimeless::Read;
 use bevy::math::Vec3;
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer, BufferDescriptor, BufferId, BufferUsages, CachedComputePipelineId,
     ComputePassDescriptor, ComputePipelineDescriptor, PipelineCache, ShaderStages, TextureId, TextureSampleType, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
-use bevy::render::sync_component::SyncComponent;
-use bevy::render::view::{Msaa, ViewUniform, ViewUniformOffset, ViewUniforms};
+use bevy::render::view::{ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use bevy::time::Time;
@@ -34,12 +30,12 @@ use crate::frame_facts::FrameFacts;
 use crate::gpu_particles::{next_unit, ring_writes};
 use crate::particle_draw::{ParticleDrawSystems, draw_particles};
 use crate::particle_frame::{DrawnParticles, Liquid, LiquidRole, Pour};
-use crate::screen_pass::{ViewBindGroups, modern_level};
+use crate::screen_pass::{PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders};
 
 const STREAM_SHADER: Handle<Shader> = uuid_handle!("3e8b5d17-9c42-4a6f-b1d0-62f7a9e4c358");
-const PARTICLE_BYTES: u64 = LIQUID_PARTICLE_WORDS as u64 * 4;
-const LANE: u32 = 256;
+pub(super) const PARTICLE_BYTES: u64 = LIQUID_PARTICLE_WORDS as u64 * 4;
+pub(super) const LANE: u32 = 1024;
 const LANES_PER_LEVEL: u32 = 8;
 const LANE_CAP: u32 = 64;
 /// Matches `@workgroup_size` in `liquid_stream.wesl`.
@@ -64,9 +60,8 @@ impl Plugin for LiquidStreamPlugin {
         }
         add_libraries(app);
         add_shaders(app, [(STREAM_SHADER, Shader::from_wesl(include_str!("../liquid_stream.wesl"), "p2_render/liquid_stream.wesl"))]);
-        app.add_plugins(ExtractComponentPlugin::<LiquidStream>::default())
-            .init_resource::<Pourer>()
-            .add_systems(PostUpdate, pour_liquids.after(draw_particles).in_set(ParticleDrawSystems));
+        add_view_pass::<LiquidStream>(app);
+        app.init_resource::<Pourer>().add_systems(PostUpdate, pour_liquids.after(draw_particles).after(tag_pass_views).in_set(ParticleDrawSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -81,7 +76,7 @@ fn lane_count(level: u8) -> u32 {
     (LANES_PER_LEVEL * u32::from(level)).min(LANE_CAP)
 }
 
-fn liquid_bits(kind: FluidType, burning: bool) -> u32 {
+pub(super) fn liquid_bits(kind: FluidType, burning: bool) -> u32 {
     (kind as u32 & LIQUID_KIND_MASK) | if burning { LIQUID_BURNING } else { 0 }
 }
 
@@ -122,13 +117,19 @@ struct Pourer {
 }
 
 impl Pourer {
+    /// A pour holds its lane while it flows, even on frames that owe less than one particle.
     fn lane_of(&mut self, parent: Entity) -> Option<usize> {
-        if let Some(index) = self.lanes.iter().position(|lane| lane.owner == parent) {
-            return Some(index);
-        }
         let clock = self.clock;
-        let index = self.lanes.iter().position(|lane| clock > lane.quiet_at)?;
-        self.lanes[index] = Lane { owner: parent, ..Lane::FREE };
+        let index = match self.lanes.iter().position(|lane| lane.owner == parent) {
+            Some(index) => index,
+            None => {
+                let index = self.lanes.iter().position(|lane| clock > lane.quiet_at)?;
+                self.lanes[index] = Lane { owner: parent, ..Lane::FREE };
+                index
+            }
+        };
+        let lane = &mut self.lanes[index];
+        lane.quiet_at = lane.quiet_at.max(clock + LIFE_MARGIN);
         Some(index)
     }
 
@@ -150,7 +151,9 @@ impl Pourer {
             let Some(origin) = origin.filter(|_| pour.flowing) else { continue };
             let Some(index) = self.lane_of(actor.parent) else { continue };
             let lane = &mut self.lanes[index];
-            let owed = lane.owed + pour.rate.max(0.0) * RATE_PER_LEVEL * f32::from(level) * seconds;
+            // A lane holds a pour's whole life: faster pouring would write over the tail still in the air.
+            let rate = (pour.rate.max(0.0) * RATE_PER_LEVEL * f32::from(level)).min(LANE as f32 / LONGEST_LIFE as f32);
+            let owed = lane.owed + rate * seconds;
             let count = owed.floor();
             (lane.owed, lane.gravity) = (owed - count, Vec3::from(to_bevy(pour.acceleration)));
             let count = count as usize;
@@ -180,7 +183,8 @@ impl Pourer {
 }
 
 /// On the one scene view whose depth prepass the stream lands on, while any liquid particle lives.
-#[derive(Component, Debug, Clone, PartialEq)]
+#[derive(Component, Debug, Clone, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
 pub struct LiquidStream {
     capacity: u32,
     map: u32,
@@ -200,10 +204,10 @@ fn pour_liquids(
     time: Res<Time>,
     facts: Res<FrameFacts>,
     drawn: Option<Res<DrawnParticles>>,
-    views: Query<(Entity, &Camera, &Msaa, Has<DepthPrepass>, Has<LiquidStream>), With<SceneView>>,
+    views: Query<(Entity, Has<PassView>, Option<&LiquidStream>), With<SceneView>>,
     mut pourer: ResMut<Pourer>,
 ) {
-    let stepper = views.iter().find(|&(_, camera, msaa, depth, _)| camera.is_active && matches!(msaa, Msaa::Off) && depth).map(|(entity, ..)| entity);
+    let stepper = views.iter().find(|&(_, drawn_in, _)| drawn_in).map(|(entity, ..)| entity);
     let seconds = if facts.paused { 0.0 } else { time.delta_secs().min(0.1) };
     let level = modern_level(settings.as_deref(), MODERN_LIQUIDS);
     let mut stream = match (drawn.as_deref(), stepper) {
@@ -213,28 +217,9 @@ fn pour_liquids(
             None
         }
     };
-    for (entity, .., shown) in &views {
-        if stepper == Some(entity)
-            && let Some(stream) = stream.take()
-        {
-            commands.entity(entity).insert(stream);
-        } else if shown {
-            commands.entity(entity).remove::<LiquidStream>();
-        }
-    }
-}
-
-impl SyncComponent<RenderApp> for LiquidStream {
-    type Target = (Self,);
-}
-
-impl ExtractComponent<RenderApp> for LiquidStream {
-    type QueryData = Read<Self>;
-    type QueryFilter = ();
-    type Out = Self;
-
-    fn extract_component(stream: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
-        Some(stream.clone())
+    for (entity, _, shown) in &views {
+        let wanted = if stepper == Some(entity) { stream.take() } else { None };
+        follow_view_pass(commands.entity(entity), shown, wanted);
     }
 }
 
@@ -331,6 +316,10 @@ fn prepare_stream(
             ..Default::default()
         }));
     }
+    if pipeline.step.and_then(|id| cache.get_compute_pipeline(id)).is_none() {
+        commands.remove_resource::<LiquidParticles>();
+        return;
+    }
     let Some(pool) = pool.filter(|pool| pool.capacity == stream.capacity && pool.map == stream.map) else {
         commands.insert_resource(StreamPool::new(&device, stream));
         commands.remove_resource::<LiquidParticles>();
@@ -419,7 +408,7 @@ mod tests {
     #[test]
     fn the_pool_grows_with_the_level_and_stops_at_zero() {
         assert_eq!(lane_count(0), 0);
-        assert_eq!(lane_count(1) * LANE, 2048);
+        assert_eq!(lane_count(1) * LANE, 8192);
         assert_eq!(lane_count(6), 6 * LANES_PER_LEVEL);
         assert_eq!(lane_count(10), LANE_CAP);
         let mut pourer = Pourer::default();

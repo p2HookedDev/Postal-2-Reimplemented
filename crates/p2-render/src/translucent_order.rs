@@ -9,9 +9,10 @@ use bevy::core_pipeline::core_3d::{Transparent3d, TransparentSortingInfo3d};
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::prelude::{Changed, Component, Entity, Local, Query, RemovedComponents, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::math::{Vec3, Vec4};
+use bevy::math::{Quat, Vec3, Vec4};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_phase::{SortedPhaseItem, ViewSortedRenderPhases, sort_phase_system};
+use bevy::render::sync_world::MainEntity;
 use bevy::render::view::ExtractedView;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::transform::TransformSystems;
@@ -21,7 +22,7 @@ use p2_bevy_assets::to_bevy;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::level_collision::LevelCollision;
-use crate::view::ShownScene;
+use crate::view::{SKY_LAYER, ShownScene};
 
 /// A translucent section holding one BSP node's surfaces, with the node's plane in the drawn space: `xyz · p - w`.
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
@@ -60,6 +61,10 @@ struct TranslucentOrder {
     ranks: FxHashMap<Entity, FxHashMap<usize, usize>>,
     nodes: FxHashMap<Entity, SortedBspNode>,
     draws: FxHashMap<Entity, TranslucentDraw>,
+    /// The sky zone's draws: they go first, ordered from the sky's own eye.
+    sky: FxHashSet<Entity>,
+    sky_ranks: Option<FxHashMap<usize, usize>>,
+    sky_place: Option<(Vec3, Quat)>,
 }
 
 pub struct TranslucentOrderPlugin;
@@ -88,6 +93,8 @@ fn rank_sorted_nodes(
     changed_draws: Query<(), Changed<TranslucentDraw>>,
     mut removed_sections: RemovedComponents<SortedBspNode>,
     mut removed_draws: RemovedComponents<TranslucentDraw>,
+    sky_layers: Query<(Entity, &RenderLayers), Changed<RenderLayers>>,
+    mut removed_layers: RemovedComponents<RenderLayers>,
     mut order: ResMut<TranslucentOrder>,
     mut cached: Local<Option<(usize, WantedNodes)>>,
 ) {
@@ -97,7 +104,7 @@ fn rank_sorted_nodes(
     let draws = (removed_draws.read().count() > 0 || !changed_draws.is_empty())
         .then(|| draws.iter().map(|(entity, draw)| (entity, *draw)).collect::<FxHashMap<Entity, TranslucentDraw>>());
     let kept = nodes.as_ref().unwrap_or(&order.nodes);
-    let ranks: FxHashMap<Entity, FxHashMap<usize, usize>> = match level.model().filter(|_| !kept.is_empty()) {
+    let (ranks, sky_ranks): (FxHashMap<Entity, FxHashMap<usize, usize>>, Option<FxHashMap<usize, usize>>) = match level.model().filter(|_| !kept.is_empty()) {
         Some(model) => {
             let wanted: FxHashSet<usize> = kept.values().map(|section| section.node).collect();
             let key = model.nodes.as_ptr() as usize;
@@ -105,21 +112,32 @@ fn rank_sorted_nodes(
                 *cached = Some((key, WantedNodes::new(model, wanted)));
             }
             let Some((_, wanted)) = cached.as_ref() else { return };
-            let rank = |eye: Vec3| {
+            let rank = |eye: Vec3| -> FxHashMap<usize, usize> {
                 let eye = to_bevy((eye - shown.origin).to_array());
                 back_to_front(model, eye, wanted).into_iter().enumerate().map(|(rank, node)| (node, rank)).collect()
             };
-            cameras
+            let views = cameras
                 .iter()
                 .filter(|(_, camera, _, layers)| camera.is_active && layers.is_none_or(|layers| *layers != RenderLayers::none()))
                 .map(|(entity, _, transform, _)| (entity, rank(transform.translation())))
-                .collect()
+                .collect();
+            (views, shown.sky_place.map(|(eye, _)| rank(eye)))
         }
-        None => FxHashMap::default(),
+        None => (FxHashMap::default(), None),
     };
     let held = order.bypass_change_detection();
     let mut changed = held.ranks != ranks;
     held.ranks = ranks;
+    changed |= held.sky_ranks != sky_ranks || held.sky_place != shown.sky_place;
+    held.sky_ranks = sky_ranks;
+    held.sky_place = shown.sky_place;
+    let sky_layer = RenderLayers::layer(SKY_LAYER);
+    for entity in removed_layers.read() {
+        changed |= held.sky.remove(&entity);
+    }
+    for (entity, layers) in &sky_layers {
+        changed |= if layers.intersects(&sky_layer) { held.sky.insert(entity) } else { held.sky.remove(&entity) };
+    }
     if let Some(nodes) = nodes {
         changed |= held.nodes != nodes;
         held.nodes = nodes;
@@ -209,46 +227,66 @@ fn insert_at(list: &[Entry], eye: Vec3, center: Vec3, distance: f32) -> usize {
         .unwrap_or(list.len())
 }
 
+type ItemKey = (Entity, MainEntity);
+
 fn engine_translucent_order(views: Query<&ExtractedView>, mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>, order: Res<TranslucentOrder>) {
     for view in &views {
         let Some(phase) = phases.get_mut(&view.retained_view_entity) else { continue };
         let eye = view.world_from_view.translation();
         let ranks = order.ranks.get(&view.retained_view_entity.main_entity.id());
-        let (mut terrain, mut nodes, mut after) = (Vec::new(), Vec::new(), Vec::new());
-        let mut actors: FxHashMap<Entity, (Vec3, Vec<(u32, _)>)> = FxHashMap::default();
-        for (&key, item) in &phase.items {
-            let section = order.nodes.get(&key.1.id()).filter(|section| ranks.is_some_and(|ranks| ranks.contains_key(&section.node)));
-            match (section, order.draws.get(&key.1.id()), item.sorting_info) {
-                (Some(section), ..) => nodes.push((ranks.and_then(|ranks| ranks.get(&section.node)).copied().unwrap_or_default(), key, *section)),
-                (None, Some(TranslucentDraw::Terrain(layer)), _) => terrain.push((*layer, key)),
-                (None, Some(TranslucentDraw::AfterScene), _) | (None, _, TransparentSortingInfo3d::AlwaysOnTop) => after.push(key),
-                (None, part, TransparentSortingInfo3d::Sorted { mesh_center, .. }) => {
-                    let (actor, order) = match part {
-                        Some(&TranslucentDraw::Part { actor, order }) => (actor, order),
-                        _ => (key.1.id(), 0),
-                    };
-                    actors.entry(actor).or_insert_with(|| (mesh_center, Vec::new())).1.push((order, key));
-                }
-            }
-        }
-        terrain.sort_by_key(|(layer, _)| *layer);
-        nodes.sort_by_key(|(rank, ..)| *rank);
-        let mut actors: Vec<_> = actors.into_values().map(|(center, parts)| (center.distance(eye), center, parts)).collect();
-        actors.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let (mut list, mut keys): (Vec<Entry>, Vec<Vec<_>>) = nodes.into_iter().map(|(_, key, node)| (Entry::Node(node), vec![key])).unzip();
-        for (distance, center, mut parts) in actors {
-            parts.sort_by_key(|(order, _)| *order);
-            let at = insert_at(&list, eye, center, distance);
-            list.insert(at, Entry::Actor { distance });
-            keys.insert(at, parts.into_iter().map(|(_, key)| key).collect());
-        }
-        let listed = keys.into_iter().flatten();
-        let place: FxHashMap<_, usize> = terrain.into_iter().map(|(_, key)| key).chain(listed).chain(after).enumerate().map(|(place, key)| (key, place)).collect();
+        let (sky, level): (Vec<_>, Vec<_>) = phase.items.iter().map(|(&key, item)| (key, item.sorting_info)).partition(|(key, _)| order.sky.contains(&key.1.id()));
+        // As retail draws the sky's scene before the level's, from the sky's eye.
+        let sky = match order.sky_place {
+            Some((sky_eye, turn)) => engine_list(&order, sky, order.sky_ranks.as_ref(), sky_eye, |center| sky_eye + turn * (center - eye)),
+            None => engine_list(&order, sky, ranks, eye, |center| center),
+        };
+        let listed = sky.into_iter().chain(engine_list(&order, level, ranks, eye, |center| center));
+        let place: FxHashMap<ItemKey, usize> = listed.enumerate().map(|(place, key)| (key, place)).collect();
         for (key, item) in phase.items.iter_mut() {
             item.distance = place.get(key).copied().unwrap_or_default() as f32;
         }
         phase.items.sort_by_key(|_, item| item.sort_key());
     }
+}
+
+/// Terrain layers first, then the BSP nodes back to front with each translucent actor where the engine inserts it, then
+/// what draws after the scene. `true_center` takes a drawn centre to where it is seen from `eye`.
+fn engine_list(
+    known: &TranslucentOrder,
+    items: Vec<(ItemKey, TransparentSortingInfo3d)>,
+    ranks: Option<&FxHashMap<usize, usize>>,
+    eye: Vec3,
+    true_center: impl Fn(Vec3) -> Vec3,
+) -> Vec<ItemKey> {
+    let (mut terrain, mut nodes, mut after) = (Vec::new(), Vec::new(), Vec::new());
+    let mut actors: FxHashMap<Entity, (Vec3, Vec<(u32, ItemKey)>)> = FxHashMap::default();
+    for (key, sorting) in items {
+        let section = known.nodes.get(&key.1.id()).filter(|section| ranks.is_some_and(|ranks| ranks.contains_key(&section.node)));
+        match (section, known.draws.get(&key.1.id()), sorting) {
+            (Some(section), ..) => nodes.push((ranks.and_then(|ranks| ranks.get(&section.node)).copied().unwrap_or_default(), key, *section)),
+            (None, Some(TranslucentDraw::Terrain(layer)), _) => terrain.push((*layer, key)),
+            (None, Some(TranslucentDraw::AfterScene), _) | (None, _, TransparentSortingInfo3d::AlwaysOnTop) => after.push(key),
+            (None, part, TransparentSortingInfo3d::Sorted { mesh_center, .. }) => {
+                let (actor, order) = match part {
+                    Some(&TranslucentDraw::Part { actor, order }) => (actor, order),
+                    _ => (key.1.id(), 0),
+                };
+                actors.entry(actor).or_insert_with(|| (true_center(mesh_center), Vec::new())).1.push((order, key));
+            }
+        }
+    }
+    terrain.sort_by_key(|(layer, _)| *layer);
+    nodes.sort_by_key(|(rank, ..)| *rank);
+    let mut actors: Vec<_> = actors.into_values().map(|(center, parts)| (center.distance(eye), center, parts)).collect();
+    actors.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let (mut list, mut keys): (Vec<Entry>, Vec<Vec<_>>) = nodes.into_iter().map(|(_, key, node)| (Entry::Node(node), vec![key])).unzip();
+    for (distance, center, mut parts) in actors {
+        parts.sort_by_key(|(order, _)| *order);
+        let at = insert_at(&list, eye, center, distance);
+        list.insert(at, Entry::Actor { distance });
+        keys.insert(at, parts.into_iter().map(|(_, key)| key).collect());
+    }
+    terrain.into_iter().map(|(_, key)| key).chain(keys.into_iter().flatten()).chain(after).collect()
 }
 
 #[cfg(test)]

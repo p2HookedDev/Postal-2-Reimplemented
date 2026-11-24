@@ -37,7 +37,7 @@ use p2_host::display::{
 };
 use crate::material_class::level_bits;
 use crate::level_collision::LevelCollision;
-use crate::view::{NoSunCast, SKY_LAYER};
+use crate::view::NoSunCast;
 use crate::tone::ToneCamera;
 use crate::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step};
 use crate::blended::{OpaqueDecals, TerrainLayerMaterial};
@@ -169,7 +169,7 @@ fn follow_flag<M: ModernFlagged>(
     }
 }
 
-/// The view and sky cameras share the world image only while their HDR agrees. Bloom runs before the tone curve,
+/// The view is HDR under modern graphics. Bloom runs before the tone curve,
 /// anti-aliasing and sharpening after it; the depth prepass stays while the occlusion culling needs it.
 pub fn apply(
     settings: Res<Settings>,
@@ -184,10 +184,9 @@ pub fn apply(
     let sun_level = settings.modern_level(MODERN_SHADOWS);
     commands.insert_resource(DirectionalLightShadowMap { size: sun_quality(sun_level).0 });
     commands.insert_resource(WorldCasts(sun_level > 0));
-    let sky = RenderLayers::layer(SKY_LAYER);
     for (entity, mut shown, view, hdr, culled, layers) in &mut cameras {
         let mut camera = commands.entity(entity);
-        let hdr_wanted = settings.modern_graphics() && (view || layers.is_some_and(|layers| layers.intersects(&sky)));
+        let hdr_wanted = settings.modern_graphics() && view;
         if hdr != hdr_wanted {
             if hdr_wanted {
                 camera.insert(Hdr);
@@ -196,13 +195,10 @@ pub fn apply(
             }
         }
         if !view {
-            if layers.is_some_and(|layers| layers.intersects(&sky)) {
-                camera.insert(if hdr_wanted { sky_view_mark() } else { AmbientLight { affects_lightmapped_meshes: false, ..AmbientLight::default() } });
-            }
             continue;
         }
-        // Bevy blends a later camera's frame over the target by its alpha. The view shares the sky's frame, which holds
-        // the sky already, and the alpha there is the rays' mask, so under modern the view's frame replaces the target.
+        // Bevy blends a camera's frame over the target by its alpha, and the alpha is the rays' mask (the sky stores 0),
+        // so under modern the view's frame replaces the target.
         let replaces = matches!(shown.output_mode, CameraOutputMode::Write { blend_state: Some(_), .. });
         if replaces != settings.modern_graphics() {
             shown.output_mode = if replaces {
@@ -264,12 +260,6 @@ pub fn apply(
 }
 
 const BLOOM_PER_LEVEL: f32 = 0.02;
-
-/// The sky camera's ambient light, which its shaders do not use: the negative alpha tells them to store the sky as
-/// alpha 0, the mask the sun's rays read. Matches `modern.wesl`.
-fn sky_view_mark() -> AmbientLight {
-    AmbientLight { color: Color::LinearRgba(LinearRgba::new(0.0, 0.0, 0.0, -1.0)), brightness: 1.0, affects_lightmapped_meshes: false }
-}
 
 /// Added over the frame through a knee that starts at black: mid tones scatter a little, which is the haze, and bright
 /// light scatters most.
@@ -437,7 +427,7 @@ fn sun_cascades(distance_level: u8) -> CascadeShadowConfig {
     .build()
 }
 
-/// With the sun and the later cached levels this stays inside Bevy's ten directional lights.
+/// With the sun this stays inside Bevy's ten directional lights; the cached sun levels are not lights.
 const MAX_FILL_SUNS: usize = 4;
 
 /// Suns this close in direction light the same way: maps stack several on one direction, and their light adds up.

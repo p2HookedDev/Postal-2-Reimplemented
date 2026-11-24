@@ -1,5 +1,7 @@
+use bevy::ecs::entity::Entity;
 use bevy::math::Vec3;
 use p2_particles::{DrawStyle, SpriteParticle};
+use rustc_hash::FxHashSet;
 
 use super::sprites::sprite_box;
 use super::ParticleDraws;
@@ -46,40 +48,39 @@ pub(crate) fn fire_box(sprites: &[SpriteParticle], origin: Vec3) -> Option<FireB
 }
 
 impl ParticleDraws {
-    /// The fires whose sprites were hidden this frame, nearest first, to be drawn as volumes; then the nearest fires
-    /// drawn this frame, at most `cap` within `reach` of `eye`, are the ones hidden next frame. A `cap` of 0 hands every
-    /// fire back to its sprites.
-    pub fn fire_volumes(&mut self, drawn: &DrawnParticles, origin: Vec3, eye: Vec3, cap: usize, reach: f32) -> Vec<FireBox> {
-        let (mut hidden, mut candidates, mut distances) = (Vec::new(), Vec::new(), Vec::new());
+    /// The fires in `hidden`, whose sprites were hidden this frame, nearest first, to be drawn as volumes; and the
+    /// nearest fires drawn this frame, at most `cap` within `reach` of `eye`, to hide next frame.
+    pub fn fire_volumes(
+        &self,
+        drawn: &DrawnParticles,
+        hidden: &FxHashSet<(Entity, u32)>,
+        origin: Vec3,
+        eye: Vec3,
+        cap: usize,
+        reach: f32,
+    ) -> (Vec<FireBox>, FxHashSet<(Entity, u32)>) {
+        let (mut volumes, mut candidates, mut distances) = (Vec::new(), Vec::new(), Vec::new());
         for slot in &drawn.actors {
             let Some(actor) = self.actors.get(&slot.parent) else { continue };
             let eligible = slot.drawn && slot.overlay.is_none();
-            for (index, (draw, DrawnEmitter { sprites, .. })) in actor.emitters.iter().zip(&slot.emitters).enumerate() {
+            for (order, (draw, DrawnEmitter { sprites, .. })) in actor.emitters.iter().zip(&slot.emitters).enumerate() {
                 if !draw.fire || draw.grid.is_none() {
                     continue;
                 }
                 let Some(fire) = fire_box(sprites, origin) else { continue };
-                let distance = eye.distance(fire.centre);
-                if draw.volume {
-                    hidden.push((distance, fire));
+                let (key, distance) = ((slot.parent, order as u32), eye.distance(fire.centre));
+                if hidden.contains(&key) {
+                    volumes.push((distance, fire));
                 }
                 if eligible && is_column(&fire) {
-                    candidates.push((slot.parent, index));
+                    candidates.push(key);
                     distances.push(distance);
                 }
             }
         }
-        for draw in self.actors.values_mut().flat_map(|actor| actor.emitters.iter_mut()) {
-            draw.volume = false;
-        }
-        for chosen in nearest_fires(&distances, cap, reach) {
-            let (parent, index) = candidates[chosen];
-            if let Some(draw) = self.actors.get_mut(&parent).and_then(|actor| actor.emitters.get_mut(index)) {
-                draw.volume = true;
-            }
-        }
-        hidden.sort_by(|a, b| a.0.total_cmp(&b.0));
-        hidden.into_iter().take(cap).map(|(_, fire)| fire).collect()
+        let next = nearest_fires(&distances, cap, reach).into_iter().map(|chosen| candidates[chosen]).collect();
+        volumes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (volumes.into_iter().take(cap).map(|(_, fire)| fire).collect(), next)
     }
 }
 

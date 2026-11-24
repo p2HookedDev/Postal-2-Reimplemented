@@ -208,15 +208,18 @@ fn modern_glass(color: vec4<f32>, position: vec3<f32>, normal: vec3<f32>, seen: 
     return vec4((matte * color.a + highlight) / max(alpha, 1e-4), alpha);
 }
 
-// The frame's alpha tells the sky from the world for the sun's rays: a solid surface of the sky stores 0, the world keeps
-// 1. The world's frame is blended over the sky's by its alpha, so the world must never store less. The sky's camera
-// carries the mark in its ambient light's alpha, which nothing else reads there. Matches `modern.rs`.
-const SKY_VIEW_MARK: f32 = -0.5;
+// The frame's alpha tells the sky from the world for the sun's rays: a solid surface of the sky stores 0, the world 1.
+fn sky_view() -> bool {
+@if(SKY_VIEW)
+    return true;
+@else
+    return false;
+}
 
 fn sky_mask(material_flags: u32, alpha: f32) -> f32 {
     let mode = material_flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
     let solid = mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE || mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_MASK;
-    return select(alpha, 0.0, solid && lights.ambient_color.a < SKY_VIEW_MARK);
+    return select(alpha, 0.0, solid && sky_view());
 }
 
 // Only an alpha-blend pipeline has the def, so the glass path is compiled into no other.

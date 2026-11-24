@@ -15,9 +15,9 @@ import package::p2_render::modern::{
     Around, actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, lit_surface, sky_from_ambient, surface_of,
 };
 import package::p2_render::modern_base::to_eye;
-import package::p2_render::sun_shadow::{ROOFED_SKY, SKY_FACING_FADE, SUN_FACING_FADE, sun_found, sun_index, sun_visibility};
+import package::p2_render::sun_shadow::{ROOFED_SKY, SKY_FACING_FADE, SUN_FACING_FADE, sun_found, sun_index};
 import package::p2_render::lamp_shadow::{add_lamp, lamp_shown, no_lamps};
-import package::p2_render::surface::{add_dynamic, modern_light, shade_surface};
+import package::p2_render::surface::{add_dynamic, material_sun_visibility, modern_light, shade_surface};
 import package::p2_render::layer_bindings::{apply_layers, lit_color, post_lighting};
 import package::p2_render::layer_types::{ActorShading, HardwareLight, Lighting, ShaderLayers};
 import package::p2_render::tone_curve::pbr_neutral;
@@ -150,7 +150,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         var sun = 1.0;
         if modern {
             light *= ambient_occlusion(pbr_input.frag_coord.xy);
-            sun = sun_visibility(sun_id, in.world_position, normal, pbr_input.frag_coord.xy);
+            sun = material_sun_visibility(in, sun_id, in.world_position, normal, pbr_input.frag_coord.xy);
         }
         for (var i = 0u; i < count; i++) {
             var one = light_at((*lighting).lights[i], in.world_position.xyz, normal);

@@ -7,6 +7,7 @@ use bevy::shader::{Shader, ShaderRef};
 
 use crate::shader_layers::ShaderLayers;
 use crate::shaders::add_material;
+use crate::shaders::SkyKey;
 
 pub type MeshLitMaterial = ExtendedMaterial<StandardMaterial, DynamicLit>;
 
@@ -26,6 +27,7 @@ impl MaterialExtension for DynamicLit {
         crate::shaders::cast_both_sides(descriptor, key.mesh_key);
         crate::shaders::mark_see_through(descriptor, key.mesh_key);
         crate::reflections::write_class_in_prepass(descriptor, crate::reflections::LayersHeld::Alone);
+        crate::shaders::mark_sky(descriptor, key.bind_group_data);
         Ok(())
     }
 

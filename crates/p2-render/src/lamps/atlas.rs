@@ -277,14 +277,9 @@ pub(super) fn world_masked(collision: &StaticCollision, origin: Vec3) -> Vec<Mas
         .collect()
 }
 
-pub(super) fn new_atlas(images: &mut Assets<Image>, side: u32) -> Handle<Image> {
-    let mut image = Image::new_uninit(
-        Extent3d { width: side, height: side, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        TextureFormat::R16Float,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT;
+pub(crate) fn new_atlas(images: &mut Assets<Image>, [width, height]: [u32; 2], format: TextureFormat) -> Handle<Image> {
+    let mut image = Image::new_uninit(Extent3d { width, height, depth_or_array_layers: 1 }, TextureDimension::D2, format, RenderAssetUsages::RENDER_WORLD);
+    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST;
     images.add(image)
 }
 

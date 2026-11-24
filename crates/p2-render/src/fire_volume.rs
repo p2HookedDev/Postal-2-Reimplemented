@@ -4,31 +4,28 @@
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
-use bevy::camera::Camera;
 use bevy::core_pipeline::FullscreenShader;
-use bevy::core_pipeline::prepass::{DepthPrepass, ViewPrepassTextures};
+use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::lifetimeless::Read;
 use bevy::math::{Vec3, Vec4};
 use bevy::render::camera::ExtractedCamera;
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferId,
     BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor,
     ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
-use bevy::render::sync_component::SyncComponent;
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::{ExtractedView, Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
+use bevy::render::view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use bevy::time::Time;
 use bevy::transform::components::GlobalTransform;
+use rustc_hash::FxHashSet;
 
 use crate::components::SceneView;
 use p2_host::display::{MODERN_FIRE_VOLUMES, Settings};
@@ -36,7 +33,9 @@ use crate::MainPassExtraSystems;
 use crate::frame_facts::FrameFacts;
 use crate::particle_draw::ParticleDraws;
 use crate::particle_frame::DrawnParticles;
-use crate::screen_pass::{HalfThenFull, ScreenStep, ViewBindGroups, half_texture, half_viewport, modern_level};
+use crate::screen_pass::{
+    HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, modern_level, tag_pass_views,
+};
 use crate::shaders::{add_libraries, add_shaders};
 
 const FIRE_SHADER: Handle<Shader> = uuid_handle!("b3e81c5a-6d27-4f90-8a1e-2c7d94f05b63");
@@ -65,7 +64,8 @@ impl Plugin for FireVolumePlugin {
         }
         add_libraries(app);
         add_shaders(app, [(FIRE_SHADER, Shader::from_wesl(include_str!("fire_volume.wesl"), "p2_render/fire_volume.wesl"))]);
-        app.add_plugins(ExtractComponentPlugin::<FireVolumes>::default()).add_systems(PostUpdate, follow_fires.in_set(FireVolumeSystems));
+        add_view_pass::<FireVolumes>(app);
+        app.init_resource::<VolumeFires>().add_systems(PostUpdate, follow_fires.after(tag_pass_views).in_set(FireVolumeSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -100,67 +100,50 @@ fn quality(level: u8) -> Option<Quality> {
 }
 
 /// On a scene camera while fire volumes are on: this frame's fires, nearest first.
-#[derive(Component, Debug, Clone, PartialEq)]
+#[derive(Component, Debug, Clone, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_sync_target((Self, FireView))]
 pub struct FireVolumes {
     quality: Quality,
     seconds: f32,
     volumes: Vec<FireBox>,
 }
 
-/// Hides the sprites only of fires a view will draw: one active, single-sampled, with a depth prepass.
+/// The emitters, by parent and order, drawn as volumes this frame: the particle drawing hides their sprites.
+#[derive(Resource, Default)]
+pub struct VolumeFires(pub(crate) FxHashSet<(Entity, u32)>);
+
+/// Hides the sprites only of fires a view will draw. The fires hidden this frame are the ones picked last frame, so no
+/// frame draws a fire as both.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn follow_fires(
     mut commands: Commands,
     settings: Option<Res<Settings>>,
     time: Res<Time>,
     facts: Res<FrameFacts>,
-    draws: Option<ResMut<ParticleDraws>>,
+    draws: Option<Res<ParticleDraws>>,
     drawn: Option<Res<DrawnParticles>>,
-    views: Query<(Entity, &Camera, &Msaa, &GlobalTransform, Has<DepthPrepass>, Has<FireVolumes>), With<SceneView>>,
-    mut hiding: Local<bool>,
+    mut hidden: ResMut<VolumeFires>,
+    views: Query<(Entity, &GlobalTransform, Has<PassView>, Option<&FireVolumes>), With<SceneView>>,
 ) {
     let wanted = quality(modern_level(settings.as_deref(), MODERN_FIRE_VOLUMES));
-    let drawn_by = |camera: &Camera, msaa: &Msaa, depth: bool| wanted.is_some() && camera.is_active && matches!(msaa, Msaa::Off) && depth;
-    let eye = views.iter().find(|(_, camera, msaa, _, depth, _)| drawn_by(camera, msaa, *depth)).map(|(_, _, _, at, ..)| at.translation());
+    let eye = views.iter().find(|&(_, _, drawn_in, _)| drawn_in).map(|(_, at, ..)| at.translation()).filter(|_| wanted.is_some());
     let origin = facts.in_play.then_some(facts.origin);
-    let mut volumes = Vec::new();
-    if let (Some(mut draws), Some(drawn)) = (draws, drawn) {
-        match (wanted, eye, origin) {
-            (Some(_), Some(eye), Some(origin)) => {
-                volumes = draws.fire_volumes(&drawn, origin, eye, MAX_VOLUMES, REACH);
-                *hiding = true;
-            }
-            _ if std::mem::take(&mut *hiding) => {
-                draws.fire_volumes(&drawn, Vec3::ZERO, Vec3::ZERO, 0, 0.0);
-            }
-            _ => {}
+    let volumes = match (draws.as_deref(), drawn.as_deref(), eye, origin) {
+        (Some(draws), Some(drawn), Some(eye), Some(origin)) => {
+            let (volumes, next) = draws.fire_volumes(drawn, &hidden.0, origin, eye, MAX_VOLUMES, REACH);
+            hidden.0 = next;
+            volumes
         }
-    }
+        _ => {
+            hidden.0.clear();
+            Vec::new()
+        }
+    };
     let seconds = time.elapsed_secs_wrapped();
-    for (entity, camera, msaa, _, depth, shown) in &views {
-        match wanted.filter(|_| drawn_by(camera, msaa, depth)) {
-            Some(quality) => {
-                commands.entity(entity).insert(FireVolumes { quality, seconds, volumes: volumes.clone() });
-            }
-            None if shown => {
-                commands.entity(entity).remove::<FireVolumes>();
-            }
-            None => {}
-        }
-    }
-}
-
-impl SyncComponent<RenderApp> for FireVolumes {
-    type Target = (Self, FireView);
-}
-
-impl ExtractComponent<RenderApp> for FireVolumes {
-    type QueryData = Read<Self>;
-    type QueryFilter = ();
-    type Out = Self;
-
-    fn extract_component(fires: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
-        Some(fires.clone())
+    for (entity, _, drawn_in, shown) in &views {
+        let fires = wanted.filter(|_| drawn_in).map(|quality| FireVolumes { quality, seconds, volumes: volumes.clone() });
+        follow_view_pass(commands.entity(entity), shown, fires);
     }
 }
 

@@ -11,13 +11,11 @@ use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::prepass::{NORMAL_PREPASS_FORMAT, ViewPrepassTextures};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::query::QueryItem;
+use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::lifetimeless::Read;
 use bevy::math::{Mat4, URect, UVec2, Vec4};
 use bevy::render::diagnostic::RecordDiagnostics;
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
     AddressMode, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BufferId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
     FilterMode, FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
@@ -25,8 +23,7 @@ use bevy::render::render_resource::{
     TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
-use bevy::render::sync_component::SyncComponent;
-use bevy::render::view::{ExtractedView, Msaa, ViewTarget};
+use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use bevy::transform::TransformSystems;
@@ -35,7 +32,7 @@ use bevy::transform::components::GlobalTransform;
 use crate::components::SceneView;
 use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS, Settings};
 use crate::particle_frame::DrawnParticles;
-use crate::screen_pass::{PassUniformOffset, PassUniforms, ViewBindGroups, modern_level, prepare_pass_uniforms};
+use crate::screen_pass::{PassUniformOffset, PassUniforms, PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, prepare_pass_uniforms, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders};
 use crate::view::ShownScene;
 
@@ -59,8 +56,8 @@ impl Plugin for ReflectionsPlugin {
         }
         add_libraries(app);
         add_shaders(app, [(REFLECTIONS_SHADER, Shader::from_wesl(include_str!("reflections.wesl"), "p2_render/reflections.wesl"))]);
-        app.add_plugins(ExtractComponentPlugin::<Reflections>::default())
-            .add_systems(PostUpdate, follow_reflection_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems));
+        add_view_pass::<Reflections>(app);
+        app.add_systems(PostUpdate, follow_reflection_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems).after(tag_pass_views));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -98,7 +95,9 @@ pub fn write_class_in_prepass(descriptor: &mut RenderPipelineDescriptor, held: L
 }
 
 /// On a scene camera while screen-space reflections are on. As `reflections.wesl` reads it.
-#[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_sync_target((Self, ReflectionsPipelineId, PassUniformOffset<Self>))]
 pub struct Reflections {
     clip_from_view: Mat4,
     view_from_clip: Mat4,
@@ -134,21 +133,18 @@ fn follow_reflection_settings(
     settings: Option<Res<Settings>>,
     drawn: Option<Res<DrawnParticles>>,
     scene: Option<Res<ShownScene>>,
-    views: Query<(Entity, &Camera, &GlobalTransform, &Msaa, Option<&Reflections>), With<SceneView>>,
+    views: Query<(Entity, &Camera, &GlobalTransform, Has<PassView>, Option<&Reflections>), With<SceneView>>,
 ) {
     let wanted = look(
         modern_level(settings.as_deref(), MODERN_REFLECTIONS),
         modern_level(settings.as_deref(), MODERN_REFLECTION_STRENGTH),
         settings.as_deref().map_or(0, Settings::material_level),
     );
-    for (entity, camera, place, msaa, shown) in &views {
-        // The pass binds the prepass textures as single-sampled.
+    for (entity, camera, place, drawn_in, shown) in &views {
         let viewport = camera.physical_viewport_rect().filter(|rect| rect.size().min_element() > 0);
         let target = camera.physical_target_size().filter(|size| size.min_element() > 0);
-        let (Some(look), Some(viewport), Some(target)) = (wanted.filter(|_| camera.is_active && matches!(msaa, Msaa::Off)), viewport, target) else {
-            if shown.is_some() {
-                commands.entity(entity).remove::<Reflections>();
-            }
+        let (Some(look), Some(viewport), Some(target)) = (wanted.filter(|_| drawn_in), viewport, target) else {
+            follow_view_pass(commands.entity(entity), shown, None);
             continue;
         };
         let (clip_from_view, view_from_world) = (camera.clip_from_view(), place.to_matrix().inverse());
@@ -160,23 +156,7 @@ fn follow_reflection_settings(
         let puddle_count = Vec4::new(discs.len() as f32, 0.0, 0.0, 0.0);
         let (in_frame, from_frame) = viewport_in_frame(viewport, target);
         let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world, look, puddles, puddle_count, in_frame, from_frame };
-        if shown != Some(&reflections) {
-            commands.entity(entity).insert(reflections);
-        }
-    }
-}
-
-impl SyncComponent<RenderApp> for Reflections {
-    type Target = (Self, ReflectionsPipelineId, PassUniformOffset<Self>);
-}
-
-impl ExtractComponent<RenderApp> for Reflections {
-    type QueryData = Read<Self>;
-    type QueryFilter = ();
-    type Out = Self;
-
-    fn extract_component(reflections: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
-        Some(*reflections)
+        follow_view_pass(commands.entity(entity), shown, Some(reflections));
     }
 }
 

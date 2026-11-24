@@ -30,9 +30,9 @@ use bevy::math::{Affine3, Affine3A, Mat4, UVec2, Vec3, Vec4};
 use bevy::mesh::{Indices, Mesh, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{
     LIGHTMAPS_PER_SLAB,
-    LightEntity, LightKeyCache, MeshFlags, MeshPipeline, MeshPipelineKey,
+    MeshFlags, MeshPipeline, MeshPipelineKey,
     MeshTransforms, MeshUniform, PreparedMaterial, PrepassFragmentShader, PrepassPipeline, PrepassVertexShader, SetMeshViewBindGroup, SetMeshViewBindingArrayBindGroup, SetPrepassEmptyMaterialBindGroup, SetPrepassViewBindGroup,
-    SetPrepassViewEmptyBindGroup, Shadow, ShadowBatchSetKey, ShadowBinKey, ShadowView, ViewKeyCache, ViewKeyPrepassCache, alpha_mode_pipeline_key,
+    SetPrepassViewEmptyBindGroup, Shadow, ViewKeyCache, ViewKeyPrepassCache, alpha_mode_pipeline_key,
 };
 use bevy::platform::collections::HashMap;
 use bevy::render::erased_render_asset::ErasedRenderAssets;
@@ -67,6 +67,9 @@ mod build;
 mod queue;
 mod cull;
 mod draw;
+mod level;
+use bevy::render::render_resource::CachedRenderPipelineId;
+use crate::sun_levels::SunLevelFrame;
 use buffers::{
     casts_shadow, chunk_table, cull_buffers, cull_pipeline, lightmap_arrays_usable, lightmap_slots, mesh_bind_groups,
     prepass_reads_material, push_u32s, section_uniform,
@@ -234,11 +237,6 @@ impl WorldTargets<'_, '_> {
 #[extract_app(RenderApp)]
 pub struct WorldCamera;
 
-/// On a directional light: whether its shadow views draw the static world this frame. Extracted by whoever sets it.
-#[derive(Component, Clone, Copy, Default, ExtractComponent)]
-#[extract_app(RenderApp)]
-pub struct DrawsStaticWorld(pub bool);
-
 /// Raised when every shadow view that holds the static world must draw it again. Shared by both worlds; whoever keeps
 /// those views inits and extracts it.
 #[derive(Resource, Clone, Default, ExtractResource)]
@@ -314,8 +312,8 @@ pub(crate) struct WorldPass {
     built: Option<Built>,
     pipeline: Option<(BindGroupLayoutDescriptor, CachedComputePipelineId)>,
     queued: HashMap<RetainedViewEntity, (MeshPipelineKey, Option<MeshPipelineKey>)>,
-    shadow_queued: HashMap<RetainedViewEntity, MeshPipelineKey>,
     waited_frames: u32,
+    level: level::LevelDraw,
 }
 
 #[derive(Resource, Default)]
@@ -361,7 +359,8 @@ impl Plugin for WorldPassPlugin {
                     .before(Core3dSystems::Prepass)
                     .before(bevy::pbr::per_view_shadow_pass::<{ bevy::pbr::EARLY_SHADOW_PASS }>)
                     .before(bevy::pbr::shared_shadow_pass::<{ bevy::pbr::EARLY_SHADOW_PASS }>),
-            );
+            )
+            .add_systems(Core3d, level::draw_level.after(cull_world).before(Core3dSystems::Prepass));
     }
 }
 

@@ -376,7 +376,7 @@ fn follow_lamps(
         let side = key.map_or(0, |(_, _, side)| side);
         if atlas.side != side {
             atlas.side = side;
-            atlas.image = (side > 0).then(|| new_atlas(&mut images, side));
+            atlas.image = (side > 0).then(|| new_atlas(&mut images, [side, side], TextureFormat::R16Float));
         }
         for entity in &lamps {
             commands.entity(entity).despawn();
@@ -422,6 +422,9 @@ pub(crate) enum MaterialSlot {
     Occlusion,
     MetallicRoughness,
     Anisotropy,
+    /// Bevy reads it only for parallax, compiled out without vertex tangents: a mesh that gains tangents would shift its
+    /// UVs by this image as a height map.
+    DepthMap,
 }
 
 impl MaterialSlot {
@@ -430,6 +433,7 @@ impl MaterialSlot {
             Self::Occlusion => &material.occlusion_texture,
             Self::MetallicRoughness => &material.metallic_roughness_texture,
             Self::Anisotropy => &material.anisotropy_texture,
+            Self::DepthMap => &material.depth_map,
         }
     }
 
@@ -438,6 +442,7 @@ impl MaterialSlot {
             Self::Occlusion => &mut material.occlusion_texture,
             Self::MetallicRoughness => &mut material.metallic_roughness_texture,
             Self::Anisotropy => &mut material.anisotropy_texture,
+            Self::DepthMap => &mut material.depth_map,
         }
     }
 }

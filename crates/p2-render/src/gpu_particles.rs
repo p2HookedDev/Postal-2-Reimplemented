@@ -6,18 +6,15 @@ use std::collections::VecDeque;
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{AssetId, Handle, uuid_handle};
-use bevy::camera::Camera;
-use bevy::core_pipeline::prepass::{DepthPrepass, ViewPrepassTextures};
+use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::SystemParam;
-use bevy::ecs::system::lifetimeless::Read;
 use bevy::image::Image;
 use bevy::math::Vec3;
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{
     AddressMode, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer,
@@ -27,9 +24,8 @@ use bevy::render::render_resource::{
     TextureViewId, VertexState, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
-use bevy::render::sync_component::SyncComponent;
 use bevy::render::texture::{FallbackImage, GpuImage};
-use bevy::render::view::{ExtractedView, Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
+use bevy::render::view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use bevy::time::Time;
@@ -48,7 +44,7 @@ use crate::map_lights::MapLights;
 use crate::particle_draw::sprites::lamps_shown;
 use crate::particle_draw::{ParticleDrawSystems, ParticleDraws, draw_particles};
 use crate::particle_frame::{Blast, DrawnParticles, push_from_person_hits};
-use crate::screen_pass::{ViewBindGroups, modern_level};
+use crate::screen_pass::{PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders};
 
 const DROPLET_SHADER: Handle<Shader> = uuid_handle!("7c4e2a91-5b38-4d6f-a0e7-3f9b1c82d465");
@@ -95,9 +91,13 @@ impl Plugin for GpuParticlesPlugin {
         }
         add_libraries(app);
         add_shaders(app, [(DROPLET_SHADER, Shader::from_wesl(include_str!("gpu_particles.wesl"), "p2_render/gpu_particles.wesl"))]);
-        app.add_plugins(ExtractComponentPlugin::<GpuDroplets>::default()).init_resource::<Spawner>().init_resource::<PieceBirths>().add_systems(
+        add_view_pass::<GpuDroplets>(app);
+        app.init_resource::<Spawner>().init_resource::<PieceBirths>().add_systems(
             PostUpdate,
-            (note_sources.before(draw_particles), push_from_person_hits.after(draw_particles), throw_droplets).chain().in_set(GpuParticleSystems).in_set(ParticleDrawSystems),
+            (note_sources.before(draw_particles), push_from_person_hits.after(draw_particles), throw_droplets.after(tag_pass_views))
+                .chain()
+                .in_set(GpuParticleSystems)
+                .in_set(ParticleDrawSystems),
         );
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -361,7 +361,9 @@ impl Spawner {
 
 /// On a scene camera while detail particles are on: the pool's size, the map it belongs to, the frame's seconds, the
 /// droplets born this frame and the textures by slot.
-#[derive(Component, Debug, Clone, PartialEq)]
+#[derive(Component, Debug, Clone, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_sync_target((Self, DropletPool))]
 pub struct GpuDroplets {
     pool: u32,
     map: u32,
@@ -407,14 +409,13 @@ fn throw_droplets(
     time: Res<Time>,
     facts: Res<FrameFacts>,
     drawn: Option<Res<DrawnParticles>>,
-    views: Query<(Entity, &Camera, &Msaa, Has<DepthPrepass>, Has<GpuDroplets>), With<SceneView>>,
+    views: Query<(Entity, Has<PassView>, Option<&GpuDroplets>), With<SceneView>>,
     mut spawner: ResMut<Spawner>,
     mut births: ResMut<PieceBirths>,
     room: RoomLight,
 ) {
     let level = modern_level(settings.as_deref(), MODERN_GPU_PARTICLES);
-    let drawn_by = |camera: &Camera, msaa: &Msaa, depth: bool| level > 0 && camera.is_active && matches!(msaa, Msaa::Off) && depth;
-    let any_view = views.iter().any(|(_, camera, msaa, depth, _)| drawn_by(camera, msaa, depth));
+    let any_view = level > 0 && views.iter().any(|(_, drawn_in, _)| drawn_in);
     // With the particles' light off a sprite is drawn as its texture is, and so is its chunk.
     let lit = facts.in_play && modern_level(settings.as_deref(), MODERN_PARTICLE_LIGHT) > 0;
     let light_at = |parent: Entity, location: Vector| room.at(parent, location).filter(|_| lit).unwrap_or(Vec3::ONE);
@@ -422,30 +423,13 @@ fn throw_droplets(
         Some(drawn) if any_view => spawner.throw(drawn, level, facts.in_play.then_some(facts.origin), facts.game_step, light_at, &mut births.0),
         _ => Vec::new(),
     };
-    let seconds = if facts.paused { 0.0 } else { time.delta_secs().min(0.1) };
+    let seconds = facts.capped_step(time.delta_secs(), 0.1);
     let (pool, map) = (pool_size(level), drawn.as_deref().map_or(0, |drawn| drawn.level));
     let pushes: Vec<[f32; 8]> = drawn.as_deref().map_or(&[][..], |drawn| &drawn.blasts).iter().take(PUSHES).map(|blast| push_words(blast, facts.origin)).collect();
     let textures: Vec<AssetId<Image>> = spawner.textures.iter().map(Handle::id).collect();
-    for (entity, camera, msaa, depth, shown) in &views {
-        if drawn_by(camera, msaa, depth) {
-            commands.entity(entity).insert(GpuDroplets { pool, map, seconds, newborn: newborn.clone(), pushes: pushes.clone(), textures: textures.clone() });
-        } else if shown {
-            commands.entity(entity).remove::<GpuDroplets>();
-        }
-    }
-}
-
-impl SyncComponent<RenderApp> for GpuDroplets {
-    type Target = (Self, DropletPool);
-}
-
-impl ExtractComponent<RenderApp> for GpuDroplets {
-    type QueryData = Read<Self>;
-    type QueryFilter = ();
-    type Out = Self;
-
-    fn extract_component(droplets: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
-        Some(droplets.clone())
+    for (entity, drawn_in, shown) in &views {
+        let droplets = (level > 0 && drawn_in).then(|| GpuDroplets { pool, map, seconds, newborn: newborn.clone(), pushes: pushes.clone(), textures: textures.clone() });
+        follow_view_pass(commands.entity(entity), shown, droplets);
     }
 }
 

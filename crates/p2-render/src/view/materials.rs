@@ -113,6 +113,7 @@ impl ActorMaterials<'_> {
 #[derive(Clone, PartialEq)]
 pub enum SectionMaterial {
     Standard(Handle<StandardMaterial>),
+    SkyStandard(Handle<SkyStandardMaterial>),
     Blended(Handle<BlendedMaterial>),
     Terrain(Handle<TerrainLayerMaterial>),
     TerrainPass(Handle<TerrainMaterial>),
@@ -124,6 +125,7 @@ impl SectionMaterial {
     pub(crate) fn id(&self) -> UntypedAssetId {
         match self {
             Self::Standard(material) => material.id().untyped(),
+            Self::SkyStandard(material) => material.id().untyped(),
             Self::Blended(material) => material.id().untyped(),
             Self::Terrain(material) => material.id().untyped(),
             Self::TerrainPass(material) => material.id().untyped(),
@@ -135,6 +137,7 @@ impl SectionMaterial {
     pub fn insert(&self, entity: &mut EntityCommands) {
         match self {
             Self::Standard(material) => entity.insert(MeshMaterial3d(material.clone())),
+            Self::SkyStandard(material) => entity.insert(MeshMaterial3d(material.clone())),
             Self::Blended(material) => entity.insert(MeshMaterial3d(material.clone())),
             Self::Terrain(material) => entity.insert(MeshMaterial3d(material.clone())),
             Self::TerrainPass(material) => entity.insert(MeshMaterial3d(material.clone())),
@@ -166,6 +169,7 @@ pub(super) struct SectionMaterials<'w> {
     grey: Res<'w, MissingTextureMaterial>,
     pub(super) actors: ActorMaterials<'w>,
     pub(super) blended: ResMut<'w, Assets<BlendedMaterial>>,
+    sky_standard: ResMut<'w, Assets<SkyStandardMaterial>>,
     pub(super) terrain_layers: ResMut<'w, Assets<TerrainLayerMaterial>>,
     terrain_passes: ResMut<'w, Assets<TerrainMaterial>>,
     pub(super) lightmapped: ResMut<'w, Assets<LightmappedMaterial>>,
@@ -173,10 +177,17 @@ pub(super) struct SectionMaterials<'w> {
     pub(super) animated: ResMut<'w, AnimatedMaterials>,
 }
 
-pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores: &mut SectionMaterials, cache: &mut FxHashMap<(bool, String), SectionMaterial>) -> SectionMaterial {
+pub(super) fn scene_section_material(
+    section: &SectionView,
+    center: Vec3,
+    sky: Option<(Vec3, Quat)>,
+    stores: &mut SectionMaterials,
+    cache: &mut FxHashMap<(bool, bool, String), SectionMaterial>,
+) -> SectionMaterial {
     let Some(texture) = &section.texture else { return SectionMaterial::Standard(stores.grey.0.clone()) };
     let vertex_lit = vertex_lit(section);
-    let key = (vertex_lit, section.material_key());
+    let in_sky = sky.is_some();
+    let key = (vertex_lit, in_sky, section.material_key());
     if let Some(material) = cache.get(&key) {
         return material.clone();
     }
@@ -197,16 +208,18 @@ pub(super) fn scene_section_material(section: &SectionView, center: Vec3, stores
     };
     let material = if !section.terrain.is_empty() {
         let base = StandardMaterial { base_color_texture: None, ..standard };
-        SectionMaterial::TerrainPass(stores.terrain_passes.add(TerrainMaterial { base, extension: TerrainLayers::new(&section.terrain, center) }))
+        SectionMaterial::TerrainPass(stores.terrain_passes.add(TerrainMaterial { base, extension: sky.into_iter().fold(TerrainLayers::new(&section.terrain, center), TerrainLayers::in_sky) }))
     } else if let Some(alpha_map) = &section.alpha_map {
-        let extension = TerrainLayer::new(alpha_map.clone(), &section.layers);
+        let extension = TerrainLayer { sky: in_sky, ..TerrainLayer::new(alpha_map.clone(), &section.layers) };
         SectionMaterial::Terrain(stores.terrain_layers.add(TerrainLayerMaterial { base: section.layers.lit(standard), extension }))
     } else if section.lightmap.is_some() {
-        SectionMaterial::Lightmapped(stores.lightmapped.add(LightmappedMaterial { base: section.layers.lit(standard), extension: BakedLight::new(&section.layers) }))
+        SectionMaterial::Lightmapped(stores.lightmapped.add(LightmappedMaterial { base: section.layers.lit(standard), extension: BakedLight { sky: in_sky, ..BakedLight::new(&section.layers) } }))
     } else if vertex_lit {
-        SectionMaterial::MeshLit(stores.actors.mesh_lit.add(MeshLitMaterial { base: section.layers.lit(standard), extension: DynamicLit::new(&section.layers) }))
+        SectionMaterial::MeshLit(stores.actors.mesh_lit.add(MeshLitMaterial { base: section.layers.lit(standard), extension: DynamicLit { sky: in_sky, ..DynamicLit::new(&section.layers) } }))
     } else if section.alpha_mode == AlphaMode::Blend && section.uv.is_empty() {
-        SectionMaterial::Blended(stores.blended.add(BlendedMaterial { base: section.layers.lit(standard), extension: OpaqueDecals::new(&section.layers) }))
+        SectionMaterial::Blended(stores.blended.add(BlendedMaterial { base: section.layers.lit(standard), extension: OpaqueDecals { sky: in_sky, ..OpaqueDecals::new(&section.layers) } }))
+    } else if in_sky {
+        SectionMaterial::SkyStandard(stores.sky_standard.add(SkyStandardMaterial { base: standard, extension: SkyStandard {} }))
     } else {
         SectionMaterial::Standard(stores.actors.materials.add(standard))
     };

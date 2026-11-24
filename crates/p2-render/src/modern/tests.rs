@@ -4,6 +4,7 @@ use bevy::ecs::world::World;
 use bevy::pbr::StandardMaterial;
 
 use super::*;
+use crate::view::SKY_LAYER;
 use p2_render_cpu::LE_SUNLIGHT;
 use p2_host::display::MODERN_GRAPHICS;
 use crate::actor_light::LightEnvironment;

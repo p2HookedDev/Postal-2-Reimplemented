@@ -9,6 +9,7 @@ use bevy::math::{Affine3A, Mat4, Vec3};
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::transform::TransformSystems;
 use bevy::transform::components::{GlobalTransform, Transform};
+use p2_bevy_assets::to_bevy;
 use p2_vm::ObjectId;
 use rustc_hash::FxHashMap;
 
@@ -157,7 +158,7 @@ pub fn present_wounds(
     if !facts.in_play {
         return;
     }
-    let step = if facts.paused { 0.0 } else { facts.game_step };
+    let step = facts.step();
     wounds.bodies.retain(|_, body| {
         body.retain_mut(|wound| {
             let Ok(mut decal) = decals.get_mut(wound.decal) else { return false };
@@ -179,18 +180,16 @@ pub fn present_wounds(
     }
     let origin = facts.origin;
     for hit in facts.person_hits.iter().filter(|hit| hit.damage > 0.0) {
-        let [x, y, z]: [f32; 3] = hit.momentum.into();
-        let Some(toward) = Vec3::new(x, z, y).try_normalize() else { continue };
+        let Some(toward) = Vec3::from(to_bevy(hit.momentum)).try_normalize() else { continue };
         let Some((_, skin)) = skins.iter().find(|(follow, _)| follow.actor == hit.person) else { continue };
         let placed: Vec<(Entity, Mat4)> = skin.joints.iter().filter_map(|&joint| Some((joint, Mat4::from(joints.get(joint).ok()?.affine())))).collect();
         let frames: Vec<Mat4> = placed.iter().map(|&(_, frame)| frame).collect();
-        let [x, y, z]: [f32; 3] = hit.at.into();
         wounds.made = wounds.made.wrapping_add(1);
         let seed = wounds.made;
         let (image, splat) = &splats.0[seed as usize % splats.0.len()];
         let size = WOUND_SIZE + WOUND_GROWTH * (seed.wrapping_mul(7) % WOUND_SIZES) as f32 / (WOUND_SIZES - 1) as f32;
         let roll = seed.wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
-        let Some((index, local)) = wound_frame(&frames, origin + Vec3::new(x, z, y), toward, size, roll) else { continue };
+        let Some((index, local)) = wound_frame(&frames, origin + Vec3::from(to_bevy(hit.at)), toward, size, roll) else { continue };
         let decal = ClusteredDecal { base_color_texture: Some(image.clone()), tag: wound_tag(*splat, 0.0), ..Default::default() };
         let decal = commands.spawn((MapScoped, decal, Transform::from_matrix(frames[index] * local))).id();
         let wound = Wound { decal, joint: placed[index].0, local, tag: *splat, age: 0.0 };
@@ -234,7 +233,7 @@ fn age_decals(settings: Option<Res<Settings>>, facts: Res<FrameFacts>, mut decal
         return;
     }
     *aged = true;
-    let step = if facts.paused { 0.0 } else { facts.game_step };
+    let step = facts.step();
     for (mut decal, mut age) in &mut decals {
         age.age += step;
         let tag = aged_tag(age.tag, age.life, age.age, age.blood.then_some(age.age));

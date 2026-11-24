@@ -3,7 +3,7 @@ use bevy::asset::{AssetApp, Assets, Handle, uuid_handle};
 use bevy::pbr::{Material, MaterialPlugin, MeshPipelineKey};
 use bevy::render::RenderApp;
 use bevy::render::render_resource::RenderPipelineDescriptor;
-use bevy::shader::Shader;
+use bevy::shader::{Shader, ShaderDefVal};
 
 pub(crate) fn add_shaders(app: &mut App, shaders: impl IntoIterator<Item = (Handle<Shader>, Shader)>) {
     let mut assets = app.world_mut().resource_mut::<Assets<Shader>>();
@@ -32,6 +32,9 @@ const SURFACE_SHADER: Handle<Shader> = uuid_handle!("5d2a8f47-b13c-4e69-a0d5-c8e
 const MATERIAL_LAYERS_SHADER: Handle<Shader> = uuid_handle!("8e41c7d2-5a9f-4b36-a1c8-6f02d3e9b574");
 const LAYER_TYPES_SHADER: Handle<Shader> = uuid_handle!("c4f2a917-6e3b-4d08-9b5a-2e71d8f04c63");
 const DEPTH_SURFACE_SHADER: Handle<Shader> = uuid_handle!("f05b9d36-2c7e-4a81-b4e9-7d13a6c0e258");
+const SUN_LEVELS_SHADER: Handle<Shader> = uuid_handle!("9b2e6d41-c58a-4f17-a3d0-6e8f1b47c925");
+const SKY_VIEW_SHADER: Handle<Shader> = uuid_handle!("3e7d1a96-b24c-4f58-8d0e-c71a5f92b630");
+const SKY_VERTEX_SHADER: Handle<Shader> = uuid_handle!("6c1f8e24-a937-4b0d-9e52-d84b07a3f619");
 
 pub(crate) struct ShaderLibraryPlugin;
 
@@ -59,6 +62,9 @@ impl Plugin for ShaderLibraryPlugin {
             (MATERIAL_LAYERS_SHADER, Shader::from_wesl(include_str!("material_layers.wesl"), "p2_render/material_layers.wesl")),
             (LAYER_TYPES_SHADER, Shader::from_wesl(include_str!("layer_types.wesl"), "p2_render/layer_types.wesl")),
             (DEPTH_SURFACE_SHADER, Shader::from_wesl(include_str!("depth_surface.wesl"), "p2_render/depth_surface.wesl")),
+            (SUN_LEVELS_SHADER, Shader::from_wesl(include_str!("sun_levels.wesl"), "p2_render/sun_levels.wesl")),
+            (SKY_VIEW_SHADER, Shader::from_wesl(include_str!("sky_view.wesl"), "p2_render/sky_view.wesl")),
+            (SKY_VERTEX_SHADER, Shader::from_wesl(include_str!("sky_vertex.wesl"), "p2_render/sky_vertex.wesl")),
         ]);
     }
 }
@@ -94,6 +100,35 @@ pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
         None => value.trim_end_matches('f').parse().ok(),
     };
     parsed.unwrap_or_else(|| panic!("const {name} = {value} is not a number"))
+}
+
+/// Whether a section material draws the sky zone.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SkyKey {
+    pub sky: bool,
+}
+
+pub(crate) fn mark_sky(descriptor: &mut RenderPipelineDescriptor, key: SkyKey) {
+    if key.sky {
+        sky_vertex(descriptor);
+    }
+}
+
+/// A sky material's vertex stage squeezes it behind the level and draws nothing in a prepass.
+pub(crate) fn sky_vertex(descriptor: &mut RenderPipelineDescriptor) {
+    let prepass = descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
+    descriptor.vertex.shader = SKY_VERTEX_SHADER;
+    descriptor.vertex.entry_point = Some(if prepass { "prepass_vertex" } else { "vertex" }.into());
+    sky_view_defs(descriptor);
+}
+
+/// The sky view's shader def; the sky takes no scene fog.
+pub(crate) fn sky_view_defs(descriptor: &mut RenderPipelineDescriptor) {
+    descriptor.vertex.shader_defs.push("SKY_VIEW".into());
+    if let Some(fragment) = descriptor.fragment.as_mut() {
+        fragment.shader_defs.retain(|def| !matches!(def, ShaderDefVal::Bool(name, _) if name == "DISTANCE_FOG"));
+        fragment.shader_defs.push("SKY_VIEW".into());
+    }
 }
 
 /// Bevy gives an alpha-blend pipeline no def of its own; the lit surfaces' see-through path is compiled into those only.

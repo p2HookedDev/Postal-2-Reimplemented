@@ -10,6 +10,7 @@ import bevy_pbr::render::{
 import package::p2_render::shader_layers::{detail, glow, specular};
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::modern::sky_mask;
+import package::p2_render::sky_view::sky_before_near;
 import package::p2_render::layer_types::ShaderLayers;
 @if(BINDLESS)
 import package::p2_render::layer_types::LayerIndices;
@@ -130,6 +131,11 @@ fn lit_color(layers: ShaderLayers, stored: vec3<f32>, light: vec3<f32>) -> vec3<
 // surface covers only its alpha's share of it, so the rest comes off (fog is affine in the colour; no tone mapping in
 // the shader). The specular fades with the fog as towards black (unverified).
 fn post_lighting(pbr_input: pbr_types::PbrInput, color: vec4<f32>) -> vec4<f32> {
+@if(SKY_VIEW) {
+    if sky_before_near(pbr_input.world_position.xyz, view.world_from_view, view.clip_from_view[3][2]) {
+        discard;
+    }
+}
 @if(PREMULTIPLY_ALPHA) {
     let mode = pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
     let added = mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD;

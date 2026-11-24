@@ -1,11 +1,15 @@
-//! What the modern full-screen passes share: the settings level they follow and one uniform per view, carried on the
-//! camera as the pass's own component.
+//! What the modern full-screen passes share: the views they draw in, the settings level they follow and one uniform
+//! per view, carried on the camera as the pass's own component.
 
 use std::marker::PhantomData;
 
+use bevy::app::{App, Plugin, PostUpdate};
+use bevy::camera::Camera;
 use bevy::color::LinearRgba;
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::ecs::entity::{Entity, EntityHashMap};
-use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Commands, Component, Has, Query, Res, ResMut, Resource, With};
+use bevy::ecs::system::EntityCommands;
 use bevy::math::UVec2;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::diagnostic::RecordDiagnostics;
@@ -16,13 +20,57 @@ use bevy::render::render_resource::{
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::{ExtractedView, ViewTarget};
+use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::view::{ExtractedView, Msaa, ViewTarget};
+use bevy::render::RenderApp;
 
+use crate::components::SceneView;
 use p2_host::display::Settings;
 
 /// A modern setting's level; 0 without settings.
 pub fn modern_level(settings: Option<&Settings>, name: &str) -> u8 {
     settings.map_or(0, |settings| settings.modern_level(name))
+}
+
+/// On a scene view the passes draw in: active, single-sampled (they bind the prepass textures as such) and with a
+/// depth prepass.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct PassView;
+
+struct PassViewPlugin;
+
+impl Plugin for PassViewPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PostUpdate, tag_pass_views);
+    }
+}
+
+/// Extracts the pass's `T` from the views; the views are tagged once however many passes ask.
+pub fn add_view_pass<T: ExtractComponent<RenderApp>>(app: &mut App) {
+    if !app.is_plugin_added::<PassViewPlugin>() {
+        app.add_plugins(PassViewPlugin);
+    }
+    app.add_plugins(ExtractComponentPlugin::<T>::default());
+}
+
+pub fn tag_pass_views(mut commands: Commands, views: Query<(Entity, &Camera, &Msaa, Has<DepthPrepass>, Option<&PassView>), With<SceneView>>) {
+    for (entity, camera, msaa, depth, tagged) in &views {
+        let drawn_in = camera.is_active && matches!(msaa, Msaa::Off) && depth;
+        follow_view_pass(commands.entity(entity), tagged, drawn_in.then_some(PassView));
+    }
+}
+
+/// Puts the pass's `wanted` on the view only when it differs from what is there, or takes the pass off.
+pub fn follow_view_pass<T: Component + PartialEq>(mut view: EntityCommands, shown: Option<&T>, wanted: Option<T>) {
+    match wanted {
+        Some(wanted) if shown != Some(&wanted) => {
+            view.insert(wanted);
+        }
+        None if shown.is_some() => {
+            view.remove::<T>();
+        }
+        _ => {}
+    }
 }
 
 #[derive(Resource)]
@@ -71,6 +119,11 @@ impl<K: PartialEq> ViewBindGroups<K> {
             *cached = None;
         }
         &cached.get_or_insert_with(|| (key, make())).1
+    }
+
+    /// Drops the view's group, and with it what the group kept alive.
+    pub fn forget(&mut self, view: Entity) {
+        self.0.remove(&view);
     }
 }
 
@@ -162,10 +215,38 @@ impl HalfThenFull<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::change_detection::DetectChanges;
+    use bevy::ecs::world::World;
 
     #[test]
     fn half_size_covers_odd_sides() {
         assert_eq!(half_size(UVec2::new(1921, 1080)), UVec2::new(961, 540));
         assert_eq!(half_size(UVec2::ONE), UVec2::ONE);
+    }
+
+    #[derive(Component, Debug, Clone, Copy, PartialEq)]
+    struct Pass(u8);
+
+    /// Whether the follow wrote the pass this step.
+    fn follow(world: &mut World, view: Entity, wanted: Option<Pass>) -> bool {
+        world.clear_trackers();
+        let shown = world.get::<Pass>(view).copied();
+        follow_view_pass(world.commands().entity(view), shown.as_ref(), wanted);
+        world.flush();
+        world.entity(view).get_ref::<Pass>().is_some_and(|pass| pass.is_changed())
+    }
+
+    #[test]
+    fn a_view_pass_is_written_only_when_it_changes_and_taken_off_when_unwanted() {
+        let mut world = World::new();
+        let view = world.spawn_empty().id();
+        assert!(follow(&mut world, view, Some(Pass(1))));
+        assert!(!follow(&mut world, view, Some(Pass(1))), "the same pass is not written again");
+        assert!(follow(&mut world, view, Some(Pass(2))));
+        assert_eq!(world.get::<Pass>(view), Some(&Pass(2)));
+        follow(&mut world, view, None);
+        assert_eq!(world.get::<Pass>(view), None);
+        follow(&mut world, view, None);
+        assert_eq!(world.get::<Pass>(view), None);
     }
 }

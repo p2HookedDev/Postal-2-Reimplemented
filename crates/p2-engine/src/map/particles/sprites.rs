@@ -11,8 +11,8 @@ fn pour(p: &ParticleActor) -> Option<Pour> {
         from: p.turn.place?,
         velocity: [world([x.min, y.min, z.min].into()), world([x.max, y.max, z.max].into())],
         acceleration: world(props.acceleration),
-        rate: props.particles_per_second,
-        flowing: props.particles_per_second > 0.0 && !props.disabled,
+        rate: props.flow_rate(),
+        flowing: props.flow_rate() > 0.0,
     })
 }
 

@@ -11,7 +11,18 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 27] = [
+const ENTRIES: [(&str, &[&str]); 38] = [
+    ("particle", &["P2_PARTICLE_LEVELS", "SKY_VIEW"]),
+    ("actor_light", &["SKY_VIEW"]),
+    ("sun_levels", &[]),
+    ("sky_view", &[]),
+    ("sky_vertex", &["SKY_VIEW"]),
+    ("lightmapped", &["LIGHTMAP", "SKY_VIEW"]),
+    ("mesh_light", &["SKY_VIEW"]),
+    ("terrain", &["SKY_VIEW"]),
+    ("terrain_layer", &["TERRAIN_LAYER", "SKY_VIEW"]),
+    ("blended", &["SKY_VIEW"]),
+    ("level_caster", &[]),
     ("actor_light", &[]),
     ("actor_light", &["VISIBILITY_RANGE_DITHER"]),
     ("mesh_light", &["VISIBILITY_RANGE_DITHER"]),
@@ -25,9 +36,9 @@ const ENTRIES: [(&str, &[&str]); 27] = [
     ("lightmapped", &["PREMULTIPLY_ALPHA", "BLEND_MULTIPLY"]),
     ("lightmapped", &["P2_SEE_THROUGH"]),
     ("mesh_light", &["P2_SEE_THROUGH"]),
-    ("particle", &["TAGGED_COLOR"]),
+    ("particle", &["TAGGED_COLOR", "P2_PARTICLE_LEVELS"]),
     ("debris", &[]),
-    ("particle", &[]),
+    ("particle", &["P2_PARTICLE_LEVELS"]),
     ("tone", &[]),
     ("reflections", &[]),
     ("lamp_fog", &[]),

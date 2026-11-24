@@ -1,4 +1,5 @@
 use super::*;
+use bevy::math::Mat4;
 
 /// The Bevy camera rotation of an Unreal view rotation (pitch, yaw, roll; 65536 a turn): Unreal looks
 /// along X with Z up and Y right, a Bevy camera along −Z with Y up and X right, Y and Z swapped.
@@ -23,7 +24,6 @@ pub(super) fn plain_output() -> (Msaa, Tonemapping, DebandDither, MipBias) {
 #[derive(SystemParam)]
 pub(super) struct SceneCameras<'w, 's> {
     pub(super) views: Query<'w, 's, &'static mut SceneView>,
-    pub(super) skies: Query<'w, 's, &'static mut SkyCamera>,
 }
 
 fn set_camera(camera: &mut Mut<Camera>, is_active: bool, viewport: Option<&Viewport>) {
@@ -90,14 +90,14 @@ fn place_camera(
     facts: Res<FrameFacts>,
     mut cameras: Query<
         (Entity, &mut Camera, &mut Transform, &SceneView, &mut Projection, Has<OcclusionCulling>, Has<ScreenSpaceAmbientOcclusion>),
-        Without<SkyCamera>,
+        Without<SkyRoot>,
     >,
-    mut skies: Query<(&mut Camera, &mut Transform, &SkyCamera, &mut Projection), Without<SceneView>>,
+    mut sky_roots: Query<&mut Transform, (With<SkyRoot>, Without<SceneView>)>,
+    shown: Res<ShownScene>,
 ) {
     let view_fov = view.view_fov(&facts);
     let viewport = view.bevy_viewport();
-    let has_sky = skies.iter().any(|(_, _, sky, _)| sky.position.is_some());
-    let mut rotation = Quat::IDENTITY;
+    let mut eye = None;
     for (entity, mut camera, mut transform, scene_view, mut projection, culled, ssao) in &mut cameras {
         view.set_fov(&mut projection, view_fov);
         set_camera(&mut camera, viewport.is_some(), viewport.as_ref());
@@ -118,25 +118,17 @@ fn place_camera(
                 commands.entity(entity).remove::<(DepthPrepass, OcclusionCulling)>();
             }
         }
-        let clear_color = if has_sky { ClearColorConfig::None } else { ClearColorConfig::Default };
-        if std::mem::discriminant(&camera.clear_color) != std::mem::discriminant(&clear_color) {
-            camera.clear_color = clear_color;
-        }
-        rotation = scene_view.rotation;
-        let placed = Transform::from_translation(scene_view.position).with_rotation(rotation);
+        eye = Some(scene_view.position);
+        let placed = Transform::from_translation(scene_view.position).with_rotation(scene_view.rotation);
         if *transform != placed {
             *transform = placed;
         }
     }
-    for (mut camera, mut transform, sky, mut projection) in &mut skies {
-        view.set_fov(&mut projection, view_fov);
-        set_camera(&mut camera, viewport.is_some() && sky.position.is_some(), viewport.as_ref());
-        // The sky's world turns by the inverse of the `SkyZoneInfo`'s rotation before the view's, so its
-        // camera looks along the zone's rotation applied to the view's.
-        let (position, turn) = sky.position.unwrap_or((Vec3::ZERO, Quat::IDENTITY));
-        let placed = Transform::from_translation(position).with_rotation(turn * rotation);
-        if *transform != placed {
-            *transform = placed;
+    // The sky zone's geometry at p shows at eye + turn^-1 (p - sky eye): no parallax, turned by the zone's rotation.
+    if let (Some(eye), Some((sky_eye, turn))) = (eye, shown.sky_place) {
+        let placed = Transform::from_matrix(Mat4::from_translation(eye) * Mat4::from_quat(turn.inverse()) * Mat4::from_translation(shown.origin - sky_eye));
+        for mut transform in &mut sky_roots {
+            transform.set_if_neq(placed);
         }
     }
 }

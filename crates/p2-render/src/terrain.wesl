@@ -17,6 +17,7 @@ import package::p2_render::modern_base::{LUMINANCE, MODERN_ON, NO_RELIEF};
 import package::p2_render::relief::{relief_from, relief_shows};
 import package::p2_render::sun_shadow::{sun_found, sun_index};
 import package::p2_render::surface::{ModernLight, modern_light, retail_lit};
+import package::p2_render::sky_view::sky_true_position;
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
 @if(BINDLESS)
@@ -28,6 +29,8 @@ struct TerrainParams {
     u: array<vec4<f32>, MAX_LAYERS>,
     v: array<vec4<f32>, MAX_LAYERS>,
     count: vec4<u32>,
+    sky_eye: vec4<f32>,
+    sky_turn: array<vec4<f32>, 3>,
 }
 
 @if(BINDLESS) {
@@ -160,6 +163,10 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     }
     var pbr_input = pbr_input_from_standard_material(input, is_front);
 
+    let terrain = params(vertex_output);
+@if(SKY_VIEW)
+    let position = sky_true_position(vertex_output.world_position.xyz, view.world_position, terrain.sky_eye.xyz, mat3x3(terrain.sky_turn[0].xyz, terrain.sky_turn[1].xyz, terrain.sky_turn[2].xyz));
+@else
     let position = vertex_output.world_position.xyz;
     let position_dx = dpdx(position);
     let position_dy = dpdy(position);
@@ -168,7 +175,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let alpha_dx = dpdx(alpha_uv) * mip_scale;
     let alpha_dy = dpdy(alpha_uv) * mip_scale;
 
-    let terrain = params(vertex_output);
     let count = min(terrain.count.x, MAX_LAYERS);
     let sun = sun_index();
     let modern = (terrain.count.y & MODERN_ON) != 0u && sun_found(sun);

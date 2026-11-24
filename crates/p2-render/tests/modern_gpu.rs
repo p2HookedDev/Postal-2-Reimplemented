@@ -22,7 +22,9 @@ use p2_render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLig
 use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
 use bevy::light::AmbientLight;
 use p2_render::view::{CASTER_LAYER, MOVER_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView};
-use p2_render::sun_cache::{CachedSunLevel, SunCachePlugin, SunCacheStale, level_config};
+use p2_render::sun_cache::{CachedSunLevel, SunCachePlugin, SunCacheStale};
+use p2_render::modern::StillProp;
+use p2_render::world_pass::{WorldCamera, WorldPassPlugin};
 
 const SUN_LESS: f32 = 0.3;
 const SUN_TERM: f32 = 0.2;
@@ -204,7 +206,7 @@ fn a_cached_sun_level_keeps_its_shadow_until_it_redraws() {
     let seen = RenderLayers::from_layers(&[0, SUN_VIEW_LAYER]);
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins((p2_render::mesh_light::MeshLightPlugin, p2_render::actor_light::ActorLightPlugin, SunCachePlugin));
+    app.add_plugins((p2_render::mesh_light::MeshLightPlugin, p2_render::actor_light::ActorLightPlugin, SunCachePlugin, WorldPassPlugin));
     app.finish();
     app.cleanup();
     let world = app.world_mut();
@@ -227,6 +229,7 @@ fn a_cached_sun_level_keeps_its_shadow_until_it_redraws() {
         seen,
         SceneView::default(),
         AmbientLight { brightness: 0.0, ..AmbientLight::default() },
+        WorldCamera,
     ));
     let ground = world.resource_mut::<Assets<Mesh>>().add(quad(30.0, 0.0, 1.0));
     let mut extension = DynamicLit::default();
@@ -234,8 +237,8 @@ fn a_cached_sun_level_keeps_its_shadow_until_it_redraws() {
     let material = world.resource_mut::<Assets<MeshLitMaterial>>().add(MeshLitMaterial { base: StandardMaterial::default(), extension });
     world.spawn((Mesh3d(ground), MeshMaterial3d(material), Transform::default()));
     let caster = world.resource_mut::<Assets<Mesh>>().add(quad(3.0, 5.0, 1.0));
-    let plain = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
-    let caster = world.spawn((Mesh3d(caster), MeshMaterial3d(plain), Transform::default(), RenderLayers::layer(STATIC_CASTER_LAYER))).id();
+    let settled = world.resource_mut::<Assets<MeshLitMaterial>>().add(MeshLitMaterial { base: StandardMaterial::default(), extension: DynamicLit::default() });
+    let caster = world.spawn((Mesh3d(caster), MeshMaterial3d(settled), Transform::default(), RenderLayers::layer(STATIC_CASTER_LAYER), StillProp(true))).id();
     let down = Transform::default().looking_to(Vec3::NEG_Z, Vec3::Y);
     let sun = DirectionalLight {
         color: Color::LinearRgba(LinearRgba::rgb(0.5, 0.5, 0.5)),
@@ -246,8 +249,7 @@ fn a_cached_sun_level_keeps_its_shadow_until_it_redraws() {
     };
     let config = CascadeShadowConfigBuilder { num_cascades: 3, minimum_distance: 0.1, maximum_distance: 60.0, first_cascade_far_bound: 15.0, overlap_proportion: 0.1 };
     world.spawn((sun, config.build(), down, RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER])));
-    let black = DirectionalLight { color: Color::BLACK, illuminance: 0.0, shadow_maps_enabled: true, affects_lightmapped_mesh_diffuse: false, ..DirectionalLight::default() };
-    world.spawn((CachedSunLevel::new(512.0), black, level_config(512.0), down, RenderLayers::layer(SUN_VIEW_LAYER)));
+    world.spawn((CachedSunLevel::new(512.0), down));
 
     let red = |frame: &[u8], x: u32, y: u32| frame[((y * SIZE + x) * 4) as usize];
     let read = |frames: &Arc<Mutex<Vec<Vec<u8>>>>| frames.lock().expect("lock").last().map(|last| (red(last, SIZE / 2, SIZE / 2), red(last, 4, 4)));

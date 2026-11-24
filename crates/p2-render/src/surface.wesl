@@ -9,8 +9,26 @@ import package::p2_render::layer_bindings::lit_color;
 import package::p2_render::layer_types::ShaderLayers;
 import package::p2_render::modern::{allows_gloss, ambient_occlusion, classed_surface, modern_glass, modern_surface, with_light};
 import package::p2_render::modern_base::LampLight;
-import package::p2_render::sun_shadow::sun_seen_from;
+import package::p2_render::sun_shadow::{sun_seen_from, sun_visibility};
+import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::lamp_shadow::lamp_light;
+@if(BINDLESS)
+import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
+
+// The cached sun levels ride in the material's depth map slot: its bindless indices, read where the image is sampled.
+fn material_levels(in: VertexOutput) -> LevelSource {
+@if(BINDLESS) {
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    return LevelSource(material_indices[slot].depth_map_texture, material_indices[slot].depth_map_sampler);
+}
+@else {
+    return LevelSource(0u, 0u);
+}
+}
+
+fn material_sun_visibility(in: VertexOutput, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
+    return sun_visibility(material_levels(in), sun, position, normal, frag_coord);
+}
 
 struct ModernLight {
     position: vec3<f32>,
@@ -24,7 +42,7 @@ struct ModernLight {
 // The sun sees `normal`, the lamps light `bumped`.
 fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool) -> ModernLight {
     let position = pbr_input.world_position.xyz;
-    let seen = sun_seen_from(sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
+    let seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
     let gloss = allows_gloss(flag) && !darken;
     let surface = classed_surface(flag, blend);
     let lamps = lamp_light(in, position, bumped, gloss, surface, flag);

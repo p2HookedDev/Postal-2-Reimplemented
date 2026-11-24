@@ -36,6 +36,8 @@ rfd = "0.17"
 rodio = { version = "0.22", default-features = false }
 # Same major version as bevy_image 0.20 uses; bevy only re-exports it through bevy_render.
 wgpu-types = { version = "30", default-features = false }
+# The bound ShaderBuffer puts on its records; the same version bevy_render uses.
+bytemuck = "1"
 # The shader compiler wgpu 30 uses; tests validate the engine's own WGSL with it.
 naga = { version = "30", default-features = false }
 # The WESL composer bevy_shader 0.20 uses (same features); a test composes the engine's shaders with it.

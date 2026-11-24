@@ -50,8 +50,9 @@ impl PlayWorld {
         self.frame.step * self.frame.time_dilation
     }
 
-    pub fn time_dilation(&self) -> f32 {
-        self.frame.time_dilation
+    /// `real` host seconds in game seconds: none while paused, slowed by `TimeDilation`.
+    pub fn game_seconds(&self, real: f32) -> f32 {
+        if self.frame.paused { 0.0 } else { real * self.frame.time_dilation }
     }
 
     /// The hits on people in the tick now shown, each on one host frame only.

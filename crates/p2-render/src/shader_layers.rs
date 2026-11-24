@@ -94,6 +94,7 @@ macro_rules! layered_extension {
         #[derive(bevy::asset::Asset, bevy::render::render_resource::AsBindGroup, bevy::reflect::Reflect, Debug, Clone, Default)]
         #[data(100, ShaderLayers, binding_array(107))]
         #[bindless(index_table(range(100..107), binding(108)))]
+        #[bind_group_data(SkyKey)]
         pub struct $name {
             pub layers: crate::shader_layers::ShaderLayers,
             #[texture(101)]
@@ -105,12 +106,19 @@ macro_rules! layered_extension {
             #[texture(105)]
             #[sampler(106)]
             pub flat_specular: Option<bevy::asset::Handle<bevy::image::Image>>,
+            pub sky: bool,
         }
 
         impl $name {
             pub fn new(layers: &crate::shader_layers::Layers) -> Self {
                 let [detail, specular, flat_specular] = layers.images();
-                Self { layers: layers.params, detail, specular, flat_specular }
+                Self { layers: layers.params, detail, specular, flat_specular, sky: false }
+            }
+        }
+
+        impl From<&$name> for SkyKey {
+            fn from(extension: &$name) -> Self {
+                Self { sky: extension.sky }
             }
         }
 

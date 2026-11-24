@@ -26,7 +26,8 @@ use p2_math::Vector;
 use p2_render::MainPassExtraSystems;
 use p2_render::frame_facts::FrameFacts;
 use p2_render::liquids::LiquidsPlugin;
-use p2_render::particle_frame::{DrawnActor, DrawnParticles, Liquid, LiquidRole, Pour};
+use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, Liquid, LiquidRole, Pour};
+use p2_particles::SpriteParticle;
 use p2_render::view::SceneView;
 use p2_vm::FluidType;
 
@@ -40,9 +41,8 @@ fn red_pixels(frame: &Mutex<Vec<u8>>) -> usize {
     frame.lock().expect("lock").as_chunks::<4>().0.iter().filter(|&&pixel| is_red(pixel)).count()
 }
 
-/// A slow blood pour in front of a grey wall, 40 units ahead of the eye, under white ambient light; the app and the
-/// frame it last drew.
-fn pouring() -> (App, Arc<Mutex<Vec<u8>>>) {
+/// `actor` in front of a grey wall under white ambient light, until it draws red; the app and the frame it last drew.
+fn showing(actor: impl FnOnce(bevy::ecs::entity::Entity) -> DrawnActor) -> (App, Arc<Mutex<Vec<u8>>>) {
     let mut app = App::new();
     common::headless_renderer(&mut app);
     app.add_plugins(LiquidsPlugin);
@@ -84,15 +84,7 @@ fn pouring() -> (App, Arc<Mutex<Vec<u8>>>) {
     let grey = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color: Color::srgb(0.2, 0.2, 0.2), unlit: true, ..Default::default() });
     world.spawn((Mesh3d(wall), MeshMaterial3d(grey), Transform::default()));
     let parent = world.spawn_empty().id();
-    let pour = Pour {
-        from: Vector::new(0.0, -40.0, 8.0),
-        velocity: [Vector::new(-4.0, 0.0, -4.0), Vector::new(4.0, 0.0, 4.0)],
-        acceleration: Vector::new(0.0, 0.0, -15.0),
-        rate: 120.0,
-        flowing: true,
-    };
-    let liquid = Liquid { kind: FluidType::Blood, role: LiquidRole::Stream, burning: false, pour: Some(pour) };
-    world.resource_mut::<DrawnParticles>().actors.push(DrawnActor { parent, drawn: true, liquid: Some(liquid), ..DrawnActor::default() });
+    world.resource_mut::<DrawnParticles>().actors.push(actor(parent));
 
     let start = Instant::now();
     while red_pixels(&frames) < 20 {
@@ -102,10 +94,41 @@ fn pouring() -> (App, Arc<Mutex<Vec<u8>>>) {
     (app, frames)
 }
 
+/// A slow blood pour 40 units ahead of the eye.
+fn pouring(parent: bevy::ecs::entity::Entity) -> DrawnActor {
+    let pour = Pour {
+        from: Vector::new(0.0, -40.0, 8.0),
+        velocity: [Vector::new(-4.0, 0.0, -4.0), Vector::new(4.0, 0.0, 4.0)],
+        acceleration: Vector::new(0.0, 0.0, -15.0),
+        rate: 120.0,
+        flowing: true,
+    };
+    let liquid = Liquid { kind: FluidType::Blood, role: LiquidRole::Stream, burning: false, pour: Some(pour) };
+    DrawnActor { parent, drawn: true, liquid: Some(liquid), ..DrawnActor::default() }
+}
+
+/// A blood puddle's one sprite standing up 50 units ahead of the eye, facing it, as the scripts would hand it over.
+fn puddle(parent: bevy::ecs::entity::Entity) -> DrawnActor {
+    let sprite = SpriteParticle {
+        location: Vector::new(0.0, -50.0, 0.0),
+        previous: Vector::new(0.0, -50.0, 0.0),
+        size: [12.0, 12.0],
+        up: Vector::new(0.0, 0.0, 12.0),
+        right: Vector::new(12.0, 0.0, 0.0),
+        color: [255; 4],
+        uv: [0.0, 0.0, 1.0, 1.0],
+        blend: None,
+        serial: 1,
+    };
+    let liquid = Liquid { kind: FluidType::Blood, role: LiquidRole::Puddle, burning: false, pour: None };
+    let emitter = DrawnEmitter { sprites: vec![sprite], ..DrawnEmitter::default() };
+    DrawnActor { parent, drawn: true, seen: true, puddle_seed: Some(7), liquid: Some(liquid), emitters: vec![emitter], ..DrawnActor::default() }
+}
+
 #[test]
 #[ignore = "needs a GPU"]
 fn a_blood_pour_draws_a_red_surface_that_is_gone_once_the_pour_stops_and_its_drops_die() {
-    let (mut app, frame) = pouring();
+    let (mut app, frame) = showing(pouring);
     let liquid = app.world_mut().resource_mut::<DrawnParticles>().actors[0].liquid.as_mut().and_then(|liquid| liquid.pour.as_mut()).map(|pour| pour.flowing = false);
     assert!(liquid.is_some());
     let stopped = Instant::now();
@@ -115,3 +138,14 @@ fn a_blood_pour_draws_a_red_surface_that_is_gone_once_the_pour_stops_and_its_dro
     }
 }
 
+#[test]
+#[ignore = "needs a GPU"]
+fn a_blood_puddle_is_drawn_as_our_own_liquid_from_its_sprite() {
+    let (mut app, frame) = showing(puddle);
+    app.world_mut().resource_mut::<DrawnParticles>().actors.clear();
+    let gone = Instant::now();
+    while red_pixels(&frame) > 0 {
+        app.update();
+        assert!(gone.elapsed() < Duration::from_secs(10), "{} pixels of the puddle stay after it is gone", red_pixels(&frame));
+    }
+}

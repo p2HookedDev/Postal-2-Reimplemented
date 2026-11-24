@@ -113,6 +113,22 @@ pub struct EmitterProperties {
     pub beam: BeamProperties,
 }
 
+impl EmitterProperties {
+    /// Particles a second while it keeps spawning, 0 once stopped: `ParticlesPerSecond` when set, else as many as
+    /// `MaxParticles` over one lifetime while dead particles respawn (the rule the simulation fills by).
+    pub fn flow_rate(&self) -> f32 {
+        if self.disabled {
+            0.0
+        } else if self.particles_per_second > 0.0 {
+            self.particles_per_second
+        } else if self.respawn_dead_particles && self.lifetime_range.center() > 0.0 {
+            self.max_particles.max(0) as f32 / self.lifetime_range.center()
+        } else {
+            0.0
+        }
+    }
+}
+
 impl Default for EmitterProperties {
     fn default() -> Self {
         let zero = RangeVector::splat(0.0, 0.0);
@@ -209,5 +225,22 @@ impl Default for EmitterProperties {
             render_two_sided: false,
             beam: BeamProperties::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_flow_rate_follows_the_simulations_spawn_rule() {
+        let mut props = EmitterProperties { max_particles: 13, respawn_dead_particles: true, lifetime_range: Range { min: 0.5, max: 0.5 }, ..EmitterProperties::default() };
+        assert_eq!(props.flow_rate(), 26.0);
+        props.particles_per_second = 40.0;
+        assert_eq!(props.flow_rate(), 40.0);
+        props.disabled = true;
+        assert_eq!(props.flow_rate(), 0.0);
+        props = EmitterProperties { max_particles: 13, respawn_dead_particles: false, lifetime_range: Range { min: 0.5, max: 0.5 }, ..EmitterProperties::default() };
+        assert_eq!(props.flow_rate(), 0.0);
     }
 }

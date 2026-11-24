@@ -83,9 +83,15 @@ fn actor_target(instance_index: u32) -> u32 {
 }
 
 fn cluster_ranges(pbr_input: PbrInput) -> ClusterableObjectIndexRanges {
+@if(SKY_VIEW) {
+    var none: ClusterableObjectIndexRanges;
+    return none;
+}
+@if(!SKY_VIEW) {
     let view_z = get_view_z(pbr_input.world_position.xyz);
     let cluster_index = clustered_forward::view_fragment_cluster_index(pbr_input.frag_coord.xy, view_z, pbr_input.is_orthographic);
     return clustered_forward::unpack_clusterable_object_index_ranges(cluster_index);
+}
 }
 
 @if(CLUSTERED_DECALS_ARE_USABLE)

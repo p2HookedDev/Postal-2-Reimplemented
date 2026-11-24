@@ -32,6 +32,7 @@ use crate::shader_layers::{Layers, ShaderLayers};
 use crate::shaders::add_material;
 
 use p2_render_cpu::MAX_HARDWARE_LIGHTS;
+use crate::shaders::SkyKey;
 
 mod view_model;
 pub use view_model::view_model_lighting;
@@ -203,6 +204,7 @@ pub type ActorLitMaterial = ExtendedMaterial<StandardMaterial, HardwareLighting>
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 #[data(100, ActorShading, binding_array(107))]
 #[bindless(index_table(range(100..107), binding(108)))]
+#[bind_group_data(SkyKey)]
 pub struct HardwareLighting {
     pub lighting: SkinnedLighting,
     pub layers: ShaderLayers,
@@ -217,12 +219,19 @@ pub struct HardwareLighting {
     #[texture(105)]
     #[sampler(106)]
     pub flat_specular: Option<Handle<Image>>,
+    pub sky: bool,
+}
+
+impl From<&HardwareLighting> for SkyKey {
+    fn from(extension: &HardwareLighting) -> Self {
+        Self { sky: extension.sky }
+    }
 }
 
 impl HardwareLighting {
     pub fn new(lighting: SkinnedLighting, layers: &Layers) -> Self {
         let [detail, specular, flat_specular] = layers.images();
-        Self { lighting, layers: layers.params, overlay: 0, detail, specular, flat_specular }
+        Self { lighting, layers: layers.params, overlay: 0, detail, specular, flat_specular, sky: false }
     }
 }
 
@@ -288,6 +297,7 @@ impl MaterialExtension for HardwareLighting {
     ) -> Result<(), SpecializedMeshPipelineError> {
         crate::shaders::cast_both_sides(descriptor, key.mesh_key);
         crate::reflections::write_class_in_prepass(descriptor, crate::reflections::LayersHeld::InActorShading);
+        crate::shaders::mark_sky(descriptor, key.bind_group_data);
         Ok(())
     }
 

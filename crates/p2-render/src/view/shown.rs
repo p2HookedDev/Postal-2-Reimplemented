@@ -20,4 +20,6 @@ pub struct ShownScene {
     pub start: Option<(Vec3, i32)>,
     pub light_maps: Vec<Option<Handle<Image>>>,
     pub sky_zone: Option<u8>,
+    /// The sky zone's eye in the drawn level and the zone's turn.
+    pub sky_place: Option<(Vec3, bevy::math::Quat)>,
 }

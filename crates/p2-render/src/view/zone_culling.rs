@@ -1,4 +1,5 @@
 use super::*;
+use super::sky_copies::InSky;
 
 pub(super) struct ZoneCullingPlugin;
 
@@ -222,7 +223,7 @@ pub(super) fn layers_by_zone(
     parents: Query<&ChildOf>,
     roots: Query<(&ZoneCulled, Has<CastsUnseen>), Or<(With<ActorModel>, With<LayeredByZone>)>>,
     children: Query<&Children>,
-    layers: Query<(Option<&RenderLayers>, Has<Mesh3d>)>,
+    layers: Query<(Option<&RenderLayers>, Has<Mesh3d>, Has<InSky>)>,
 ) {
     let joined = joined.iter().flat_map(|entity| parents.iter_ancestors(entity)).filter(|&root| roots.contains(root));
     let dirty: EntityHashSet = changed.iter().chain(joined).collect();
@@ -233,24 +234,27 @@ pub(super) fn layers_by_zone(
         let (in_sky, in_world) = sky_and_world(&zone.zones, shown.sky_zone);
         for draw in children.iter_descendants(root) {
             // As `move_draws`: an entity without layers is a draw only if it is a mesh, so a skeleton's joints are left be.
-            let now = match layers.get(draw) {
-                Ok((Some(now), _)) => now.clone(),
-                Ok((None, true)) => RenderLayers::default(),
+            let (now, was_in_sky) = match layers.get(draw) {
+                Ok((Some(now), _, was_in_sky)) => (now.clone(), was_in_sky),
+                Ok((None, true, was_in_sky)) => (RenderLayers::default(), was_in_sky),
                 _ => continue,
             };
             // Draws on other layers only (an overlay's) are not the level's to move.
-            if !now.intersects(&scene) {
+            if !now.intersects(&scene) && !was_in_sky {
                 continue;
             }
+            // The sky draws its own copy of a draw in the sky zone.
             let mut next = now.clone().without(0).without(UNSEEN_LAYER).without(SKY_LAYER);
-            if in_sky {
-                next = next.with(SKY_LAYER);
-            }
             if in_world {
                 next = next.with(world_layer);
             }
             if next != now {
                 commands.entity(draw).insert(next);
+            }
+            if in_sky && !was_in_sky {
+                commands.entity(draw).insert(InSky);
+            } else if !in_sky && was_in_sky {
+                commands.entity(draw).remove::<InSky>();
             }
         }
     }

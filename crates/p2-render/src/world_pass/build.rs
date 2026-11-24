@@ -248,7 +248,6 @@ pub(super) fn rebuild_if_stale(world: &mut World) {
         clear_phases(world);
         let mut pass = world.resource_mut::<WorldPass>();
         pass.queued.clear();
-        pass.shadow_queued.clear();
     }
     if draws.sections.is_empty() {
         return;
@@ -267,7 +266,6 @@ pub(super) fn rebuild_if_stale(world: &mut World) {
     let mut pass = world.resource_mut::<WorldPass>();
     pass.built = Some(built);
     pass.queued.clear();
-    pass.shadow_queued.clear();
     pass.waited_frames = 0;
 }
 

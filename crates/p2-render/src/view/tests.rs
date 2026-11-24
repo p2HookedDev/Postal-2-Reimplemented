@@ -122,6 +122,10 @@ fn a_forced_zone_tag_shows_only_from_its_zones() {
     assert!(forced_shown(Some(&[1]), None));
 }
 
+fn drawn_layers(app: &App, entity: Entity) -> Vec<usize> {
+    app.world().get::<RenderLayers>(entity).cloned().unwrap_or_default().iter().collect()
+}
+
 #[test]
 fn a_moving_actor_is_in_the_zones_where_it_is() {
     let mut app = App::new();
@@ -144,11 +148,11 @@ fn a_moving_actor_is_in_the_zones_where_it_is() {
     let aabb = Aabb::from_min_max(Vec3::splat(-10.0), Vec3::splat(10.0));
     let section = app.world_mut().spawn((follow, Transform::from_xyz(0.0, 50.0, 0.0), aabb, Mesh3d::default(), ChildOf(root))).id();
     let zones = |app: &App| app.world().get::<ZoneCulled>(root).map(|zone| zone.zones.clone());
-    let layers = |app: &App| app.world().get::<RenderLayers>(section).cloned().unwrap_or_default();
+    let layers = |app: &App| (drawn_layers(app, section), app.world().get::<sky_copies::InSky>(section).is_some());
     app.update();
     assert_eq!(zones(&app), Some(vec![2]));
-    assert_eq!(layers(&app), RenderLayers::layer(SKY_LAYER), "only in the sky zone: the sky camera's");
-    for (y, expected, drawn) in [(5.0, vec![1, 2], RenderLayers::layer(0).with(SKY_LAYER)), (-50.0, vec![1], RenderLayers::layer(0))] {
+    assert_eq!(layers(&app), (Vec::new(), true), "only in the sky zone: only its sky copy draws");
+    for (y, expected, drawn) in [(5.0, vec![1, 2], (vec![0], true)), (-50.0, vec![1], (vec![0], false))] {
         if let Some(mut transform) = app.world_mut().get_mut::<Transform>(section) {
             transform.translation.y = y;
         }
@@ -238,10 +242,10 @@ fn draws_under_a_zone_layered_root_follow_its_zones_also_when_they_join_later() 
     let later = app.world_mut().spawn((ChildOf(middle), Mesh3d::default())).id();
     let overlay = app.world_mut().spawn((ChildOf(middle), RenderLayers::layer(7))).id();
     app.update();
-    let layers = |app: &App, entity| app.world().get::<RenderLayers>(entity).cloned().unwrap_or_default();
-    assert_eq!(layers(&app, first), RenderLayers::layer(SKY_LAYER));
-    assert_eq!(layers(&app, later), RenderLayers::layer(SKY_LAYER));
-    assert_eq!(layers(&app, overlay), RenderLayers::layer(7), "an overlay draw is left alone");
+    let in_sky = |app: &App, entity| (drawn_layers(app, entity), app.world().get::<sky_copies::InSky>(entity).is_some());
+    assert_eq!(in_sky(&app, first), (Vec::new(), true));
+    assert_eq!(in_sky(&app, later), (Vec::new(), true));
+    assert_eq!(in_sky(&app, overlay), (vec![7], false), "an overlay draw is left alone");
     assert!(app.world().get::<RenderLayers>(middle).is_none(), "what is no mesh, such as a joint, is no draw");
 }
 
@@ -279,7 +283,7 @@ fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
     app.world_mut().write_message(SceneChange::Clear);
     app.world_mut().write_message(SceneChange::Show(Box::new(scene)));
     app.update();
-    assert_eq!(counts(&mut app), (2, 2), "the static root and the attachments root, one draw an instance");
+    assert_eq!(counts(&mut app), (3, 2), "the static, attachments and sky roots, one draw an instance");
     assert_eq!(app.world().resource::<ShownScene>().radius, 1.0);
     app.world_mut().write_message(SceneChange::Clear);
     app.update();

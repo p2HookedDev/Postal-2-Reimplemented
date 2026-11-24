@@ -119,7 +119,7 @@ pub(super) fn place_feet(
     let eye = world.view_location().map(|location| Vec3::from_array(location.into()));
     let cutscene = world.cutscene();
     let blend = 1.0 - (-time.delta_secs() * BLEND_RATE).exp();
-    let seconds = if world.game_paused() { 0.0 } else { time.delta_secs() * world.time_dilation() };
+    let seconds = world.game_seconds(time.delta_secs());
     feet.visited.clear();
     for item in &animated.0 {
         let Some(actor) = item.actor else { continue };

@@ -6,9 +6,9 @@ use std::f32::consts::TAU;
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Asset, AssetId, Assets, Handle, RenderAssetUsages, uuid_handle};
-use bevy::color::{Alpha, Color};
+use bevy::color::{Alpha, Color, ColorToComponents};
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
 use bevy::light::NotShadowCaster;
@@ -36,11 +36,12 @@ use crate::particle_draw::ParticleDrawSystems;
 use crate::particle_frame::{Blast, DrawnParticles};
 use crate::screen_pass::modern_level;
 use crate::shaders::add_shaders;
+use crate::slot_buffer::SlotBuffer;
 
 const PIECES_PER_LEVEL: usize = 64;
 /// The tint buffer's first size: the lying pieces' cap and the sparks' cap at the highest setting. Pieces fading out to
-/// make room count against neither, so it may grow, in steps, since a new size makes Bevy build a new GPU buffer.
-const SLOTS: u32 = 2 * 10 * PIECES_PER_LEVEL as u32;
+/// make room count against neither, so it may grow.
+const SLOTS: usize = 2 * 10 * PIECES_PER_LEVEL;
 const DEBRIS_SHADER: Handle<Shader> = uuid_handle!("9c4e1a72-3d58-4b06-a8f1-6e27d0b5c934");
 /// Every piece's colour in linear light, at its `MeshTag`.
 const DEBRIS_TINTS: Handle<ShaderBuffer> = uuid_handle!("e5a03f81-7b6c-4d29-9e14-c83f20a6d7b5");
@@ -83,13 +84,11 @@ impl Plugin for DebrisPlugin {
             return;
         }
         add_shaders(app, [(DEBRIS_SHADER, Shader::from_wesl(include_str!("debris.wesl"), "p2_render/debris.wesl"))]);
-        let tints = ShaderBuffer::new(vec![[0.0f32; 4]; SLOTS as usize], RenderAssetUsages::default());
-        if let Err(error) = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().insert(DEBRIS_TINTS.id(), tints) {
-            bevy::log::error!("debris tint buffer: {error}");
-        }
+        let mut debris = Debris::default();
+        debris.loose.tints.upload(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>());
         app.add_plugins(MaterialPlugin::<ExtendedMaterial<StandardMaterial, DebrisTint>>::default());
         // After the droplets' thrower: it hands over this frame's pieces, and the hits' pushes come before it.
-        app.init_resource::<PieceBirths>().init_resource::<Debris>().add_systems(
+        app.init_resource::<PieceBirths>().insert_resource(debris).add_systems(
             PostUpdate,
             (start_pieces, move_pieces).chain().in_set(DebrisSystems).in_set(ParticleDrawSystems).after(GpuParticleSystems),
         );
@@ -108,22 +107,6 @@ impl MaterialExtension for DebrisTint {
     }
 }
 
-/// Slots of the tint buffer: given back ones first, then ones never used.
-#[derive(Default)]
-struct Slots {
-    free: Vec<u32>,
-    used: u32,
-}
-
-impl Slots {
-    fn take(&mut self) -> u32 {
-        self.free.pop().unwrap_or_else(|| {
-            self.used += 1;
-            self.used - 1
-        })
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PieceKind {
     /// A thin box that lies where it lands: a shard.
@@ -132,6 +115,54 @@ pub(crate) enum PieceKind {
     Lump,
     /// A small ball that bounces and burns out, drawn as a streak along its motion.
     Spark,
+}
+
+struct PieceTraits {
+    /// The body for a piece of this half size.
+    shape: fn(f32) -> Shape,
+    friction: f32,
+    restitution: f32,
+    alpha_mode: AlphaMode,
+    mesh: fn([f32; 4]) -> Mesh,
+    /// Thrown at a random rotation, else unturned.
+    tumbles: bool,
+}
+
+impl PieceKind {
+    fn traits(self) -> PieceTraits {
+        match self {
+            Self::Flat => PieceTraits {
+                shape: |half| {
+                    let side = half.max(THICKNESS);
+                    Shape::Box(Vector::new(side, side, THICKNESS))
+                },
+                friction: 0.7,
+                restitution: 0.15,
+                alpha_mode: AlphaMode::Blend,
+                mesh: quad,
+                tumbles: true,
+            },
+            Self::Lump => PieceTraits {
+                shape: |half| {
+                    let side = (half * LUMP_BODY).max(THICKNESS);
+                    Shape::Box(Vector::new(side, side, side))
+                },
+                friction: 0.6,
+                restitution: 0.35,
+                alpha_mode: AlphaMode::Blend,
+                mesh: crossed_quads,
+                tumbles: true,
+            },
+            Self::Spark => PieceTraits {
+                shape: |_| Shape::Sphere(Vector::ZERO, SPARK_RADIUS),
+                friction: 0.1,
+                restitution: 0.5,
+                alpha_mode: AlphaMode::Add,
+                mesh: quad,
+                tumbles: false,
+            },
+        }
+    }
 }
 
 /// A piece a sprite throws, in Unreal units and axes.
@@ -191,83 +222,101 @@ struct Place {
     world: World,
 }
 
-#[derive(Default)]
 struct Loose {
-    /// Oldest first.
-    groups: Vec<Group>,
+    /// Shards and lumps, oldest first.
+    lying: Vec<Group>,
+    /// Oldest first; a spark without a body is gone.
+    sparks: Vec<Group>,
     /// Oldest first.
     worlds: Vec<Place>,
     serial: u32,
     seed: u32,
     /// The entities of pieces that went, for the systems to despawn.
     gone: Vec<Entity>,
-    slots: Slots,
+    tints: SlotBuffer<[f32; 4]>,
+}
+
+impl Default for Loose {
+    fn default() -> Self {
+        Self { lying: Vec::new(), sparks: Vec::new(), worlds: Vec::new(), serial: 0, seed: 0, gone: Vec::new(), tints: SlotBuffer::new(DEBRIS_TINTS, SLOTS) }
+    }
+}
+
+fn world_mut(worlds: &mut [Place], id: u32) -> Option<&mut World> {
+    worlds.iter_mut().find(|place| place.id == id).map(|place| &mut place.world)
+}
+
+fn in_world(body: Option<(u32, BodyId)>, id: u32) -> bool {
+    body.is_some_and(|(world, _)| world == id)
+}
+
+fn joined(groups: &[Group], parent: Entity, kind: PieceKind) -> Option<usize> {
+    groups.iter().rposition(|held| held.parent == parent && held.kind == kind && !held.ending && held.age < TOGETHER)
+}
+
+/// Makes room under `cap` in `groups` for one more piece of `kind` thrown by `parent`; false when the piece is not
+/// thrown. The oldest groups end early and stop counting.
+fn room_under_cap(groups: &mut [Group], parent: Entity, kind: PieceKind, cap: usize) -> bool {
+    let (counted, sizes): (Vec<usize>, Vec<usize>) = groups.iter().enumerate().filter(|(_, held)| !held.ending).map(|(at, held)| (at, held.pieces.len())).unzip();
+    if sizes.iter().sum::<usize>() < cap {
+        return true;
+    }
+    let joins = joined(groups, parent, kind).and_then(|group| counted.iter().position(|&at| at == group));
+    let Some(dropped) = groups_to_drop(&sizes, joins, cap) else { return false };
+    for &at in &counted[..dropped] {
+        let held = &mut groups[at];
+        held.ending = true;
+        held.seconds = held.seconds.min(held.age + FADE);
+    }
+    true
 }
 
 impl Loose {
-    fn end(&mut self, group: Group) {
-        for piece in &group.pieces {
+    fn list_mut(&mut self, kind: PieceKind) -> &mut Vec<Group> {
+        match kind {
+            PieceKind::Flat | PieceKind::Lump => &mut self.lying,
+            PieceKind::Spark => &mut self.sparks,
+        }
+    }
+
+    fn end(&mut self, groups: impl IntoIterator<Item = Group>) {
+        for piece in groups.into_iter().flat_map(|group| group.pieces) {
             if let Some((id, body)) = piece.body
-                && let Some(place) = self.worlds.iter_mut().find(|place| place.id == id)
+                && let Some(world) = world_mut(&mut self.worlds, id)
             {
-                place.world.remove_body(body);
+                world.remove_body(body);
             }
             self.gone.push(piece.entity);
-            self.slots.free.push(piece.slot);
+            self.tints.free(piece.slot);
         }
     }
 
-    fn joined(&self, parent: Entity, kind: PieceKind) -> Option<usize> {
-        self.groups.iter().rposition(|held| held.parent == parent && held.kind == kind && !held.ending && held.age < TOGETHER)
-    }
-
-    /// Makes room under `cap` for one more piece of `kind` thrown by `parent`; false when the piece is not thrown.
     /// Sparks have a cap of their own, so a burst of fire never takes a lying piece's place. The oldest sparks go at
-    /// once; the oldest lying pieces fade out and stop counting.
+    /// once; the oldest lying pieces fade out.
     fn make_room(&mut self, parent: Entity, kind: PieceKind, cap: usize) -> bool {
-        let spark = kind == PieceKind::Spark;
-        let counted = |held: &Group| (held.kind == PieceKind::Spark) == spark && !held.ending;
-        let own: usize = self.groups.iter().filter(|held| counted(held) && held.parent == parent).map(|held| held.pieces.len()).sum();
-        if !spark && own >= cap / BREAK_SHARE {
-            return false;
-        }
-        let total: usize = self.groups.iter().filter(|held| counted(held)).map(|held| held.pieces.len()).sum();
-        if total < cap {
-            return true;
-        }
-        let places: Vec<usize> = self.groups.iter().enumerate().filter(|(_, held)| counted(held)).map(|(at, _)| at).collect();
-        let sizes: Vec<usize> = places.iter().map(|&at| self.groups[at].pieces.len()).collect();
-        let joins = self.joined(parent, kind).and_then(|group| places.iter().position(|&at| at == group));
-        let Some(dropped) = groups_to_drop(&sizes, joins, cap) else { return false };
-        for &at in places[..dropped].iter().rev() {
-            if spark {
-                let group = self.groups.remove(at);
-                self.end(group);
-            } else {
-                let held = &mut self.groups[at];
-                held.ending = true;
-                held.seconds = held.seconds.min(held.age + FADE);
+        match kind {
+            PieceKind::Spark => {
+                let room = room_under_cap(&mut self.sparks, parent, kind, cap);
+                let ended: Vec<Group> = self.sparks.extract_if(.., |group| group.ending).collect();
+                self.end(ended);
+                room
+            }
+            PieceKind::Flat | PieceKind::Lump => {
+                let own: usize = self.lying.iter().filter(|held| !held.ending && held.parent == parent).map(|held| held.pieces.len()).sum();
+                own < cap / BREAK_SHARE && room_under_cap(&mut self.lying, parent, kind, cap)
             }
         }
-        true
     }
 
-    /// A world goes: the oldest in which no shard or lump still flies, else the oldest. A shard or a lump still flying
-    /// in it goes rather than hang in the air, and its sparks go at the next step.
+    /// A world goes: the oldest in which no shard or lump still flies, else the oldest. What still flies in it goes
+    /// rather than hang in the air.
     fn retire_a_world(&mut self) {
-        let flying = |id: u32| self.groups.iter().filter(|group| group.kind != PieceKind::Spark).flat_map(|group| &group.pieces).any(|piece| piece.body.is_some_and(|(world, _)| world == id));
+        let flying = |id: u32| self.lying.iter().flat_map(|group| &group.pieces).any(|piece| in_world(piece.body, id));
         let Some(id) = self.worlds.iter().map(|place| place.id).find(|&id| !flying(id)).or(self.worlds.first().map(|place| place.id)) else { return };
-        let held = |body: Option<(u32, BodyId)>| body.is_some_and(|(world, _)| world == id);
-        for group in &mut self.groups {
-            if group.kind == PieceKind::Spark {
-                for piece in group.pieces.iter_mut().filter(|piece| held(piece.body)) {
-                    piece.body = None;
-                }
-            } else {
-                for piece in group.pieces.extract_if(.., |piece| held(piece.body)) {
-                    self.gone.push(piece.entity);
-                    self.slots.free.push(piece.slot);
-                }
+        for group in self.lying.iter_mut().chain(&mut self.sparks) {
+            for piece in group.pieces.extract_if(.., |piece| in_world(piece.body, id)) {
+                self.gone.push(piece.entity);
+                self.tints.free(piece.slot);
             }
         }
         self.worlds.retain(|place| place.id != id);
@@ -296,21 +345,21 @@ impl Loose {
         Quat::from_euler(EulerRot::XYZ, unit(), unit(), unit()).to_array()
     }
 
-    /// A lying piece gets a body again in a world that holds it; a spark without a body is gone already.
+    /// A lying piece gets a body again in a world that holds it.
     fn blast(&mut self, blast: &Blast, level: impl Fn(Vector) -> Vec<[[f32; 3]; 3]>) {
         let mut hits = Vec::new();
-        for (g, group) in self.groups.iter().enumerate() {
-            for piece in &group.pieces {
-                if (piece.place - blast.at).size() < blast.radius {
-                    hits.push((g, piece.entity));
+        for list in [&self.lying, &self.sparks] {
+            for (g, group) in list.iter().enumerate() {
+                for piece in group.pieces.iter().filter(|piece| (piece.place - blast.at).size() < blast.radius) {
+                    hits.push((group.kind, g, piece.entity));
                 }
             }
         }
         let up = Vector::new(0.0, 0.0, 1.0);
-        for (g, entity) in hits {
+        for (kind, g, entity) in hits {
             // Found by its entity again: a world made for an earlier hit may have retired this piece's world or taken
             // a flying piece out of its group.
-            let Some((kind, age, piece)) = self.groups.get(g).and_then(|group| Some((group.kind, group.age, *group.pieces.iter().find(|piece| piece.entity == entity)?))) else { continue };
+            let Some((age, piece)) = self.list_mut(kind).get(g).and_then(|group| Some((group.age, *group.pieces.iter().find(|piece| piece.entity == entity)?))) else { continue };
             let off = piece.place - blast.at;
             let distance = off.size();
             let away = if distance > 1e-3 { off / distance } else { up };
@@ -320,20 +369,19 @@ impl Loose {
             let spin = self.random_spin() * share;
             let body = match piece.body {
                 Some((id, body)) => {
-                    let Some(place) = self.worlds.iter_mut().find(|place| place.id == id) else { continue };
-                    let velocity = place.world.velocity(body).unwrap_or(Vector::ZERO) + change;
-                    place.world.set_velocity(body, velocity);
-                    place.world.set_spin(body, spin);
+                    let Some(world) = world_mut(&mut self.worlds, id) else { continue };
+                    let velocity = world.velocity(body).unwrap_or(Vector::ZERO) + change;
+                    world.set_velocity(body, velocity);
+                    world.set_spin(body, spin);
                     (id, body)
                 }
-                None if kind != PieceKind::Spark => {
+                None => {
                     let id = self.world_holding(piece.place, &level);
-                    let Some(place) = self.worlds.iter_mut().find(|place| place.id == id) else { continue };
-                    (id, add_piece(&mut place.world, kind, &piece, change, spin))
+                    let Some(world) = world_mut(&mut self.worlds, id) else { continue };
+                    (id, add_piece(world, kind, &piece, change, spin))
                 }
-                None => continue,
             };
-            if let Some(held) = self.groups.get_mut(g).and_then(|group| group.pieces.iter_mut().find(|held| held.entity == entity)) {
+            if let Some(held) = self.list_mut(kind).get_mut(g).and_then(|group| group.pieces.iter_mut().find(|held| held.entity == entity)) {
                 (held.body, held.woke) = (Some(body), age);
             }
         }
@@ -345,36 +393,35 @@ impl Loose {
         for place in &mut self.worlds {
             place.world.step(seconds);
         }
-        for group in &mut self.groups {
+        for group in self.lying.iter_mut().chain(&mut self.sparks) {
             group.age += seconds;
             for piece in &mut group.pieces {
                 let Some((id, body)) = piece.body else { continue };
-                let Some(place) = self.worlds.iter_mut().find(|place| place.id == id) else {
+                let Some(world) = world_mut(&mut self.worlds, id) else {
                     piece.body = None;
                     continue;
                 };
-                if let Some((at, rotation)) = place.world.pose(body) {
+                if let Some((at, rotation)) = world.pose(body) {
                     (piece.place, piece.rotation) = (at, rotation);
                 }
-                piece.velocity = place.world.velocity(body).unwrap_or(Vector::ZERO);
+                piece.velocity = world.velocity(body).unwrap_or(Vector::ZERO);
                 piece.stirred = true;
-                if place.world.is_sleeping(body) || group.age - piece.woke > AWAKE_MOST {
-                    place.world.remove_body(body);
+                if world.is_sleeping(body) || group.age - piece.woke > AWAKE_MOST {
+                    world.remove_body(body);
                     piece.body = None;
                 }
             }
-            if group.kind == PieceKind::Spark {
-                for piece in group.pieces.extract_if(.., |piece| piece.body.is_none()) {
-                    self.gone.push(piece.entity);
-                    self.slots.free.push(piece.slot);
-                }
+        }
+        for group in &mut self.sparks {
+            for piece in group.pieces.extract_if(.., |piece| piece.body.is_none()) {
+                self.gone.push(piece.entity);
+                self.tints.free(piece.slot);
             }
         }
-        let ended: Vec<Group> = self.groups.extract_if(.., |group| group.age >= group.seconds || group.pieces.is_empty()).collect();
-        for group in ended {
-            self.end(group);
-        }
-        self.worlds.retain(|place| self.groups.iter().flat_map(|group| &group.pieces).any(|piece| piece.body.is_some_and(|(world, _)| world == place.id)));
+        let over = |group: &mut Group| group.age >= group.seconds || group.pieces.is_empty();
+        let ended: Vec<Group> = self.lying.extract_if(.., over).chain(self.sparks.extract_if(.., over)).collect();
+        self.end(ended);
+        self.worlds.retain(|place| self.lying.iter().chain(&self.sparks).flat_map(|group| &group.pieces).any(|piece| in_world(piece.body, place.id)));
     }
 }
 
@@ -393,9 +440,9 @@ struct Debris {
 
 impl Debris {
     fn clear(&mut self) {
-        for group in std::mem::take(&mut self.loose.groups) {
-            self.loose.end(group);
-        }
+        let lying = std::mem::take(&mut self.loose.lying);
+        let sparks = std::mem::take(&mut self.loose.sparks);
+        self.loose.end(lying.into_iter().chain(sparks));
         self.loose.worlds.clear();
         self.triangles = None;
         self.meshes.clear();
@@ -416,27 +463,22 @@ impl Debris {
         if !loose.make_room(birth.parent, birth.kind, cap) {
             return;
         }
-        let slot = loose.slots.take();
+        let traits = birth.kind.traits();
+        let slot = loose.tints.take();
         let world = loose.world_holding(birth.place, |centre| triangles.near(centre, REACH));
-        let at = match loose.joined(birth.parent, birth.kind) {
-            Some(at) => at,
-            None => {
-                let group = Group { parent: birth.parent, kind: birth.kind, pieces: Vec::new(), age: 0.0, seconds: birth.seconds, ending: false };
-                loose.groups.push(group);
-                loose.groups.len() - 1
-            }
-        };
-        let alpha_mode = match birth.kind {
-            PieceKind::Flat | PieceKind::Lump => AlphaMode::Blend,
-            PieceKind::Spark => AlphaMode::Add,
-        };
+        let groups = loose.list_mut(birth.kind);
+        let at = joined(groups, birth.parent, birth.kind).unwrap_or_else(|| {
+            groups.push(Group { parent: birth.parent, kind: birth.kind, pieces: Vec::new(), age: 0.0, seconds: birth.seconds, ending: false });
+            groups.len() - 1
+        });
+        let age = groups[at].age;
         let material = held_materials
-            .entry((birth.image.id(), birth.kind == PieceKind::Spark))
+            .entry((birth.image.id(), traits.alpha_mode == AlphaMode::Add))
             .or_insert_with(|| {
                 materials.add(ExtendedMaterial {
                     base: StandardMaterial {
                         base_color_texture: Some(birth.image.clone()),
-                        alpha_mode,
+                        alpha_mode: traits.alpha_mode,
                         unlit: true,
                         double_sided: true,
                         cull_mode: None,
@@ -446,17 +488,11 @@ impl Debris {
                 })
             })
             .clone();
-        let rotation = match birth.kind {
-            PieceKind::Flat | PieceKind::Lump => loose.random_rotation(),
-            PieceKind::Spark => [0.0, 0.0, 0.0, 1.0],
-        };
+        let rotation = if traits.tumbles { loose.random_rotation() } else { [0.0, 0.0, 0.0, 1.0] };
         let spin = loose.random_spin();
-        let mesh = held_meshes
-            .entry((birth.kind, birth.uv.map(f32::to_bits)))
-            .or_insert_with(|| meshes.add(if birth.kind == PieceKind::Lump { crossed_quads(birth.uv) } else { quad(birth.uv) }))
-            .clone();
-        let (Some(group), Some(held)) = (loose.groups.get_mut(at), loose.worlds.iter_mut().find(|place| place.id == world)) else {
-            loose.slots.free.push(slot);
+        let mesh = held_meshes.entry((birth.kind, birth.uv.map(f32::to_bits))).or_insert_with(|| meshes.add((traits.mesh)(birth.uv))).clone();
+        let Some(held) = world_mut(&mut loose.worlds, world) else {
+            loose.tints.free(slot);
             return;
         };
         let mut piece = Piece {
@@ -468,16 +504,18 @@ impl Debris {
             half: birth.half,
             tint: birth.tint,
             slot,
-            woke: group.age,
+            woke: age,
             stirred: false,
         };
-        piece.body = Some((world, add_piece(&mut held.world, birth.kind, &piece, birth.velocity, spin)));
+        piece.body = Some((world, add_piece(held, birth.kind, &piece, birth.velocity, spin)));
         let transform = match birth.kind {
             PieceKind::Flat | PieceKind::Lump => piece_transform(&piece, birth.kind, origin),
             PieceKind::Spark => spark_transform(&piece, *eye, origin),
         };
         piece.entity = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), MeshTag::new(slot), transform, NotShadowCaster, DebrisPiece)).id();
-        group.pieces.push(piece);
+        if let Some(group) = loose.list_mut(birth.kind).get_mut(at) {
+            group.pieces.push(piece);
+        }
     }
 }
 
@@ -510,26 +548,16 @@ fn world_around(triangles: Vec<[[f32; 3]; 3]>) -> World {
 }
 
 fn add_piece(world: &mut World, kind: PieceKind, piece: &Piece, velocity: Vector, spin: Vector) -> BodyId {
-    let (shape, friction, restitution) = match kind {
-        PieceKind::Flat => {
-            let side = piece.half.max(THICKNESS);
-            (Shape::Box(Vector::new(side, side, THICKNESS)), 0.7, 0.15)
-        }
-        PieceKind::Lump => {
-            let side = (piece.half * LUMP_BODY).max(THICKNESS);
-            (Shape::Box(Vector::new(side, side, side)), 0.6, 0.35)
-        }
-        PieceKind::Spark => (Shape::Sphere(Vector::ZERO, SPARK_RADIUS), 0.1, 0.5),
-    };
+    let traits = kind.traits();
     let body = world.add_body(&BodyParams {
-        shapes: vec![shape],
+        shapes: vec![(traits.shape)(piece.half)],
         location: piece.place,
         rotation: piece.rotation,
         mass: 0.0,
         linear_damping: 0.1,
         angular_damping: 0.8,
-        friction,
-        restitution,
+        friction: traits.friction,
+        restitution: traits.restitution,
         asleep: false,
         stay_upright: false,
         allow_yaw: false,
@@ -641,58 +669,40 @@ fn move_pieces(
     mut debris: ResMut<Debris>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut placed: Query<&mut Transform, With<DebrisPiece>>,
-    mut paints: Local<Vec<(usize, [f32; 4])>>,
 ) {
-    let seconds = if facts.paused { 0.0 } else { time.delta_secs().min(FRAME_MOST) };
+    let seconds = facts.capped_step(time.delta_secs(), FRAME_MOST);
     let debris = &mut *debris;
     let shifted = std::mem::replace(&mut debris.origin, facts.origin) != facts.origin;
     debris.loose.advance(seconds);
     for entity in debris.loose.gone.drain(..) {
         commands.entity(entity).despawn();
     }
-    let eye = debris.eye;
-    paints.clear();
-    for group in &mut debris.loose.groups {
+    let mut place = |entity: Entity, at: Transform| {
+        if let Ok(mut transform) = placed.get_mut(entity)
+            && *transform != at
+        {
+            *transform = at;
+        }
+    };
+    let Loose { lying, sparks, tints, .. } = &mut debris.loose;
+    for group in lying.iter_mut() {
         let left = group.seconds - group.age;
+        let alpha = if left < FADE { (left / FADE).max(0.0) } else { 1.0 };
         for piece in &mut group.pieces {
-            let at = match group.kind {
-                PieceKind::Spark => Some(spark_transform(piece, eye, facts.origin)),
-                kind if piece.stirred || shifted => Some(piece_transform(piece, kind, facts.origin)),
-                _ => None,
-            };
-            piece.stirred = false;
-            if let Some(at) = at
-                && let Ok(mut transform) = placed.get_mut(piece.entity)
-                && *transform != at
-            {
-                *transform = at;
+            if std::mem::take(&mut piece.stirred) || shifted {
+                place(piece.entity, piece_transform(piece, group.kind, facts.origin));
             }
-            let paint = match group.kind {
-                PieceKind::Spark => spark_color(piece.tint, group.age / group.seconds.max(1e-3)),
-                PieceKind::Flat | PieceKind::Lump => {
-                    Color::srgb(piece.tint.x, piece.tint.y, piece.tint.z).with_alpha(if left < FADE { (left / FADE).max(0.0) } else { 1.0 })
-                }
-            }
-            .to_linear();
-            paints.push((piece.slot as usize, [paint.red, paint.green, paint.blue, paint.alpha]));
+            tints.set(piece.slot, Color::srgb(piece.tint.x, piece.tint.y, piece.tint.z).with_alpha(alpha).to_linear().to_f32_array());
         }
     }
-    let used = debris.loose.slots.used as usize;
-    let held = buffers.get(DEBRIS_TINTS.id()).and_then(|buffer| buffer.cast_slice::<[f32; 4]>());
-    let grown = held.is_some_and(|held| held.len() < used);
-    let changed = grown || held.is_some_and(|held| paints.iter().any(|&(slot, paint)| held.get(slot) != Some(&paint)));
-    if changed && let Some(mut buffer) = buffers.get_mut(DEBRIS_TINTS.id()) {
-        if grown {
-            buffer.resize((used.next_power_of_two() * size_of::<[f32; 4]>()) as u64);
-        }
-        if let Some(tints) = buffer.cast_slice_mut::<[f32; 4]>() {
-            for &(slot, paint) in paints.iter() {
-                if let Some(tint) = tints.get_mut(slot) {
-                    *tint = paint;
-                }
-            }
+    for group in sparks.iter() {
+        let age = group.age / group.seconds.max(1e-3);
+        for piece in &group.pieces {
+            place(piece.entity, spark_transform(piece, debris.eye, facts.origin));
+            tints.set(piece.slot, spark_color(piece.tint, age).to_linear().to_f32_array());
         }
     }
+    tints.upload(&mut buffers);
 }
 
 #[cfg(test)]
@@ -716,17 +726,6 @@ mod tests {
             stirred: false,
         };
         Group { parent: Entity::PLACEHOLDER, kind, pieces: vec![piece], age: 0.0, seconds, ending: false }
-    }
-
-    #[test]
-    fn a_slot_given_back_is_taken_again_before_a_new_one() {
-        let mut slots = Slots::default();
-        assert_eq!(slots.take(), 0);
-        assert_eq!(slots.take(), 1);
-        slots.free.push(0);
-        assert_eq!(slots.take(), 0);
-        assert_eq!(slots.take(), 2);
-        assert_eq!(slots.used, 3);
     }
 
     #[test]
@@ -755,31 +754,31 @@ mod tests {
         let mut loose = Loose::default();
         let before = Vector::new(0.0, 0.0, THICKNESS);
         let far = Vector::new(500.0, 0.0, THICKNESS);
-        loose.groups.push(lying_group(PieceKind::Flat, before, 30.0));
-        loose.groups.push(lying_group(PieceKind::Flat, far, 30.0));
+        loose.lying.push(lying_group(PieceKind::Flat, before, 30.0));
+        loose.lying.push(lying_group(PieceKind::Flat, far, 30.0));
         let blast = Blast { at: Vector::new(-20.0, 0.0, 0.0), radius: 48.0, push: 220.0, way: Vector::ZERO };
         loose.blast(&blast, |_| FLOOR.to_vec());
-        assert!(loose.groups[0].pieces[0].body.is_some(), "the near piece has a body again");
-        assert!(loose.groups[1].pieces[0].body.is_none() && loose.groups[1].pieces[0].place == far, "the far piece stays as it lay");
+        assert!(loose.lying[0].pieces[0].body.is_some(), "the near piece has a body again");
+        assert!(loose.lying[1].pieces[0].body.is_none() && loose.lying[1].pieces[0].place == far, "the far piece stays as it lay");
         assert_eq!(loose.worlds.len(), 1);
         let frozen = (0..240).position(|_| {
             loose.advance(1.0 / 60.0);
-            loose.groups[0].pieces[0].body.is_none()
+            loose.lying[0].pieces[0].body.is_none()
         });
         assert!(frozen.is_some(), "still awake after four seconds");
-        let after = loose.groups[0].pieces[0].place;
+        let after = loose.lying[0].pieces[0].place;
         assert!((after - blast.at).size() > (before - blast.at).size(), "lies at {after:?}");
         assert!(loose.worlds.is_empty(), "a world with no body left is dropped");
-        assert_eq!(loose.groups[1].pieces[0].place, far);
+        assert_eq!(loose.lying[1].pieces[0].place, far);
     }
 
     #[test]
     fn a_blast_with_nothing_near_makes_no_world() {
         let mut loose = Loose::default();
-        loose.groups.push(lying_group(PieceKind::Flat, Vector::new(500.0, 0.0, THICKNESS), 30.0));
+        loose.lying.push(lying_group(PieceKind::Flat, Vector::new(500.0, 0.0, THICKNESS), 30.0));
         loose.blast(&Blast { at: Vector::ZERO, radius: 48.0, push: 220.0, way: Vector::ZERO }, |_| FLOOR.to_vec());
         assert!(loose.worlds.is_empty());
-        assert!(loose.groups[0].pieces[0].body.is_none());
+        assert!(loose.lying[0].pieces[0].body.is_none());
     }
 
     #[test]
@@ -789,15 +788,15 @@ mod tests {
         let id = loose.world_holding(group.pieces[0].place, |_| FLOOR.to_vec());
         let body = add_piece(&mut loose.worlds[0].world, PieceKind::Spark, &group.pieces[0], Vector::new(100.0, 0.0, 0.0), Vector::ZERO);
         group.pieces[0].body = Some((id, body));
-        loose.groups.push(group);
+        loose.sparks.push(group);
         for _ in 0..30 {
             loose.advance(1.0 / 60.0);
         }
-        assert_eq!(loose.groups.len(), 1, "alive at half its life");
+        assert_eq!(loose.sparks.len(), 1, "alive at half its life");
         for _ in 0..40 {
             loose.advance(1.0 / 60.0);
         }
-        assert!(loose.groups.is_empty());
+        assert!(loose.sparks.is_empty());
         assert_eq!(loose.gone, vec![Entity::PLACEHOLDER]);
         assert!(loose.worlds.is_empty());
     }
@@ -827,17 +826,17 @@ mod tests {
             let id = loose.world_holding(group.pieces[0].place, |_| FLOOR.to_vec());
             let place = loose.worlds.iter_mut().find(|place| place.id == id).unwrap();
             group.pieces[0].body = Some((id, add_piece(&mut place.world, PieceKind::Flat, &group.pieces[0], Vector::ZERO, Vector::ZERO)));
-            loose.groups.push(group);
+            loose.lying.push(group);
         }
-        let lying = Piece { entity: entities.spawn_empty().id(), body: None, ..loose.groups[0].pieces[0] };
-        loose.groups[0].pieces.push(lying);
-        let flier = loose.groups[0].pieces[0].entity;
+        let lying = Piece { entity: entities.spawn_empty().id(), body: None, ..loose.lying[0].pieces[0] };
+        loose.lying[0].pieces.push(lying);
+        let flier = loose.lying[0].pieces[0].entity;
         loose.world_holding(Vector::new(0.0, 90_000.0, 0.0), |_| Vec::new());
         assert_eq!(loose.worlds.len(), WORLDS);
         assert_eq!(loose.gone, vec![flier], "the oldest world's flying shard goes rather than hang");
-        assert_eq!(loose.groups[0].pieces.len(), 1);
-        assert_eq!(loose.groups[0].pieces[0].entity, lying.entity, "a lying piece of the same group stays");
-        assert!(loose.groups[1..].iter().all(|group| group.pieces[0].body.is_some()), "the other worlds keep their pieces");
+        assert_eq!(loose.lying[0].pieces.len(), 1);
+        assert_eq!(loose.lying[0].pieces[0].entity, lying.entity, "a lying piece of the same group stays");
+        assert!(loose.lying[1..].iter().all(|group| group.pieces[0].body.is_some()), "the other worlds keep their pieces");
     }
 
     fn thrown_by(parent: Entity, kind: PieceKind, pieces: usize, age: f32) -> Group {
@@ -852,24 +851,24 @@ mod tests {
         let mut world = bevy::ecs::world::World::new();
         let [first, second, third, shot] = [(); 4].map(|()| world.spawn_empty().id());
         let mut loose = Loose::default();
-        loose.groups.push(thrown_by(first, PieceKind::Flat, 20, 10.0));
-        loose.groups.push(thrown_by(second, PieceKind::Flat, 20, 5.0));
+        loose.lying.push(thrown_by(first, PieceKind::Flat, 20, 10.0));
+        loose.lying.push(thrown_by(second, PieceKind::Flat, 20, 5.0));
         assert!(loose.make_room(third, PieceKind::Flat, 64), "a third break is thrown under the cap");
-        assert!(loose.groups.iter().all(|held| !held.ending));
+        assert!(loose.lying.iter().all(|held| !held.ending));
 
         assert!(loose.make_room(third, PieceKind::Flat, 40), "at the cap the oldest makes room");
-        assert!(loose.groups[0].ending && !loose.groups[1].ending);
-        assert_eq!((loose.groups.len(), loose.groups[0].seconds), (2, 10.0 + FADE), "it fades, it is not taken away at once");
+        assert!(loose.lying[0].ending && !loose.lying[1].ending);
+        assert_eq!((loose.lying.len(), loose.lying[0].seconds), (2, 10.0 + FADE), "it fades, it is not taken away at once");
         assert!(loose.make_room(third, PieceKind::Flat, 40), "and no longer counts");
-        assert!(!loose.groups[1].ending);
+        assert!(!loose.lying[1].ending);
 
         for _ in 0..40 {
             assert!(loose.make_room(shot, PieceKind::Spark, 40), "sparks have a cap of their own");
         }
-        assert!(!loose.groups[1].ending, "a burst of sparks fades no lying piece");
-        loose.groups.push(thrown_by(shot, PieceKind::Spark, 40, 0.5));
+        assert!(!loose.lying[1].ending, "a burst of sparks fades no lying piece");
+        loose.sparks.push(thrown_by(shot, PieceKind::Spark, 40, 0.5));
         assert!(loose.make_room(third, PieceKind::Spark, 40));
-        assert_eq!(loose.groups.len(), 2, "the oldest sparks go at once");
+        assert!(loose.sparks.is_empty() && loose.lying.len() == 2, "the oldest sparks go at once");
         assert_eq!(loose.gone.len(), 40);
     }
 
@@ -878,7 +877,7 @@ mod tests {
         let mut world = bevy::ecs::world::World::new();
         let [window, other] = [(); 2].map(|()| world.spawn_empty().id());
         let mut loose = Loose::default();
-        loose.groups.push(thrown_by(window, PieceKind::Flat, 64 / BREAK_SHARE, 0.1));
+        loose.lying.push(thrown_by(window, PieceKind::Flat, 64 / BREAK_SHARE, 0.1));
         assert!(!loose.make_room(window, PieceKind::Flat, 64), "the same break throws no more");
         assert!(loose.make_room(other, PieceKind::Flat, 64), "another break does");
         assert!(loose.make_room(window, PieceKind::Spark, 64), "a spark is no part of a break's share");

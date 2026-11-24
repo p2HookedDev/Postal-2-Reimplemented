@@ -2,7 +2,7 @@
 //! additive, unlit, unfogged, with no Z test or write.
 
 use bevy::app::{App, Plugin, Update};
-use bevy::asset::{AssetId, Assets, Handle, RenderAssetUsages};
+use bevy::asset::{AssetId, Assets, Handle};
 use bevy::camera::visibility::{NoFrustumCulling, Visibility};
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::entity::EntityHashMap;
@@ -25,6 +25,7 @@ use crate::level_collision::LevelCollision;
 use crate::particle_frame::DrawnParticles;
 use crate::particle_material::{CORONA_COLORS, ParticleMaterial, RECORD_WORDS};
 use crate::scene::{LayeredByZone, ZoneCulled};
+use crate::slot_buffer::SlotBuffer;
 use crate::sprites::sprite_quad;
 use crate::translucent_order::TranslucentDraw;
 
@@ -62,48 +63,13 @@ struct CoronaMaterials {
 
 const MIN_COLOR_SLOTS: usize = 16;
 
-/// The records of `CORONA_COLORS`, one slot per corona. Grows only in steps: a new byte size makes a new GPU buffer.
-#[derive(Resource, Default)]
-struct CoronaColors {
-    records: Vec<[u32; RECORD_WORDS]>,
-    free: Vec<usize>,
-    dirty: bool,
-}
+#[derive(Resource)]
+struct CoronaColors(SlotBuffer<[u32; RECORD_WORDS]>);
 
-impl CoronaColors {
-    fn take_slot(&mut self) -> usize {
-        let slot = self.free.pop().unwrap_or_else(|| {
-            let slot = self.records.len();
-            self.records.resize((slot * 2).max(MIN_COLOR_SLOTS), [0; RECORD_WORDS]);
-            self.free.extend((slot + 1..self.records.len()).rev());
-            slot
-        });
-        self.set(slot, [1.0; 3]);
-        slot
-    }
-
-    fn set(&mut self, slot: usize, color: [f32; 3]) {
-        if let Some(record) = self.records.get_mut(slot) {
-            record[0..3].copy_from_slice(&color.map(f32::to_bits));
-            self.dirty = true;
-        }
-    }
-
-    fn upload(&mut self, buffers: &mut Assets<ShaderBuffer>) {
-        if !std::mem::take(&mut self.dirty) {
-            return;
-        }
-        if !buffers.contains(CORONA_COLORS.id()) {
-            if let Err(error) = buffers.insert(CORONA_COLORS.id(), ShaderBuffer::new(self.records.clone(), RenderAssetUsages::default())) {
-                bevy::log::error!("corona colour buffer: {error}");
-            }
-            return;
-        }
-        if let Some(mut buffer) = buffers.get_mut(CORONA_COLORS.id()) {
-            buffer.clear();
-            buffer.extend_from_slice(&self.records);
-        }
-    }
+fn color_record(color: [f32; 3]) -> [u32; RECORD_WORDS] {
+    let mut record = [0; RECORD_WORDS];
+    record[0..3].copy_from_slice(&color.map(f32::to_bits));
+    record
 }
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -113,15 +79,12 @@ pub struct CoronaPlugin;
 
 impl Plugin for CoronaPlugin {
     fn build(&self, app: &mut App) {
-        // Before any corona's material is prepared: a material bound to a buffer not yet made gets Bevy's one-byte
-        // stand-in, which no storage binding takes.
-        if let Some(mut buffers) = app.world_mut().get_resource_mut::<Assets<ShaderBuffer>>()
-            && let Err(error) = buffers.insert(CORONA_COLORS.id(), ShaderBuffer::new(vec![[0u32; RECORD_WORDS]; MIN_COLOR_SLOTS], RenderAssetUsages::default()))
-        {
-            bevy::log::error!("corona colour buffer: {error}");
+        let mut colors = CoronaColors(SlotBuffer::new(CORONA_COLORS, MIN_COLOR_SLOTS));
+        if let Some(mut buffers) = app.world_mut().get_resource_mut::<Assets<ShaderBuffer>>() {
+            colors.0.upload(&mut buffers);
         }
         app.init_resource::<CoronaMaterials>()
-            .init_resource::<CoronaColors>()
+            .insert_resource(colors)
             .add_observer(add_corona_quad)
             .add_observer(free_corona_slot)
             .configure_sets(Update, CoronaSystems.after(crate::sprites::SpriteSystems))
@@ -144,15 +107,15 @@ fn add_corona_quad(
     let Ok(look) = looks.get(entity) else { return };
     let quad = quad.get_or_insert_with(|| meshes.add(sprite_quad())).clone();
     let material = cache.materials.entry(look.image.id()).or_insert_with(|| materials.add(ParticleMaterial::corona(look.image.clone()))).clone();
-    let tag = MeshTag::new(u32::try_from(colors.take_slot()).unwrap_or(u32::MAX));
+    let slot = colors.0.take();
+    colors.0.set(slot, color_record([1.0; 3]));
+    let tag = MeshTag::new(slot);
     commands.entity(entity).insert((Mesh3d(quad), tag, MeshMaterial3d(material), NoFrustumCulling, TranslucentDraw::AfterScene, CoronaColor([1.0; 3])));
 }
 
 fn free_corona_slot(remove: On<Remove<CoronaLook>>, tags: Query<&MeshTag>, mut colors: ResMut<CoronaColors>) {
-    if let Ok(tag) = tags.get(remove.event().entity)
-        && let Ok(slot) = usize::try_from(tag.value)
-    {
-        colors.free.push(slot);
+    if let Ok(tag) = tags.get(remove.event().entity) {
+        colors.0.free(tag.value);
     }
 }
 
@@ -222,16 +185,14 @@ fn draw_coronas(
         if *transform != faced {
             *transform = faced;
         }
-        if drawn.0 != color
-            && let Ok(slot) = usize::try_from(tag.value)
-        {
-            colors.set(slot, color);
+        if drawn.0 != color {
+            colors.0.set(tag.value, color_record(color));
             drawn.0 = color;
         }
         shown.set_if_neq(Visibility::Inherited);
     }
     if let Some(mut buffers) = buffers {
-        colors.upload(&mut buffers);
+        colors.0.upload(&mut buffers);
     }
 }
 
@@ -270,12 +231,12 @@ mod tests {
         assert_eq!([shown(&app, blocked), shown(&app, open)], [Visibility::Hidden, Visibility::Inherited]);
         let world = app.world();
         let uploaded = world.resource::<Assets<ShaderBuffer>>().get(CORONA_COLORS.id()).and_then(|buffer| buffer.cast_slice::<[u32; RECORD_WORDS]>()).expect("the colour buffer");
-        assert_eq!(uploaded, world.resource::<CoronaColors>().records.as_slice());
+        assert_eq!(uploaded, world.resource::<CoronaColors>().0.records());
         let tags = [blocked, open].map(|corona| world.entity(corona).get::<MeshTag>().expect("a slot").value as usize);
         assert_ne!(tags[0], tags[1]);
         let color = world.entity(open).get::<CoronaColor>().expect("a colour").0;
         assert_eq!(uploaded[tags[1]][0..3], color.map(f32::to_bits));
         app.world_mut().entity_mut(blocked).despawn();
-        assert_eq!(app.world().resource::<CoronaColors>().free.last(), Some(&tags[0]));
+        assert_eq!(app.world_mut().resource_mut::<CoronaColors>().0.take() as usize, tags[0]);
     }
 }

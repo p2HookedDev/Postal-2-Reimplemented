@@ -4,34 +4,30 @@
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
-use bevy::camera::Camera;
 use bevy::color::LinearRgba;
 use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::query::QueryItem;
+use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::lifetimeless::Read;
 use bevy::render::camera::ExtractedCamera;
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, BufferId, CachedRenderPipelineId,
     ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines,
     TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
-use bevy::render::sync_component::SyncComponent;
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::{ExtractedView, Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
+use bevy::render::view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 
 use crate::components::SceneView;
 use p2_host::display::{MODERN_BOUNCE_LIGHT, Settings};
 use crate::MainPassExtraSystems;
-use crate::screen_pass::{HalfThenFull, ScreenStep, ViewBindGroups, half_texture, half_viewport};
+use crate::screen_pass::{HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders};
 
 const BOUNCE_SHADER: Handle<Shader> = uuid_handle!("4f0d2b7e-9c31-4a8e-b6d5-1e7a3c90f2d8");
@@ -61,7 +57,8 @@ impl Plugin for BounceLightPlugin {
         }
         add_libraries(app);
         add_shaders(app, [(BOUNCE_SHADER,Shader::from_wesl(include_str!("bounce.wesl"), "p2_render/bounce.wesl"))]);
-        app.add_plugins(ExtractComponentPlugin::<BounceLight>::default()).add_systems(PostUpdate, follow_bounce_settings);
+        add_view_pass::<BounceLight>(app);
+        app.add_systems(PostUpdate, follow_bounce_settings.after(tag_pass_views));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -74,40 +71,19 @@ impl Plugin for BounceLightPlugin {
 }
 
 /// On a scene camera while bounce light is on: its strength.
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_sync_target((Self, BounceView))]
 pub struct BounceLight(f32);
 
 fn strength(level: u8) -> Option<f32> {
     (level > 0).then(|| f32::from(level) * STRENGTH_PER_LEVEL)
 }
 
-fn follow_bounce_settings(mut commands: Commands, settings: Option<Res<Settings>>, views: Query<(Entity, &Camera, &Msaa, Option<&BounceLight>), With<SceneView>>) {
+fn follow_bounce_settings(mut commands: Commands, settings: Option<Res<Settings>>, views: Query<(Entity, Has<PassView>, Option<&BounceLight>), With<SceneView>>) {
     let wanted = strength(settings.as_ref().map_or(0, |settings| settings.modern_level(MODERN_BOUNCE_LIGHT)));
-    for (entity, camera, msaa, shown) in &views {
-        // The passes bind the prepass textures as single-sampled.
-        match wanted.filter(|_| camera.is_active && matches!(msaa, Msaa::Off)) {
-            Some(scale) if shown != Some(&BounceLight(scale)) => {
-                commands.entity(entity).insert(BounceLight(scale));
-            }
-            None if shown.is_some() => {
-                commands.entity(entity).remove::<BounceLight>();
-            }
-            _ => {}
-        }
-    }
-}
-
-impl SyncComponent<RenderApp> for BounceLight {
-    type Target = (Self, BounceView);
-}
-
-impl ExtractComponent<RenderApp> for BounceLight {
-    type QueryData = Read<Self>;
-    type QueryFilter = ();
-    type Out = Self;
-
-    fn extract_component(light: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
-        Some(*light)
+    for (entity, drawn_in, shown) in &views {
+        follow_view_pass(commands.entity(entity), shown, wanted.filter(|_| drawn_in).map(BounceLight));
     }
 }
 

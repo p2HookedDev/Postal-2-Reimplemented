@@ -155,7 +155,7 @@ fn flinch(
             bone.spring.kick(speed, strength * bone.share);
         }
     }
-    let seconds = if world.game_paused() { 0.0 } else { time.delta_secs() * world.time_dilation() };
+    let seconds = world.game_seconds(time.delta_secs());
     flinches.people.retain(|&actor, person| {
         person.age += seconds;
         person.bones.iter_mut().for_each(|bone| bone.spring.step(seconds, strength * bone.share));

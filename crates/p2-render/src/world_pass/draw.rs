@@ -35,12 +35,27 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetWorldMaterial<I> {
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         let Some((built, bucket)) = pass_data.into_inner().built.as_ref().zip(bucket) else { return RenderCommandResult::Skip };
-        let bucket = &built.buckets[bucket.0];
-        let Some(allocator) = allocators.into_inner().get(&bucket.type_id) else { return RenderCommandResult::Skip };
-        let Some(bind_group) = allocator.get(bucket.group).and_then(|group| group.bind_group()) else { return RenderCommandResult::Skip };
+        let Some(bind_group) = material_group(built, allocators.into_inner(), bucket.0) else { return RenderCommandResult::Skip };
         pass.set_bind_group(I, bind_group, &[]);
         RenderCommandResult::Success
     }
+}
+
+pub(super) fn material_group<'w>(built: &'w Built, allocators: &'w MaterialBindGroupAllocators, index: usize) -> Option<&'w BindGroup> {
+    let bucket = &built.buckets[index];
+    allocators.get(&bucket.type_id)?.get(bucket.group)?.bind_group()
+}
+
+/// The bucket's culled chunks, from the indirect arguments of view slot `slot`.
+pub(super) fn draw_bucket<'w>(pass: &mut TrackedRenderPass<'w>, built: &'w Built, allocator: &'w MeshAllocator, index: usize, slot: u32) -> RenderCommandResult {
+    let bucket = &built.buckets[index];
+    let (Some(vertices), Some(indices)) = (allocator.mesh_vertex_slice(&bucket.mesh), allocator.mesh_index_slice(&bucket.mesh)) else { return RenderCommandResult::Skip };
+    pass.set_vertex_buffer(0, vertices.buffer.slice(..));
+    pass.set_index_buffer(indices.buffer.slice(..), bucket.index_format);
+    let args_offset = (u64::from(slot) * u64::from(built.chunk_count) + u64::from(bucket.first_draw)) * ARGS_SIZE;
+    let count_offset = (u64::from(slot) * built.buckets.len() as u64 + index as u64) * COUNT_SIZE;
+    pass.multi_draw_indexed_indirect_count(&built.args, args_offset, &built.counts, count_offset, bucket.draws);
+    RenderCommandResult::Success
 }
 
 pub(crate) struct DrawWorldBucket;
@@ -58,15 +73,7 @@ impl<P: PhaseItem> RenderCommand<P> for DrawWorldBucket {
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         let Some((built, index)) = pass_data.into_inner().built.as_ref().zip(bucket) else { return RenderCommandResult::Skip };
-        let allocator = allocator.into_inner();
-        let bucket = &built.buckets[index.0];
-        let (Some(vertices), Some(indices)) = (allocator.mesh_vertex_slice(&bucket.mesh), allocator.mesh_index_slice(&bucket.mesh)) else { return RenderCommandResult::Skip };
-        pass.set_vertex_buffer(0, vertices.buffer.slice(..));
-        pass.set_index_buffer(indices.buffer.slice(..), bucket.index_format);
-        let args_offset = (u64::from(slot.0) * u64::from(built.chunk_count) + u64::from(bucket.first_draw)) * ARGS_SIZE;
-        let count_offset = (u64::from(slot.0) * built.buckets.len() as u64 + index.0 as u64) * COUNT_SIZE;
-        pass.multi_draw_indexed_indirect_count(&built.args, args_offset, &built.counts, count_offset, bucket.draws);
-        RenderCommandResult::Success
+        draw_bucket(pass, built, allocator.into_inner(), index.0, slot.0)
     }
 }
 

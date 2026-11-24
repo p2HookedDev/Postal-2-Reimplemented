@@ -1,6 +1,7 @@
 // The liquid stream's surface in screen space. `splat` keeps each pixel's nearest liquid and its bits, `thickness`
 // adds up each liquid's optical depth through its particles, `narrow_range` smooths the liquid's depth, and
-// `composite` shades it over the frame. All four read the particles as sphere impostors; a lying one is flattened.
+// `composite` shades it over the frame. A flying particle is a capsule to its linked neighbour, so a pour reads as one
+// ribbon, or a drop streaked along its velocity once the link breaks; a lying one is a flattened sphere.
 
 import bevy_render::view::View;
 import package::p2_render::depth_surface::{normal_at, world_at};
@@ -12,13 +13,12 @@ struct Particle {
     bits: u32,
 }
 
-// `LiquidSurface` in `surface.rs`; the ambient is in display light.
+// `LiquidSurface` in `surface.rs`.
 struct Surface {
     sun_direction: vec3<f32>,
     seconds: f32,
     sun_color: vec3<f32>,
     scale: u32,
-    ambient: vec3<f32>,
     delta: f32,
 }
 
@@ -27,7 +27,7 @@ struct Optics {
     sigma: vec3<f32>,
     // How much a thin film colours the specular.
     sheen: f32,
-    // The linear colour the liquid scatters back.
+    // The linear albedo the liquid scatters back: dark, as a wet liquid's colour is mostly its specular.
     body: vec3<f32>,
     // How much lumps vary the thickness.
     chunks: f32,
@@ -39,28 +39,34 @@ struct Optics {
 const KIND_MASK: u32 = 0xFu;
 const LANDED: u32 = 16u;
 const BURNING: u32 = 32u;
+const DEPOSIT: u32 = 128u;
+const BROKEN: u32 = 64u;
+const AGE_SHIFT: u32 = 16u;
+const AGE_UNITS: f32 = 4096.0;
+const LINK_GAP: f32 = 0.15;
+const LANE: u32 = 1024u;
 const KINDS: u32 = 9u;
 
 // By `FluidType` byte; row 0 stands for a kind the table does not know. A private var, as only memory may be indexed
 // by a value known at run time.
 var<private> OPTICS: array<Optics, KINDS> = array<Optics, KINDS>(
-    Optics(vec3(0.05, 0.04, 0.03), 0.0, vec3(0.6, 0.6, 0.6), 0.0, 0.1, 0.0),
+    Optics(vec3(0.05, 0.04, 0.03), 0.0, vec3(0.1, 0.1, 0.1), 0.0, 0.1, 0.0),
     // Gas
-    Optics(vec3(0.01, 0.012, 0.02), 1.0, vec3(0.9, 0.85, 0.6), 0.0, 0.05, 0.0),
+    Optics(vec3(0.01, 0.012, 0.02), 1.0, vec3(0.1, 0.1, 0.09), 0.0, 0.05, 0.0),
     // Urine
-    Optics(vec3(0.03, 0.08, 0.5), 0.0, vec3(0.9, 0.75, 0.2), 0.0, 0.08, 0.0),
+    Optics(vec3(0.03, 0.08, 0.5), 0.0, vec3(0.037, 0.035, 0.0), 0.0, 0.08, 0.0),
     // Blood
-    Optics(vec3(0.6, 3.0, 3.2), 0.0, vec3(0.35, 0.01, 0.01), 0.0, 0.12, 0.0),
+    Optics(vec3(0.6, 3.0, 3.2), 0.0, vec3(0.12, 0.001, 0.0006), 0.0, 0.12, 0.0),
     // Puke
-    Optics(vec3(0.9, 0.7, 1.6), 0.0, vec3(0.45, 0.42, 0.08), 0.8, 0.35, 0.0),
+    Optics(vec3(0.9, 0.7, 1.6), 0.0, vec3(0.36, 0.11, 0.008), 0.8, 0.35, 0.0),
     // BloodyPuke
-    Optics(vec3(0.8, 1.6, 2.2), 0.0, vec3(0.42, 0.15, 0.04), 0.6, 0.3, 0.0),
+    Optics(vec3(0.8, 1.6, 2.2), 0.0, vec3(0.14, 0.02, 0.003), 0.6, 0.3, 0.0),
     // Gonorrhea
-    Optics(vec3(0.6, 0.4, 0.9), 0.0, vec3(0.55, 0.6, 0.3), 0.3, 0.25, 0.0),
+    Optics(vec3(0.6, 0.4, 0.9), 0.0, vec3(0.25, 0.28, 0.06), 0.3, 0.25, 0.0),
     // BloodyUrine
-    Optics(vec3(0.3, 1.2, 1.6), 0.0, vec3(0.6, 0.15, 0.05), 0.0, 0.1, 0.0),
+    Optics(vec3(0.3, 1.2, 1.6), 0.0, vec3(0.06, 0.012, 0.001), 0.0, 0.1, 0.0),
     // Napalm
-    Optics(vec3(0.5, 0.8, 1.5), 0.0, vec3(0.5, 0.25, 0.05), 0.0, 0.2, 1.0),
+    Optics(vec3(0.5, 0.8, 1.5), 0.0, vec3(0.1, 0.06, 0.01), 0.0, 0.2, 1.0),
 );
 
 // Burning liquid's light, in linear HDR.
@@ -71,6 +77,13 @@ const TAU: f32 = 6.28318531;
 // A lying particle's radii against its round radius: wide along the surface it lies on, flat along its normal.
 const SPREAD: f32 = 1.4;
 const FLAT: f32 = 0.3;
+// A linked particle's ribbon radius against its own; a free drop streaks back this many seconds of its velocity, at most
+// this many radii.
+const RIBBON: f32 = 0.6;
+const STREAK_SECONDS: f32 = 0.012;
+const MOST_STREAK: f32 = 4.0;
+// A deposit is a film: its radius along the surface it lies on, this thick along its normal, in Unreal units.
+const FILM_DEPTH: f32 = 1.5;
 // Lumps in a chunky liquid, per Unreal unit.
 const CHUNK_CELL: f32 = 0.6;
 // The narrow-range filter: its reach and the depth range around the middle it keeps, in Unreal units, and the most
@@ -82,6 +95,26 @@ const TAPS: f32 = 4.0;
 // How far behind the scene the smoothed liquid may still be drawn, in Unreal units.
 const SCENE_SLACK: f32 = 1.0;
 const FILM_SCALE: f32 = 0.35;
+// A pool: Unreal units a tile of the generated texture, where its edge lies in radii and how far the shape moves it, the
+// share of a radius over which the rim thins, how far ripples tilt the normal and drift each second, and how much
+// smoother than the liquid's own surface it is.
+const PUDDLE_UNITS: f32 = 64.0;
+const EDGE: f32 = 0.75;
+const EDGE_WANDER: f32 = 0.4;
+const MENISCUS: f32 = 0.3;
+const RIPPLE: f32 = 0.25;
+const RIPPLE_DRIFT: f32 = 2.0;
+const POOL_SMOOTH: f32 = 0.5;
+const LUMA: vec3<f32> = vec3(0.2126, 0.7152, 0.0722);
+// An engine surface's unknown albedo: the frame over it is the light it gets.
+const MID_GREY: f32 = 0.25;
+const LIGHT_CLAMP: f32 = 8.0;
+// How far across the frame a unit of the reflected direction in view space reaches.
+const CATCH_REACH: f32 = 0.5;
+// How much of a liquid's specular takes its hue.
+const SHEEN_HUE: f32 = 0.9;
+// The brightest a liquid's light may be against the brightest channel of the frame behind it.
+const GLARE: f32 = 2.0;
 
 @group(0) @binding(0) var<storage, read> particles: array<Particle>;
 @group(0) @binding(1) var scene_depth: texture_depth_2d;
@@ -91,12 +124,16 @@ const FILM_SCALE: f32 = 0.35;
 @group(0) @binding(5) var smoothed: texture_2d<f32>;
 @group(0) @binding(6) var optical: texture_2d<f32>;
 @group(0) @binding(7) var front: texture_2d<u32>;
+@group(0) @binding(8) var scene_colour: texture_2d<f32>;
+@group(0) @binding(9) var puddle: texture_2d<f32>;
+@group(0) @binding(10) var puddle_sampler: sampler;
 
 struct Splat {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) particle: u32,
     @location(1) world: vec3<f32>,
     @location(2) @interpolate(flat) normal: vec3<f32>,
+    @location(3) @interpolate(flat) ribbon: vec4<f32>,
 }
 
 // Distances along `dir` from the eye; `far` below `near` misses.
@@ -112,6 +149,9 @@ struct SplatOut {
 }
 
 fn bound_of(p: Particle) -> f32 {
+    if (p.bits & DEPOSIT) != 0u {
+        return max(p.place.w, FILM_DEPTH);
+    }
     return p.place.w * select(1.0, max(SPREAD, FLAT), (p.bits & LANDED) != 0u);
 }
 
@@ -121,6 +161,9 @@ fn lying_normal(p: Particle) -> vec3<f32> {
         return vec3(0.0, 1.0, 0.0);
     }
     let clip = view.clip_from_world * vec4(p.place.xyz, 1.0);
+    if clip.w <= 0.0 || any(abs(clip.xy) > vec2(clip.w)) {
+        return vec3(0.0, 1.0, 0.0);
+    }
     let size = vec2<f32>(textureDimensions(scene_depth));
     let uv = vec2(clip.x, -clip.y) / clip.w * 0.5 + 0.5;
     let pixel = vec2<i32>(clamp(uv * size, vec2(1.0), size - 2.0));
@@ -135,7 +178,94 @@ fn unit_space(p: Particle, n: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
         return v / r;
     }
     let along = dot(v, n) * n;
+    if (p.bits & DEPOSIT) != 0u {
+        return (v - along) / r + along / FILM_DEPTH;
+    }
     return (v - along) / (r * SPREAD) + along / (r * FLAT);
+}
+
+fn age_of(bits: u32) -> f32 {
+    return f32(bits >> AGE_SHIFT) / AGE_UNITS;
+}
+
+// A flying particle's capsule: its far end from the particle, and its radius; 0 radius for a lying one. Linked as the
+// stream's own step links it, it runs to its newer neighbour; free, it streaks back along its velocity.
+fn ribbon_of(index: u32, p: Particle) -> vec4<f32> {
+    if (p.bits & (LANDED | DEPOSIT)) != 0u {
+        return vec4(0.0);
+    }
+    let base = index - index % LANE;
+    let next = base + (index - base + 1u) % LANE;
+    if (p.bits & BROKEN) == 0u && next < arrayLength(&particles) {
+        let q = particles[next];
+        if q.place.w > 0.0 && (q.bits & LANDED) == 0u && (q.bits & KIND_MASK) == (p.bits & KIND_MASK) && abs(age_of(q.bits) - age_of(p.bits)) < LINK_GAP {
+            return vec4(q.place.xyz - p.place.xyz, p.place.w * RIBBON);
+        }
+    }
+    let streak = p.velocity * STREAK_SECONDS;
+    return vec4(-streak * min(1.0, p.place.w * MOST_STREAK / max(length(streak), 1e-4)), p.place.w);
+}
+
+// Entry and exit along `d` from `o`, relative to the sphere's centre; exit before entry misses.
+fn sphere_hits(o: vec3<f32>, d: vec3<f32>, r: f32) -> vec2<f32> {
+    let b = dot(d, o);
+    let h = b * b - dot(o, o) + r * r;
+    if h < 0.0 {
+        return vec2(1e30, -1e30);
+    }
+    return vec2(-b - sqrt(h), -b + sqrt(h));
+}
+
+// The capsule from the origin to `axis` as its two end spheres and the cylinder between, all convex together.
+fn capsule_hits(o: vec3<f32>, d: vec3<f32>, axis: vec3<f32>, r: f32) -> vec2<f32> {
+    let head = sphere_hits(o, d, r);
+    let tail = sphere_hits(o - axis, d, r);
+    var hits = vec2(min(head.x, tail.x), max(head.y, tail.y));
+    let baba = dot(axis, axis);
+    let bard = dot(axis, d);
+    let baoa = dot(axis, o);
+    let a = baba - bard * bard;
+    let b = baba * dot(d, o) - baoa * bard;
+    let h = b * b - a * (baba * dot(o, o) - baoa * baoa - r * r * baba);
+    if a > 1e-6 * baba && h >= 0.0 {
+        let t = (vec2(-b, -b) + vec2(-1.0, 1.0) * sqrt(h)) / a;
+        let y = baoa + t * bard;
+        if y.x > 0.0 && y.x < baba {
+            hits.x = min(hits.x, t.x);
+        }
+        if y.y > 0.0 && y.y < baba {
+            hits.y = max(hits.y, t.y);
+        }
+    }
+    return hits;
+}
+
+// The generated texture's place on the surface with normal `n`, across its two axes nearest the surface.
+fn plane_uv(world: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
+    let a = abs(n);
+    let planar = select(select(world.xy, world.zy, a.x > a.z), world.xz, a.y > max(a.x, a.z));
+    return planar / PUDDLE_UNITS;
+}
+
+// How far inside a pool's edge `at` lies, in radii; below 0 is outside. The generated shape anchored to the world moves
+// the edge, so neighbouring blobs share one organic outline.
+fn pool_edge(p: Particle, n: vec3<f32>, at: vec3<f32>) -> f32 {
+    let off = at - p.place.xyz;
+    let across = length(off - dot(off, n) * n) / p.place.w;
+    let shape = textureSampleLevel(puddle, puddle_sampler, plane_uv(at, n), 0.0).r;
+    return EDGE + EDGE_WANDER * (2.0 * shape - 1.0) - across;
+}
+
+// A pool lies flat on the scene: its normal is the scene's under it, tilted by two drifting layers of ripples.
+fn pool_normal(pixel: vec2<i32>) -> vec3<f32> {
+    let size = vec2<f32>(textureDimensions(scene_depth));
+    let under = world_at(scene_depth, view.world_from_clip, pixel, size);
+    let n = normal_at(scene_depth, view.world_from_clip, view.world_position, pixel, size, under);
+    let uv = plane_uv(under, n);
+    let drift = vec2(RIPPLE_DRIFT * surface.seconds / PUDDLE_UNITS);
+    let slope = textureSampleLevel(puddle, puddle_sampler, uv + drift, 0.0).gb + textureSampleLevel(puddle, puddle_sampler, uv * 1.7 - drift, 0.0).gb - 1.0;
+    let across = normalize(cross(n, select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(n.y) > 0.9)));
+    return normalize(n - RIPPLE * (slope.x * across + slope.y * cross(n, across)));
 }
 
 fn kind_of(bits: u32) -> u32 {
@@ -174,9 +304,13 @@ fn full_pixel(position: vec2<f32>) -> vec2<i32> {
 }
 
 // Solved from the impostor's own point, close to the particle, so a far particle keeps its precision.
-fn ray_through(p: Particle, n: vec3<f32>, world: vec3<f32>) -> Ray {
+fn ray_through(p: Particle, n: vec3<f32>, ribbon: vec4<f32>, world: vec3<f32>) -> Ray {
     let start = length(world - view.world_position);
     let dir = (world - view.world_position) / start;
+    if ribbon.w > 0.0 {
+        let hits = capsule_hits(world - p.place.xyz, dir, ribbon.xyz, ribbon.w);
+        return Ray(dir, start + hits.x, start + hits.y);
+    }
     let o = unit_space(p, n, world - p.place.xyz);
     let d = unit_space(p, n, dir);
     let a = dot(d, d);
@@ -198,11 +332,14 @@ fn splat_vertex(@builtin(vertex_index) vertex: u32) -> Splat {
         select(-1.0, 1.0, corner_index == 1u || corner_index == 2u || corner_index == 4u),
         select(-1.0, 1.0, corner_index == 2u || corner_index == 4u || corner_index == 5u),
     );
-    let bound = bound_of(p);
-    let to_eye = view.world_position - p.place.xyz;
+    let ribbon = ribbon_of(index, p);
+    let centre = p.place.xyz + 0.5 * ribbon.xyz;
+    let bound = select(bound_of(p), 0.5 * length(ribbon.xyz) + ribbon.w, ribbon.w > 0.0);
+    let to_eye = view.world_position - centre;
     let d = length(to_eye);
     var out: Splat;
     out.particle = index;
+    out.ribbon = ribbon;
     if p.place.w <= 0.0 || d <= bound * 1.05 {
         out.position = vec4(2.0, 2.0, 2.0, 1.0);
         out.world = p.place.xyz;
@@ -214,7 +351,7 @@ fn splat_vertex(@builtin(vertex_index) vertex: u32) -> Splat {
     let up = cross(forward, side);
     // On the bounding sphere's near face, as wide as the sphere's outline seen from the eye.
     let half_size = 1.02 * bound * sqrt((d - bound) / (d + bound));
-    out.world = p.place.xyz + forward * bound + (side * corner.x + up * corner.y) * half_size;
+    out.world = centre + forward * bound + (side * corner.x + up * corner.y) * half_size;
     out.position = view.clip_from_world * vec4(out.world, 1.0);
     return out;
 }
@@ -222,8 +359,11 @@ fn splat_vertex(@builtin(vertex_index) vertex: u32) -> Splat {
 @fragment
 fn splat(in: Splat) -> SplatOut {
     let p = particles[in.particle];
-    let ray = ray_through(p, in.normal, in.world);
+    let ray = ray_through(p, in.normal, in.ribbon, in.world);
     if ray.far <= ray.near || scene_distance(full_pixel(in.position.xy)) < ray.near {
+        discard;
+    }
+    if (p.bits & DEPOSIT) != 0u && pool_edge(p, in.normal, view.world_position + ray.dir * ray.near) < 0.0 {
         discard;
     }
     let clip = view.clip_from_world * vec4(view.world_position + ray.dir * ray.near, 1.0);
@@ -233,14 +373,22 @@ fn splat(in: Splat) -> SplatOut {
 @fragment
 fn thickness(in: Splat) -> @location(0) vec4<f32> {
     let p = particles[in.particle];
-    let ray = ray_through(p, in.normal, in.world);
+    let ray = ray_through(p, in.normal, in.ribbon, in.world);
     let far = min(ray.far, scene_distance(full_pixel(in.position.xy)));
     if far <= ray.near {
         discard;
     }
     let row = OPTICS[kind_of(p.bits)];
     let at = view.world_position + ray.dir * ray.near;
-    let lumps = 1.0 + row.chunks * (hash3(floor(at * CHUNK_CELL)) * 2.0 - 1.0);
+    var lumps = 1.0 + row.chunks * (hash3(floor(at * CHUNK_CELL)) * 2.0 - 1.0);
+    if (p.bits & DEPOSIT) != 0u {
+        let edge = pool_edge(p, in.normal, at);
+        if edge < 0.0 {
+            discard;
+        }
+        // The rim thins to nothing, so the floor shows through a pool's edge.
+        lumps *= smoothstep(0.0, MENISCUS, edge);
+    }
     let chord = (far - ray.near) * lumps;
     return vec4(row.sigma * chord, chord);
 }
@@ -312,35 +460,43 @@ fn surface_step(texel: vec2<i32>, middle: vec3<f32>, offset: vec2<i32>) -> vec3<
     return back;
 }
 
+// The frame where no liquid is drawn, so the pass writes every pixel of the frame it swaps to.
 @fragment
 fn composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let pixel = vec2<i32>(position.xy);
+    let behind = textureLoad(scene_colour, pixel, 0);
     let texel = vec2<i32>((position.xy - view.viewport.xy) / f32(surface.scale));
     let z = textureLoad(smoothed, texel, 0).r;
     let optics = textureLoad(optical, texel, 0);
-    if z <= 0.0 || optics.a <= 0.0 {
-        discard;
+    if z <= 0.0 || optics.a <= 0.0 || any(position.xy < view.viewport.xy) || any(position.xy >= view.viewport.xy + view.viewport.zw) {
+        return behind;
     }
-    let scene = textureLoad(scene_depth, vec2<i32>(position.xy), 0);
+    let scene = textureLoad(scene_depth, pixel, 0);
     if scene > 0.0 && eye_depth(scene) < z - SCENE_SLACK {
-        discard;
+        return behind;
     }
     let middle = view_position(texel, z);
     var normal_in_view = normalize(cross(surface_step(texel, middle, vec2(0, 1)), surface_step(texel, middle, vec2(1, 0))));
     if dot(normal_in_view, middle) > 0.0 {
         normal_in_view = -normal_in_view;
     }
-    let n = normalize((view.world_from_view * vec4(normal_in_view, 0.0)).xyz);
     let world = (view.world_from_view * vec4(middle, 1.0)).xyz;
     let v = normalize(view.world_position - world);
     let l = surface.sun_direction;
     let bits = textureLoad(front, texel, 0).r;
     let row = OPTICS[kind_of(bits)];
+    let pool = (bits & DEPOSIT) != 0u;
+    var n = normalize((view.world_from_view * vec4(normal_in_view, 0.0)).xyz);
+    if pool {
+        n = pool_normal(pixel);
+    }
+    let roughness = row.roughness * select(1.0, POOL_SMOOTH, pool);
 
     let n_dot_l = max(dot(n, l), 0.0);
     let n_dot_v = max(dot(n, v), 1e-4);
     let h = normalize(l + v);
     let n_dot_h = max(dot(n, h), 0.0);
-    let a = row.roughness * row.roughness;
+    let a = roughness * roughness;
     let a2 = a * a;
     let lobe = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
     let ggx = a2 / (PI * lobe * lobe);
@@ -348,20 +504,29 @@ fn composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let visibility = 0.25 / ((n_dot_l * (1.0 - k) + k) * (n_dot_v * (1.0 - k) + k));
     let fresnel_sun = F0 + (1.0 - F0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
     let fresnel_view = F0 + (1.0 - F0) * pow(1.0 - n_dot_v, 5.0);
-    let ambient = pow(max(surface.ambient, vec3(0.0)), vec3(2.2));
-    var specular = surface.sun_color * (ggx * visibility * fresnel_sun * n_dot_l) + ambient * fresnel_view;
+    // The frame behind stands in for the light the liquid gets: the zone's ambient, its lamps, the sun and its shadow.
+    let light = clamp(dot(behind.rgb, LUMA) / MID_GREY, 0.0, LIGHT_CLAMP);
+    // Only where the frame is bright enough to be sunlit does the sun glint.
+    let glint = surface.sun_color * (ggx * visibility * fresnel_sun * n_dot_l) * smoothstep(0.6, 1.6, light);
+    let mirrored = (view.view_from_world * vec4(reflect(-v, n), 0.0)).xy;
+    let lowest = vec2<i32>(view.viewport.xy);
+    let caught = textureLoad(scene_colour, clamp(pixel + vec2<i32>(vec2(mirrored.x, -mirrored.y) * CATCH_REACH * view.viewport.zw), lowest, lowest + vec2<i32>(view.viewport.zw) - 1), 0).rgb;
+    let hue = mix(vec3(1.0), row.body / max(max(row.body.r, max(row.body.g, row.body.b)), 1e-4), SHEEN_HUE);
+    var specular = (glint + caught * fresnel_view) * hue;
     let film = 0.5 + 0.5 * cos(TAU * (optics.a * FILM_SCALE + (1.0 - n_dot_v) * 0.6 + vec3(0.0, 0.33, 0.67)));
     specular *= mix(vec3(1.0), 2.0 * film, row.sheen);
 
     let absorbed = 1.0 - exp(-optics.rgb);
-    let light = ambient + surface.sun_color * (0.25 + 0.75 * n_dot_l);
-    var colour = row.body * light * absorbed * (1.0 - fresnel_view) + specular;
-    var alpha = (absorbed.r + absorbed.g + absorbed.b) / 3.0;
+    let alpha = (absorbed.r + absorbed.g + absorbed.b) / 3.0;
+    // The body colour scaled by its own cover, so thin urine stays yellow, not cyan; the frame shows through by channel.
+    var colour = row.body * light * alpha * (1.0 - fresnel_view) + specular;
+    // Glare over the frame's own brightest keeps its hue: red glare on blood, not a white clip.
+    let cap = GLARE * max(1.0, max(behind.r, max(behind.g, behind.b)));
+    colour /= max(1.0, max(colour.r, max(colour.g, colour.b)) / cap);
     let burning = max(row.burns, select(0.0, 1.0, (bits & BURNING) != 0u));
     if burning > 0.0 {
         let flicker = 0.6 + 0.8 * value_noise(world * 0.08 + vec3(0.0, -2.5 * surface.seconds, 0.0));
         colour += BURN * burning * flicker * clamp(optics.a * 0.5, 0.2, 1.0);
-        alpha = max(alpha, 0.5 * burning);
     }
-    return vec4(colour, alpha);
+    return vec4(colour + behind.rgb * exp(-optics.rgb) * (1.0 - 0.5 * burning), behind.a);
 }

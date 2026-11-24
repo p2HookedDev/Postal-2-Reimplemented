@@ -12,19 +12,19 @@ use bevy::math::Vec3;
 use bevy::mesh::{Mesh, Mesh3d, PrimitiveTopology};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::render::storage::ShaderBuffer;
-use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_particles::{EmitterKind, StripPoint};
 use rustc_hash::FxHashMap;
 
-use super::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, LiquidRole, MeshEmitterLook};
+use super::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook};
 use super::particle_material::{ParticleMaterial, RECORD_WORDS, SharedParticleKey, sprite_light};
 use super::translucent_order::TranslucentDraw;
 use crate::components::OverlaySlot;
+use crate::fire_volume::VolumeFires;
 use super::bsp_light::FrameLights;
 use super::frame_facts::FrameFacts;
 use super::glow_lights::GlowLights;
-use p2_host::frame_times::FrameTimes;
+use p2_host::frame_times::{FrameTimes, MeshWrite, mesh_written};
 use p2_host::display::{MODERN_LIQUID_FLOW, MODERN_LIQUIDS, Settings};
 use bounds::apply_bounds;
 use fire::is_fire;
@@ -47,8 +47,8 @@ pub struct ParticleDrawSystems;
 
 impl Plugin for ParticleDrawPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DrawnParticles>().init_resource::<ParticleDraws>().init_resource::<FrameTimes>().init_resource::<FrameFacts>();
-        app.init_resource::<FrameLights>().init_resource::<GlowLights>().add_systems(PostUpdate, draw_particles.in_set(ParticleDrawSystems));
+        init_drawing_resources(app);
+        app.add_systems(PostUpdate, draw_particles.in_set(ParticleDrawSystems));
     }
 }
 
@@ -89,7 +89,7 @@ pub fn draw_particles(
     mut pool_slots: Query<&mut Transform, (With<PoolSlot>, Without<crate::lamps::Lamp>)>,
     settings: Option<Res<Settings>>,
     lights: ParticleLights,
-    time: Res<Time>,
+    volume_fires: Option<Res<VolumeFires>>,
     mut times: ResMut<FrameTimes>,
 ) {
     let started = Instant::now();
@@ -109,7 +109,6 @@ pub fn draw_particles(
     draws.actors.retain(|parent, _| parents.contains(*parent));
     let flow = settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_LIQUID_FLOW) > 0);
     let liquids = settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_LIQUIDS) > 0);
-    let seconds = time.elapsed_secs_wrapped();
     let lit_by = lights.wanted(settings.as_deref());
     let mut records = std::mem::take(&mut draws.records);
     records.clear();
@@ -130,7 +129,8 @@ pub fn draw_particles(
                 pool.place(&mut commands, &mut pool_slots, slot, order as u32, &emitter.meshes);
             }
         }
-        let mut writes = MeshWrites { commands: &mut commands, meshes: &mut assets.meshes, records: &mut records, liquid_flow: flow, liquids, seconds };
+        let mut writes =
+            MeshWrites { commands: &mut commands, meshes: &mut assets.meshes, records: &mut records, liquid_flow: flow, liquids, volume_fires: volume_fires.as_deref() };
         let (bounds, newly_shown) = fill_emitter_meshes(&mut writes, actor, slot, drawn.eye);
         write_sprite_records(&mut writes, actor, slot, bounds);
         let changed = newly_shown || bounds != actor.drawn_bounds;
@@ -176,7 +176,6 @@ impl ParticleDraws {
             mesh: Some(EmitterMesh { entity, mesh, shown: false, strip_key: None, written: false }),
             grid,
             fire: is_fire(&name, props.draw_style),
-            volume: false,
             pool: None,
         };
     }
@@ -202,8 +201,6 @@ struct EmitterDraw {
     mesh: Option<EmitterMesh>,
     grid: Option<SpriteGrid>,
     fire: bool,
-    /// Drawn as a fire volume under modern graphics: its sprites are hidden.
-    volume: bool,
     pool: Option<MeshPool>,
 }
 
@@ -233,19 +230,23 @@ struct MeshWrites<'a, 'w, 's> {
     records: &'a mut Vec<[u32; RECORD_WORDS]>,
     liquid_flow: bool,
     liquids: bool,
-    /// Wrapped seconds, for the motion of a liquid sprite's surface.
-    seconds: f32,
+    volume_fires: Option<&'a VolumeFires>,
+}
+
+fn union(bounds: Option<(Vec3, Vec3)>, (min, max): (Vec3, Vec3)) -> (Vec3, Vec3) {
+    bounds.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max)))
 }
 
 fn fill_emitter_meshes(writes: &mut MeshWrites, actor: &mut ActorDraw, slot: &DrawnActor, eye: Vec3) -> (Option<(Vec3, Vec3)>, bool) {
     let (mut bounds, mut newly_shown) = (slot.mesh_reach, false);
     let flow = writes.liquid_flow;
-    // The modern stream stands in for a feeder's strip and droplets; its splash is an actor of its own and stays.
-    let streamed = writes.liquids && slot.liquid.is_some_and(|liquid| matches!(liquid.role, LiquidRole::Stream | LiquidRole::Drip));
-    for (draw, DrawnEmitter { sprites, strip, beams, shape, .. }) in actor.emitters.iter_mut().zip(&slot.emitters) {
-        let EmitterDraw { mesh: Some(EmitterMesh { entity, mesh, shown, strip_key: drawn_key, written }), grid, volume, .. } = draw else { continue };
+    // Our own liquid stands in for every game texture of a liquid actor.
+    let ours = writes.liquids && slot.liquid.is_some();
+    for (order, (draw, DrawnEmitter { sprites, strip, beams, shape, .. })) in actor.emitters.iter_mut().zip(&slot.emitters).enumerate() {
+        let EmitterDraw { mesh: Some(EmitterMesh { entity, mesh, shown, strip_key: drawn_key, written }), grid, .. } = draw else { continue };
         let EmitterShape { kind, facing, beam_scale, sheets } = *shape;
-        let visible = slot.seen && !streamed && !*volume && (strip.len() > 1 || !sprites.is_empty() || !beams.is_empty());
+        let volume = writes.volume_fires.is_some_and(|fires| fires.0.contains(&(slot.parent, order as u32)));
+        let visible = slot.seen && !ours && !volume && (strip.len() > 1 || !sprites.is_empty() || !beams.is_empty());
         if *shown != visible {
             *shown = visible;
             newly_shown |= visible;
@@ -259,12 +260,12 @@ fn fill_emitter_meshes(writes: &mut MeshWrites, actor: &mut ActorDraw, slot: &Dr
             if quads != grid.quads {
                 grid.quads = quads;
                 if let Some(mut mesh) = writes.meshes.get_mut(&*mesh) {
-                    p2_host::frame_times::mesh_written(p2_host::frame_times::MeshWrite::SpriteGrid);
+                    mesh_written(MeshWrite::SpriteGrid);
                     *mesh = sprite_grid(quads);
                 }
             }
-            for (min, max) in sprites.iter().map(sprite_box) {
-                bounds = Some(bounds.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max))));
+            for sprite_bounds in sprites.iter().map(sprite_box) {
+                bounds = Some(union(bounds, sprite_bounds));
             }
         } else {
             // The switch is in the key so a still trail is redrawn when it moves.
@@ -272,20 +273,26 @@ fn fill_emitter_meshes(writes: &mut MeshWrites, actor: &mut ActorDraw, slot: &Dr
             if (key.is_none() || key != *drawn_key)
                 && let Some(mut mesh) = writes.meshes.get_mut(&*mesh)
             {
-                p2_host::frame_times::mesh_written(if kind == EmitterKind::Strip { p2_host::frame_times::MeshWrite::Strip } else { p2_host::frame_times::MeshWrite::Beam });
-                if kind == EmitterKind::Strip && flow {
-                    fill_smooth_strip(&mut mesh, strip, facing, eye);
-                } else if kind == EmitterKind::Strip {
-                    fill_strip(&mut mesh, strip, facing, eye);
-                } else {
-                    fill_beams(&mut mesh, beams, beam_scale, sheets, eye);
-                }
+                let written_as = match (kind, flow) {
+                    (EmitterKind::Strip, true) => {
+                        fill_smooth_strip(&mut mesh, strip, facing, eye);
+                        MeshWrite::Strip
+                    }
+                    (EmitterKind::Strip, false) => {
+                        fill_strip(&mut mesh, strip, facing, eye);
+                        MeshWrite::Strip
+                    }
+                    _ => {
+                        fill_beams(&mut mesh, beams, beam_scale, sheets, eye);
+                        MeshWrite::Beam
+                    }
+                };
+                mesh_written(written_as);
                 *drawn_key = key;
                 *written = true;
             }
             if let Some(aabb) = writes.meshes.get(&*mesh).and_then(|mesh| mesh.get_aabb()) {
-                let (min, max) = (Vec3::from(aabb.min()), Vec3::from(aabb.max()));
-                bounds = Some(bounds.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max))));
+                bounds = Some(union(bounds, (Vec3::from(aabb.min()), Vec3::from(aabb.max()))));
             }
         }
     }
@@ -293,7 +300,7 @@ fn fill_emitter_meshes(writes: &mut MeshWrites, actor: &mut ActorDraw, slot: &Dr
 }
 
 pub fn init_drawing_resources(app: &mut App) {
-    app.init_resource::<DrawnParticles>().init_resource::<ParticleDraws>().init_resource::<FrameTimes>().init_resource::<Time>();
+    app.init_resource::<DrawnParticles>().init_resource::<ParticleDraws>().init_resource::<FrameTimes>();
     app.init_resource::<FrameFacts>().init_resource::<FrameLights>().init_resource::<GlowLights>();
     app.init_resource::<Assets<Mesh>>().init_resource::<Assets<ParticleMaterial>>().init_resource::<Assets<StandardMaterial>>();
 }

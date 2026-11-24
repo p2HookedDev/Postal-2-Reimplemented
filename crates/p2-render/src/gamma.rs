@@ -21,7 +21,7 @@ use bevy::sprite_render::{Material2d, Material2dPlugin, MeshMaterial2d};
 use bevy::window::{PrimaryWindow, Window};
 
 use p2_host::display::{BRIGHTNESS, CONTRAST, GAMMA, Settings};
-use crate::components::{CanvasLayer, SKY_LAYER, SceneView};
+use crate::components::{CanvasLayer, SceneView};
 use crate::tone::{ToneCamera, ToneFrame, TonePlugin};
 use crate::shaders::add_shaders;
 
@@ -98,7 +98,7 @@ fn apply(
     window: Single<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<GammaMaterial>>,
-    mut cameras: Query<(&mut RenderTarget, Has<SceneView>, Option<&RenderLayers>), Or<(With<Camera3d>, With<CanvasLayer>, With<ToneCamera>)>>,
+    mut cameras: Query<(&mut RenderTarget, Has<SceneView>), Or<(With<Camera3d>, With<CanvasLayer>, With<ToneCamera>)>>,
     mut ramp_camera: Query<&mut Camera>,
 ) {
     let last = gamma.ramp;
@@ -128,9 +128,8 @@ fn apply(
     }
     let scale_factor = window.scale_factor();
     let modern = settings.modern_graphics();
-    let sky = RenderLayers::layer(SKY_LAYER);
-    for (mut target, view, layers) in &mut cameras {
-        let toned = modern && (view || layers.is_some_and(|layers| layers.intersects(&sky)));
+    for (mut target, view) in &mut cameras {
+        let toned = modern && view;
         let wanted = if toned { Some(&tone.image) } else if active { Some(&gamma.image) } else { None };
         let current = match &*target {
             RenderTarget::Image(image) => Some((&image.handle, image.scale_factor)),
@@ -155,7 +154,7 @@ mod tests {
     use super::*;
     use p2_host::display::MODERN_GRAPHICS;
 
-    fn wired(modern: &str, brightness: &str) -> (Handle<Image>, Handle<Image>, [Option<Handle<Image>>; 4]) {
+    fn wired(modern: &str, brightness: &str) -> (Handle<Image>, Handle<Image>, [Option<Handle<Image>>; 3]) {
         let mut world = World::new();
         world.insert_resource(Settings::read(|query| match query {
             MODERN_GRAPHICS => modern.to_owned(),
@@ -175,7 +174,6 @@ mod tests {
         world.spawn((Window::default(), PrimaryWindow));
         let cameras = [
             world.spawn((Camera3d::default(), SceneView::default())).id(),
-            world.spawn((Camera3d::default(), RenderLayers::layer(SKY_LAYER))).id(),
             world.spawn((Camera3d::default(), CanvasLayer(0))).id(),
             world.spawn((Camera2d, ToneCamera)).id(),
         ];
@@ -190,13 +188,13 @@ mod tests {
     #[test]
     fn world_cameras_draw_into_the_tone_image_under_modern() {
         let (_, _, targets) = wired("False", "");
-        assert_eq!(targets, [None, None, None, None]);
+        assert_eq!(targets, [None, None, None]);
         let (toned, _, targets) = wired("True", "");
-        assert_eq!(targets, [Some(toned.clone()), Some(toned), None, None]);
+        assert_eq!(targets, [Some(toned), None, None]);
         let (toned, ramped, targets) = wired("True", "0.7");
-        assert_eq!(targets, [Some(toned.clone()), Some(toned), Some(ramped.clone()), Some(ramped)]);
+        assert_eq!(targets, [Some(toned), Some(ramped.clone()), Some(ramped)]);
         let (_, ramped, targets) = wired("False", "0.7");
-        assert_eq!(targets, [Some(ramped.clone()), Some(ramped.clone()), Some(ramped.clone()), Some(ramped)]);
+        assert_eq!(targets, [Some(ramped.clone()), Some(ramped.clone()), Some(ramped)]);
     }
 
     #[test]

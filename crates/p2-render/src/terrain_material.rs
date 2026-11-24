@@ -1,11 +1,13 @@
 use bevy::asset::{Asset, Handle, uuid_handle};
 use bevy::image::Image;
-use bevy::math::{UVec4, Vec3, Vec4};
+use bevy::math::{Mat3, Quat, UVec4, Vec3, Vec4};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, StandardMaterial};
 use bevy::reflect::Reflect;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::{Shader, ShaderRef};
+
+use crate::shaders::SkyKey;
 
 pub const MAX_LAYERS: usize = 8;
 
@@ -34,11 +36,15 @@ pub struct TerrainParams {
     pub u: [Vec4; MAX_LAYERS],
     pub v: [Vec4; MAX_LAYERS],
     pub count: UVec4,
+    /// A sky sector's sky eye and zone turn (by columns), to find where a placed point is in the map.
+    pub sky_eye: Vec4,
+    pub sky_turn: [Vec4; 3],
 }
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 #[data(100, TerrainParams, binding_array(133))]
 #[bindless(index_table(range(100..133), binding(134)))]
+#[bind_group_data(SkyKey)]
 pub struct TerrainLayers {
     pub params: TerrainParams,
     #[texture(101)]
@@ -86,6 +92,7 @@ pub struct TerrainLayers {
     #[texture(131)]
     #[sampler(132)]
     pub alpha_map_7: Option<Handle<Image>>,
+    pub sky: bool,
 }
 
 impl TerrainLayers {
@@ -114,7 +121,22 @@ impl TerrainLayers {
             alpha_map_5: alpha_map(5),
             alpha_map_6: alpha_map(6),
             alpha_map_7: alpha_map(7),
+            sky: false,
         }
+    }
+
+    pub fn in_sky(mut self, (eye, turn): (Vec3, Quat)) -> Self {
+        let turn = Mat3::from_quat(turn);
+        self.params.sky_eye = eye.extend(1.0);
+        self.params.sky_turn = [turn.x_axis, turn.y_axis, turn.z_axis].map(|column| column.extend(0.0));
+        self.sky = true;
+        self
+    }
+}
+
+impl From<&TerrainLayers> for SkyKey {
+    fn from(extension: &TerrainLayers) -> Self {
+        Self { sky: extension.sky }
     }
 }
 
@@ -134,6 +156,7 @@ impl MaterialExtension for TerrainLayers {
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         crate::shaders::cast_both_sides(descriptor, key.mesh_key);
+        crate::shaders::mark_sky(descriptor, key.bind_group_data);
         Ok(())
     }
 

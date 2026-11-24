@@ -28,52 +28,53 @@ enum Chunks {
     CastersOnly,
 }
 
-#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 pub(super) fn prepare_world_views(
     mut commands: Commands,
     mut pass: ResMut<WorldPass>,
     queue: Res<RenderQueue>,
     cameras: Query<(Entity, &ExtractedView, Option<&WorldCullSlot>), With<WorldCamera>>,
-    lights: Query<(Entity, &ExtractedView, &LightEntity, Option<&WorldCullSlot>), With<ShadowView>>,
-    levels: Query<&DrawsStaticWorld>,
     seen_zones: Option<Res<WorldSeenZones>>,
     casts: Option<Res<WorldCasts>>,
+    frame: Option<Res<SunLevelFrame>>,
 ) {
+    let pass = &mut *pass;
     let Some(built) = pass.built.as_mut() else { return };
     let seen_zones = seen_zones.map_or(WorldSeenZones::default().0, |seen| seen.0);
     let clip_from_world = |view: &ExtractedView| view.clip_from_world.unwrap_or_else(|| view.clip_from_view * view.world_from_view.to_matrix().inverse());
     let mut bytes = Vec::with_capacity(MAX_VIEWS * VIEW_STRIDE as usize);
     let mut slot = 0u32;
-    let mut add = |entity: Entity, planes: [Vec4; 6], chunks: Chunks, zones: [u32; 8], had: Option<&WorldCullSlot>| {
+    // The cached sun level has no view entity: its slot is kept on the pass.
+    let mut add = |entity: Option<(Entity, Option<&WorldCullSlot>)>, planes: [Vec4; 6], chunks: Chunks, zones: [u32; 8]| {
         if slot as usize >= MAX_VIEWS {
-            return;
+            return None;
         }
         let start = bytes.len();
         bytes.extend(planes.iter().flat_map(|plane| plane.to_array()).flat_map(|value: f32| value.to_le_bytes()));
         push_u32s(&mut bytes, &[slot * built.chunk_count, slot * built.buckets.len() as u32, u32::from(matches!(chunks, Chunks::CastersOnly)), 0]);
         push_u32s(&mut bytes, &zones);
         bytes.resize(start + VIEW_STRIDE as usize, 0);
-        if had != Some(&WorldCullSlot(slot)) {
+        if let Some((entity, had)) = entity
+            && had != Some(&WorldCullSlot(slot))
+        {
             commands.entity(entity).insert(WorldCullSlot(slot));
         }
         slot += 1;
+        Some(slot - 1)
     };
     for (entity, view, had) in &cameras {
-        add(entity, view_planes(clip_from_world(view), Planes::Frustum), Chunks::All, seen_zones, had);
+        add(Some((entity, had)), view_planes(clip_from_world(view), Planes::Frustum), Chunks::All, seen_zones);
     }
-    if casts.is_some_and(|casts| casts.0) {
-        for (entity, view, light, had) in &lights {
-            if let LightEntity::Directional { light_entity, .. } = light
-                && levels.get(*light_entity).is_ok_and(|draws| draws.0)
-            {
-                add(entity, view_planes(clip_from_world(view), Planes::Sides), Chunks::CastersOnly, [u32::MAX; 8], had);
-            }
-        }
-    }
+    let casts = casts.is_some_and(|casts| casts.0);
+    let level = frame
+        .as_deref()
+        .filter(|_| casts)
+        .and_then(|frame| frame.records.get(frame.drawing?))
+        .and_then(|record| add(None, view_planes(record.clip_from_world, Planes::Sides), Chunks::CastersOnly, [u32::MAX; 8]));
     built.live_views = slot;
     if !bytes.is_empty() {
         queue.write_buffer(&built.views, 0, &bytes);
     }
+    pass.level.slot = level;
 }
 
 pub(super) fn cull_world(_view: ViewQuery<Entity, With<WorldCamera>>, pass: Res<WorldPass>, cache: Res<PipelineCache>, mut context: RenderContext) {

@@ -33,7 +33,7 @@ use crate::shaders::{add_libraries, add_shaders};
 
 const TONE_SHADER: Handle<Shader> = uuid_handle!("6d1f3a92-5b0e-4c87-a2d4-8e7c19b05f3a");
 const TONE_LAYER: usize = 9;
-/// After the sky (-2) and the view (-1), before the HUD's actors and canvas layers (1 to 8).
+/// After the view (-1), before the HUD's actors and canvas layers (1 to 8).
 const TONE_ORDER: isize = 0;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]

@@ -22,6 +22,8 @@ use p2_vm::ERenderStyle;
 
 use p2_host::display::{MODERN_PARTICLE_LIGHT, MODERN_SOFT_PARTICLES, Settings};
 use crate::shaders::{add_libraries, add_shaders};
+use crate::lamps::material_added;
+use crate::sun_levels::SunLevelAtlas;
 
 const PARTICLE_SHADER: Handle<Shader> = uuid_handle!("6f0c2d6e-8a51-4c4f-9a43-2b7d0f3c5e91");
 
@@ -34,6 +36,8 @@ pub(crate) const PARTICLE_SPRITES: Handle<ShaderBuffer> = uuid_handle!("3b8e5f1a
 pub(crate) const CORONA_COLORS: Handle<ShaderBuffer> = uuid_handle!("9d41c7e2-5b3a-4f86-a0d9-6e2f18b7c304");
 
 pub(crate) const RECORD_WORDS: usize = 20;
+
+const PARTICLE_LEVELS: &str = "P2_PARTICLE_LEVELS";
 
 pub struct ParticlePlugin;
 
@@ -51,7 +55,27 @@ impl Plugin for ParticlePlugin {
             bevy::log::error!("particle sprite buffer: {error}");
         }
         app.add_plugins(MaterialPlugin::<ParticleMaterial>::default());
-        app.init_resource::<Settings>().add_systems(PostUpdate, follow_modern_levels.before(AssetEventSystems));
+        app.init_resource::<Settings>().add_systems(PostUpdate, (follow_modern_levels, follow_sun_levels).before(AssetEventSystems));
+    }
+}
+
+fn follow_sun_levels(
+    atlas: Option<Res<SunLevelAtlas>>,
+    events: Option<Res<Messages<AssetEvent<ParticleMaterial>>>>,
+    mut cursor: Local<MessageCursor<AssetEvent<ParticleMaterial>>>,
+    mut known: Local<usize>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
+) {
+    let Some(atlas) = atlas else { return };
+    if !atlas.is_changed() && materials.len() == *known && !material_added(events.as_deref(), &mut cursor) {
+        return;
+    }
+    *known = materials.len();
+    let stale: Vec<_> = materials.iter().filter(|(_, material)| material.sun_levels != atlas.image).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(mut material) = materials.get_mut(id) {
+            material.sun_levels.clone_from(&atlas.image);
+        }
     }
 }
 
@@ -159,11 +183,15 @@ pub struct ParticleMaterial {
     pub params: ParticleParams,
     #[storage(4, read_only)]
     pub sprites: Handle<ShaderBuffer>,
+    #[texture(5)]
+    #[sampler(6)]
+    pub sun_levels: Option<Handle<Image>>,
     pub style: DrawStyle,
     pub no_depth: bool,
     /// Fades into the level geometry behind it under modern graphics: a sprite facing the eye, which never lies on a surface.
     pub soft_edge: bool,
     pub light: SpriteLight,
+    pub sky: bool,
 }
 
 /// What two particle materials must share to draw alike.
@@ -174,6 +202,7 @@ pub struct SharedParticleKey {
     no_depth: bool,
     soft_edge: bool,
     light: SpriteLight,
+    sky: bool,
 }
 
 impl ParticleMaterial {
@@ -185,6 +214,7 @@ impl ParticleMaterial {
             no_depth: self.no_depth,
             soft_edge: self.soft_edge,
             light: self.light,
+            sky: self.sky,
         }
     }
 
@@ -200,7 +230,7 @@ impl ParticleMaterial {
             lit: 0,
         };
         let soft_edge = props.use_direction_as == DirectionUsage::None && props.draw_style != DrawStyle::Regular;
-        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, no_depth: false, soft_edge, light: sprite_light(props.draw_style, "", props.use_direction_as) }
+        Self { texture, params, sprites: PARTICLE_SPRITES, sun_levels: None, style: props.draw_style, no_depth: false, soft_edge, light: sprite_light(props.draw_style, "", props.use_direction_as), sky: false }
     }
 
     /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene (unverified
@@ -214,7 +244,7 @@ impl ParticleMaterial {
             SpriteBlend::Modulated => (DrawStyle::Modulated, 0.0, 0),
         };
         let params = ParticleParams { style: style as u32, alpha_ref, alpha_test, blend_frames: 0, fogged: 1, soft: 0.0, lit: 0 };
-        Self { texture, params, sprites: PARTICLE_SPRITES, style, no_depth: false, soft_edge: false, light: SpriteLight::SelfLit }
+        Self { texture, params, sprites: PARTICLE_SPRITES, sun_levels: None, style, no_depth: false, soft_edge: false, light: SpriteLight::SelfLit, sky: false }
     }
 
     pub fn corona(texture: Handle<Image>) -> Self {
@@ -257,11 +287,12 @@ pub struct ParticleKey {
     style: DrawStyle,
     no_depth: bool,
     tagged_color: bool,
+    sky: bool,
 }
 
 impl From<&ParticleMaterial> for ParticleKey {
     fn from(material: &ParticleMaterial) -> Self {
-        Self { style: material.style, no_depth: material.no_depth, tagged_color: material.sprites.id() == CORONA_COLORS.id() }
+        Self { style: material.style, no_depth: material.no_depth, tagged_color: material.sprites.id() == CORONA_COLORS.id(), sky: material.sky }
     }
 }
 
@@ -293,11 +324,19 @@ impl Material for ParticleMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
+        // `sun_levels.wesl` reads this material's bindings 5 and 6 instead of a standard material's slot.
+        descriptor.vertex.shader_defs.push(PARTICLE_LEVELS.into());
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push(PARTICLE_LEVELS.into());
+        }
         if !layout.0.contains(Mesh::ATTRIBUTE_COLOR) {
             descriptor.vertex.shader_defs.push("PARTICLE_INSTANCES".into());
         }
         if key.bind_group_data.tagged_color {
             descriptor.vertex.shader_defs.push("TAGGED_COLOR".into());
+        }
+        if key.bind_group_data.sky {
+            crate::shaders::sky_view_defs(descriptor);
         }
         // Sprites lying on surfaces are coplanar with them; with another triangulation they z-fought. Pulled towards the camera
         // (reversed Z: up) by a slope bias, which grows at grazing views where they fought.

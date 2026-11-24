@@ -77,6 +77,8 @@ pub enum LiquidRole {
     Drip,
     Puddle,
     Trail,
+    /// Droplets bursting where a stream lands.
+    Splash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

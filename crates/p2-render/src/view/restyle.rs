@@ -21,12 +21,13 @@ pub(super) fn surface_two_sided(drawn: bool, was: bool, now: bool) -> bool {
 
 pub fn restyle_switched(world: &mut bevy::ecs::world::World, looks: &HashMap<AssetId<Image>, SwitchedLook>) {
     let mut restyled = restyle::<StandardMaterial>(world, looks, |m| m, |m| m, |_, _| {}, SectionMaterial::Standard);
+    restyled.extend(restyle::<SkyStandardMaterial>(world, looks, |m| &m.base, |m| &mut m.base, |_, _| {}, SectionMaterial::SkyStandard));
     restyled.extend(restyle::<LightmappedMaterial>(
         world,
         looks,
         |m| &m.base,
         |m| &mut m.base,
-        |m, layers| (m.base, m.extension) = (layers.lit(m.base.clone()), BakedLight::new(layers)),
+        |m, layers| (m.base, m.extension) = (layers.lit(m.base.clone()), BakedLight { sky: m.extension.sky, ..BakedLight::new(layers) }),
         SectionMaterial::Lightmapped,
     ));
     restyled.extend(restyle::<MeshLitMaterial>(
@@ -34,7 +35,7 @@ pub fn restyle_switched(world: &mut bevy::ecs::world::World, looks: &HashMap<Ass
         looks,
         |m| &m.base,
         |m| &mut m.base,
-        |m, layers| (m.base, m.extension) = (layers.lit(m.base.clone()), DynamicLit::new(layers)),
+        |m, layers| (m.base, m.extension) = (layers.lit(m.base.clone()), DynamicLit { sky: m.extension.sky, ..DynamicLit::new(layers) }),
         SectionMaterial::MeshLit,
     ));
     restyled.extend(restyle::<BlendedMaterial>(
@@ -42,7 +43,7 @@ pub fn restyle_switched(world: &mut bevy::ecs::world::World, looks: &HashMap<Ass
         looks,
         |m| &m.base,
         |m| &mut m.base,
-        |m, layers| (m.base, m.extension) = (layers.lit(m.base.clone()), OpaqueDecals::new(layers)),
+        |m, layers| (m.base, m.extension) = (layers.lit(m.base.clone()), OpaqueDecals { sky: m.extension.sky, ..OpaqueDecals::new(layers) }),
         SectionMaterial::Blended,
     ));
     let Some(mut animated) = world.get_resource_mut::<AnimatedMaterials>() else { return };
@@ -99,6 +100,7 @@ fn restyle<M: bevy::asset::Asset>(
 /// only once prepared again.
 pub fn rebind_materials(world: &mut bevy::ecs::world::World, images: &HashSet<AssetId<Image>>) {
     touch_drawing::<StandardMaterial>(world, images, |material| material);
+    touch_drawing::<SkyStandardMaterial>(world, images, |material| &material.base);
     touch_drawing::<MeshLitMaterial>(world, images, |material| &material.base);
     touch_drawing::<LightmappedMaterial>(world, images, |material| &material.base);
     touch_drawing::<crate::actor_light::ActorLitMaterial>(world, images, |material| &material.base);

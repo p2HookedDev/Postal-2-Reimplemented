@@ -11,22 +11,19 @@ use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::query::QueryItem;
+use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::lifetimeless::Read;
 use bevy::math::{Mat4, UVec2, UVec4, Vec3, Vec4};
 use bevy::render::camera::ExtractedCamera;
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, BufferId, CachedRenderPipelineId,
     ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline,
     SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
-use bevy::render::sync_component::SyncComponent;
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::{ExtractedView, Msaa, ViewTarget};
+use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use bevy::transform::TransformSystems;
@@ -39,7 +36,10 @@ use crate::level_collision::LevelCollision;
 use crate::MainPassExtraSystems;
 use crate::lamps::{Lamp, Placed, lamp_falloff};
 use crate::modern::linear_light;
-use crate::screen_pass::{HalfThenFull, PassUniformOffset, PassUniforms, ScreenStep, ViewBindGroups, half_texture, prepare_pass_uniforms};
+use crate::screen_pass::{
+    HalfThenFull, PassUniformOffset, PassUniforms, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, prepare_pass_uniforms,
+    tag_pass_views,
+};
 use crate::shaders::{add_libraries, add_shaders};
 use crate::view::ShownScene;
 
@@ -67,8 +67,8 @@ impl Plugin for LampFogPlugin {
         }
         add_libraries(app);
         add_shaders(app, [(LAMP_FOG_SHADER, Shader::from_wesl(include_str!("lamp_fog.wesl"), "p2_render/lamp_fog.wesl"))]);
-        app.add_plugins(ExtractComponentPlugin::<LampFog>::default())
-            .add_systems(PostUpdate, follow_lamp_fog_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems));
+        add_view_pass::<LampFog>(app);
+        app.add_systems(PostUpdate, follow_lamp_fog_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems).after(tag_pass_views));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -92,7 +92,9 @@ pub struct FogLamp {
 }
 
 /// On a scene camera while lamp fog shows. As `lamp_fog.wesl` reads it.
-#[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_sync_target((Self, LampFogPipelineIds, PassUniformOffset<Self>, LampFogTexture))]
 pub struct LampFog {
     view_from_clip: Mat4,
     lamps: [FogLamp; FOG_LAMPS],
@@ -154,7 +156,7 @@ fn follow_lamp_fog_settings(
     scene: (Option<Res<ShownScene>>, Option<Res<LevelCollision>>),
     mut open_zones: Local<(Option<u32>, Vec<bool>)>,
     lamps: Query<(&Transform, &Placed, &InheritedVisibility), With<Lamp>>,
-    views: Query<(Entity, &Camera, &GlobalTransform, &Msaa, Option<&LampFog>), With<SceneView>>,
+    views: Query<(Entity, &Camera, &GlobalTransform, Has<PassView>, Option<&LampFog>), With<SceneView>>,
 ) {
     let level = settings.as_ref().map_or(0, |settings| settings.modern_level(MODERN_VOLUMETRIC_FOG));
     let (shown, collision) = scene;
@@ -177,17 +179,15 @@ fn follow_lamp_fog_settings(
     let sun = shown.as_ref().and_then(|shown| shown.lighting.as_ref()).and_then(|lighting| {
         lighting.sun.as_ref().map(|(light, _)| Vec3::from(linear_light(light.color(lighting.level_brightness))).element_sum())
     });
-    for (entity, camera, place, msaa, shown_fog) in &views {
+    for (entity, camera, place, drawn_in, shown_fog) in &views {
         let world_from_view = place.to_matrix();
         let eye = world_from_view.w_axis.truncate();
-        let picked = if camera.is_active && matches!(msaa, Msaa::Off) { pick_lamps(&sources, eye, -world_from_view.z_axis.truncate().normalize_or_zero()) } else { Vec::new() };
+        let picked = if drawn_in { pick_lamps(&sources, eye, -world_from_view.z_axis.truncate().normalize_or_zero()) } else { Vec::new() };
         let zone = model.zip(shown.as_ref()).map(|(model, shown)| p2_collision::point_zone(model, p2_bevy_assets::to_bevy(eye - shown.origin).into()));
         let open = zone.is_some_and(|zone| open_zones.1.get(usize::from(zone)).copied().unwrap_or(false));
         let density = fog_density(level, open, sun.unwrap_or(0.0), picked.iter().map(|source| source.color.element_sum()).reduce(f32::max));
         if density <= 0.0 {
-            if shown_fog.is_some() {
-                commands.entity(entity).remove::<LampFog>();
-            }
+            follow_view_pass(commands.entity(entity), shown_fog, None);
             continue;
         }
         let view_from_world = world_from_view.inverse();
@@ -200,23 +200,7 @@ fn follow_lamp_fog_settings(
         });
         let viewport = camera.physical_viewport_rect().map_or(Vec4::ZERO, |rect| UVec4::new(rect.min.x, rect.min.y, rect.width(), rect.height()).as_vec4());
         let fog = LampFog { view_from_clip: camera.clip_from_view().inverse(), lamps, look: Vec4::new(density, picked.len() as f32, STEPS, VIEW_REACH), viewport };
-        if shown_fog != Some(&fog) {
-            commands.entity(entity).insert(fog);
-        }
-    }
-}
-
-impl SyncComponent<RenderApp> for LampFog {
-    type Target = (Self, LampFogPipelineIds, PassUniformOffset<Self>, LampFogTexture);
-}
-
-impl ExtractComponent<RenderApp> for LampFog {
-    type QueryData = Read<Self>;
-    type QueryFilter = ();
-    type Out = Self;
-
-    fn extract_component(fog: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
-        Some(*fog)
+        follow_view_pass(commands.entity(entity), shown_fog, Some(fog));
     }
 }
 
