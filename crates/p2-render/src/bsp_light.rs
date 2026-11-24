@@ -1,7 +1,7 @@
 //! Dynamic lights as Bevy point and spot lights, which our shaders read with the engine's formulas;
 //! a point light's `radius` carries its `LightEffect`.
 
-use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT};
+use p2_render_cpu::LightEffect;
 use bevy::color::{Color, LinearRgba};
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, With};
@@ -31,8 +31,8 @@ pub(crate) fn gpu_light(light: &MeshLight, level_brightness: f32) -> Option<Bevy
     let color = Color::LinearRgba(LinearRgba::rgb(r, g, b));
     let (intensity, range) = (4.0 * std::f32::consts::PI, light.world_radius());
     match light.effect {
-        LE_SUNLIGHT => None,
-        LE_STATIC_SPOT | LE_SPOTLIGHT => Some(BevyLight::Spot(SpotLight {
+        LightEffect::Sunlight => None,
+        LightEffect::StaticSpot | LightEffect::Spotlight => Some(BevyLight::Spot(SpotLight {
             color,
             intensity,
             range,
@@ -48,7 +48,7 @@ pub(crate) fn gpu_light(light: &MeshLight, level_brightness: f32) -> Option<Bevy
             color,
             intensity,
             range,
-            radius: f32::from(effect.0),
+            radius: f32::from(effect as u8),
             shadow_maps_enabled: false,
             contact_shadows_enabled: false,
             affects_lightmapped_mesh_diffuse: false,
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn point_lights_carry_the_retail_colour_radius_and_effect() {
-        let light = MeshLight { radius: 3.0, brightness: 255.0, dynamic: true, effect: p2_render_cpu::LightEffect(13), ..MeshLight::default() };
+        let light = MeshLight { radius: 3.0, brightness: 255.0, dynamic: true, effect: LightEffect::NonIncidence, ..MeshLight::default() };
         let Some(BevyLight::Point(point)) = gpu_light(&light, 1.0) else { panic!("not a point light") };
         assert_eq!(point.range, 100.0);
         assert_eq!(point.radius, 13.0);
@@ -174,11 +174,11 @@ mod tests {
     #[test]
     fn spot_effects_are_spot_lights_with_the_engine_cone_and_sunlight_is_left_out() {
         let light = |effect| MeshLight { effect, cone: 64, dynamic: true, ..MeshLight::default() };
-        for effect in [LE_STATIC_SPOT, LE_SPOTLIGHT] {
+        for effect in [LightEffect::StaticSpot, LightEffect::Spotlight] {
             let Some(BevyLight::Spot(spot)) = gpu_light(&light(effect), 1.0) else { panic!("not a spot light") };
             assert_eq!(spot.inner_angle, 0.0);
             assert!((spot.outer_angle.cos() - 0.75).abs() < 1e-6);
         }
-        assert!(gpu_light(&light(LE_SUNLIGHT), 1.0).is_none());
+        assert!(gpu_light(&light(LightEffect::Sunlight), 1.0).is_none());
     }
 }

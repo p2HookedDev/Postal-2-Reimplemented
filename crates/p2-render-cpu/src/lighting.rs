@@ -4,25 +4,92 @@ use p2_assets::{StaticMesh, StaticMeshInstance};
 use p2_math::Rng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LightType(pub u8);
+#[repr(u8)]
+pub enum LightType {
+    None = 0,
+    Steady = 1,
+    Pulse = 2,
+    Blink = 3,
+    Flicker = 4,
+    Strobe = 5,
+    BackdropLight = 6,
+    SubtlePulse = 7,
+    TexturePaletteOnce = 8,
+    TexturePaletteLoop = 9,
+}
+
+impl LightType {
+    /// A byte past the script's list gives no light.
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            1 => Self::Steady,
+            2 => Self::Pulse,
+            3 => Self::Blink,
+            4 => Self::Flicker,
+            5 => Self::Strobe,
+            6 => Self::BackdropLight,
+            7 => Self::SubtlePulse,
+            8 => Self::TexturePaletteOnce,
+            9 => Self::TexturePaletteLoop,
+            _ => Self::None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LightEffect(pub u8);
+#[repr(u8)]
+pub enum LightEffect {
+    None = 0,
+    TorchWaver = 1,
+    FireWaver = 2,
+    WateryShimmer = 3,
+    Searchlight = 4,
+    SlowWave = 5,
+    FastWave = 6,
+    CloudCast = 7,
+    StaticSpot = 8,
+    Shock = 9,
+    Disco = 10,
+    Warp = 11,
+    Spotlight = 12,
+    NonIncidence = 13,
+    Shell = 14,
+    OmniBumpMap = 15,
+    Interference = 16,
+    Cylinder = 17,
+    Rotor = 18,
+    Unused = 19,
+    Sunlight = 20,
+}
 
-pub(crate) const LT_NONE: LightType = LightType(0);
-pub const LT_STEADY: LightType = LightType(1);
-const LT_PULSE: LightType = LightType(2);
-const LT_BLINK: LightType = LightType(3);
-const LT_FLICKER: LightType = LightType(4);
-const LT_STROBE: LightType = LightType(5);
-pub const LT_SUBTLE_PULSE: LightType = LightType(7);
-const LT_TEXTURE_PALETTE_ONCE: LightType = LightType(8);
-const LT_TEXTURE_PALETTE_LOOP: LightType = LightType(9);
-pub const LE_STATIC_SPOT: LightEffect = LightEffect(8);
-pub const LE_SPOTLIGHT: LightEffect = LightEffect(12);
-pub const LE_NON_INCIDENCE: LightEffect = LightEffect(13);
-const LE_CYLINDER: LightEffect = LightEffect(17);
-pub const LE_SUNLIGHT: LightEffect = LightEffect(20);
+impl LightEffect {
+    /// A byte past the script's list is no effect.
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            1 => Self::TorchWaver,
+            2 => Self::FireWaver,
+            3 => Self::WateryShimmer,
+            4 => Self::Searchlight,
+            5 => Self::SlowWave,
+            6 => Self::FastWave,
+            7 => Self::CloudCast,
+            8 => Self::StaticSpot,
+            9 => Self::Shock,
+            10 => Self::Disco,
+            11 => Self::Warp,
+            12 => Self::Spotlight,
+            13 => Self::NonIncidence,
+            14 => Self::Shell,
+            15 => Self::OmniBumpMap,
+            16 => Self::Interference,
+            17 => Self::Cylinder,
+            18 => Self::Rotor,
+            19 => Self::Unused,
+            20 => Self::Sunlight,
+            _ => Self::None,
+        }
+    }
+}
 
 pub const MAX_HARDWARE_LIGHTS: usize = 8;
 pub const SUN_DISTANCE: f32 = 65536.0;
@@ -51,11 +118,11 @@ impl Default for MeshLight {
         Self {
             location: Vector::ZERO,
             rotation: Rotator::ZERO,
-            light_type: LT_STEADY,
+            light_type: LightType::Steady,
             period: 32,
             phase: 0,
             intensity: 1.0,
-            effect: LightEffect(0),
+            effect: LightEffect::None,
             brightness: 64.0,
             hue: 0,
             saturation: 255,
@@ -112,18 +179,18 @@ pub fn light_type_scale(light_type: LightType, period: u8, phase: u8, time: f32,
         (s * f64::from(amplitude) + f64::from(base)) as f32
     };
     match light_type {
-        LT_STEADY | LT_TEXTURE_PALETTE_ONCE | LT_TEXTURE_PALETTE_LOOP => 1.0,
-        LT_PULSE => pulse(0.39, 0.6),
-        LT_BLINK => {
+        LightType::Steady | LightType::TexturePaletteOnce | LightType::TexturePaletteLoop => 1.0,
+        LightType::Pulse => pulse(0.39, 0.6),
+        LightType::Blink => {
             if pulse_angle(time, i32::from(period) + 1, phase) & 1 == 0 { 1.0 } else { 0.0 }
         }
-        LT_FLICKER => {
+        LightType::Flicker => {
             if 0.5 > rand { 0.0 } else { rand }
         }
-        LT_STROBE => {
+        LightType::Strobe => {
             if strobe { 0.0 } else { 1.0 }
         }
-        LT_SUBTLE_PULSE => pulse(0.09, 0.9),
+        LightType::SubtlePulse => pulse(0.09, 0.9),
         _ => 0.0,
     }
 }
@@ -145,8 +212,8 @@ impl LightClock {
     /// `light` at `time` with its [`light_type_scale`] in [`MeshLight::intensity`]. Retail sets a light up for each
     /// thing it lights each frame (a flicker light draws a new random number each time); here once per frame.
     pub fn animate(&mut self, light: MeshLight, time: f32) -> MeshLight {
-        let rand = if light.light_type == LT_FLICKER { self.rng.frand() } else { 0.0 };
-        if light.light_type == LT_STROBE && self.strobe_time != time {
+        let rand = if light.light_type == LightType::Flicker { self.rng.frand() } else { 0.0 };
+        if light.light_type == LightType::Strobe && self.strobe_time != time {
             self.strobe_time = time;
             self.strobe = !self.strobe;
         }
@@ -157,7 +224,7 @@ impl LightClock {
 
 impl MeshLight {
     pub fn color(&self, level_brightness: f32) -> [f32; 3] {
-        let intensity = if self.light_type == LT_NONE { 0.0 } else { self.intensity };
+        let intensity = if self.light_type == LightType::None { 0.0 } else { self.intensity };
         hsv_color(self.hue, self.saturation, 255).map(|c| c * self.brightness / 255.0 * intensity * level_brightness)
     }
 
@@ -170,7 +237,7 @@ impl MeshLight {
     }
 
     fn prepare(&self) -> PreparedLight<'_> {
-        let direction = if matches!(self.effect, LE_SUNLIGHT | LE_SPOTLIGHT | LE_STATIC_SPOT) { self.rotation.vector() } else { Vector::ZERO };
+        let direction = if matches!(self.effect, LightEffect::Sunlight | LightEffect::Spotlight | LightEffect::StaticSpot) { self.rotation.vector() } else { Vector::ZERO };
         let sine = self.cone_sine();
         PreparedLight { light: self, radius: self.world_radius(), direction, sine, rsine: 1.0 / (1.0 - sine) }
     }
@@ -197,21 +264,21 @@ impl PreparedLight<'_> {
         let PreparedLight { light, radius, direction, sine, rsine } = *self;
         let to_light = light.location - position;
         let distance_squared = to_light.dot(to_light);
-        if light.effect != LE_SUNLIGHT && distance_squared >= radius * radius {
+        if light.effect != LightEffect::Sunlight && distance_squared >= radius * radius {
             return 0.0;
         }
         let distance = distance_squared.sqrt();
         match light.effect {
-            LE_SUNLIGHT => {
+            LightEffect::Sunlight => {
                 let d = direction.dot(normal);
                 if d < 0.0 { d * -2.0 } else { 0.0 }
             }
-            LE_CYLINDER if distance < radius => {
+            LightEffect::Cylinder if distance < radius => {
                 (1.0 - (to_light.x * to_light.x + to_light.y * to_light.y) / (radius * radius)).max(0.0) * 2.0
             }
-            LE_NON_INCIDENCE if to_light.dot(normal) > 0.0 && distance < radius => (1.02 - distance / radius).sqrt() * 2.0,
-            LE_CYLINDER | LE_NON_INCIDENCE => 0.0,
-            LE_SPOTLIGHT | LE_STATIC_SPOT => {
+            LightEffect::NonIncidence if to_light.dot(normal) > 0.0 && distance < radius => (1.02 - distance / radius).sqrt() * 2.0,
+            LightEffect::Cylinder | LightEffect::NonIncidence => 0.0,
+            LightEffect::Spotlight | LightEffect::StaticSpot => {
                 let base = attenuation(distance, radius, to_light, normal);
                 if base <= 0.0 {
                     return 0.0;
@@ -308,13 +375,13 @@ fn radial_falloff(distance: f32, radius: f32) -> f32 {
 
 impl HardwareLight {
     pub fn new(light: &MeshLight, level_brightness: f32, center: Vector, radius: f32) -> Option<Self> {
-        if light.light_type == LT_NONE {
+        if light.light_type == LightType::None {
             return None;
         }
         let color = light.color(level_brightness);
         let (kind, scale) = match light.effect {
-            LE_SUNLIGHT => (HardwareKind::Directional, 0.25 * 3.5),
-            LE_SPOTLIGHT | LE_STATIC_SPOT => (HardwareKind::Spot, 0.1),
+            LightEffect::Sunlight => (HardwareKind::Directional, 0.25 * 3.5),
+            LightEffect::Spotlight | LightEffect::StaticSpot => (HardwareKind::Spot, 0.1),
             _ => (HardwareKind::Point, 0.5),
         };
         let mut out = Self {
@@ -536,35 +603,35 @@ mod tests {
         assert_eq!(hardware.sample([0.0; 3].into(), [0.0, 0.0, -1.0].into()), [0.0; 3]);
         let side = hardware.sample([0.0; 3].into(), [1.0, 0.0, 0.0].into());
         assert_eq!(side, [0.0; 3]);
-        let spot = MeshLight { effect: LE_SPOTLIGHT, rotation: [-16384, 0, 0].into(), ..light };
+        let spot = MeshLight { effect: LightEffect::Spotlight, rotation: [-16384, 0, 0].into(), ..light };
         let spot = HardwareLight::new(&spot, 1.0, [0.0; 3].into(), 50.0).unwrap();
         let below = spot.sample([0.0; 3].into(), [0.0, 0.0, 1.0].into())[0];
         assert!((below / (0.1 * full) - hardware.sample([0.0; 3].into(), [0.0, 0.0, 1.0].into())[0] / (0.5 * full)).abs() < 1e-4, "{below}");
         assert_eq!(spot.sample([150.0, 0.0, 0.0].into(), [0.0, 0.0, 1.0].into()), [0.0; 3]);
-        let sun = MeshLight { effect: LE_SUNLIGHT, rotation: [-16384, 0, 0].into(), ..light };
+        let sun = MeshLight { effect: LightEffect::Sunlight, rotation: [-16384, 0, 0].into(), ..light };
         let sun = HardwareLight::new(&sun, 1.0, [0.0; 3].into(), 50.0).unwrap();
         assert!((sun.sample([5000.0, 0.0, 0.0].into(), [0.0, 0.0, 1.0].into())[0] - 0.875 * full).abs() < 1e-4);
     }
 
     #[test]
     fn light_type_scales() {
-        assert_eq!(light_type_scale(LT_STEADY, 32, 0, 12.3, 0.0, false), 1.0);
-        assert_eq!(light_type_scale(LT_NONE, 32, 0, 0.0, 0.0, false), 0.0);
-        assert_eq!(light_type_scale(LightType(6), 32, 0, 0.0, 0.0, false), 0.0);
-        assert!((light_type_scale(LT_PULSE, 32, 0, 0.0, 0.0, false) - 0.6).abs() < 1e-6);
-        assert!((light_type_scale(LT_SUBTLE_PULSE, 32, 0, 0.0, 0.0, false) - 0.9).abs() < 1e-6);
-        assert!((light_type_scale(LT_PULSE, 32, 64, 0.0, 0.0, false) - 0.99).abs() < 1e-6);
-        assert!((light_type_scale(LT_SUBTLE_PULSE, 32, 192, 0.0, 0.0, false) - 0.81).abs() < 1e-6);
-        assert!((light_type_scale(LT_PULSE, 35, 0, 0.25, 0.0, false) - 0.99).abs() < 1e-5);
-        assert_eq!(light_type_scale(LT_PULSE, 0, 0, 1.0 / 35.0, 0.0, false), light_type_scale(LT_PULSE, 1, 0, 1.0 / 35.0, 0.0, false));
-        assert_eq!(light_type_scale(LT_BLINK, 0, 1, 0.0, 0.0, false), 1.0);
+        assert_eq!(light_type_scale(LightType::Steady, 32, 0, 12.3, 0.0, false), 1.0);
+        assert_eq!(light_type_scale(LightType::None, 32, 0, 0.0, 0.0, false), 0.0);
+        assert_eq!(light_type_scale(LightType::BackdropLight, 32, 0, 0.0, 0.0, false), 0.0);
+        assert!((light_type_scale(LightType::Pulse, 32, 0, 0.0, 0.0, false) - 0.6).abs() < 1e-6);
+        assert!((light_type_scale(LightType::SubtlePulse, 32, 0, 0.0, 0.0, false) - 0.9).abs() < 1e-6);
+        assert!((light_type_scale(LightType::Pulse, 32, 64, 0.0, 0.0, false) - 0.99).abs() < 1e-6);
+        assert!((light_type_scale(LightType::SubtlePulse, 32, 192, 0.0, 0.0, false) - 0.81).abs() < 1e-6);
+        assert!((light_type_scale(LightType::Pulse, 35, 0, 0.25, 0.0, false) - 0.99).abs() < 1e-5);
+        assert_eq!(light_type_scale(LightType::Pulse, 0, 0, 1.0 / 35.0, 0.0, false), light_type_scale(LightType::Pulse, 1, 0, 1.0 / 35.0, 0.0, false));
+        assert_eq!(light_type_scale(LightType::Blink, 0, 1, 0.0, 0.0, false), 1.0);
         assert_eq!(pulse_angle(1.0 / 65536.0, 1, 0), 35);
-        assert_eq!(light_type_scale(LT_BLINK, 0, 0, 1.0 / 65536.0, 0.0, false), 0.0);
-        assert_eq!(light_type_scale(LT_BLINK, 0, 0, 2.0 / 65536.0, 0.0, false), 1.0);
-        assert_eq!(light_type_scale(LT_FLICKER, 32, 0, 0.0, 0.49, false), 0.0);
-        assert_eq!(light_type_scale(LT_FLICKER, 32, 0, 0.0, 0.75, false), 0.75);
-        assert_eq!(light_type_scale(LT_STROBE, 32, 0, 0.0, 0.0, true), 0.0);
-        assert_eq!(light_type_scale(LT_STROBE, 32, 0, 0.0, 0.0, false), 1.0);
+        assert_eq!(light_type_scale(LightType::Blink, 0, 0, 1.0 / 65536.0, 0.0, false), 0.0);
+        assert_eq!(light_type_scale(LightType::Blink, 0, 0, 2.0 / 65536.0, 0.0, false), 1.0);
+        assert_eq!(light_type_scale(LightType::Flicker, 32, 0, 0.0, 0.49, false), 0.0);
+        assert_eq!(light_type_scale(LightType::Flicker, 32, 0, 0.0, 0.75, false), 0.75);
+        assert_eq!(light_type_scale(LightType::Strobe, 32, 0, 0.0, 0.0, true), 0.0);
+        assert_eq!(light_type_scale(LightType::Strobe, 32, 0, 0.0, 0.0, false), 1.0);
         assert_eq!(truncate(3e9), i32::MIN);
         assert_eq!(sin_tab(i32::MIN), 0.0);
     }
@@ -572,19 +639,19 @@ mod tests {
     #[test]
     fn clock_animates_lights() {
         let mut clock = LightClock::default();
-        let strobe = MeshLight { light_type: LT_STROBE, brightness: 255.0, ..MeshLight::default() };
+        let strobe = MeshLight { light_type: LightType::Strobe, brightness: 255.0, ..MeshLight::default() };
         assert_eq!(clock.animate(strobe, 0.1).intensity, 0.0);
         assert_eq!(clock.animate(strobe, 0.1).intensity, 0.0);
         assert_eq!(clock.animate(strobe, 0.2).intensity, 1.0);
         let steady = clock.animate(MeshLight::default(), 0.3);
         assert_eq!(steady.intensity, 1.0);
         let mut rng = Rng::new(1);
-        let flicker = MeshLight { light_type: LT_FLICKER, ..MeshLight::default() };
-        let expected = light_type_scale(LT_FLICKER, 32, 0, 0.0, rng.frand(), false);
+        let flicker = MeshLight { light_type: LightType::Flicker, ..MeshLight::default() };
+        let expected = light_type_scale(LightType::Flicker, 32, 0, 0.0, rng.frand(), false);
         let lit = clock.animate(flicker, 0.3);
         assert_eq!(lit.intensity, expected);
         assert_eq!(lit.world_radius(), flicker.world_radius());
-        let pulse = clock.animate(MeshLight { light_type: LT_PULSE, phase: 64, ..MeshLight::default() }, 0.0);
+        let pulse = clock.animate(MeshLight { light_type: LightType::Pulse, phase: 64, ..MeshLight::default() }, 0.0);
         let [r, ..] = pulse.color(1.0);
         assert!((r - MeshLight::default().color(1.0)[0] * 0.99).abs() < 1e-5, "{r}");
     }

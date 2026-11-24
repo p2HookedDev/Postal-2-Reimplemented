@@ -38,7 +38,7 @@ use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, Emitte
 use p2_render::probes::ProbesPlugin;
 use p2_render::view::{CASTER_LAYER, SUN_VIEW_LAYER, SceneView, ShownScene};
 use p2_render::{MainPassExtraSystems, RenderFollowSystems};
-use p2_render_cpu::{LE_SUNLIGHT, MeshLight};
+use p2_render_cpu::{LightEffect, MeshLight};
 use p2_vm::FluidType;
 use rustc_hash::FxHashMap;
 
@@ -219,7 +219,7 @@ fn blood_scene(ground: Floor, sun_way: Vec3) -> Vec<u8> {
         MODERN_INDIRECT => "1".to_owned(),
         _ => String::new(),
     }));
-    let sun_light = MeshLight { effect: LE_SUNLIGHT, rotation: Vector::new(sun_way.x, sun_way.z, sun_way.y).rotation(), brightness: 128.0, ..MeshLight::default() };
+    let sun_light = MeshLight { effect: LightEffect::Sunlight, rotation: Vector::new(sun_way.x, sun_way.z, sun_way.y).rotation(), brightness: 128.0, ..MeshLight::default() };
     let lights = FxHashMap::from_iter([(0, sun_light)]);
     app.insert_resource(ShownScene { lighting: Some(Arc::new(LightEnvironment::new(lights, vec![[0.06, 0.06, 0.07]], 1.0))), ..ShownScene::default() });
     app.insert_resource(FrameFacts { in_play: true, game_step: 1.0 / 60.0, ..FrameFacts::default() });

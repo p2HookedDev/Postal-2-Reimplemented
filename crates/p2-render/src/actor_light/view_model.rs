@@ -7,7 +7,7 @@ use p2_assets::poly_flags::FAKE_BACKDROP;
 use p2_bevy_assets::to_bevy;
 use p2_collision::{Sides, terrain_line_check};
 use p2_math::{Rotator, Vector};
-use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, MAX_HARDWARE_LIGHTS, MeshLight};
+use p2_render_cpu::{LightEffect, MAX_HARDWARE_LIGHTS, MeshLight};
 
 use super::{HardwareLightUniform, LightEnvironment, SkinnedLighting};
 use crate::level_collision::StaticCollision;
@@ -142,7 +142,7 @@ pub fn view_model_lighting(environment: &LightEnvironment, map: &MapLights, leve
     });
     let lamps = nearest_lamps(environment, level, eye).into_iter().map(|lamp| {
         let [r, g, b] = linear_light(lamp.color(brightness));
-        let spot = matches!(lamp.effect, LE_SPOTLIGHT | LE_STATIC_SPOT);
+        let spot = matches!(lamp.effect, LightEffect::Spotlight | LightEffect::StaticSpot);
         HardwareLightUniform {
             position: (Vec3::from(to_bevy(lamp.location)) + origin).extend(lamp.world_radius()),
             direction: Vec3::from(to_bevy(lamp.rotation.vector())),
@@ -176,7 +176,7 @@ mod tests {
     use p2_assets::Model;
     use p2_collision::{BspHulls, MeshCollision, MeshSet};
     use p2_math::Rotator;
-    use p2_render_cpu::LE_SUNLIGHT;
+    use p2_render_cpu::LightEffect;
     use rustc_hash::FxHashMap;
     use std::sync::Arc;
 
@@ -206,7 +206,7 @@ mod tests {
     }
 
     fn environment(extra: Vec<MeshLight>) -> Arc<LightEnvironment> {
-        let sun = MeshLight { effect: LE_SUNLIGHT, rotation: DOWN, brightness: 128.0, ..MeshLight::default() };
+        let sun = MeshLight { effect: LightEffect::Sunlight, rotation: DOWN, brightness: 128.0, ..MeshLight::default() };
         let lights = FxHashMap::from_iter([sun].into_iter().chain(extra).enumerate().map(|(key, light)| (key as i32, light)));
         Arc::new(LightEnvironment::new(lights, vec![[0.1, 0.2, 0.3]], 1.0))
     }
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn the_weapon_takes_the_sun_its_fills_and_the_near_lamps() {
-        let fill = MeshLight { effect: LE_SUNLIGHT, rotation: Rotator { pitch: -8192, yaw: 0, roll: 0 }, brightness: 64.0, ..MeshLight::default() };
+        let fill = MeshLight { effect: LightEffect::Sunlight, rotation: Rotator { pitch: -8192, yaw: 0, roll: 0 }, brightness: 64.0, ..MeshLight::default() };
         let special = MeshLight { special_lit: true, ..lamp(Vector::new(120.0, 0.0, 0.0)) };
         let environment = environment(vec![fill, lamp(Vector::new(100.0, 0.0, 0.0)), lamp(Vector::new(5000.0, 0.0, 0.0)), special]);
         let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO, 0);
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn a_spot_lamp_carries_its_cone() {
-        let spot = MeshLight { effect: LE_SPOTLIGHT, cone: 64, rotation: DOWN, ..lamp(Vector::new(0.0, 0.0, 50.0)) };
+        let spot = MeshLight { effect: LightEffect::Spotlight, cone: 64, rotation: DOWN, ..lamp(Vector::new(0.0, 0.0, 50.0)) };
         let environment = environment(vec![spot]);
         let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO, 0);
         let lamp = lighting.lights[1];

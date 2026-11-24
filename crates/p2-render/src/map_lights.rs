@@ -69,13 +69,13 @@ pub(crate) fn follow_map_lights(
 mod tests {
     use super::*;
     use p2_math::Rotator;
-    use p2_render_cpu::LE_SUNLIGHT;
+    use p2_render_cpu::LightEffect;
     use rustc_hash::FxHashMap;
 
     #[test]
     fn map_lights_match_the_sun_and_fills_worked_out_directly() {
         let sun = |brightness: f32, pitch: i32, x: f32| MeshLight {
-            effect: LE_SUNLIGHT,
+            effect: LightEffect::Sunlight,
             rotation: Rotator { pitch, yaw: 0, roll: 0 },
             brightness,
             location: p2_math::Vector::new(x, 0.0, 0.0),

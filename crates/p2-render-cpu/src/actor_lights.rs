@@ -1,7 +1,7 @@
 use p2_assets::Model;
 use p2_math::Vector;
 
-use crate::lighting::{LE_SUNLIGHT, LT_NONE, MAX_HARDWARE_LIGHTS, MeshLight, SUN_DISTANCE};
+use crate::lighting::{LightEffect, LightType, MAX_HARDWARE_LIGHTS, MeshLight, SUN_DISTANCE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Walls {
@@ -42,12 +42,12 @@ pub fn relevant_lights<'a>(model: &Model, candidates: impl IntoIterator<Item = &
     let traced = walls == Walls::Checked && p2_collision::point_leaf(model, center).is_some();
     let mut keyed: Vec<(f32, MeshLight)> = candidates
         .into_iter()
-        .filter(|light| light.light_type != LT_NONE)
+        .filter(|light| light.light_type != LightType::None)
         .filter_map(|light| {
             let to_center = center - light.location;
             let (distance_squared, range) = (to_center.dot(to_center), light.world_radius());
             let (key, end) = match light.effect {
-                LE_SUNLIGHT => (f32::MAX, center - light.rotation.vector() * SUN_DISTANCE),
+                LightEffect::Sunlight => (f32::MAX, center - light.rotation.vector() * SUN_DISTANCE),
                 _ if distance_squared > (range + radius) * (range + radius) => return None,
                 _ => ((1.0 - distance_squared / (range * range)) * light.brightness, light.location),
             };
@@ -70,7 +70,7 @@ fn light_clear(model: &Model, start: Vector, end: Vector) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lighting::LE_SPOTLIGHT;
+    use crate::lighting::LightEffect;
     use p2_assets::{BspNode, BspSurface, Leaf, poly_flags};
 
     fn wall() -> Model {
@@ -110,7 +110,7 @@ mod tests {
         let mut sky = wall();
         sky.surfaces[0].poly_flags = poly_flags::FAKE_BACKDROP;
         assert_eq!(relevant_lights(&sky, &[behind], center, 20.0, 8, Walls::Checked), [behind]);
-        let sun = |yaw: i32| MeshLight { effect: LE_SUNLIGHT, rotation: [0, yaw, 0].into(), ..MeshLight::default() };
+        let sun = |yaw: i32| MeshLight { effect: LightEffect::Sunlight, rotation: [0, yaw, 0].into(), ..MeshLight::default() };
         assert!(relevant_lights(&wall(), &[sun(0)], center, 20.0, 8, Walls::Checked).is_empty());
         assert_eq!(relevant_lights(&wall(), &[sun(32768)], center, 20.0, 8, Walls::Checked), [sun(32768)]);
     }
@@ -119,13 +119,13 @@ mod tests {
     fn with_walls_ignored_a_light_behind_a_wall_is_kept() {
         let (center, behind) = (Vector::new(10.0, 0.0, 0.0), at(-40.0, 255.0));
         assert_eq!(relevant_lights(&wall(), &[behind], center, 20.0, 8, Walls::Ignored), [behind]);
-        let sun = MeshLight { effect: LE_SUNLIGHT, ..MeshLight::default() };
+        let sun = MeshLight { effect: LightEffect::Sunlight, ..MeshLight::default() };
         assert_eq!(relevant_lights(&wall(), &[sun], center, 20.0, 8, Walls::Ignored), [sun]);
     }
 
     #[test]
     fn a_spot_facing_away_keeps_its_place_in_the_order() {
-        let away = MeshLight { effect: LE_SPOTLIGHT, ..at(100.0, 40.0) };
+        let away = MeshLight { effect: LightEffect::Spotlight, ..at(100.0, 40.0) };
         let lights = relevant_lights(&Model::default(), &[at(190.0, 255.0), away, at(10.0, 255.0)], Vector::ZERO, 50.0, 8, Walls::Checked);
         assert_eq!(lights, [at(10.0, 255.0), away, at(190.0, 255.0)]);
     }
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn suns_come_first_and_a_light_past_its_radius_is_kept_last() {
-        let sun = MeshLight { effect: LE_SUNLIGHT, rotation: [-16384, 0, 0].into(), brightness: 10.0, ..MeshLight::default() };
+        let sun = MeshLight { effect: LightEffect::Sunlight, rotation: [-16384, 0, 0].into(), brightness: 10.0, ..MeshLight::default() };
         let (near, edge, past, gone) = (at(100.0, 64.0), at(200.0, 255.0), at(230.0, 255.0), at(260.0, 255.0));
         let lights = relevant_lights(&Model::default(), &[edge, past, gone, near, sun], Vector::ZERO, 50.0, 8, Walls::Checked);
         assert_eq!(lights, [sun, near, edge, past]);

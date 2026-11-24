@@ -35,7 +35,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use bevy::transform::TransformSystems;
 use bevy::transform::components::Transform;
 use p2_assets::Model;
-use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT, MeshLight};
+use p2_render_cpu::{LightEffect, MeshLight};
 
 use crate::components::{MOVER_LAYER, RESTING_PROP_LAYER, SUN_VIEW_LAYER, SceneView};
 use p2_host::display::{MODERN_LAMP_SHADOWS, Settings};
@@ -108,7 +108,7 @@ fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32
 }
 
 fn scene_place(light: &MeshLight, origin: Vec3) -> (Vec3, Option<Vec3>) {
-    let spot = matches!(light.effect, LE_STATIC_SPOT | LE_SPOTLIGHT).then(|| Vec3::from(p2_bevy_assets::to_bevy(light.rotation.vector())).normalize_or_zero());
+    let spot = matches!(light.effect, LightEffect::StaticSpot | LightEffect::Spotlight).then(|| Vec3::from(p2_bevy_assets::to_bevy(light.rotation.vector())).normalize_or_zero());
     (Vec3::from(p2_bevy_assets::to_bevy(light.location)) + origin, spot)
 }
 
@@ -141,7 +141,7 @@ fn lamp_quality(level: u8) -> LampQuality {
 }
 
 pub(crate) fn is_lamp(light: &MeshLight) -> bool {
-    !light.dynamic && !light.special_lit && light.effect != LE_SUNLIGHT && light.color(1.0).iter().sum::<f32>() > 0.0
+    !light.dynamic && !light.special_lit && light.effect != LightEffect::Sunlight && light.color(1.0).iter().sum::<f32>() > 0.0
 }
 
 pub(crate) fn map_lamps(environment: &LightEnvironment) -> Vec<MeshLight> {
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn a_spots_record_has_a_negative_radius_and_holds_its_direction_and_cone() {
-        let light = MeshLight { effect: LE_SPOTLIGHT, cone: 128, ..MeshLight::default() };
+        let light = MeshLight { effect: LightEffect::Spotlight, cone: 128, ..MeshLight::default() };
         let record = lamp_record(&light, 1.0, Vec3::ZERO, UNMAPPED);
         assert_eq!(record[0][3], -light.world_radius());
         let along = Vec3::from(p2_bevy_assets::to_bevy(light.rotation.vector())).normalize();
@@ -685,7 +685,7 @@ mod tests {
         assert!(is_lamp(&MeshLight::default()));
         assert!(!is_lamp(&MeshLight { dynamic: true, ..MeshLight::default() }));
         assert!(!is_lamp(&MeshLight { special_lit: true, ..MeshLight::default() }));
-        assert!(!is_lamp(&MeshLight { effect: LE_SUNLIGHT, ..MeshLight::default() }));
+        assert!(!is_lamp(&MeshLight { effect: LightEffect::Sunlight, ..MeshLight::default() }));
         assert!(!is_lamp(&MeshLight { brightness: 0.0, ..MeshLight::default() }));
     }
 }

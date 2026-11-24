@@ -5,7 +5,7 @@ use bevy::pbr::StandardMaterial;
 
 use super::*;
 use crate::view::SKY_LAYER;
-use p2_render_cpu::LE_SUNLIGHT;
+use p2_render_cpu::LightEffect;
 use p2_host::display::{MODERN_GRAPHICS, MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
 use crate::actor_light::LightEnvironment;
 use crate::blended::TerrainLayer;
@@ -153,8 +153,8 @@ fn ambient_fades_then_lands_on_the_zone() {
     assert_eq!(shown, bright);
 }
 
-fn light(effect: p2_render_cpu::LightEffect, brightness: f32, x: f32) -> MeshLight {
-    MeshLight { light_type: p2_render_cpu::LightType(1), effect, brightness, location: Vector::from([x, 0.0, 0.0]), ..MeshLight::default() }
+fn light(effect: LightEffect, brightness: f32, x: f32) -> MeshLight {
+    MeshLight { light_type: p2_render_cpu::LightType::Steady, effect, brightness, location: Vector::from([x, 0.0, 0.0]), ..MeshLight::default() }
 }
 
 #[test]
@@ -281,7 +281,7 @@ fn a_mover_keeps_its_layer_for_the_lamps_with_the_suns_shadows_off() {
 fn suns_on_one_direction_add_up_and_others_are_fills() {
     let down = p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 };
     let slanted = p2_math::Rotator { pitch: -8192, yaw: 0, roll: 0 };
-    let sun = |brightness: f32, rotation, x: f32| MeshLight { rotation, ..light(LE_SUNLIGHT, brightness, x) };
+    let sun = |brightness: f32, rotation, x: f32| MeshLight { rotation, ..light(LightEffect::Sunlight, brightness, x) };
     let lights = [sun(128.0, down, 1.0), sun(64.0, down, 2.0), sun(32.0, down, 3.0), sun(40.0, slanted, 4.0)];
     let environment = LightEnvironment::new(lights.into_iter().enumerate().map(|(key, light)| (key as i32, light)).collect(), Vec::new(), 1.0);
     let alone = linear_light(sun(128.0, down, 1.0).color(1.0));
@@ -295,7 +295,7 @@ fn suns_on_one_direction_add_up_and_others_are_fills() {
 #[test]
 fn a_copy_of_the_suns_in_another_zone_does_not_add_up() {
     let down = p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 };
-    let sun = |brightness: f32, x: f32| MeshLight { rotation: down, ..light(LE_SUNLIGHT, brightness, x) };
+    let sun = |brightness: f32, x: f32| MeshLight { rotation: down, ..light(LightEffect::Sunlight, brightness, x) };
     let one_zone = [sun(128.0, 1.0), sun(64.0, 2.0)];
     let copies = [sun(128.0, 1.0), sun(64.0, 2.0), sun(128.0, 101.0), sun(64.0, 102.0), sun(128.0, 201.0), sun(64.0, 202.0)];
     let environment = |lights: &[MeshLight]| LightEnvironment::new(lights.iter().enumerate().map(|(key, light)| (key as i32, *light)).collect(), Vec::new(), 1.0);
@@ -308,7 +308,7 @@ fn a_copy_of_the_suns_in_another_zone_does_not_add_up() {
 #[test]
 fn a_zone_has_the_set_of_its_own_suns_without_the_special_ones() {
     let down = p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 };
-    let sun = |brightness: f32, x: f32| MeshLight { rotation: down, ..light(LE_SUNLIGHT, brightness, x) };
+    let sun = |brightness: f32, x: f32| MeshLight { rotation: down, ..light(LightEffect::Sunlight, brightness, x) };
     let lights = [sun(128.0, 1.0), sun(64.0, 101.0), MeshLight { special_lit: true, ..sun(200.0, 102.0) }, MeshLight { special_lit: true, ..sun(90.0, 201.0) }];
     let environment = LightEnvironment::new(lights.into_iter().enumerate().map(|(key, light)| (key as i32, light)).collect(), Vec::new(), 1.0)
         .suns_of_one_zone(|at| (at.x / 100.0) as u8);

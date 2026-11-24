@@ -284,11 +284,11 @@ pub fn light_values(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> MeshLight {
     MeshLight {
         location,
         rotation,
-        light_type: p2_render_cpu::LightType(vm.store.byte_of(actor, Prop::LightType)),
+        light_type: p2_render_cpu::LightType::from_byte(vm.store.byte_of(actor, Prop::LightType)),
         period: vm.store.byte_of(actor, Prop::LightPeriod),
         phase: vm.store.byte_of(actor, Prop::LightPhase),
         intensity: 1.0,
-        effect: p2_render_cpu::LightEffect(vm.store.byte_of(actor, Prop::LightEffect)),
+        effect: p2_render_cpu::LightEffect::from_byte(vm.store.byte_of(actor, Prop::LightEffect)),
         brightness: vm.store.float_of(actor, Prop::LightBrightness),
         hue: vm.store.byte_of(actor, Prop::LightHue),
         saturation: vm.store.byte_of(actor, Prop::LightSaturation),

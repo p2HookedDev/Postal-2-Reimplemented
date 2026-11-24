@@ -79,10 +79,10 @@ fn saved_light(pkg: &Package, data: &[u8], reference: i32) -> Option<MeshLight> 
             ("Rotation", TagValue::Struct { data, .. }) => {
                 light.rotation = [0, 4, 8].map(|at| i32::from_le_bytes(data[at..at + 4].try_into().unwrap())).into();
             }
-            ("LightType", &TagValue::Byte(v)) => light.light_type = p2_render_cpu::LightType(v),
+            ("LightType", &TagValue::Byte(v)) => light.light_type = p2_render_cpu::LightType::from_byte(v),
             ("LightPeriod", &TagValue::Byte(v)) => light.period = v,
             ("LightPhase", &TagValue::Byte(v)) => light.phase = v,
-            ("LightEffect", &TagValue::Byte(v)) => light.effect = p2_render_cpu::LightEffect(v),
+            ("LightEffect", &TagValue::Byte(v)) => light.effect = p2_render_cpu::LightEffect::from_byte(v),
             ("LightBrightness", &TagValue::Float(v)) => light.brightness = v,
             ("LightHue", &TagValue::Byte(v)) => light.hue = v,
             ("LightSaturation", &TagValue::Byte(v)) => light.saturation = v,

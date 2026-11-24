@@ -6,7 +6,6 @@ use p2_package::Loader;
 use p2_render_cpu::{HardwareKind, HardwareLight, MeshLight};
 use p2_vm::Vm;
 
-const LE_SUNLIGHT: p2_render_cpu::LightEffect = p2_render_cpu::LightEffect(20);
 
 fn loader() -> Option<Loader> {
     let dir = game_dir()?;
@@ -28,7 +27,7 @@ fn outdoor_maps_have_a_sun_shining_down() {
     let Some(mut loader) = loader() else { return };
     for map in ["Suburbs-3", "Suburbs-1"] {
         let lights = map_lights(&mut loader, map);
-        let suns: Vec<_> = lights.iter().filter(|light| light.effect == LE_SUNLIGHT).collect();
+        let suns: Vec<_> = lights.iter().filter(|light| light.effect == p2_render_cpu::LightEffect::Sunlight).collect();
         assert!(!suns.is_empty(), "{map}: no LE_Sunlight light among {} lights", lights.len());
         for sun in suns {
             let hardware = HardwareLight::new(sun, 1.0, Default::default(), 0.0).expect("a sun the actors are lit by");

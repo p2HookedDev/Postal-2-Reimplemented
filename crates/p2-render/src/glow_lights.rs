@@ -1,6 +1,6 @@
 use bevy::ecs::prelude::{Local, Res, ResMut, Resource};
 use p2_math::Vector;
-use p2_render_cpu::{LE_NON_INCIDENCE, LT_STEADY, LT_SUBTLE_PULSE, LightClock, MeshLight};
+use p2_render_cpu::{LightEffect, LightType, LightClock, MeshLight};
 
 use p2_host::display::{MODERN_FIRE_LIGHT, Settings};
 use crate::frame_facts::{FrameFacts, Glow, GlowSource, ScriptLight};
@@ -38,7 +38,7 @@ fn flash(glow: &GlowSource) -> Option<MeshLight> {
     let lit = |light: ScriptLight| MeshLight {
         location: glow.location,
         rotation: light.rotation,
-        light_type: LT_STEADY,
+        light_type: LightType::Steady,
         effect: light.effect,
         brightness: light.brightness,
         hue: light.hue,
@@ -50,7 +50,7 @@ fn flash(glow: &GlowSource) -> Option<MeshLight> {
     };
     match glow.kind {
         Glow::Fire { .. } => None,
-        Glow::ShotFlash(light) => Some(MeshLight { effect: LE_NON_INCIDENCE, radius: light.radius.min(FLASH_RADIUS_MOST), ..lit(light) }),
+        Glow::ShotFlash(light) => Some(MeshLight { effect: LightEffect::NonIncidence, radius: light.radius.min(FLASH_RADIUS_MOST), ..lit(light) }),
         Glow::Flash { light, age } => {
             let share = flash_share(age);
             (share > 0.0).then(|| MeshLight { brightness: FLASH_BRIGHTNESS * share, radius: FLASH_RADIUS, ..lit(light) })
@@ -68,7 +68,7 @@ pub(crate) fn light_glows(facts: Res<FrameFacts>, settings: Option<Res<Settings>
             let fade = if life_left > 0.0 { (life_left / FIRE_FADE_SECONDS).min(1.0) } else { 1.0 };
             let share = fire_share(glow.location, fade, lights);
             if share > 0.0 {
-                let light = MeshLight { location: glow.location, light_type: LT_SUBTLE_PULSE, hue: FIRE_HUE, saturation: FIRE_SATURATION, brightness: FIRE_BRIGHTNESS * share, radius: FIRE_RADIUS, dynamic: true, ..MeshLight::default() };
+                let light = MeshLight { location: glow.location, light_type: LightType::SubtlePulse, hue: FIRE_HUE, saturation: FIRE_SATURATION, brightness: FIRE_BRIGHTNESS * share, radius: FIRE_RADIUS, dynamic: true, ..MeshLight::default() };
                 lights.push(clock.animate(light, facts.level_time));
             }
         }

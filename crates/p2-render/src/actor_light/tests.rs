@@ -144,13 +144,13 @@ fn fade_arrives_in_bounded_steps() {
     assert_eq!(fade_step(drawn, shown, target, step), LightFade { shown: target, arrived: true, write: false });
 }
 
-fn map_light(effect: p2_render_cpu::LightEffect, brightness: f32, x: f32) -> MeshLight {
-    MeshLight { light_type: p2_render_cpu::LightType(1), effect, brightness, location: Vector::from([x, 0.0, 0.0]), ..MeshLight::default() }
+fn map_light(effect: LightEffect, brightness: f32, x: f32) -> MeshLight {
+    MeshLight { light_type: p2_render_cpu::LightType::Steady, effect, brightness, location: Vector::from([x, 0.0, 0.0]), ..MeshLight::default() }
 }
 
 #[test]
 fn the_brightest_sun_is_picked_and_none_without_sun() {
-    let lights = [map_light(p2_render_cpu::LightEffect(0), 255.0, 1.0), map_light(LE_SUNLIGHT, 64.0, 2.0), map_light(LE_SUNLIGHT, 200.0, 3.0), map_light(LE_SUNLIGHT, 100.0, 4.0)];
+    let lights = [map_light(LightEffect::None, 255.0, 1.0), map_light(LightEffect::Sunlight, 64.0, 2.0), map_light(LightEffect::Sunlight, 200.0, 3.0), map_light(LightEffect::Sunlight, 100.0, 4.0)];
     let (picked, sun) = brightest_sun(&lights, 1.0).expect("a sun");
     assert_eq!(<[f32; 3]>::from(picked.location), [3.0, 0.0, 0.0]);
     assert_eq!(sun.kind, HardwareKind::Directional);

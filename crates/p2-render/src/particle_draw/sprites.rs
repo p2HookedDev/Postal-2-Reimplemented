@@ -8,7 +8,7 @@ use bevy::transform::components::Transform;
 use p2_bevy_assets::to_bevy;
 use p2_math::Vector;
 use p2_particles::SpriteParticle;
-use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT, MeshLight};
+use p2_render_cpu::{LightEffect, MeshLight};
 
 use super::bounds::occlusion_aabb;
 use super::{ActorDraw, EmitterMesh, MeshWrites};
@@ -142,7 +142,7 @@ pub(crate) fn lamps_shown(lamps: Vec3) -> Vec3 {
 /// A puff's share of the script lights around it (a fire, a gun flash), in display light: their falloff with no
 /// facing, at half of what a surface facing them takes.
 pub(crate) fn glow_at<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, location: Vector, level_brightness: f32) -> Vec3 {
-    let points = lights.into_iter().filter(|light| light.dynamic && !matches!(light.effect, LE_SUNLIGHT | LE_SPOTLIGHT | LE_STATIC_SPOT));
+    let points = lights.into_iter().filter(|light| light.dynamic && !matches!(light.effect, LightEffect::Sunlight | LightEffect::Spotlight | LightEffect::StaticSpot));
     points
         .map(|light| {
             let a = ((light.location - location).size() / light.world_radius()).min(1.0);
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(glow_at(&[light], Vector::new(50.0, 0.0, 0.0), 1.0), full * 0.25);
         assert_eq!(glow_at(&[light], Vector::new(100.0, 0.0, 0.0), 1.0), Vec3::ZERO);
         assert_eq!(glow_at(&[light], Vector::new(500.0, 0.0, 0.0), 1.0), Vec3::ZERO);
-        assert_eq!(glow_at(&[MeshLight { dynamic: false, ..light }, MeshLight { effect: LE_SPOTLIGHT, ..light }], Vector::ZERO, 1.0), Vec3::ZERO);
+        assert_eq!(glow_at(&[MeshLight { dynamic: false, ..light }, MeshLight { effect: LightEffect::Spotlight, ..light }], Vector::ZERO, 1.0), Vec3::ZERO);
     }
 
     fn to_linear(x: f32) -> f32 {

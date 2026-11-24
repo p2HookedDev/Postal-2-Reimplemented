@@ -1,7 +1,7 @@
 //! Dynamic light on terrain, re-lit per frame as retail does when a `bDynamicLight` light touches a sector.
 //! Modern graphics light terrain per pixel instead and read no vertex light.
 
-use p2_render_cpu::LE_SUNLIGHT;
+use p2_render_cpu::LightEffect;
 use bevy::asset::{Assets, Handle};
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::prelude::{Local, Res, ResMut};
@@ -22,7 +22,7 @@ pub struct TerrainSector {
 }
 
 pub fn reaches_box(light: &MeshLight, min: Vector, max: Vector) -> bool {
-    if light.effect == LE_SUNLIGHT {
+    if light.effect == LightEffect::Sunlight {
         return true;
     }
     let distance_squared: f32 = (0..3).map(|i| (light.location[i] - light.location[i].clamp(min[i], max[i])).powi(2)).sum();
@@ -111,7 +111,7 @@ mod tests {
         assert!(reaches_box(&light([50.0, 50.0, 50.0].into()), min.into(), max.into()));
         assert!(reaches_box(&light([-99.0, 50.0, 0.0].into()), min.into(), max.into()));
         assert!(!reaches_box(&light([-101.0, 50.0, 0.0].into()), min.into(), max.into()));
-        assert!(reaches_box(&MeshLight { effect: LE_SUNLIGHT, ..light([1e6; 3].into()) }, min.into(), max.into()));
+        assert!(reaches_box(&MeshLight { effect: LightEffect::Sunlight, ..light([1e6; 3].into()) }, min.into(), max.into()));
     }
 
     #[test]

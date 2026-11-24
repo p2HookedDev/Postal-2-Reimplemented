@@ -16,7 +16,7 @@ use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, Shade
 use bevy::shader::{Shader, ShaderRef};
 use p2_math::{Rotator, Vector};
 use p2_assets::{Model, SkeletalMesh, StaticMesh, StaticMeshInstance, uv_matrix};
-use p2_render_cpu::{HardwareKind, HardwareLight, LE_SUNLIGHT, MeshLight, MeshPlacement, Walls, actor_ambient, hardware_ambient, leaf_lights, leaves_ambient, relevant_lights, static_mesh_colors};
+use p2_render_cpu::{HardwareKind, HardwareLight, LightEffect, MeshLight, MeshPlacement, Walls, actor_ambient, hardware_ambient, leaf_lights, leaves_ambient, relevant_lights, static_mesh_colors};
 use p2_bevy_assets::{lighting_colors, set_vertex_colors, to_bevy, unreal_mesh_matrix};
 use p2_vm::ObjectId;
 
@@ -69,7 +69,7 @@ pub(crate) fn brightest_sun<'a>(lights: impl IntoIterator<Item = &'a MeshLight>,
     let strength = |light: &HardwareLight| light.color.iter().sum::<f32>();
     lights
         .into_iter()
-        .filter(|light| light.effect == LE_SUNLIGHT)
+        .filter(|light| light.effect == LightEffect::Sunlight)
         .filter_map(|light| Some((*light, HardwareLight::new(light, level_brightness, Vector::default(), 0.0)?)))
         // Equal suns by location: the lights come in hash order, which differs between runs.
         .max_by(|(light_a, a), (light_b, b)| {
@@ -122,7 +122,7 @@ impl LightEnvironment {
         // Highest key first: of fully equal suns the picker keeps the last, so the lowest key wins.
         ordered.sort_unstable_by_key(|&(&key, _)| std::cmp::Reverse(key));
         let sun = brightest_sun(ordered.into_iter().map(|(_, light)| light), level_brightness);
-        let suns = lights.values().filter(|light| light.effect == LE_SUNLIGHT && !light.dynamic).copied().collect();
+        let suns = lights.values().filter(|light| light.effect == LightEffect::Sunlight && !light.dynamic).copied().collect();
         Self { lights, zone_ambients, level_brightness, sun, suns, zone_suns: Vec::new(), terrain: Vec::new() }
     }
 

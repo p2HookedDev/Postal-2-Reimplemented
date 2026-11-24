@@ -28,7 +28,7 @@ use p2_render::lamps::LampsPlugin;
 use p2_render::map_lights::MapLights;
 use p2_render::mesh_light::{DynamicLit, MeshLightPlugin, MeshLitMaterial};
 use p2_math::{Rotator, Vector};
-use p2_render_cpu::{LE_SUNLIGHT, MeshLight};
+use p2_render_cpu::{LightEffect, MeshLight};
 use rustc_hash::FxHashMap;
 
 const SIZE: u32 = 32;
@@ -36,7 +36,7 @@ const CLEAR: u8 = 43;
 const ZONE: f32 = 0.05;
 
 fn light_at_the_eye() -> (SkinnedLighting, Arc<LightEnvironment>, StaticCollision) {
-    let sun = MeshLight { effect: LE_SUNLIGHT, rotation: Rotator { pitch: -16384, yaw: 0, roll: 0 }, brightness: 40.0, ..MeshLight::default() };
+    let sun = MeshLight { effect: LightEffect::Sunlight, rotation: Rotator { pitch: -16384, yaw: 0, roll: 0 }, brightness: 40.0, ..MeshLight::default() };
     let lamp = MeshLight { location: Vector::new(0.0, 0.0, 10.0), radius: 0.0, brightness: 60.0, ..MeshLight::default() };
     let environment = Arc::new(LightEnvironment::new(FxHashMap::from_iter([(0, sun), (1, lamp)]), vec![[ZONE; 3]], 1.0));
     let level = StaticCollision {
