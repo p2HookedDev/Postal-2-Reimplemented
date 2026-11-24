@@ -1,6 +1,7 @@
 use super::*;
 use super::scene::VmAnimations;
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::math::Affine3A;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
@@ -32,15 +33,18 @@ pub struct SpawnedActors {
 }
 
 impl SpawnedActors {
-    /// A model or a texture is still being built on another thread; which frame takes it depends on the machine.
     pub fn building(&self) -> bool {
         self.spawn_builds.iter().any(|build| !build.task.is_finished()) || self.texture_builds.iter().any(|build| !build.task.is_finished())
     }
 
-    /// Builds and the actors waiting on them, finished or not, that the scene has not taken in yet: one finished model
-    /// is taken in a frame.
     pub fn pending(&self) -> usize {
         self.spawn_builds.len() + self.texture_builds.len() + self.spawn_waiting.len()
+    }
+}
+
+pub(super) fn count_pending(spawned: Res<SpawnedActors>, pending: Option<ResMut<crate::play::SpawnsPending>>) {
+    if let Some(mut pending) = pending {
+        pending.set_if_neq(crate::play::SpawnsPending(spawned.pending()));
     }
 }
 
@@ -128,10 +132,10 @@ fn build_skeletal_model(
 
 const NO_PROJECTORS_TAG: u32 = 1;
 const ATTACHED_TAG: u32 = 2;
-/// A static mesh lit as an actor (a mover relit as it moves) still takes static mesh projectors.
 const STATIC_MESH_TAG: u32 = 4;
 const MOVER_TAG: u32 = 8;
-/// In a projector's tag: the decal follows a mover or Karma prop and draws on those only. Frame buffer blends stop at 6, so bit 7 is free.
+/// In a projector's tag: the decal follows a mover or Karma prop and draws on those only. Frame buffer blends
+/// stop at 6, so bit 7 is free.
 const MOVER_ONLY_TAG: u32 = 1 << 7;
 
 fn projector_mesh_tag((follow, bone): (Option<&FollowActor>, Option<&FollowBone>), attached: &FxHashSet<ObjectId>, movers: &FxHashSet<ObjectId>) -> u32 {
@@ -141,7 +145,8 @@ fn projector_mesh_tag((follow, bone): (Option<&FollowActor>, Option<&FollowBone>
     ATTACHED_TAG | static_mesh | mover
 }
 
-/// A decal following the mover it was cast on (our choice: retail is thought to leave it where it was cast, unverified).
+/// A decal following the mover it was cast on (our choice: retail is thought to leave it where it was cast,
+/// unverified).
 pub(super) struct MoverDecal {
     mover: ObjectId,
     on_mover: Affine3A,
@@ -247,8 +252,6 @@ fn spawn_actor_model(spawned: SpawnedActor, origin: Vec3, t: &mut SpawnTargets) 
     let (sections, follow, lit) = match (model, draw) {
         (SpawnModel::Static { mesh, sections }, SpawnedDraw::Static(a)) => {
             let (mut sections, lit) = static_actor_sections(&mut t.assets.meshes, mesh, sections, &a);
-            // As the map's static meshes: vertex lit, so drawn by the shader that applies projectors. An unlit one has
-            // no light colours and stays on the plain material.
             for section in sections.iter_mut().filter(|_| lit.is_some()) {
                 section.no_scene_lights = true;
             }
@@ -278,9 +281,6 @@ impl Session {
     pub(super) fn update_spawned(&mut self, t: &mut SpawnTargets) {
         let Some(world) = t.play.world_mut() else { return };
         let mut spawned = world.take_spawned();
-        // Restyled actors: retail draws whatever the actor holds each frame. The old model goes, scene-built or spawned; the new
-        // one is built below like a spawned actor's (its pose and ragdoll come from the actor's frames, so they carry over). A
-        // HUD-drawn model is made again from its current mesh when next drawn.
         let restyled: FxHashSet<ObjectId> = spawned.iter().filter(|s| s.restyled).map(|s| s.actor).collect();
         if !restyled.is_empty() {
             let roots: bevy::ecs::entity::EntityHashSet = t.actor_models.iter().filter(|(_, model, _)| restyled.contains(&model.0)).map(|(entity, _, _)| entity).collect();
@@ -370,8 +370,6 @@ impl Session {
         }
         t.times.add("spawned: a built model taken in", started);
         let started = std::time::Instant::now();
-        // A severed limb wears its body's skin (`Limb.SetupLimb` sets `Skins[0]`). An actor whose model is not built yet waits
-        // for it (shown a frame or two after it spawned).
         let mut waiting = std::mem::take(&mut t.spawned.spawn_waiting);
         waiting.extend(found);
         for spawned in waiting {
@@ -459,8 +457,6 @@ pub(super) fn present_projections(mut session: ResMut<Session>, mut t: Projectio
     t.times.add("projections", started);
 }
 
-/// Splats abandon their projection for the time they live (`AbandonProjector(UseLife)`, which ends the projection in the
-/// engine) and destroy themselves then. Sections following an actor are tagged by whether it is in a projector's list.
 fn update_projections(session: &mut Session, t: &mut ProjectionParams) {
     let Some(world) = t.play.world_mut() else { return };
     let projectors = &mut *t.projectors;

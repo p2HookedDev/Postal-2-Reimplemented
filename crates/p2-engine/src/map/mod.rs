@@ -77,7 +77,6 @@ pub struct MapPlugin;
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MapSystems {
     Load,
-    /// In the egui pass, after `Load`: a host sets [`CanvasArea`] before this.
     Paint,
     Present,
     Particles,
@@ -97,8 +96,6 @@ impl bevy::app::Plugin for MapPlugin {
     }
 }
 
-/// What presents a played map's frame, without the HUD's own camera: all a host without a window adds beside its
-/// `Session` resource.
 pub struct MapPresentPlugin;
 
 impl bevy::app::Plugin for MapPresentPlugin {
@@ -112,6 +109,7 @@ impl bevy::app::Plugin for MapPresentPlugin {
             .init_resource::<SpawnedActors>()
             .init_resource::<Hud>()
             .add_systems(bevy::app::Update, coronas::place_coronas.in_set(MapSystems::CoronaPlaces))
+            .add_systems(bevy::app::PostUpdate, spawned::count_pending.after(spawned::present_spawned))
             .configure_sets(bevy::app::PostUpdate, MapSystems::Present.in_set(crate::play::PlaySystems::Present).run_if(map_shown))
             .add_systems(
                 bevy::app::PostUpdate,
@@ -134,7 +132,6 @@ impl bevy::app::Plugin for MapPresentPlugin {
     }
 }
 
-/// What loading a map fills and dropping it empties.
 #[derive(SystemParam)]
 pub struct SceneTargets<'w, 's> {
     pub assets: AssetStores<'w>,
@@ -305,8 +302,8 @@ pub(crate) fn map_shown(session: Option<Res<Session>>, play: Option<Res<Play>>) 
     session.is_some_and(|session| session.loading().is_none()) && play.is_some_and(|play| play.world().is_some())
 }
 
-/// Frames the engine draws as travel begins (P2Screen.uc: three duplicates, one for a loading message, and one with
-/// the screen drawn under the progress bar).
+/// Frames the engine draws as travel begins (P2Screen.uc: three duplicates, one for a loading message, and one
+/// with the screen drawn under the progress bar).
 const TRAVEL_FRAMES: usize = 5;
 
 struct PendingLoad {
@@ -404,7 +401,6 @@ fn start_vm(
         }
     };
     progress.set(0.08);
-    // The camera is the player's eyes, so its own pawn is not drawn.
     if fresh && let Err(error) = vm.init_client().and_then(|()| vm.add_viewport_interaction("P2Modern", "ModernPhotoMode")) {
         bevy::log::warn!("client: {error}");
     }
@@ -467,8 +463,8 @@ impl Session {
         *t.fluids = Fluids::default();
     }
 
-    /// Viewer-only (and the real-data tests of this crate, which cannot use `p2-viewer`): loads on this thread, blocking.
-    /// The game loads maps with [`Session::begin_load`] / [`Session::finish_load`] and never calls this.
+    /// Viewer-only (and the real-data tests of this crate, which cannot use `p2-viewer`): loads on this thread,
+    /// blocking. The game loads maps with [`Session::begin_load`] / [`Session::finish_load`] and never calls this.
     pub fn load_map(&mut self, package: &str, t: &mut SceneTargets) -> Result<String, LoadError> {
         self.clear(t);
         self.start_map(package, t)
@@ -478,15 +474,10 @@ impl Session {
         let (game, id) = self.library.open(&self.root, package)?;
         let prepare = scene_preparer(game, id, package, t);
         let map_name = map_name(package);
-        // As travel begins the engine draws a few frames more: P2's screens count them (`TravelRenderCount`)
-        // and leave their last image up during the load.
         let canvas = t.play.canvas();
         if url.is_some()
             && let Some(world) = t.play.world_mut()
         {
-            // The last of them is the `Entry` map's controller's (the progress bar's): the level's HUD does not draw
-            // in it (no HUD, no "PAUSED"), screens draw under the bar in `PreRender`. The image left up is the one
-            // before it, where a screen drew over the HUD in `PostRender`.
             for frame in 1..=TRAVEL_FRAMES {
                 let items = world.hud(canvas);
                 if frame < TRAVEL_FRAMES {
@@ -527,7 +518,6 @@ impl Session {
             Ok(Err(error)) => return Some(Err(error)),
             Err(_) => return Some(Err(LoadError::Panicked { package })),
         };
-        // The weapon stays on the load screen until the new map's first frame (`drop_left_canvas_actors_when_presented`).
         let left: Vec<Entity> = t.hud.canvas_actors.drain(..).map(|shown| shown.entity).collect();
         for &entity in &left {
             t.commands.entity(entity).remove::<MapScoped>();

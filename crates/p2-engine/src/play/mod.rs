@@ -1,7 +1,3 @@
-//! Play mode: the shown map's VM runs on a thread of its own while the main thread presents the frame before it: at the
-//! hand-off (`PlaySystems::Tick`) the main thread takes the finished frame's [`VmFrame`] and gives the VM the next input.
-//! A job that takes longer than a frame is not waited for: frames are drawn without it, the view turning with the mouse.
-
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -56,6 +52,7 @@ mod world;
 mod sound;
 
 use p2_vm::Pointer;
+pub use reveal::SpawnsPending;
 pub use vm_thread::*;
 pub use world::*;
 use sound::{ambient_gain, pitch_factor};
@@ -63,20 +60,19 @@ pub(crate) use sound::MovieSound;
 
 const MAX_STEP: f32 = 0.1;
 
-/// The shortest time between two game ticks, in seconds. Frames are drawn apart from ticks and the world is blended
-/// between them, so ticking faster than this only repeats work (scripts, physics, the reads after them) that no
-/// frame shows sooner.
+/// The shortest time between two game ticks, in seconds. Frames are drawn apart from ticks and the world is
+/// blended between them, so ticking faster than this only repeats work (scripts, physics, the reads after them)
+/// that no frame shows sooner.
 const TICK_PERIOD: f32 = 1.0 / 120.0;
 
-/// Frames whose times the game's step is the mean of ([`StepClock`]): a multiple of 2, 3 and 4, so frame times that
-/// alternate in such a pattern (vsync: 3 and 4 refreshes of a 240 Hz display) give an even step.
+/// Frames whose times the game's step is the mean of ([`StepClock`]): a multiple of 2, 3 and 4, so frame times
+/// that alternate in such a pattern (vsync: 3 and 4 refreshes of a 240 Hz display) give an even step.
 const STEP_FRAMES: usize = 12;
 
-/// Gives Bevy's system threads [`p2_vm::SCRIPT_STACK`] (the main thread helps run systems too, its stack is set at link
-/// time). Call before the app is built: the compute pool made here is the one the app's `TaskPoolPlugin` keeps
-/// (`get_or_init`).
+/// Gives Bevy's system threads [`p2_vm::SCRIPT_STACK`] (the main thread helps run systems too, its stack is set
+/// at link time). Call before the app is built: the compute pool made here is the one the app's `TaskPoolPlugin`
+/// keeps (`get_or_init`).
 pub fn init_script_stacks() {
-    // Every core but those the main, render and VM threads keep busy.
     let threads = bevy::tasks::available_parallelism().saturating_sub(3).max(1);
     bevy::tasks::ComputeTaskPool::get_or_init(|| {
         bevy::tasks::TaskPoolBuilder::new().num_threads(threads).stack_size(p2_vm::SCRIPT_STACK).thread_name("Compute Task Pool".into()).build()
@@ -89,11 +85,10 @@ pub struct PlayPlugin;
 pub enum PlaySystems {
     Input,
     Tick,
-    /// (`Update`) After the actors took this tick's places, before the sounds are mixed.
     Placed,
-    /// (`PostUpdate`) Before the renderer copies changed assets (`AssetEventSystems`: the particle meshes rewritten every
-    /// frame) and before transforms propagate (the first-person weapon placed after `RenderOverlays`), so both show this
-    /// frame, not one late.
+    /// (`PostUpdate`) Before the renderer copies changed assets (`AssetEventSystems`: the particle meshes rewritten
+    /// every frame) and before transforms propagate (the first-person weapon placed after `RenderOverlays`), so both
+    /// show this frame, not one late.
     Present,
 }
 
@@ -111,6 +106,7 @@ impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(sound::SoundPlugin);
         app.init_resource::<Play>()
+            .init_resource::<SpawnsPending>()
             .init_resource::<FrameTimes>()
             .init_resource::<PlayerInput>()
             .configure_sets(Update, (PlaySystems::Input, PlaySystems::Tick).chain())
@@ -127,8 +123,8 @@ impl Plugin for PlayPlugin {
             )
             .add_systems(Update, photo::request_screenshot.after(hand_off).in_set(PlaySystems::Tick))
             .add_systems(Update, reveal::release_reveal.before(PlaySystems::Tick))
-            // The renderer copies a changed asset only in the frame its change event is sent; unordered, that ran
-            // before the particle meshes were rewritten on some frames, and those frames showed the previous ones.
+            // The renderer copies a changed asset only in the frame its change event is sent, so the particle meshes
+            // must be rewritten before that or the frame shows the previous ones.
             .configure_sets(PostUpdate, PlaySystems::Present.before(AssetEventSystems).before(TransformSystems::Propagate));
     }
 }
@@ -148,10 +144,7 @@ pub struct Play {
     canvas: HudCanvas,
     clock: StepClock,
     frame_clock: StepClock,
-    /// Frame time the host's own simulations (particles, fluids) have not stepped yet: they step once per game tick,
-    /// as the engine's, by the frame time since the tick before.
     unstepped: f32,
-    /// Frame time not yet paid for with a game tick; a tick is due once a [`TICK_PERIOD`] of it has gathered.
     tick_debt: f32,
     pub smooth_step: bool,
     waited: f32,
@@ -185,9 +178,9 @@ impl Default for Play {
     }
 }
 
-/// The mean of the last [`STEP_FRAMES`] frame times (each at most [`MAX_STEP`]). A frame's picture shows a frame or more
-/// after its step was measured, so a frame's own time is wrong whenever frame times alternate (vsync at 3 and 4
-/// refreshes); the mean moves the world evenly, and game time stays within a few frames of real time.
+/// The mean of the last [`STEP_FRAMES`] frame times (each at most [`MAX_STEP`]). A frame's picture shows a frame
+/// or more after its step was measured, so a frame's own time is wrong whenever frame times alternate (vsync at 3
+/// and 4 refreshes); the mean moves the world evenly, and game time stays within a few frames of real time.
 #[derive(Default)]
 struct StepClock {
     recent: std::collections::VecDeque<f32>,
@@ -203,27 +196,18 @@ impl StepClock {
     }
 }
 
-/// Turns the drawn view with the mouse before the game's scripts have: by how far the game's view turned for each
-/// mouse count in its last ticks. Off (the game's own rotation, glided between ticks) whenever more than one of those
-/// ticks disagrees: a cutscene, recoil, a pitch limit, mouse smoothing.
 #[derive(Default)]
 struct LookAhead {
-    /// The mouse counts the running job took.
     in_flight: [f32; 2],
     /// Yaw and pitch, in rotator units per mouse count.
     samples: [std::collections::VecDeque<f32>; 2],
     seen: Option<p2_math::Rotator>,
-    /// The actor the view is from: the samples start over when it changes (a cutscene's camera).
     viewer: Option<ObjectId>,
 }
 
 const LOOK_SAMPLES: usize = 5;
-/// Samples that may disagree with the rest while the look still runs ahead: more keeps it on through a recoil tick, but
-/// keeps a wrong scale longer after a zoom.
 const LOOK_OUTLIERS: usize = 1;
-/// Mouse counts below which a tick's turn says nothing about the scale.
 const LOOK_MIN_COUNTS: f32 = 1.0;
-/// How far the samples may differ from their median for the look to run ahead.
 const LOOK_AGREEMENT: f32 = 0.1;
 /// The pitch the look ahead stops at, down and up: `PlayerController` keeps the view's within it (unverified).
 const LOOK_PITCH_LIMITS: [i32; 2] = [-16384, 18000];
@@ -265,8 +249,6 @@ impl LookAhead {
         if agree + LOOK_OUTLIERS >= LOOK_SAMPLES { median } else { 0.0 }
     }
 
-    /// `rotation` (the newest tick's) turned by the mouse counts the game has not shown yet: the running job's and
-    /// `waiting`. An axis that does not run ahead shows `glided`, the rotation between the last ticks.
     fn ahead(&self, rotation: p2_math::Rotator, glided: p2_math::Rotator, waiting: [f32; 2]) -> p2_math::Rotator {
         let scales = [0, 1].map(|i| Self::scale(&self.samples[i]));
         if scales == [0.0; 2] {
@@ -316,7 +298,6 @@ impl Play {
         }
     }
 
-    /// Blocks until the running tick is back. The game never does: a frame shows without it.
     pub fn wait_for_tick(&mut self) {
         if let Some(world) = self.world.as_mut() {
             world.wait(VmWait::UntilBack);
@@ -336,7 +317,6 @@ impl Play {
     }
 }
 
-/// The canvas the scripts draw on, in pixels, and how far the HUD's own drawing stays in from its left and right sides.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct HudCanvas {
     pub size: [f32; 2],
@@ -350,7 +330,6 @@ struct PlayCameras<'w, 's> {
 }
 
 impl PlayCameras<'_, '_> {
-    /// The game's view, its rotation run ahead by the mouse the game has not shown yet.
     fn look(&mut self, world: &PlayWorld, look: &LookAhead, waiting: [f32; 2], playing: bool) {
         let view = world.frame.view.filter(|_| playing);
         let held = world.frame.hud_view.or(world.frame.view).filter(|_| playing).map(|view| SceneView::look_from(view.location, view.rotation, world.origin)).map(|game| Transform::from_translation(game.position).with_rotation(game.rotation));
@@ -359,7 +338,6 @@ impl PlayCameras<'_, '_> {
         }
         let Some(view) = view else { return };
         let (location, rotation) = world.shown.view((view.location, view.rotation));
-        // With the cursor shown the mouse moves it, not the view.
         let rotation = if world.shows_mouse() { rotation } else { look.ahead(view.rotation, rotation, waiting) };
         let shown = SceneView::look_from(location, rotation, world.origin);
         for mut scene_view in &mut self.views {
@@ -379,8 +357,8 @@ struct DrawnActors<'w, 's> {
     movers: Res<'w, MoversSeen>,
 }
 
-/// Not `ViewVisibility`, which the sun's shadow cascades set too: retail draws no such shadows, so the modern graphics
-/// must not change what the game sees (`LastRenderTime`). `seen`: each sorted as Bevy keeps them.
+/// Not `ViewVisibility`, which the sun's shadow cascades set too: retail draws no such shadows, so the modern
+/// graphics must not change what the game sees (`LastRenderTime`). `seen`: each sorted as Bevy keeps them.
 fn camera_drew(seen: &[&[Entity]], shadow_only: &bevy::ecs::entity::EntityHashSet, entity: Entity, root: Option<Entity>) -> bool {
     !root.is_some_and(|root| shadow_only.contains(&root)) && seen.iter().any(|meshes| meshes.binary_search(&entity).is_ok())
 }
@@ -440,7 +418,6 @@ fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<Pl
     {
         world.start(job, JobThread::Worker);
     }
-    // A job run here is the frame presented: its view has the mouse just sent.
     if inline {
         play.look.in_flight = sent;
     }
@@ -470,7 +447,6 @@ fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, back
     let DrawnActors { models, attached, cameras: drawing_cameras, shadow_only, movers } = drawn;
     world.followed.clear();
     world.visible.clear();
-    // An inactive camera keeps the list it last had, so only the active ones count.
     let mut meshes: Vec<&[Entity]> = drawing_cameras.iter().filter(|(camera, _)| camera.is_active).map(|(_, seen)| seen.get(TypeId::of::<Mesh3d>())).collect();
     meshes.push(&movers.drawn);
     let drew = |entity, parent: Option<&ChildOf>| camera_drew(&meshes, &shadow_only.0, entity, parent.map(ChildOf::parent));
@@ -538,8 +514,6 @@ fn follow_actors(
             continue;
         }
         let Some(actor) = world.actor(follow.actor) else { continue };
-        // Destroyed (e.g. not needed this day: `PrepActorsByGroup`) or hidden actors are not drawn, except what the
-        // HUD draws itself.
         let hidden = actor.gone || (!canvas_drawn && actor.hidden);
         shown.set_if_neq(if hidden { Visibility::Hidden } else { Visibility::Inherited });
         if follow.scale != actor.scale {
@@ -560,7 +534,6 @@ fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&p2_render::actor_light
     let world = play.world();
     for (lit, mut frame) in &mut lit {
         let actor = world.and_then(|world| world.actor(lit.actor));
-        // Lit where it stands at the newest tick: a place that changes every frame would light it again every frame.
         let place = world.and_then(|world| world.tick_place(lit.actor));
         frame.set_if_neq(ActorFrame {
             place: actor.zip(place).map(|(actor, (location, rotation))| ActorPlace { location, rotation, glow: actor.glow }),
@@ -578,7 +551,6 @@ fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts
         facts.set_if_neq(p2_render::frame_facts::FrameFacts::default());
         return;
     };
-    // Written in place: the two lists keep their memory from frame to frame.
     let facts = facts.into_inner();
     facts.in_play = true;
     facts.paused = world.game_paused();
