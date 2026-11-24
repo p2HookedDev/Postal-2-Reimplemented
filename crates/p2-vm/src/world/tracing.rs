@@ -4,42 +4,56 @@ use p2_collision::{Hit, Primitive, Sides, box_check, line_check, line_check_node
 use p2_math::Vector;
 use crate::native_id::Native;
 use crate::natives::vector_arg;
-use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
+use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
 use super::trace;
 
 const OWNER_CHAIN: usize = 64;
 
 impl<L: LoaderRef> Vm<L> {
     pub fn trace_world(&self, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
+        self.trace_world_actor(start, end, extent).map(|(_, hit)| hit)
+    }
+
+    /// BSP and terrain hits report the level; a static world mesh or volume reports its own actor.
+    pub(crate) fn trace_world_actor(&self, start: Vector, end: Vector, extent: Vector) -> Option<(Option<ObjectId>, Hit)> {
+        let earliest = |a: &(Option<ObjectId>, Hit), b: &(Option<ObjectId>, Hit)| a.1.time.total_cmp(&b.1.time);
+        let world = &self.world;
+        let length = (end - start).size();
         if extent != Vector::ZERO {
-            let bsp = self.trace_bsp(start, end, extent);
-            return bsp.into_iter().chain(self.trace_boxes(start, end, extent)).min_by(|a, b| a.time.total_cmp(&b.time));
+            let bsp = self.trace_bsp(start, end, extent).map(|hit| (self.level, hit));
+            return bsp.into_iter().chain(self.trace_boxes(start, end, extent)).min_by(earliest);
         }
         // Pulled back like the engine's line checks (BSP and terrain 0.5 units, static meshes `pull_back_units`): what
         // lies at a hit (a puddle's flat sprite) stays above the surface's neighbouring triangles.
-        let world = &self.world;
-        let length = (end - start).size();
         let bsp = world.model.as_ref().and_then(|model| line_check(model, start, end)).map(|hit| pull_back(start, end, hit, 0.5));
         let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end, Sides::FrontOnly)).map(|hit| pull_back(start, end, hit, 0.5));
+        let level = bsp.into_iter().chain(terrain).map(|hit| (self.level, hit));
         let mesh = self
-            .with_near_lines(start, end, |near| mesh_line_check(near.iter().map(|&i| &*world.lines[i].shape), start, end))
-            .map(|hit| pull_back(start, end, hit, pull_back_units(Primitive::StaticMesh, length)));
-        bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
+            .with_near_lines(start, end, |near| {
+                let (hit, index, _) = mesh_line_check_at(near.iter().map(|&i| &*world.lines[i].shape), start, end)?;
+                Some((world.lines[*near.get(index)?].actor, hit))
+            })
+            .map(|(actor, hit)| (Some(actor), pull_back(start, end, hit, pull_back_units(Primitive::StaticMesh, length))));
+        level.chain(mesh).min_by(earliest)
     }
 
     /// Pulled back like retail: terrain by 0.5 units (unverified), static meshes by 0.1 of the trace,
     /// at least 0.1 and at most 1 unit, brushes 0.1 to 4 units.
-    pub(crate) fn trace_boxes(&self, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
+    pub(crate) fn trace_boxes(&self, start: Vector, end: Vector, extent: Vector) -> Option<(Option<ObjectId>, Hit)> {
         let world = &self.world;
         let length = (end - start).size();
-        let terrain = world.terrains.iter().filter_map(|t| terrain_box_check(t, start, end, extent)).map(|hit| pull_back(start, end, hit, 0.5));
-        let (mesh, brush) = self.with_near_boxes(start, end, extent, |near| {
-            let shapes = |model: bool| near.iter().map(|&i| &world.boxes[i]).filter(move |w| w.model == model).map(|w| &*w.shape);
-            (mesh_box_check(shapes(false), start, end, extent), mesh_box_check(shapes(true), start, end, extent))
+        let earliest = |a: &(Option<ObjectId>, Hit), b: &(Option<ObjectId>, Hit)| a.1.time.total_cmp(&b.1.time);
+        let terrain = world.terrains.iter().filter_map(|t| terrain_box_check(t, start, end, extent)).map(|hit| (self.level, pull_back(start, end, hit, 0.5)));
+        let shape = self.with_near_boxes(start, end, extent, |near| {
+            near.iter()
+                .map(|&i| &world.boxes[i])
+                .filter_map(|w| {
+                    let primitive = if w.model { Primitive::Brush } else { Primitive::StaticMesh };
+                    mesh_box_check([&*w.shape], start, end, extent).map(|hit| (Some(w.actor), pull_back(start, end, hit, pull_back_units(primitive, length))))
+                })
+                .min_by(earliest)
         });
-        let mesh = mesh.map(|hit| pull_back(start, end, hit, pull_back_units(Primitive::StaticMesh, length)));
-        let brush = brush.map(|hit| pull_back(start, end, hit, pull_back_units(Primitive::Brush, length)));
-        terrain.chain(mesh).chain(brush).min_by(|a, b| a.time.total_cmp(&b.time))
+        terrain.chain(shape).min_by(earliest)
     }
 
     pub(crate) fn trace_bsp(&self, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
@@ -178,14 +192,14 @@ impl<L: LoaderRef> Vm<L> {
         let mut reach = 1.0;
         let timed = self.diagnostics.count_work.then(std::time::Instant::now);
         self.count(crate::profiling::Work::Trace);
-        let level_hit = if flags & (trace::LEVEL | trace::LEVEL_GEOMETRY) != 0 { self.trace_world(start, end, extent) } else { None };
+        let level_hit = if flags & (trace::LEVEL | trace::LEVEL_GEOMETRY) != 0 { self.trace_world_actor(start, end, extent) } else { None };
         let timed = timed.map(|started| {
             self.count_n(crate::profiling::Work::TraceWorldMicros, started.elapsed().as_micros() as usize);
             std::time::Instant::now()
         });
-        if let Some(hit) = level_hit {
+        if let Some((actor, hit)) = level_hit {
             reach = hit.time;
-            if visit(self.level, hit) {
+            if visit(actor, hit) {
                 return;
             }
         }
@@ -247,11 +261,10 @@ impl<L: LoaderRef> Vm<L> {
     #[expect(clippy::unnecessary_wraps, reason = "every native dispatcher has this shape: `natives::call` returns its result")]
     pub(crate) fn trace_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let here = this.map_or(Vector::ZERO, |this| self.store.vector(this, Prop::Location));
-        let source = this.map(|this| if self.store.is_a(this, Kind::Controller) { self.store.object_of(this, Prop::Pawn).unwrap_or(this) } else { this });
         if native == Native::FastTrace {
             let end = vector_arg(args, 0).unwrap_or(here);
             let start = vector_arg(args, 1).unwrap_or(here);
-            return Ok(Some(Value::Bool(!self.any_hit(start, end, Vector::ZERO, source, trace::WORLD))));
+            return Ok(Some(Value::Bool(!self.any_hit(start, end, Vector::ZERO, this, trace::WORLD))));
         }
         let end = vector_arg(args, 2).unwrap_or(here);
         let start = vector_arg(args, 3).unwrap_or(here);
@@ -261,7 +274,7 @@ impl<L: LoaderRef> Vm<L> {
         };
         let extent = vector_arg(args, 5).unwrap_or(Vector::ZERO);
         let flags = if actors { trace::PROJ_TARGETS } else { trace::WORLD };
-        let Some((actor, hit)) = self.first_hit(start, end, extent, source, flags) else {
+        let Some((actor, hit)) = self.first_hit(start, end, extent, this, flags) else {
             // A miss still writes the zeroed check result: scripts that keep `HitLocation` (the bullet tracer's
             // `LastHitLocation`) see (0, 0, 0), not the previous hit.
             for slot in args.iter_mut().take(2) {
@@ -288,33 +301,20 @@ impl<L: LoaderRef> Vm<L> {
     /// None for terrains, cylinders, the simplified collision model and box traces (unverified),
     /// and where retail falls back to the default material. Loaded so the script reads its `SurfaceType`.
     fn hit_material(&mut self, actor: Option<ObjectId>, start: Vector, end: Vector, hit: &Hit) -> Option<ObjectId> {
-        let (mesh_actor, slot) = if actor.is_some() && actor == self.level {
-            let model = self.world.model.as_ref();
-            if let Some((_, Some(node))) = model.and_then(|m| line_check_node(m, start, end)).filter(|(bsp, _)| bsp.time <= hit.time) {
-                let model = model?;
-                let material = model.surfaces.get(model.nodes.get(node)?.surface)?.material;
-                let map = self.world.map?;
-                let loader = self.loader.clone();
-                let id = self.object_ref(&loader.package(map).package, map, material)?;
-                self.load_stub(id);
-                return Some(id);
-            }
-            let lines = &self.world.lines;
-            let (mesh_hit, world, triangle) = self.with_near_lines(start, end, |near| {
-                let (mesh_hit, index, triangle) = mesh_line_check_at(near.iter().map(|&i| &*lines[i].shape), start, end)?;
-                Some((mesh_hit, &lines[*near.get(index)?], triangle))
-            })?;
-            if mesh_hit.time > hit.time {
-                return None;
-            }
-            (world.actor, world.shape.slot(triangle)?)
-        } else {
-            let actor = actor?;
-            let shape = self.fill_shape(actor).and_then(|placement| self.placed_shape(actor, &placement))?;
-            let (_, _, triangle) = mesh_line_check_at([&*shape.lines], start, end)?;
-            (actor, shape.lines.slot(triangle)?)
-        };
-        let slot = slot as usize;
+        if actor.is_some() && actor == self.level {
+            let model = self.world.model.as_ref()?;
+            let (_, node) = line_check_node(model, start, end).filter(|(bsp, _)| bsp.time <= hit.time)?;
+            let material = model.surfaces.get(model.nodes.get(node?)?.surface)?.material;
+            let map = self.world.map?;
+            let loader = self.loader.clone();
+            let id = self.object_ref(&loader.package(map).package, map, material)?;
+            self.load_stub(id);
+            return Some(id);
+        }
+        let mesh_actor = actor?;
+        let shape = self.fill_shape(mesh_actor).and_then(|placement| self.placed_shape(mesh_actor, &placement))?;
+        let (_, _, triangle) = mesh_line_check_at([&*shape.lines], start, end)?;
+        let slot = shape.lines.slot(triangle)? as usize;
         if let Some(Value::Array(skins)) = self.store.get(mesh_actor, Prop::Skins)
             && let Some(&Value::Object(Some(skin))) = skins.get(slot)
         {

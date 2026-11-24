@@ -1,8 +1,18 @@
 use p2_collision::{Primitive, mesh_box_check, pull_back_units, segment_cylinder};
 use p2_math::Vector;
 use crate::volumes::{OldZone, ZoneEvents};
-use crate::{Error, LoaderRef, ObjectId, Prop, Vm};
+use crate::world::trace;
+use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Vm};
 use super::{Bases, CYLINDER_PULL_BACK, MOVE_TEST_ADJUST, MoveHit, Sweep, SweepAgainst, nearly_zero};
+
+/// A pawn bumps a static mesh wall only when the hit normal is steeper than this.
+const WALL_NORMAL_Z: f32 = 0.7;
+
+/// Movers are tested only through collide-world, as retail.
+fn move_trace_flags(collide_actors: bool, collide_world: bool) -> u32 {
+    let actors = if collide_actors { trace::PAWNS | trace::VOLUMES | trace::OTHERS } else { 0 };
+    actors | if collide_world { trace::WORLD } else { 0 }
+}
 
 impl<L: LoaderRef> Vm<L> {
     /// Each primitive pulls its hit back as retail: BSP 0.1 of the sweep, 0.1 to 4 units; static meshes
@@ -33,10 +43,12 @@ impl<L: LoaderRef> Vm<L> {
         if let Some(hit) = bsp {
             consider(hit.time, hit.normal, level);
         }
-        if let Some(hit) = boxes {
-            consider(hit.time, hit.normal, level);
+        if let Some((actor, hit)) = boxes {
+            consider(hit.time, hit.normal, actor);
         }
-        if actors && self.store.flag_of(mover, Prop::bCollideActors) {
+        let flags = move_trace_flags(self.store.flag_of(mover, Prop::bCollideActors), world);
+        let blocks_traces = if extent == Vector::ZERO { Prop::bBlockZeroExtentTraces } else { Prop::bBlockNonZeroExtentTraces };
+        if actors && flags != 0 {
             let (low, high) = ([0, 1, 2].map(|i| start[i].min(end[i])), [0, 1, 2].map(|i| start[i].max(end[i])));
             let nearby = self.colliders_near([low[0], low[1]], [high[0], high[1]], radius);
             self.count(crate::profiling::Work::Sweep);
@@ -65,14 +77,16 @@ impl<L: LoaderRef> Vm<L> {
                 if self.in_owner_chain(mover, other)
                     || self.store.is_deleted(other)
                     || !self.store.flag_of(other, Prop::bCollideActors)
-                    || !self.store.flag_of(other, Prop::bBlockNonZeroExtentTraces)
-                    || self.store.object_of(other, Prop::Base) == Some(mover)
-                    || self.store.object_of(other, Prop::Owner) == Some(mover)
+                    || !self.store.flag_of(other, blocks_traces)
+                    || !self.should_trace(other, Some(mover), flags)
                     || (ignore_bases && self.is_based_on(mover, other))
                 {
                     continue;
                 }
                 let blocks = blocking.blocked_by(self.blocking(other)) && self.class_blocks(other, mover);
+                if blocks && self.is_based_on(other, mover) {
+                    continue;
+                }
                 if !blocks && touches.is_none() {
                     continue;
                 }
@@ -108,7 +122,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     /// A blocked move stops `MOVE_TEST_ADJUST` short of the hit, so a moved actor keeps a gap.
-    /// Of a bump, the hit actor is notified first (unverified).
+    /// Of a bump, the hit actor is notified first; world geometry is never notified.
     pub(crate) fn move_actor(&mut self, actor: ObjectId, delta: Vector, bases: Bases) -> Result<MoveHit, Error> {
         let start = self.store.vector(actor, Prop::Location);
         if nearly_zero(delta) {
@@ -124,13 +138,12 @@ impl<L: LoaderRef> Vm<L> {
         let collides = self.store.flag_of(actor, Prop::bCollideActors);
         let world = self.store.flag_of(actor, Prop::bCollideWorld);
         let mut touches = Vec::new();
-        let block = self.sweep(
+        let mut hit = self.sweep(
             actor,
             Sweep { start, delta: test, radius, height },
             SweepAgainst { world, actors: true, ignore_bases: bases == Bases::Ignore },
             collides.then_some(&mut touches),
         );
-        let mut hit = block;
         let mut moved = delta;
         if hit.time < 1.0 {
             let reach = (length + MOVE_TEST_ADJUST) * hit.time;
@@ -150,15 +163,19 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.update_relative_location(actor);
         if let Some(other) = hit.actor
-            && Some(other) != self.level
-            && !self.store.flag_of(other, Prop::bWorldGeometry)
             && !self.is_based_on(actor, other)
         {
-            self.notify_bump(actor, other)?;
-            self.notify_bump(other, actor)?;
+            let world_geometry = Some(other) == self.level || self.store.flag_of(other, Prop::bWorldGeometry);
+            if !world_geometry {
+                self.notify_bump(other, actor)?;
+            }
+            let wall = self.store.is_a(actor, Kind::Pawn) && hit.normal.z < WALL_NORMAL_Z && self.store.is_a(other, "StaticMeshActor");
+            if !world_geometry || wall {
+                self.notify_bump(actor, other)?;
+            }
         }
         touches.sort_by(|a, b| a.time.total_cmp(&b.time));
-        for touch in touches.into_iter().filter(|t| t.time <= block.time) {
+        for touch in touches.into_iter().filter(|t| t.time < hit.time) {
             if self.store.is_deleted(actor) {
                 break;
             }
@@ -171,5 +188,22 @@ impl<L: LoaderRef> Vm<L> {
         }
         self.set_zone(actor, ZoneEvents::Sent, OldZone::Region)?;
         Ok(hit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn movers_and_world_geometry_follow_collide_world_alone() {
+        for collide_actors in [false, true] {
+            for collide_world in [false, true] {
+                let flags = move_trace_flags(collide_actors, collide_world);
+                assert_eq!(flags & (trace::MOVERS | trace::LEVEL_GEOMETRY) != 0, collide_world);
+                assert_eq!(flags & (trace::PAWNS | trace::VOLUMES | trace::OTHERS) != 0, collide_actors);
+                assert_eq!(flags & (trace::ONLY_PROJ_ACTOR | trace::BLOCKING), 0);
+            }
+        }
     }
 }
