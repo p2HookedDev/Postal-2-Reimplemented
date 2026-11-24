@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod actor;
 mod convex_volume;
 mod font;

@@ -8,6 +8,8 @@
 //! assert!(emitter.sprites(0, p2_particles::View::default()).count() <= 10);
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod fluid;
 mod math;
 mod props;

@@ -12,6 +12,10 @@ pub enum BeamEnd {
     OffsetAsAbsolute,
 }
 
+impl BeamEnd {
+    pub(crate) const BY_INDEX: [Self; 6] = [Self::Velocity, Self::Distance, Self::Offset, Self::Actor, Self::TraceOffset, Self::OffsetAsAbsolute];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BeamEndPoint {
     pub offset: RangeVector,

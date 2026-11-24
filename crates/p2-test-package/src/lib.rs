@@ -2,6 +2,8 @@
 //! load path without the game install. Object references follow the package format: an export is `index + 1`, an import
 //! is `-index - 1`, and 0 is none.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 
 use p2_package::PACKAGE_TAG;

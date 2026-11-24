@@ -20,9 +20,11 @@ use bevy::pbr::StandardMaterial;
 use bevy::time::TimeUpdateStrategy;
 use bevy::transform::components::Transform;
 use p2_engine::animation::AnimationPlugin;
-use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SceneTargets, Session, SpawnedActors};
-use p2_engine::mesh_view::{CanvasDrawn, FollowActor, MeshView, MeshViewPlugin, SceneView};
-use p2_engine::play::{FrameTimes, Play, PlayPlugin, PlaySystems, PlayerInput};
+use p2_engine::map::{Fluids, Hud, Particles, Projectors, SceneTargets, Session, SpawnedActors};
+use p2_render::level::MaterialSwitches;
+use p2_render::view::{CanvasDrawn, FollowActor, MeshView, SceneView};
+use p2_host::frame_times::FrameTimes;
+use p2_engine::play::{Play, PlayPlugin, PlaySystems, PlayerInput};
 use p2_vm::ObjectId;
 
 #[derive(Resource)]
@@ -53,7 +55,7 @@ fn input_at(frame: u32) -> (Vec<&'static str>, [f32; 2]) {
 
 fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f32; 2])) -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, MeshViewPlugin, PlayPlugin, AnimationPlugin))
+    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin))
         .init_asset::<Mesh>()
         .init_asset::<Image>()
         .init_asset::<StandardMaterial>()
@@ -369,7 +371,7 @@ fn monday_spawn_cost() {
             }
         });
         app.world_mut().resource_mut::<FrameTimes>().totals.clear();
-        let mut slowest: Option<p2_engine::play::FrameParts> = None;
+        let mut slowest: Option<p2_host::frame_times::FrameParts> = None;
         for _ in 0..10 {
             app.update();
             if let Some(parts) = app.world_mut().resource_mut::<FrameTimes>().take_slowest()

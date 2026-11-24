@@ -5,7 +5,7 @@ use bevy::ecs::prelude::{MessageReader, World};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 
 use super::*;
-use super::sound::distance_gain;
+use super::sound::{distance_gain, sound_listener};
 
 #[test]
 fn gain_is_full_inside_the_radius_then_inverse() {
@@ -74,7 +74,7 @@ fn mesh_changes_per_frame(mut app: App) -> Vec<usize> {
 fn weapon_moved_in_the_pass_is_drawn_there_that_frame() {
     use bevy::transform::components::GlobalTransform;
     let mut app = App::new();
-    app.add_plugins((TaskPoolPlugin::default(), bevy::transform::TransformPlugin, PlayPlugin));
+    app.add_plugins((TaskPoolPlugin::default(), bevy::transform::TransformPlugin, PlayPlugin)).init_resource::<ShadowOnly>();
     let weapon = app.world_mut().spawn(Transform::default()).id();
     app.add_systems(PostUpdate, (move |mut moved: Query<&mut Transform>| {
         if let Ok(mut transform) = moved.get_mut(weapon) {
@@ -94,7 +94,7 @@ fn weapon_moved_in_the_pass_is_drawn_there_that_frame() {
 #[test]
 fn particle_meshes_reach_the_renderer_in_the_frame_they_change() {
     let mut app = App::new();
-    app.add_plugins(PlayPlugin);
+    app.add_plugins(PlayPlugin).init_resource::<ShadowOnly>();
     assert_eq!(mesh_changes_per_frame(app), vec![1; 10]);
     let mut app = App::new();
     app.configure_sets(PostUpdate, PlaySystems::Present.after(AssetEventSystems));

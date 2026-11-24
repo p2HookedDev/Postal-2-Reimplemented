@@ -24,12 +24,12 @@ impl MeshPool {
                 let alpha_mode = if props.use_mesh_blend_mode { section.alpha_mode } else { standard_alpha(props.draw_style) };
                 let key = PoolMaterialKey { texture: section.texture.as_ref().map(Handle::id), alpha: alpha_key(alpha_mode), two_sided };
                 let material = shared.entry(key).or_insert_with(|| {
-                    assets.materials.add(StandardMaterial {
+                    assets.actor_materials.materials.add(StandardMaterial {
                         base_color_texture: section.texture.clone(),
                         alpha_mode,
                         unlit: true,
                         double_sided: two_sided,
-                        cull_mode: crate::mesh_view::cull_for(two_sided),
+                        cull_mode: p2_render::view::cull_for(two_sided),
                         ..Default::default()
                     })
                 });

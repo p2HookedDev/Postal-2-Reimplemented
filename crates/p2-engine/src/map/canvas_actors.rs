@@ -7,7 +7,7 @@ pub(super) struct HudTargets<'a, 'w, 's> {
     pub(super) animated: &'a mut Animated,
     pub(super) play: &'a mut Play,
     pub(super) view: &'a mut MeshView,
-    pub(super) shown: &'a mut ResMut<'w, crate::shown_scene::ShownScene>,
+    pub(super) shown: &'a mut ResMut<'w, p2_render::view::ShownScene>,
     pub(super) canvas: &'a mut CanvasModels<'w, 's>,
     pub(super) commands: &'a mut Commands<'w, 's>,
 }
@@ -21,7 +21,7 @@ pub(super) struct HudParams<'w, 's> {
     animated: ResMut<'w, Animated>,
     play: ResMut<'w, Play>,
     view: ResMut<'w, MeshView>,
-    shown: ResMut<'w, crate::shown_scene::ShownScene>,
+    shown: ResMut<'w, p2_render::view::ShownScene>,
     canvas: CanvasModels<'w, 's>,
     commands: Commands<'w, 's>,
     times: ResMut<'w, FrameTimes>,
@@ -238,13 +238,9 @@ impl Session {
         }
         let layer = RenderLayers::layer(OVERLAY_LAYERS[slot]);
         let parent = t.commands.spawn((MapScoped, Transform::from_translation(origin), Visibility::default())).id();
-        let materials = &mut t.assets.materials;
-        let material = |section: &SectionView| {
-            SectionMaterial::Standard(materials.add(crate::mesh_view::actor_standard(section, crate::mesh_view::SceneLights::Ignored)))
-        };
         let lighting = ActorLighting { unlit: false, glow: 0, max_lights: DEFAULT_MAX_LIGHTS };
         let lit = ActorLit::skeletal(actor, &mesh, follow.scale, &lighting);
-        spawn_actor_sections(t.commands, parent, sections, placed(follow), (follow.actor, follow), material, lit, (layer, CanvasDrawn(call)));
+        spawn_actor_sections(t.commands, parent, sections, placed(follow), (follow.actor, follow), (&mut t.assets.actor_materials, ActorLook::Canvas), lit, (layer, CanvasDrawn(call)));
         Some(parent)
     }
 }

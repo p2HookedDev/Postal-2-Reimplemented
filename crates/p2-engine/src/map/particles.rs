@@ -1,35 +1,23 @@
-use bevy::camera::primitives::{Aabb, MeshAabb};
+use bevy::camera::primitives::MeshAabb;
 use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::math::Vec3A;
-use bevy::mesh::MeshTag;
-use bevy::render::storage::ShaderBuffer;
-use bevy::shape::Aabb3d;
 use p2_math::Vector;
-use p2_particles::{Beam, CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner, StripPoint};
+use p2_particles::{CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner};
 
 use super::*;
-use super::fluids::{camera_view, empty_quads, fill_beams, fill_smooth_strip, fill_strip};
+use super::fluids::camera_view;
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
-use crate::mesh_view::alpha_key;
+use p2_render::view::alpha_key;
 use crate::emitter_changes::apply_command;
-use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS, sprite_light};
-use crate::display::{MODERN_FIRE_LIGHT, MODERN_LIQUID_FLOW, MODERN_PARTICLE_LIGHT, Settings};
-use crate::render::lamps::{Lamp, Placed, lamp_sum};
-use crate::level_collision::StaticCollision;
-use crate::shown_scene::ShownScene;
+use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape};
+use p2_render::level_collision::StaticCollision;
 mod mesh_particles;
 mod sprites;
 mod bounds;
-mod fire;
-mod puddles;
 use mesh_particles::{MeshPool, mesh_box, place_mesh_particles};
 pub(crate) use mesh_particles::PoolSlot;
-use sprites::{
-    MIN_QUADS, SpriteGrid, emitter_light, fill_draw_buffers, glow_at, lamps_shown, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
-    upload_sprites, write_sprite_records,
-};
-use bounds::{apply_bounds, particles_box};
-pub use bounds::{occlusion_aabb, pad_bounds};
+use sprites::{fill_draw_buffers, standard_alpha};
+use p2_render::particle_draw::bounds::OCCLUSION_MARGIN;
+use bounds::{apply_zone, particles_box};
 
 pub struct ParticleReport {
     pub name: String,
@@ -48,7 +36,6 @@ pub(super) struct ParticleActor {
     draws: Vec<EmitterDraw>,
     objects: Vec<ObjectId>,
     bounds: Option<(Vec3, Vec3)>,
-    drawn_bounds: Option<(Vec3, Vec3)>,
     buffers: DrawBuffers,
     zone_box: Option<[Vec3; 3]>,
     overlay: Option<usize>,
@@ -59,26 +46,14 @@ pub(super) struct ParticleActor {
     peak: usize,
     frames: ParticleFrames,
     turn: Turn,
-    /// The `emitter_light` at the emitter and its lamps' share (`lamps_shown`), for lit sprites under modern graphics;
-    /// where and how many frames ago.
-    lamp_light: Vec3,
-    lamps_alone: Vec3,
-    lamp_at: Vec3,
-    lamp_age: u8,
-    /// This frame's share of the script lights around it (`glow_at`), zero with the fire light setting off.
-    fire_light: Vec3,
     puddle_seed: Option<u32>,
 }
-
-const LAMP_RECHECK_UNITS: f32 = 16.0;
-const LAMP_RECHECK_FRAMES: u8 = 30;
-/// A lamp's fitting often holds it inside its own collision, so the wall test stops this short of it.
-const LAMP_CLEARANCE: f32 = 16.0;
 
 /// What one frame's update hands from its part on the main thread to the part worked on several threads and back.
 #[derive(Default)]
 struct Turn {
     owner: Owner,
+    place: Option<Vector>,
     /// The simulation's step, on a frame that holds a game tick.
     step: Option<f32>,
     /// Sprites are drawn this part of the way from their place before the newest tick to their newest (`shown_part`).
@@ -94,8 +69,6 @@ const PARALLEL_EMITTERS: usize = 32;
 
 #[derive(Default)]
 struct DrawBuffers {
-    particles: Vec<(Vec<StripPoint>, Vec<SpriteParticle>)>,
-    beams: Vec<Vec<Beam>>,
     meshes: Vec<(Vec<MeshParticle>, f32)>,
     strip_order: Vec<usize>,
 }
@@ -116,35 +89,10 @@ pub(super) struct PoolMaterialKey {
 }
 
 struct EmitterDraw {
-    mesh: Option<EmitterMesh>,
-    grid: Option<SpriteGrid>,
     disabled: bool,
     pool: Option<MeshPool>,
     pending_model: Option<ModelKey>,
     name: String,
-    fire: bool,
-    /// Drawn as a fire volume under modern graphics: its sprites are hidden.
-    volume: bool,
-}
-
-struct EmitterMesh {
-    entity: Entity,
-    mesh: Handle<Mesh>,
-    shown: bool,
-    /// What the strip in the mesh was made from: a strip that lies still (a blood trail) is not written again, as
-    /// every write is uploaded.
-    strip_key: Option<u64>,
-    written: bool,
-}
-
-fn strip_key(points: &[StripPoint], facing: Vec3) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut key = rustc_hash::FxHasher::default();
-    for point in points {
-        (point.location.x.to_bits(), point.location.y.to_bits(), point.location.z.to_bits(), point.size.to_bits(), point.color).hash(&mut key);
-    }
-    facing.to_array().map(f32::to_bits).hash(&mut key);
-    key.finish()
 }
 
 pub(super) fn particle_collision(world: &StaticCollision, start: Vector, end: Vector) -> Option<CollisionHit> {
@@ -157,12 +105,9 @@ pub struct Particles {
     pub(super) actors: Vec<ParticleActor>,
     pub(super) particle_emitters: FxHashMap<ObjectId, (usize, usize)>,
     pub(super) pool_materials: HashMap<PoolMaterialKey, Handle<StandardMaterial>>,
-    pub(super) emitter_materials: FxHashMap<crate::render::particle_material::SharedParticleKey, Handle<ParticleMaterial>>,
-    particle_records: Vec<[u32; RECORD_WORDS]>,
-    pub(super) corona_materials: FxHashMap<String, Option<Handle<ParticleMaterial>>>,
     pub(super) waiting_sprites: Vec<SpriteActor>,
     pub(super) waiting_coronas: Vec<CoronaActor>,
-    liquid_flow: bool,
+    pub(super) born: Vec<EmitterLook>,
 }
 
 impl Session {
@@ -198,33 +143,10 @@ impl Session {
                 let spawned = &mut *t.spawned;
                 let image = texture.filter(|_| p.kind != EmitterKind::Mesh).and_then(|path| actor_image(&spawned.actor_textures, &mut spawned.texture_builds, game, t.assets, &path));
                 t.times.add("spawned: emitters: textures", started);
-                let started = std::time::Instant::now();
-                let grid = (image.is_some() && !matches!(p.kind, EmitterKind::Strip | EmitterKind::Beam)).then_some(SpriteGrid { quads: MIN_QUADS, first: None });
-                let emitter_mesh = image.map(|image| {
-                    let mesh = if grid.is_some() {
-                        sprite_grid(MIN_QUADS)
-                    } else {
-                        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-                        empty_quads(&mut mesh);
-                        mesh
-                    };
-                    let mesh = t.assets.meshes.add(mesh);
-                    // Hidden until it has particles; the mesh changes every frame, so it is never frustum culled by stale
-                    // bounds. Its `Aabb` (the actor's, set with the mesh each frame) is for GPU occlusion culling.
-                    let model = (Mesh3d(mesh.clone()), Transform::default(), Visibility::Hidden, NoFrustumCulling, ChildOf(parent));
-                    let mut material = ParticleMaterial::new(image, &p);
-                    material.light = sprite_light(p.draw_style, &emitter_name, p.use_direction_as);
-                    if fogless {
-                        material.params.fogged = 0;
-                    }
-                    let part = TranslucentDraw::Part { actor: parent, order: index as u32 };
-                    let material = t.particles.emitter_materials.entry(material.shared_key()).or_insert_with(|| t.assets.particle_materials.add(material)).clone();
-                    let entity = t.commands.spawn((model, MeshMaterial3d(material), part)).id();
-                    EmitterMesh { entity, mesh, shown: false, strip_key: None, written: false }
-                });
-                t.times.add("spawned: emitters: meshes and entities", started);
-                let fire = fire::is_fire(&emitter_name, p.draw_style);
-                draws.push(EmitterDraw { mesh: emitter_mesh, grid, disabled: p.disabled, pool, pending_model, name: emitter_name, fire, volume: false });
+                if let Some(image) = image {
+                    t.particles.born.push(EmitterLook { parent, order: index as u32, image, props: p.clone(), name: emitter_name.clone(), fogless });
+                }
+                draws.push(EmitterDraw { disabled: p.disabled, pool, pending_model, name: emitter_name });
                 props.push(p);
             }
             let started = std::time::Instant::now();
@@ -233,7 +155,7 @@ impl Session {
             t.times.add("spawned: emitters: log", started);
             let started = std::time::Instant::now();
             let seed = t.particles.actors.len() as u32 + 1;
-            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), lamp_light: Vec3::ZERO, lamps_alone: Vec3::ZERO, lamp_at: Vec3::ZERO, lamp_age: u8::MAX, fire_light: Vec3::ZERO, puddle_seed: emitter.puddle.then(|| liquid_flow::puddle_seed(seed)) });
+            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), puddle_seed: emitter.puddle.then(|| liquid_flow::puddle_seed(seed)) });
             t.times.add("spawned: emitters: simulation", started);
             let started = std::time::Instant::now();
             if let Some(world) = t.play.world_mut() {
@@ -246,31 +168,6 @@ impl Session {
 }
 
 impl Particles {
-    /// One sum a drawn emitter, at its place this frame, again when it moves or on a slow rota. A lamp a wall hides adds
-    /// nothing. `glow` is the level's brightness where the script lights count too; those are read every frame.
-    fn light_emitters(&mut self, world: &PlayWorld, lamps: &[(Vec3, &Placed)], level: Option<&StaticCollision>, zone_ambients: &[[f32; 3]], glow: Option<f32>) {
-        let origin = world.origin();
-        for p in self.actors.iter_mut().filter(|p| p.drawn) {
-            p.lamp_age = p.lamp_age.saturating_add(1);
-            let Some((location, _)) = world.place(p.actor) else { continue };
-            p.fire_light = glow.map_or(Vec3::ZERO, |brightness| glow_at(world.dynamic_lights(), location, brightness));
-            let here = Vec3::from(to_bevy(location)) + origin;
-            if p.lamp_age >= LAMP_RECHECK_FRAMES || here.distance_squared(p.lamp_at) > LAMP_RECHECK_UNITS * LAMP_RECHECK_UNITS {
-                let reaches = |at: Vec3| {
-                    level.is_none_or(|level| {
-                        let to_lamp = Vector::from(to_bevy(at - origin)) - location;
-                        let distance = to_lamp.size();
-                        distance <= LAMP_CLEARANCE || level.first_hit(location, location + to_lamp * (1.0 - LAMP_CLEARANCE / distance)).is_none()
-                    })
-                };
-                let zone = level.map_or(0, |level| p2_collision::point_zone(&level.model, location));
-                let ambient = Vec3::from(zone_ambients.get(usize::from(zone)).copied().unwrap_or_default());
-                let sum = lamp_sum(lamps, here, reaches);
-                (p.lamp_light, p.lamps_alone, p.lamp_at, p.lamp_age) = (emitter_light(ambient, sum), lamps_shown(sum), here, 0);
-            }
-        }
-    }
-
     fn index_particle_emitters(&mut self) {
         self.particle_emitters.clear();
         for (at, p) in self.actors.iter().enumerate() {
@@ -363,6 +260,7 @@ fn emitter_turn(place: Option<(Vector, p2_math::Rotator)>, actor: &crate::play::
     // it.
     Turn {
         owner: Owner { location, rotation, velocity: actor.velocity },
+        place: place.map(|(location, _)| location),
         step: (step > 0.0 && place.is_some()).then_some(step * actor.time_scale),
         shown,
         hidden: actor.hidden || place.is_none(),
@@ -374,54 +272,39 @@ fn emitter_turn(place: Option<(Vector, p2_math::Rotator)>, actor: &crate::play::
 
 pub(super) struct ParticleTargets<'a, 'w, 's> {
     pub(super) particles: &'a mut Particles,
+    pub(super) drawn: &'a mut DrawnParticles,
     pub(super) play: &'a mut Play,
     pub(super) canvas: &'a [CanvasActor],
     pub(super) view: &'a mut ParticleView<'w, 's>,
     pub(super) commands: &'a mut Commands<'w, 's>,
-    pub(super) meshes: &'a mut ResMut<'w, Assets<Mesh>>,
-    pub(super) sprite_buffers: Option<&'a mut ResMut<'w, Assets<ShaderBuffer>>>,
 }
 
 #[derive(SystemParam)]
 pub(super) struct ParticleParams<'w, 's> {
     particles: ResMut<'w, Particles>,
+    drawn: ResMut<'w, DrawnParticles>,
     play: ResMut<'w, Play>,
     hud: Res<'w, Hud>,
     view: ParticleView<'w, 's>,
     commands: Commands<'w, 's>,
-    meshes: ResMut<'w, Assets<Mesh>>,
-    sprite_buffers: Option<ResMut<'w, Assets<ShaderBuffer>>>,
     times: ResMut<'w, FrameTimes>,
-    settings: Option<Res<'w, Settings>>,
-    lamps: Query<'w, 's, (&'static Transform, &'static Placed), (With<Lamp>, Without<PoolSlot>)>,
-    shown: Option<Res<'w, ShownScene>>,
 }
 
 pub(super) fn present_particles(mut t: ParticleParams) {
     let started = std::time::Instant::now();
-    let level = |name: &str| t.settings.as_deref().map_or(0, |settings| settings.modern_level(name));
-    let (lit, fire_light) = (level(MODERN_PARTICLE_LIGHT) > 0, level(MODERN_FIRE_LIGHT) > 0);
-    if lit && let Some(world) = t.play.world() {
-        let lamps: Vec<(Vec3, &Placed)> = t.lamps.iter().map(|(at, placed)| (at.translation, placed)).collect();
-        let lighting = t.shown.as_deref().and_then(|shown| shown.lighting.as_deref());
-        let zone_ambients = lighting.map_or(&[][..], |lighting| &lighting.zone_ambients[..]);
-        let glow = fire_light.then(|| lighting.map_or(1.0, |lighting| lighting.level_brightness));
-        t.particles.light_emitters(world, &lamps, t.view.collision.0.as_deref(), zone_ambients, glow);
-    }
-    t.particles.liquid_flow = t.settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_LIQUID_FLOW) > 0);
     update_particles(&mut ParticleTargets {
         particles: &mut t.particles,
+        drawn: &mut t.drawn,
         play: &mut t.play,
         canvas: &t.hud.canvas_actors,
         view: &mut t.view,
         commands: &mut t.commands,
-        meshes: &mut t.meshes,
-        sprite_buffers: t.sprite_buffers.as_mut(),
     });
     t.times.add("particles", started);
 }
 
 pub(super) fn update_particles(t: &mut ParticleTargets) {
+    t.drawn.born.append(&mut t.particles.born);
     let step = t.play.world_mut().map_or(0.0, PlayWorld::take_step);
     if let Some(world) = t.play.world_mut() {
         t.particles.apply_vm_changes(world);
@@ -439,8 +322,8 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
     // in its own scene node, so `Canvas.DrawActor` draws them at its FOV after its depth clear.
     let canvas = t.canvas;
     let particles = &mut *t.particles;
-    let (shown, mut records) = (1.0 - world.shown.clock.behind(), std::mem::take(&mut particles.particle_records));
-    records.clear();
+    let shown = 1.0 - world.shown.clock.behind();
+    t.drawn.eye = eye;
     particles.actors.retain_mut(|p| {
         let Some(actor) = world.actor(p.actor) else { return true };
         if actor.gone || p.simulation.destroyed() {
@@ -464,9 +347,6 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
         if p.overlay != overlay {
             p.overlay = overlay;
             let layer = overlay.map_or_else(RenderLayers::default, |slot| RenderLayers::layer(OVERLAY_LAYERS[slot]));
-            for mesh in p.draws.iter().filter_map(|draw| draw.mesh.as_ref()) {
-                t.commands.entity(mesh.entity).insert(layer.clone());
-            }
             for entity in p.draws.iter().filter_map(|draw| draw.pool.as_ref()).flat_map(|pool| pool.slots.iter().flatten()) {
                 t.commands.entity(*entity).insert(layer.clone());
             }
@@ -493,7 +373,7 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
         p.turn = turn;
         true
     });
-    let simulate = |p: &mut ParticleActor| {
+    let simulate = |(p, slot): (&mut ParticleActor, &mut DrawnActor)| {
         let mut collide = |start: Vector, end: Vector| collision.as_deref().and_then(|world| particle_collision(world, start, end));
         if let Some(step) = p.turn.step {
             p.simulation.tick_colliding(step, p.turn.owner, &mut collide);
@@ -501,46 +381,34 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
         p.turn.seen_box = if p.turn.hidden { None } else { particles_box(p) };
         p.turn.seen = !p.turn.hidden && p.zone_seen && in_frustum(p.turn.seen_box);
         let mut buffers = std::mem::take(&mut p.buffers);
-        fill_draw_buffers(p, &mut buffers, p.turn.seen, view);
+        fill_draw_buffers(p, &mut buffers, slot, p.turn.seen, view);
         p.buffers = buffers;
     };
+    let slots = &mut t.drawn.actors;
+    slots.resize_with(particles.actors.len(), Default::default);
     let pool = bevy::tasks::ComputeTaskPool::get();
     if particles.actors.len() < PARALLEL_EMITTERS {
-        particles.actors.iter_mut().for_each(simulate);
+        particles.actors.iter_mut().zip(slots.iter_mut()).for_each(simulate);
     } else {
         let share = particles.actors.len().div_ceil(pool.thread_num().max(1)).max(PARALLEL_EMITTERS / 2);
         let simulate = &simulate;
         pool.scope(|scope| {
-            for emitters in particles.actors.chunks_mut(share) {
-                scope.spawn(async move { emitters.iter_mut().for_each(simulate) });
+            for (emitters, slots) in particles.actors.chunks_mut(share).zip(slots.chunks_mut(share)) {
+                scope.spawn(async move { emitters.iter_mut().zip(slots).for_each(simulate) });
             }
         });
     }
-    let flow = particles.liquid_flow;
     for p in &mut particles.actors {
         let Turn { here, seen, seen_box, .. } = p.turn;
         let buffers = std::mem::take(&mut p.buffers);
-        let mesh_reach = (buffers.meshes.iter())
-            .flat_map(|(particles, reach)| particles.iter().map(move |m| mesh_box(m, *reach)))
-            .reduce(|(lo, hi), (min, max)| (lo.min(min), hi.max(max)));
-        let mut writes = MeshWrites { commands: &mut *t.commands, meshes: t.meshes, records: &mut records, liquid_flow: flow };
-        let (drawn, newly_shown) = fill_emitter_meshes(&mut writes, p, &buffers.particles, &buffers.beams, seen, eye, mesh_reach);
-        write_sprite_records(&mut writes, p, &buffers.particles, drawn);
         place_mesh_particles(t.commands, t.view, p, &buffers.meshes, seen);
         p.buffers = buffers;
-        let changed = newly_shown || drawn != p.drawn_bounds;
-        p.drawn_bounds = drawn;
         p.bounds = seen_box;
-        let mut writes = MeshWrites { commands: &mut *t.commands, meshes: t.meshes, records: &mut records, liquid_flow: flow };
-        apply_bounds(&mut writes, p, changed, (leaves, here));
+        apply_zone(t.commands, p, (leaves, here));
     }
     if !removed.is_empty() {
         particles.index_particle_emitters();
     }
-    if !records.is_empty() && let Some(buffers) = t.sprite_buffers.as_deref_mut() {
-        upload_sprites(buffers, &records);
-    }
-    particles.particle_records = records;
     world.wants_forces = particles.actors.iter().any(|p| p.simulation.emitters().iter().any(|e| e.props().use_actor_forces));
     for actor in removed {
         world.unwatch(actor);
@@ -560,76 +428,6 @@ fn log_removed(p: &ParticleActor, why: &str) {
         p.frames.hidden,
         p.frames.out_of_view
     );
-}
-
-struct MeshWrites<'a, 'w, 's> {
-    commands: &'a mut Commands<'w, 's>,
-    meshes: &'a mut Assets<Mesh>,
-    records: &'a mut Vec<[u32; RECORD_WORDS]>,
-    liquid_flow: bool,
-}
-
-fn fill_emitter_meshes(
-    writes: &mut MeshWrites,
-    p: &mut ParticleActor,
-    particles: &[(Vec<StripPoint>, Vec<SpriteParticle>)],
-    beams: &[Vec<Beam>],
-    in_view: bool,
-    eye: Vec3,
-    mut bounds: Option<(Vec3, Vec3)>,
-) -> (Option<(Vec3, Vec3)>, bool) {
-    let mut newly_shown = false;
-    let flow = writes.liquid_flow;
-    for (index, ((draw, (strip, sprites)), beams)) in p.draws.iter_mut().zip(particles).zip(beams).enumerate() {
-        let EmitterDraw { mesh: Some(EmitterMesh { entity, mesh, shown, strip_key: drawn_key, written }), grid, volume, .. } = draw else { continue };
-        let Some(props) = p.simulation.emitters().get(index).map(|e| e.props()) else { continue };
-        let (kind, usage, normal) = (props.kind, props.use_direction_as, Vec3::from_array(props.real_projection_normal.into()));
-        let visible = in_view && !*volume && (strip.len() > 1 || !sprites.is_empty() || !beams.is_empty());
-        if *shown != visible {
-            *shown = visible;
-            newly_shown |= visible;
-            writes.commands.entity(*entity).insert(if *shown { Visibility::Inherited } else { Visibility::Hidden });
-        }
-        if !*shown {
-            continue;
-        }
-        if let Some(grid) = grid.as_mut() {
-            let quads = grid_capacity(grid.quads, sprites.len());
-            if quads != grid.quads {
-                grid.quads = quads;
-                if let Some(mut mesh) = writes.meshes.get_mut(&*mesh) {
-                    crate::diagnostics::mesh_written(crate::diagnostics::MeshWrite::SpriteGrid);
-                    *mesh = sprite_grid(quads);
-                }
-            }
-            for (min, max) in sprites.iter().map(sprite_box) {
-                bounds = Some(bounds.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max))));
-            }
-        } else {
-            let facing = (usage != DirectionUsage::None).then(|| normal.normalize_or_zero());
-            // The switch is in the key so a still trail is redrawn when it moves.
-            let key = (kind == EmitterKind::Strip).then(|| strip_key(strip, facing.unwrap_or(eye)) ^ u64::from(flow));
-            if (key.is_none() || key != *drawn_key)
-                && let Some(mut mesh) = writes.meshes.get_mut(&*mesh)
-            {
-                crate::diagnostics::mesh_written(if kind == EmitterKind::Strip { crate::diagnostics::MeshWrite::Strip } else { crate::diagnostics::MeshWrite::Beam });
-                if kind == EmitterKind::Strip && flow {
-                    fill_smooth_strip(&mut mesh, strip, facing, eye);
-                } else if kind == EmitterKind::Strip {
-                    fill_strip(&mut mesh, strip, facing, eye);
-                } else {
-                    fill_beams(&mut mesh, beams, [props.beam.u_scale, props.beam.v_scale], props.beam.sheets(), eye);
-                }
-                *drawn_key = key;
-                *written = true;
-            }
-            if let Some(aabb) = writes.meshes.get(&*mesh).and_then(|mesh| mesh.get_aabb()) {
-                let (min, max) = (Vec3::from(aabb.min()), Vec3::from(aabb.max()));
-                bounds = Some(bounds.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max))));
-            }
-        }
-    }
-    (bounds, newly_shown)
 }
 
 fn sync_disabled(p: &mut ParticleActor, disabled: &[bool]) {

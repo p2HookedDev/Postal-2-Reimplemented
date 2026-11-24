@@ -82,9 +82,10 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    pub(crate) fn kill_z(&self, actor: ObjectId, walking: bool) -> Option<f32> {
+    pub(crate) fn kill_z(&self, actor: ObjectId) -> Option<f32> {
         let zone = self.region_of(actor).and_then(|(zone, _, _)| zone).or(self.level)?;
         let kill_z = self.store.float_of(zone, Prop::KillZ);
+        let walking = self.store.physics_of(actor) == Some(EPhysics::Walking);
         Some(if self.store.flag_of(zone, Prop::bSoftKillZ) && !walking { kill_z - SOFT_KILL_Z_GRACE } else { kill_z })
     }
 
@@ -106,7 +107,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let start = self.store.vector(pawn, Prop::Location);
         if controller.is_some()
-            && self.kill_z(pawn, physics == Some(EPhysics::Walking)).is_some_and(|kill_z| start[2] < kill_z)
+            && self.kill_z(pawn).is_some_and(|kill_z| start[2] < kill_z)
         {
             self.event(pawn, crate::states::Event::FellOutOfWorld, Vec::new())?;
             if self.store.is_deleted(pawn) {

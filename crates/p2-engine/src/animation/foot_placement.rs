@@ -16,8 +16,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::drawn_pose::{keep_for_game, mesh_place, posed_origin, restore, turn_about};
 use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate, pose_joints};
-use crate::display::{MODERN_FOOT_PLACEMENT, Settings};
-use crate::level_collision::{LevelCollision, StaticCollision};
+use p2_host::display::{MODERN_FOOT_PLACEMENT, Settings};
+use p2_render::level_collision::{LevelCollision, StaticCollision};
 use crate::play::Play;
 
 /// Unreal units; below the walk's step height, so a foot never reaches past what the walker could step on.

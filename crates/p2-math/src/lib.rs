@@ -1,5 +1,7 @@
 //! Vectors use Unreal axes (X forward, Y right, Z up); rotators 65536ths of a turn (pitch, yaw, roll).
 
+#![forbid(unsafe_code)]
+
 mod rng;
 pub use rng::Rng;
 

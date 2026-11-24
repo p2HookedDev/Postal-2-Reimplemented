@@ -18,7 +18,7 @@ impl<L: LoaderRef> Vm<L> {
             _ => None,
         };
         let mut rotation = (-normal).rotation();
-        rotation.roll = (self.random() * 65536.0) as i32;
+        rotation.roll = (self.rng.frand() * 65536.0) as i32;
         self.spawn(splat, owner, [Some(Value::Vector(location)), Some(Value::Rotator(rotation))])?;
         Ok(())
     }

@@ -53,7 +53,7 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn below_kill_z(&mut self, actor: ObjectId) -> Result<bool, Error> {
-        let kill_z = self.kill_z(actor, false).unwrap_or(f32::MIN);
+        let kill_z = self.kill_z(actor).unwrap_or(f32::MIN);
         if self.store.vector(actor, Prop::Location)[2] < kill_z {
             self.event(actor, crate::states::Event::FellOutOfWorld, Vec::new())?;
             return Ok(true);

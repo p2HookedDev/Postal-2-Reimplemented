@@ -21,11 +21,11 @@ impl<L: LoaderRef> Vm<L> {
         for index in 0.. {
             let Some(Value::Struct(entry)) = self.store.element_of(list, "Decorations", index) else { break };
             let [Value::Object(mesh), count, draw_scale, align, pitch, yaw, roll] = entry.as_slice() else { continue };
-            let count = in_range(self.random(), range(count));
+            let count = in_range(self.rng.frand(), range(count));
             for _ in 0..count as i32 {
-                let z = in_range(self.random(), [-extent.z, extent.z]);
-                let y = in_range(self.random(), [-extent.y, extent.y]);
-                let x = in_range(self.random(), [-extent.x, extent.x]);
+                let z = in_range(self.rng.frand(), [-extent.z, extent.z]);
+                let y = in_range(self.rng.frand(), [-extent.y, extent.y]);
+                let x = in_range(self.rng.frand(), [-extent.x, extent.x]);
                 let placed = [Some(Value::Vector(to_world(Vector::new(x, y, z)))), Some(Value::Rotator(Rotator::default()))];
                 let Some(actor) = self.spawn_actor(class, None, None, placed)? else { continue };
                 self.store.set(actor, Prop::StaticMesh, Value::Object(*mesh));
@@ -36,13 +36,13 @@ impl<L: LoaderRef> Vm<L> {
                 let mut rotation = self.store.rotator_of(actor, Prop::Rotation);
                 for (flag, axis) in [(pitch, &mut rotation.pitch), (yaw, &mut rotation.yaw), (roll, &mut rotation.roll)] {
                     if set(flag) {
-                        *axis = axis.wrapping_add(self.rand());
+                        *axis = axis.wrapping_add(self.rng.rand());
                     }
                 }
                 self.store.set(actor, Prop::Rotation, Value::Rotator(rotation));
                 let scale = range(draw_scale);
                 if scale != [0.0, 0.0] {
-                    let scale = in_range(self.random(), scale);
+                    let scale = in_range(self.rng.frand(), scale);
                     self.store.set(actor, Prop::DrawScale, Value::Float(scale));
                     self.relocate(actor);
                 }

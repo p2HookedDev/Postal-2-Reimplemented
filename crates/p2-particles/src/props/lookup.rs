@@ -31,13 +31,7 @@ impl EmitterProperties {
         read!(lookup, "FadeInFactor", p.fade_in_factor, PropertyValue::floats::<4>);
         read!(lookup, "FadeInEndTime", p.fade_in_end_time, f);
         read!(lookup, "FadeIn", p.fade_in, b);
-        read!(lookup, "CoordinateSystem", p.coordinate_system, |v: &PropertyValue| {
-            Some(match v.int()? {
-                1 => CoordinateSystem::Relative,
-                2 => CoordinateSystem::Absolute,
-                _ => CoordinateSystem::Independent,
-            })
-        });
+        read!(lookup, "CoordinateSystem", p.coordinate_system, by_index(CoordinateSystem::BY_INDEX, CoordinateSystem::Independent));
         read!(lookup, "MaxParticles", p.max_particles, i);
         read!(lookup, "EffectAxis", p.effect_axis_positive_z, |v: &PropertyValue| Some(v.int()? == 1));
         read!(lookup, "RespawnDeadParticles", p.respawn_dead_particles, b);
@@ -50,24 +44,11 @@ impl EmitterProperties {
         read!(lookup, "StartLocationOffset", p.start_location_offset, v3);
         read!(lookup, "StartLocationRange", p.start_location_range, rv);
         read!(lookup, "AddLocationFromOtherEmitter", p.add_location_from_other_emitter, other_emitter);
-        read!(lookup, "StartLocationShape", p.start_location_shape, |v: &PropertyValue| {
-            Some(match v.int()? {
-                1 => StartLocationShape::Sphere,
-                2 => StartLocationShape::Polar,
-                _ => StartLocationShape::Box,
-            })
-        });
+        read!(lookup, "StartLocationShape", p.start_location_shape, by_index(StartLocationShape::BY_INDEX, StartLocationShape::Box));
         read!(lookup, "SphereRadiusRange", p.sphere_radius_range, range);
         read!(lookup, "StartLocationPolarRange", p.start_location_polar_range, rv);
         read!(lookup, "StartMassRange", p.start_mass_range, range);
-        read!(lookup, "UseRotationFrom", p.use_rotation_from, |v: &PropertyValue| {
-            Some(match v.int()? {
-                1 => RotationSource::Actor,
-                2 => RotationSource::Offset,
-                3 => RotationSource::Normal,
-                _ => RotationSource::None,
-            })
-        });
+        read!(lookup, "UseRotationFrom", p.use_rotation_from, by_index(RotationSource::BY_INDEX, RotationSource::None));
         read!(lookup, "SpinParticles", p.spin_particles, b);
         read!(lookup, "RotationOffset", p.rotation_offset, rotator);
         read!(lookup, "SpinCCWorCW", p.spin_ccw_or_cw, v3);
@@ -89,17 +70,7 @@ impl EmitterProperties {
         read!(lookup, "ParticlesPerSecond", p.particles_per_second, f);
         read!(lookup, "InitialParticlesPerSecond", p.initial_particles_per_second, f);
         read!(lookup, "AutomaticInitialSpawning", p.automatic_initial_spawning, b);
-        read!(lookup, "DrawStyle", p.draw_style, |v: &PropertyValue| {
-            Some(match v.int()? {
-                0 => DrawStyle::Regular,
-                1 => DrawStyle::AlphaBlend,
-                2 => DrawStyle::Modulated,
-                4 => DrawStyle::AlphaModulate,
-                5 => DrawStyle::Darken,
-                6 => DrawStyle::Brighten,
-                _ => DrawStyle::Translucent,
-            })
-        });
+        read!(lookup, "DrawStyle", p.draw_style, by_index(DrawStyle::BY_INDEX, DrawStyle::Translucent));
         read!(lookup, "TextureUSubdivisions", p.texture_u_subdivisions, i);
         read!(lookup, "TextureVSubdivisions", p.texture_v_subdivisions, i);
         read!(lookup, "BlendBetweenSubdivisions", p.blend_between_subdivisions, b);
@@ -119,27 +90,10 @@ impl EmitterProperties {
         read!(lookup, "VelocityLossRange", p.velocity_loss_range, rv);
         read!(lookup, "AddVelocityFromOtherEmitter", p.add_velocity_from_other_emitter, other_emitter);
         read!(lookup, "AddVelocityMultiplierRange", p.add_velocity_multiplier_range, rv);
-        read!(lookup, "GetVelocityDirectionFrom", p.get_velocity_direction_from, |v: &PropertyValue| {
-            Some(match v.int()? {
-                1 => VelocityDirection::StartPositionAndOwner,
-                2 => VelocityDirection::OwnerAndStartPosition,
-                3 => VelocityDirection::AddRadial,
-                _ => VelocityDirection::None,
-            })
-        });
+        read!(lookup, "GetVelocityDirectionFrom", p.get_velocity_direction_from, by_index(VelocityDirection::BY_INDEX, VelocityDirection::None));
         read!(lookup, "WarmupTicksPerSecond", p.warmup_ticks_per_second, f);
         read!(lookup, "RelativeWarmupTime", p.relative_warmup_time, f);
-        read!(lookup, "UseDirectionAs", p.use_direction_as, |v: &PropertyValue| {
-            Some(match v.int()? {
-                1 => DirectionUsage::Up,
-                2 => DirectionUsage::Right,
-                3 => DirectionUsage::Forward,
-                4 => DirectionUsage::Normal,
-                5 => DirectionUsage::UpAndNormal,
-                6 => DirectionUsage::RightAndNormal,
-                _ => DirectionUsage::None,
-            })
-        });
+        read!(lookup, "UseDirectionAs", p.use_direction_as, by_index(DirectionUsage::BY_INDEX, DirectionUsage::None));
         read!(lookup, "ProjectionNormal", p.projection_normal, v3);
         read!(lookup, "RealProjectionNormal", p.real_projection_normal, v3);
         read!(lookup, "UseCollision", p.use_collision, b);
@@ -156,29 +110,13 @@ impl EmitterProperties {
         read!(lookup, "AlphaTest", p.alpha_test, b);
         read!(lookup, "AlphaRef", p.alpha_ref, i);
         read!(lookup, "DisableFogging", p.disable_fogging, b);
-        read!(lookup, "LocationShapeExtend", p.location_shape_extend, |v: &PropertyValue| {
-            Some(match v.int()? {
-                0 => ShapeExtend::None,
-                1 => ShapeExtend::Line,
-                2 => ShapeExtend::Circle,
-                _ => ShapeExtend::Other,
-            })
-        });
+        read!(lookup, "LocationShapeExtend", p.location_shape_extend, by_index(ShapeExtend::BY_INDEX, ShapeExtend::Other));
         read!(lookup, "LineStart", p.line_start, v3);
         read!(lookup, "LineEnd", p.line_end, v3);
         read!(lookup, "AllowParticleSpawn", p.allow_particle_spawn, b);
         read!(lookup, "UseMeshBlendMode", p.use_mesh_blend_mode, b);
         read!(lookup, "RenderTwoSided", p.render_two_sided, b);
-        read!(lookup, "DetermineEndPointBy", p.beam.end_by, |v: &PropertyValue| {
-            Some(match v.int()? {
-                1 => BeamEnd::Distance,
-                2 => BeamEnd::Offset,
-                3 => BeamEnd::Actor,
-                4 => BeamEnd::TraceOffset,
-                5 => BeamEnd::OffsetAsAbsolute,
-                _ => BeamEnd::Velocity,
-            })
-        });
+        read!(lookup, "DetermineEndPointBy", p.beam.end_by, by_index(BeamEnd::BY_INDEX, BeamEnd::Velocity));
         read!(lookup, "BeamDistanceRange", p.beam.distance_range, range);
         read!(lookup, "BeamEndPoints", p.beam.end_points, |v: &PropertyValue| {
             Some(v.members().iter().filter_map(beam_end_point).collect())
@@ -199,6 +137,10 @@ impl EmitterProperties {
         read!(lookup, "NoiseDeterminesEndPoint", p.beam.noise_determines_end_point, b);
         p
     }
+}
+
+fn by_index<T: Copy, const N: usize>(table: [T; N], other: T) -> impl Fn(&PropertyValue) -> Option<T> {
+    move |v| Some(usize::try_from(v.int()?).ok().and_then(|n| table.get(n)).copied().unwrap_or(other))
 }
 
 fn key_pair<T>(key: &PropertyValue, value: impl Fn(&PropertyValue) -> Option<T>, default: T) -> (f32, T) {

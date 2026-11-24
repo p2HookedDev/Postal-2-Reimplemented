@@ -5,9 +5,10 @@ use p2_math::{Rotator, Vector};
 use p2_render_cpu::{MeshLight, MeshPlacement, hsv_color};
 use rustc_hash::FxHashMap;
 
-use crate::render::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
+use p2_render::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
+use p2_render::scene::ZoneFog;
 use p2_particles::{EmitterKind, EmitterProperties, EmitterSettings, PropertyValue};
-use p2_vm::{Kind, LoaderRef, ObjectId, Prop, Value, Vm};
+use p2_vm::{ERenderStyle, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 
 pub fn antiportal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<(String, MeshPlacement)> {
     if vm.draw_type_of(actor) != Some(EDrawType::AntiPortal) || vm.store.flag_of(actor, Prop::bHidden) || vm.store.is_deleted(actor) {
@@ -17,6 +18,60 @@ pub fn antiportal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<(Str
     let (location, rotation) = location_rotation(vm, actor);
     let placement = MeshPlacement { location, rotation, scale: actor_scale(vm, actor), pre_pivot: vm.store.vector(actor, Prop::PrePivot) };
     Some((vm.store.object(volume).path.clone(), placement))
+}
+
+pub const CORONA_SIZE: f32 = 1024.0;
+
+pub struct CoronaActor {
+    pub object: ObjectId,
+    pub texture: String,
+    pub location: Vector,
+    pub rotation: Rotator,
+    pub draw_scale: f32,
+    pub draw_scale3d: [f32; 3],
+    pub hue: u8,
+    pub saturation: u8,
+    pub sizes: Option<(f32, f32)>,
+    pub light_radius: f32,
+}
+
+fn corona_texture(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<ObjectId> {
+    let lit = matches!(vm.store.get(actor, Prop::LightType), Some(Value::Byte(light_type)) if light_type != 0);
+    if !vm.store.flag_of(actor, Prop::bCorona) || !lit || vm.store.flag_of(actor, Prop::bDeleteMe) || vm.store.is_deleted(actor) {
+        return None;
+    }
+    let Some(Value::Array(skins)) = vm.store.get(actor, Prop::Skins) else { return None };
+    let Some(&Value::Object(Some(texture))) = skins.first() else { return None };
+    // Textures are mostly stubs (known by reference, no class loaded): `is_a` alone rejected every corona.
+    if !vm.store.is_a(texture, "Texture") && !vm.stub_is_a(texture, "Texture") {
+        return None;
+    }
+    Some(texture)
+}
+
+pub fn is_corona(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> bool {
+    corona_texture(vm, actor).is_some()
+}
+
+pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaActor> {
+    let texture = corona_texture(vm, actor)?;
+    let float = |property: Prop, default: f32| match vm.store.get(actor, property) {
+        Some(Value::Float(value)) => value,
+        _ => default,
+    };
+    let (location, rotation) = location_rotation(vm, actor);
+    Some(CoronaActor {
+        object: actor,
+        texture: vm.store.object(texture).path.clone(),
+        location,
+        rotation,
+        draw_scale: float(Prop::DrawScale, 1.0),
+        draw_scale3d: vm.store.vector(actor, Prop::DrawScale3D).into(),
+        hue: vm.store.byte_of(actor, Prop::LightHue),
+        saturation: vm.store.byte_of(actor, Prop::LightSaturation),
+        sizes: vm.store.is_a(actor, "Light").then(|| (float(Prop::MinCoronaSize, 0.0), float(Prop::MaxCoronaSize, 0.0))),
+        light_radius: float(Prop::LightRadius, 0.0),
+    })
 }
 
 pub struct SkeletalActor {
@@ -86,12 +141,8 @@ pub fn look_key<T: std::hash::Hash>(objects: impl IntoIterator<Item = Option<T>>
 
 pub fn skeletal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SkeletalActor> {
     // Hidden ones too: scripts may show them later (the followers' visibility follows `bHidden`).
-    if vm.draw_type_of(actor) != Some(EDrawType::Mesh) || vm.store.is_deleted(actor) {
-        return None;
-    }
-    let mesh = object_path(vm, vm.store.get(actor, Prop::Mesh).as_ref())?;
-    let (location, rotation) = location_rotation(vm, actor);
-    let skins = skin_paths(vm, actor);
+    let mesh = drawn_mesh(vm, actor, EDrawType::Mesh, Prop::Mesh)?;
+    let (location, rotation, scale, pre_pivot) = actor_placement(vm, actor);
     Some(SkeletalActor {
         object: actor,
         attached_to: attached_bone(vm, actor).map(|(base, bone)| (base, vm.store.name(bone).to_owned())),
@@ -100,11 +151,23 @@ pub fn skeletal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Skelet
         mesh,
         location,
         rotation,
-        scale: actor_scale(vm, actor),
-        pre_pivot: vm.store.vector(actor, Prop::PrePivot),
-        skins,
+        scale,
+        pre_pivot,
+        skins: skin_paths(vm, actor),
         lighting: actor_lighting(vm, actor),
     })
+}
+
+fn drawn_mesh(vm: &Vm<impl LoaderRef>, actor: ObjectId, draw_type: EDrawType, mesh: Prop) -> Option<String> {
+    if vm.draw_type_of(actor) != Some(draw_type) || vm.store.is_deleted(actor) {
+        return None;
+    }
+    object_path(vm, vm.store.get(actor, mesh).as_ref())
+}
+
+fn actor_placement(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> (Vector, Rotator, Vector, Vector) {
+    let (location, rotation) = location_rotation(vm, actor);
+    (location, rotation, actor_scale(vm, actor), vm.store.vector(actor, Prop::PrePivot))
 }
 
 #[derive(Clone, PartialEq)]
@@ -153,18 +216,15 @@ pub struct MeshActor {
 }
 
 pub fn mesh_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshActor> {
-    if vm.draw_type_of(actor) != Some(EDrawType::StaticMesh) || vm.store.is_deleted(actor) || (vm.store.flag_of(actor, Prop::bHidden) && vm.store.flag_of(actor, Prop::bStatic)) {
-        return None;
-    }
-    let static_mesh = object_path(vm, vm.store.get(actor, Prop::StaticMesh).as_ref())?;
-    let (location, rotation) = location_rotation(vm, actor);
-    let skins = skin_paths(vm, actor);
+    let static_mesh = drawn_mesh(vm, actor, EDrawType::StaticMesh, Prop::StaticMesh)
+        .filter(|_| !(vm.store.flag_of(actor, Prop::bHidden) && vm.store.flag_of(actor, Prop::bStatic)))?;
+    let (location, rotation, scale, pre_pivot) = actor_placement(vm, actor);
     Some(MeshActor {
         static_mesh,
         location,
         rotation,
-        scale: actor_scale(vm, actor),
-        pre_pivot: vm.store.vector(actor, Prop::PrePivot),
+        scale,
+        pre_pivot,
         instance: object_path(vm, vm.store.get(actor, Prop::StaticMeshInstance).as_ref()),
         lighting: actor_lighting(vm, actor),
         blocks: vm.store.flag_of(actor, Prop::bCollideActors) && vm.store.flag_of(actor, Prop::bBlockActors),
@@ -172,30 +232,11 @@ pub fn mesh_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshActor>
             Some(Value::Name(tag)) if tag != p2_vm::NameId::NONE => Some(tag),
             _ => None,
         },
-        skins,
+        skins: skin_paths(vm, actor),
         object: actor,
         movable: !vm.store.flag_of(actor, Prop::bStatic),
         accepts_projectors: vm.store.flag_of(actor, Prop::bAcceptsProjectors),
     })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderStyle {
-    Masked,
-    Translucent,
-    Modulated,
-    Other,
-}
-
-impl RenderStyle {
-    pub fn from_byte(style: u8) -> Self {
-        match style {
-            2 => Self::Masked,
-            3 => Self::Translucent,
-            4 => Self::Modulated,
-            _ => Self::Other,
-        }
-    }
 }
 
 /// Retail draws only `DT_Sprite` this way (`DT_VerticalSprite`, `DT_SpriteAnimOnce` and
@@ -205,7 +246,7 @@ pub struct SpriteActor {
     pub texture: String,
     pub location: Vector,
     pub scale: Vector,
-    pub style: RenderStyle,
+    pub style: Option<ERenderStyle>,
     pub hidden: bool,
 }
 
@@ -221,7 +262,7 @@ pub fn sprite_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SpriteAc
         texture: vm.store.object(texture).path.clone(),
         location: vm.store.location(actor),
         scale: actor_scale(vm, actor),
-        style: RenderStyle::from_byte(match vm.store.get(actor, Prop::Style) {
+        style: ERenderStyle::from_byte(match vm.store.get(actor, Prop::Style) {
             Some(Value::Byte(style)) => style,
             _ => 1,
         }),
@@ -255,8 +296,8 @@ pub fn light_values(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> MeshLight {
         cone: vm.store.byte_of(actor, Prop::LightCone),
         dynamic: vm.store.flag_of(actor, Prop::bDynamicLight),
         special_lit: vm.store.flag_of(actor, Prop::bSpecialLit),
-        corona: if crate::map::is_corona(vm, actor) {
-            crate::map::CORONA_SIZE * match vm.store.get(actor, Prop::DrawScale) {
+        corona: if is_corona(vm, actor) {
+            CORONA_SIZE * match vm.store.get(actor, Prop::DrawScale) {
                 Some(Value::Float(scale)) => scale,
                 _ => 1.0,
             }
@@ -268,13 +309,6 @@ pub fn light_values(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> MeshLight {
 
 pub fn zone_ambient(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> [f32; 3] {
     hsv_color(vm.store.byte_of(zone, Prop::AmbientHue), vm.store.byte_of(zone, Prop::AmbientSaturation), vm.store.byte_of(zone, Prop::AmbientBrightness))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ZoneFog {
-    pub color: [u8; 3],
-    pub start: f32,
-    pub end: f32,
 }
 
 pub fn zone_fog(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> Option<ZoneFog> {

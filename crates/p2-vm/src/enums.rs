@@ -51,14 +51,18 @@ impl EPhysics {
 #[repr(u8)]
 pub enum ERenderStyle {
     None = 0,
+    Masked = 2,
     Translucent = 3,
+    Modulated = 4,
 }
 
 impl ERenderStyle {
     pub fn from_byte(byte: u8) -> Option<Self> {
         Some(match byte {
             0 => Self::None,
+            2 => Self::Masked,
             3 => Self::Translucent,
+            4 => Self::Modulated,
             _ => return None,
         })
     }

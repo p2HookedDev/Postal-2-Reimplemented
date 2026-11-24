@@ -6,7 +6,7 @@ use p2_vm::ObjectId;
 use rustc_hash::FxHashMap;
 
 use super::{AnimatedMesh, Poses};
-use crate::components::FollowActor;
+use p2_render::components::FollowActor;
 use crate::play::PlayWorld;
 
 /// The mesh's frame in the world for a person the script animates and no ragdoll holds.

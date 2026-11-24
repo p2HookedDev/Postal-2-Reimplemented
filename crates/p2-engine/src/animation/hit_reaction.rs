@@ -13,7 +13,7 @@ use rustc_hash::FxHashMap;
 use super::drawn_pose::{keep_for_game, mesh_place, posed_origin, restore, turn_about};
 use super::foot_placement::{SIDES, place_feet};
 use super::{Animated, AnimatedMesh, AnimationSystems, Poses, pose_joints};
-use crate::display::{MODERN_HIT_REACTIONS, Settings};
+use p2_host::display::{MODERN_HIT_REACTIONS, Settings};
 use crate::play::{Play, PlayWorld};
 
 /// A natural frequency of 16 per second at three quarters of critical damping: settled in about 0.45 seconds.
@@ -188,7 +188,7 @@ fn kicks(world: &PlayWorld, item: &AnimatedMesh, bones: &[Mat4], hit: &PersonHit
     let Some((bone, _)) = nearest.filter(|&(_, distance)| distance <= REACH) else { return Vec::new() };
     let speed = KICK * strength * (momentum.length() / FULL_MOMENTUM).clamp(LIGHTEST, 1.0);
     let feet: Vec<usize> = SIDES.iter().filter_map(|[.., foot]| item.bone_names.iter().position(|name| name.ends_with(foot))).collect();
-    chain(&item.parents, &feet, bone)
+    bone_chain(&item.parents, &feet, bone)
         .into_iter()
         .filter_map(|(bone, share)| {
             let axis = (at - pivot(bone)?).cross(push).try_normalize().unwrap_or_else(|| Vec3::Z.cross(push).normalize_or_zero());
@@ -199,7 +199,7 @@ fn kicks(world: &PlayWorld, item: &AnimatedMesh, bones: &[Mat4], hit: &PersonHit
 
 /// From the hit bone up its parents with each one's share. A bone holding a foot (a leg, the pelvis) or hanging from
 /// the root is never turned: that would lift the planted feet and swing the whole body.
-fn chain(parents: &[usize], feet: &[usize], mut bone: usize) -> Vec<(usize, f32)> {
+fn bone_chain(parents: &[usize], feet: &[usize], mut bone: usize) -> Vec<(usize, f32)> {
     let mut chain = Vec::new();
     let mut share = 1.0;
     while let Some(&parent) = parents.get(bone)
@@ -295,10 +295,10 @@ mod tests {
         // root, pelvis, spine, spine1, neck, head, thigh, calf, foot
         let parents = [0, 0, 1, 2, 3, 4, 1, 6, 7];
         let feet = [8];
-        assert_eq!(chain(&parents, &feet, 5), vec![(5, 1.0), (4, FALLOFF), (3, FALLOFF * FALLOFF), (2, FALLOFF * FALLOFF * FALLOFF)]);
-        assert_eq!(chain(&parents, &feet, 3), vec![(3, 1.0), (2, FALLOFF)]);
-        assert!(chain(&parents, &feet, 7).is_empty());
-        assert!(chain(&parents, &feet, 1).is_empty());
+        assert_eq!(bone_chain(&parents, &feet, 5), vec![(5, 1.0), (4, FALLOFF), (3, FALLOFF * FALLOFF), (2, FALLOFF * FALLOFF * FALLOFF)]);
+        assert_eq!(bone_chain(&parents, &feet, 3), vec![(3, 1.0), (2, FALLOFF)]);
+        assert!(bone_chain(&parents, &feet, 7).is_empty());
+        assert!(bone_chain(&parents, &feet, 1).is_empty());
     }
 
     #[test]

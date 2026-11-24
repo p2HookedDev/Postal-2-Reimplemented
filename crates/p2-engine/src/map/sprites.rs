@@ -2,13 +2,9 @@
 //! white and unlit (no `ScaleGlow` or `AmbientGlow`).
 
 use super::*;
-use crate::render::particle_material::sprite_blend;
+use p2_render::components::SpriteQuad;
+use p2_render::particle_material::sprite_blend;
 use p2_math::{Rotator, Vector};
-
-#[derive(bevy::ecs::component::Component, Clone, Copy)]
-pub struct SpriteQuad {
-    texels: f32,
-}
 
 impl Session {
     pub(super) fn add_sprites(&mut self, sprites: Vec<SpriteActor>, origin: Vec3, t: &mut SpawnTargets) {

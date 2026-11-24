@@ -9,6 +9,10 @@ repository.workspace = true
 [dependencies]
 p2-math.workspace = true
 p2-assets.workspace = true
+p2-package.workspace = true
+p2-script.workspace = true
+p2-render-cpu.workspace = true
+thiserror.workspace = true
 bevy = { workspace = true, features = ["bevy_image", "bevy_asset", "bevy_mesh"] }
 wgpu-types.workspace = true
 

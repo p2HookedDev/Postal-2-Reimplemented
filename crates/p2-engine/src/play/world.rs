@@ -10,7 +10,7 @@ mod shown;
 mod tick_clock;
 pub(super) use channel_glide::{ChannelFrom, ChannelTime, glided_time};
 pub(super) use sounds::{LoadedSound, loaded_sound, opens};
-pub(crate) use places::Places;
+pub(crate) use places::{BoneFrame, Places, axes_matrix};
 pub(crate) use shown::Shown;
 pub(crate) use tick_clock::TickClock;
 pub(super) use tick_clock::Glide;
@@ -53,7 +53,7 @@ pub struct Spawned {
     pub skeletal: Option<SkeletalActor>,
     pub emitter: Option<EmitterActor>,
     pub sprite: Option<crate::actors::SpriteActor>,
-    pub corona: Option<crate::map::CoronaActor>,
+    pub corona: Option<crate::actors::CoronaActor>,
     pub restyled: bool,
 }
 
@@ -200,7 +200,7 @@ impl PlayWorld {
         let lights = vm.object_ids().filter(|&actor| crate::actors::mesh_light(&vm, actor).is_some_and(|light| light.dynamic)).collect();
         let fluid_surfaces = vm.actors().filter(|&actor| vm.store.is_a(actor, "FluidSurfaceInfo") && !vm.store.is_deleted(actor)).collect();
         let glows = vm.object_ids().filter(|&actor| glows(&vm, actor)).collect();
-        let corona_lights = vm.object_ids().filter(|&actor| crate::map::is_corona(&vm, actor)).collect();
+        let corona_lights = vm.object_ids().filter(|&actor| crate::actors::is_corona(&vm, actor)).collect();
         let volumes = vm.actors().filter(|&actor| vm.store.is_a(actor, Kind::Volume) && !vm.store.is_deleted(actor)).collect();
         let switches = vm
             .object_ids()

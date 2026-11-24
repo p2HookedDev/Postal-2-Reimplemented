@@ -13,6 +13,8 @@
 //! skeletal mesh it is used on: for each joint, how far the asset's two parts and the mesh's two bones disagree in
 //! turn and in place, bind pose against bind pose.
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -508,18 +510,18 @@ fn shader_form(pkg: &Package, data: &[u8], exp: &Export) -> Option<(String, bool
     let opacity_form = match opacity {
         0 => "none".to_owned(),
         _ if opacity == diffuse => "diffuse".to_owned(),
-        _ => chain(pkg, data, opacity),
+        _ => material_chain(pkg, data, opacity),
     };
     let glow_form = match (glow, glow_mask) {
         (0, _) => "none".to_owned(),
         (_, 0) => "unlit".to_owned(),
         _ if glow_mask == glow => "own-alpha".to_owned(),
-        _ => format!("masked:{}", chain(pkg, data, glow_mask)),
+        _ => format!("masked:{}", material_chain(pkg, data, glow_mask)),
     };
     let mask_form = match mask {
         0 => "none".to_owned(),
         _ if mask == diffuse => "diffuse".to_owned(),
-        _ => chain(pkg, data, mask),
+        _ => material_chain(pkg, data, mask),
     };
     let blending = match property("OutputBlending") {
         Some(TagValue::Byte(b)) => *b,
@@ -527,13 +529,13 @@ fn shader_form(pkg: &Package, data: &[u8], exp: &Export) -> Option<(String, bool
     };
     let form = format!(
         "opacity={opacity_form} glow={glow_form} specular={} mask={mask_form} blend={blending}",
-        chain(pkg, data, specular)
+        material_chain(pkg, data, specular)
     );
     let several_passes = opacity != 0 && opacity != diffuse && ((glow != 0 && glow_mask != 0) || specular != 0);
     Some((form, several_passes))
 }
 
-fn chain(pkg: &Package, data: &[u8], mut index: i32) -> String {
+fn material_chain(pkg: &Package, data: &[u8], mut index: i32) -> String {
     let mut classes = Vec::new();
     for _ in 0..8 {
         if index == 0 {

@@ -8,9 +8,9 @@ use bevy::log::warn;
 use bevy::state::prelude::{AppExtStates, NextState, OnEnter, States, in_state};
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use p2_engine::game_dir::{known_game_dir, save_game_dir};
-use p2_engine::game_dir_form::GameDirForm;
-use p2_engine::install;
+use p2_host::game_dir::{known_game_dir, save_game_dir};
+use p2_host::game_dir_form::GameDirForm;
+use p2_host::install;
 use p2_engine::map::{Hud, LoadMap, Particles, SpawnedActors};
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

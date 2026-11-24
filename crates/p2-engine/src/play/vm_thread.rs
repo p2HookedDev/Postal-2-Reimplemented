@@ -21,8 +21,8 @@ pub struct VmFrame {
     pub(super) sound_files: Vec<(String, Option<p2_assets::Sound>)>,
     pub(super) ambients: Vec<(ObjectId, crate::actors::AmbientActor, Arc<str>)>,
     pub(super) zone_sounds: Option<Vec<ZoneSound>>,
-    pub(super) zone_fogs: Option<Vec<Option<crate::actors::ZoneFog>>>,
-    pub(super) volume_fog: Option<crate::actors::ZoneFog>,
+    pub(super) zone_fogs: Option<Vec<Option<p2_render::scene::ZoneFog>>>,
+    pub(super) volume_fog: Option<p2_render::scene::ZoneFog>,
     pub(super) audio_channels: usize,
     pub(super) music: Vec<(MusicCommand, Option<Vector>, Option<Arc<[u8]>>)>,
     pub(super) actor_changes: Vec<(ObjectId, ActorFrame)>,
@@ -39,6 +39,8 @@ pub struct VmFrame {
     pub(super) forces: Vec<ActorForce>,
     pub(super) emitter_changes: Vec<(ObjectId, EmitterProperties)>,
     pub(super) dynamic_lights: Vec<p2_render_cpu::MeshLight>,
+    pub(super) glows: Vec<p2_render::frame_facts::GlowSource>,
+    pub(super) level_time: f32,
     pub(super) plings: Vec<p2_vm::FluidPling>,
     pub(super) person_hits: Vec<p2_vm::PersonHit>,
     pub(super) fluid_touchers: Vec<(ObjectId, Vec<p2_particles::FluidToucher>)>,
@@ -51,7 +53,7 @@ pub struct VmFrame {
     pub(super) time_dilation: f32,
     pub(super) quit: bool,
     pub(super) window: Option<p2_vm::WindowRequest>,
-    pub(super) settings: Option<crate::display::Settings>,
+    pub(super) settings: Option<p2_host::display::Settings>,
     pub(super) set_mouse: Option<[f32; 2]>,
     pub(super) screenshot: bool,
     pub(super) times: Vec<(&'static str, Duration)>,
@@ -151,6 +153,7 @@ impl VmFrame {
         self.forces.clear();
         self.emitter_changes.clear();
         self.dynamic_lights.clear();
+        self.glows.clear();
         self.material_switches.clear();
         self.plings.clear();
         self.person_hits.clear();
@@ -182,7 +185,6 @@ pub(super) struct Job {
     pub(super) finished: Vec<ObjectId>,
     pub(super) vm_profile: VmProfile,
     pub(super) forces: bool,
-    pub(super) fire_light: bool,
     pub(super) movie_status: Vec<MovieStatus>,
 }
 
@@ -205,7 +207,7 @@ pub(super) struct Simulation {
     pub(super) recent: [Vec<ObjectId>; 2],
     pub(super) recent_read: Vec<ObjectId>,
     pub(super) lights: Vec<ObjectId>,
-    /// Fires and gun flashes: what the fire light setting lights.
+    /// Fires and gun flashes: what the modern look lights.
     pub(super) glows: Vec<ObjectId>,
     pub(super) light_clock: p2_render_cpu::LightClock,
     pub(super) volumes: Vec<ObjectId>,
@@ -230,7 +232,7 @@ pub(super) struct Simulation {
     pub(super) lower_names: FxHashMap<p2_vm::NameId, Arc<str>>,
     pub(super) settings_sent: bool,
     pub(super) zone_actors: Vec<Option<ObjectId>>,
-    pub(super) zone_fogs_sent: Vec<Option<crate::actors::ZoneFog>>,
+    pub(super) zone_fogs_sent: Vec<Option<p2_render::scene::ZoneFog>>,
     pub(super) music_dir: PathBuf,
     pub(super) zone_songs: FxHashMap<String, Option<Arc<[u8]>>>,
     pub(super) zone_keys: Vec<(ObjectId, usize)>,
@@ -266,7 +268,7 @@ impl Worker {
     pub(super) fn spawn() -> Option<Self> {
         let (jobs, inbox) = std::sync::mpsc::channel::<(Box<Simulation>, Job)>();
         let (outbox, done) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new().name("vm".into()).stack_size(SCRIPT_STACK).spawn(move || {
+        let spawned = std::thread::Builder::new().name("vm".into()).stack_size(p2_vm::SCRIPT_STACK).spawn(move || {
             while let Ok((mut sim, job)) = inbox.recv() {
                 let frame = sim.run(job);
                 if outbox.send((sim, frame)).is_err() {

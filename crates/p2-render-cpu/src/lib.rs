@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod actor_lights;
 pub mod corona;
 mod lighting;

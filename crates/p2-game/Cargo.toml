@@ -20,7 +20,10 @@ bevy = { workspace = true, features = ["async_executor", "bevy_asset", "bevy_log
 # The launcher's "Copy details" button puts text on the system clipboard (arboard is already in the tree via Bevy).
 bevy_egui = { workspace = true, features = ["manage_clipboard"] }
 p2-engine.workspace = true
+p2-host.workspace = true
+p2-render.workspace = true
 p2-package.workspace = true
+p2-vm.workspace = true
 
 [lints]
 workspace = true

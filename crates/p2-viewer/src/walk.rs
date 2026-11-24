@@ -2,7 +2,7 @@
 //! moves its pawn by the VM's physics. Unreal units and coordinates.
 
 use p2_collision::{Hit, Sides, box_check, mesh_line_check, terrain_line_check};
-use p2_engine::map::StaticCollision;
+use p2_render::level_collision::StaticCollision;
 use p2_math::Vector;
 
 const HALF_HEIGHT: f32 = 72.0;

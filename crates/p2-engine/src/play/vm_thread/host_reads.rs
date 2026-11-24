@@ -8,7 +8,7 @@ impl Simulation {
         self.vm.store.next_stamp();
         self.time_dilation = self.vm.time_dilation().to_bits();
         self.cull_volume = self.vm.set_cull_view(self.view.and_then(|view| view.actor));
-        let hidden_pawn = crate::render::photo::photo_hidden_pawn(&mut self.vm);
+        let hidden_pawn = photo::photo_hidden_pawn(&mut self.vm);
         self.view_key = ViewKey { viewed: self.view.and_then(|view| view.actor), behind: self.view.is_some_and(|view| view.behind), hidden_pawn, ..self.view_key };
     }
 

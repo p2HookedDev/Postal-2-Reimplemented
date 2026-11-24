@@ -19,6 +19,8 @@ p2-package.workspace = true
 p2-script.workspace = true
 p2-collision.workspace = true
 p2-engine.workspace = true
+p2-host.workspace = true
+p2-render.workspace = true
 p2-math.workspace = true
 
 [lints]

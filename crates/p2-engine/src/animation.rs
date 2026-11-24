@@ -1,4 +1,4 @@
-pub use crate::components::FollowBone;
+use p2_render::components::FollowBone;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -22,10 +22,12 @@ use p2_bevy_assets::{bone_matrices, scaled_bone_matrices_into, unreal_mesh_matri
 use p2_vm::ObjectId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::mesh_view::{FollowActor, SkinJoint};
-use crate::play::{ActorPose, ChannelPose, FrameTimes, Play, PlayWorld};
+use p2_render::view::FollowActor;
+use p2_render::scene::SkinJoint;
+use p2_host::frame_times::FrameTimes;
+use crate::play::{ActorPose, ChannelPose, Play, PlayWorld};
 use attachments::{follow_bones, place_attached};
-pub(crate) use attachments::{BoneFrame, attached_transform};
+pub(crate) use attachments::{attached_transform, follow_transform};
 pub use attachments::attachment_frame;
 
 mod attachments;
@@ -42,7 +44,6 @@ pub struct AnimationPlugin;
 
 impl Plugin for AnimationPlugin {
     fn build(&self, app: &mut App) {
-        crate::add_once(app, crate::FrameOrderPlugin);
         app.init_resource::<Animated>()
             .init_resource::<Poses>()
             .add_plugins(foot_placement::FootPlacementPlugin)

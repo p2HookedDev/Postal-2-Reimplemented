@@ -13,8 +13,9 @@ use bevy::app::{App, Last, Update};
 use bevy::asset::{AssetApp, AssetPlugin, Assets, Handle, RenderAssetUsages};
 use bevy::camera::primitives::{Aabb, MeshAabb};
 use bevy::camera::visibility::{DynamicSkinnedMeshBounds, NoFrustumCulling, Visibility, VisibilityPlugin};
-use bevy::ecs::prelude::{ChildOf, Changed, Entity, IntoScheduleConfigs, Query, Ref, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{ChildOf, Changed, Commands, Entity, IntoScheduleConfigs, Query, Ref, Res, ResMut, Resource, With};
 use bevy::ecs::change_detection::DetectChanges;
+use bevy::ecs::system::SystemState;
 use bevy::math::{Mat4, Vec3};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, Mesh, Mesh3d, PrimitiveTopology};
@@ -25,8 +26,10 @@ use bevy::transform::components::{GlobalTransform, Transform, TransformTreeChang
 use p2_assets::{AnalogTrack, AnimSequence, Bone, Influence, MeshAnimation, NamedBone, SkelMeshSection, SkeletalMesh, Wedge};
 use p2_bevy_assets::{bone_matrices, skeletal_mesh_to_meshes, skin_bind, unreal_to_bevy};
 use p2_engine::animation::{Animated, AnimatedMesh, AnimationPlugin};
-use p2_engine::mesh_view::{ActorModel, FollowActor, SectionMaterial, SectionView, Skin, SkinJoint, spawn_actor_sections};
-use p2_engine::play::FrameTimes;
+use p2_render::view::{ActorLook, ActorMaterialCache, ActorMaterials, ActorModel, FollowActor, spawn_actor_sections};
+use p2_render::mesh_light::MeshLitMaterial;
+use p2_render::scene::{SectionView, Skin, SkinJoint};
+use p2_host::frame_times::FrameTimes;
 use p2_vm::ObjectId;
 
 const BONES: usize = 60;
@@ -233,7 +236,7 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
             app.init_resource::<OldPoses>().add_systems(Update, (walk, old_animate, old_pose_joints).chain());
         }
         Layout::New => {
-            app.init_resource::<p2_engine::play::Play>().add_plugins(AnimationPlugin).add_systems(Update, walk.before(p2_engine::mesh_view::MeshViewSystems::Camera));
+            app.init_resource::<p2_engine::play::Play>().add_plugins((AnimationPlugin, p2_engine::FrameOrderPlugin)).add_systems(Update, walk.before(p2_render::view::MeshViewSystems::Camera));
         }
     }
     let world = app.world_mut();
@@ -274,6 +277,10 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
         Layout::New => world.spawn((Transform::from_translation(-center), Visibility::default())).id(),
     };
     let spawned = shape.pawns + if layout == Layout::Old { shape.gone } else { 0 };
+    world.init_resource::<Assets<StandardMaterial>>();
+    world.init_resource::<Assets<MeshLitMaterial>>();
+    let mut actor_state = SystemState::<(Commands, ActorMaterials)>::new(world);
+    let mut actor_cache = ActorMaterialCache::default();
     let mut items = Vec::new();
     for index in 0..spawned {
         let actor = ObjectId::from_index(index as u32);
@@ -284,9 +291,9 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
         };
         let views = sections.iter().map(|mesh| SectionView { skin: Some(skin.clone()), ..SectionView::textured(mesh.clone(), None) }).collect();
         let placed = Transform::from_xyz(index as f32 * 50.0, 0.0, 0.0);
-        let mut commands = world.commands();
-        spawn_actor_sections(&mut commands, parent, views, placed, (follow.actor, follow), |_: &SectionView| SectionMaterial::Standard(Handle::<StandardMaterial>::default()), None, ());
-        world.flush();
+        let (mut commands, mut materials) = actor_state.get_mut(world).expect("actor material stores");
+        spawn_actor_sections(&mut commands, parent, views, placed, (follow.actor, follow), (&mut materials, ActorLook::Spawned(&mut actor_cache)), None, ());
+        actor_state.apply(world);
         world.spawn((Mesh3d(small.clone()), material.clone(), placed, ChildOf(heads)));
         if index < shape.posed {
             let mut item = AnimatedMesh::new(sections.clone(), Arc::clone(&pawn), Arc::clone(&animation), 0, |i| format!("b{i}"), |i| format!("b{i}"));

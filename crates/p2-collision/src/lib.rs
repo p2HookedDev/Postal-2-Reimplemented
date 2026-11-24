@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use p2_assets::{BspNode, Model, StaticMesh, Terrain, poly_flags};
 use p2_math::{Rotator, Vector};
 

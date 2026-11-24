@@ -97,7 +97,7 @@ impl Simulation {
         }
         // Actors a camera saw last frame are marked rendered, or POSTAL 2's pawns go into stasis. Photo mode's free
         // camera marks nothing: it would wake people the player never saw.
-        let photo = crate::render::photo::photo_active(&mut self.vm);
+        let photo = photo::photo_active(&mut self.vm);
         for &actor in job.visible.iter().filter(|_| !photo) {
             if let Err(error) = self.vm.mark_rendered(actor) {
                 bevy::log::warn!("{actor:?}: {error}");
@@ -130,7 +130,7 @@ impl Simulation {
         frame.times.push(("vm read poses", started.elapsed()));
         // The client's input (menus, console), then the HUD; a map change goes first, as retail loads the
         // map before it draws again.
-        self.vm.set_video_modes(crate::display::video_modes());
+        self.vm.set_video_modes(p2_host::display::video_modes());
         if let Some([x, y]) = job.cursor {
             self.vm.set_mouse_position(x, y);
         }
@@ -151,7 +151,7 @@ impl Simulation {
             frame.times.push(("hud scripts", started.elapsed()));
         }
         let started = Instant::now();
-        self.read_after_hud(&mut frame, &job.watched, job.forces, job.fire_light);
+        self.read_after_hud(&mut frame, &job.watched, job.forces);
         frame.times.push(("vm read after hud", started.elapsed()));
         frame.profile = self.vm.diagnostics.tick_profile.take().unwrap_or_default();
         let vm_time = frame.times.iter().filter(|(name, _)| !name.starts_with("after hud: ")).map(|(_, time)| *time).sum();

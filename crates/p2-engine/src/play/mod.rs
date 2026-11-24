@@ -43,22 +43,21 @@ use crate::actors::{
     BoneAttachment, EmitterActor, MeshActor, ProjectorActor, SkeletalActor, actor_look, actor_scale, bone_attachment, emitter_actor,
     emitter_properties, emitters_disabled, location_rotation, mesh_actor, object_path, projector_actor, skeletal_actor, skin_paths,
 };
-use crate::animation::{BoneFrame, FollowBone};
-use crate::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
-use crate::display::MODERN_FIRE_LIGHT;
-use crate::mesh_view::ShadowOnly;
+use p2_render::components::FollowBone;
+use p2_render::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
+use p2_render::view::ShadowOnly;
+use p2_host::frame_times::{FrameTimes, VmProfile, end_frame};
 
-mod times;
+pub(crate) mod photo;
 mod vm_thread;
 mod world;
 mod sound;
 
-pub use p2_vm::Pointer;
-pub use times::*;
+use p2_vm::Pointer;
 pub use vm_thread::*;
 pub use world::*;
 use sound::{ambient_gain, pitch_factor};
-pub(crate) use sound::{MovieSound, sound_listener};
+pub(crate) use sound::MovieSound;
 
 const MAX_STEP: f32 = 0.1;
 
@@ -71,19 +70,14 @@ const TICK_PERIOD: f32 = 1.0 / 120.0;
 /// alternate in such a pattern (vsync: 3 and 4 refreshes of a 240 Hz display) give an even step.
 const STEP_FRAMES: usize = 12;
 
-/// Stack of every thread that runs scripts (bytes): scripts call by recursion, up to the engine's 1000 nested calls.
-/// The VM's thread and the system threads ([`init_script_stacks`]) get it; each program's `build.rs` gives the main
-/// thread the same by hand (`/STACK:67108864`): the three must match.
-pub const SCRIPT_STACK: usize = 64 << 20;
-
-/// Gives Bevy's system threads [`SCRIPT_STACK`] (the main thread helps run systems too, its stack is set at link
+/// Gives Bevy's system threads [`p2_vm::SCRIPT_STACK`] (the main thread helps run systems too, its stack is set at link
 /// time). Call before the app is built: the compute pool made here is the one the app's `TaskPoolPlugin` keeps
 /// (`get_or_init`).
 pub fn init_script_stacks() {
     // Every core but those the main, render and VM threads keep busy.
     let threads = bevy::tasks::available_parallelism().saturating_sub(3).max(1);
     bevy::tasks::ComputeTaskPool::get_or_init(|| {
-        bevy::tasks::TaskPoolBuilder::new().num_threads(threads).stack_size(SCRIPT_STACK).thread_name("Compute Task Pool".into()).build()
+        bevy::tasks::TaskPoolBuilder::new().num_threads(threads).stack_size(p2_vm::SCRIPT_STACK).thread_name("Compute Task Pool".into()).build()
     });
 }
 
@@ -93,6 +87,8 @@ pub struct PlayPlugin;
 pub enum PlaySystems {
     Input,
     Tick,
+    /// (`Update`) After the actors took this tick's places, before the sounds are mixed.
+    Placed,
     /// (`PostUpdate`) Before the renderer copies changed assets (`AssetEventSystems`: the particle meshes rewritten every
     /// frame) and before transforms propagate (the first-person weapon placed after `RenderOverlays`), so both show this
     /// frame, not one late.
@@ -111,22 +107,23 @@ pub struct PlayerInput {
 
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
-        crate::add_once(app, sound::SoundPlugin);
+        app.add_plugins(sound::SoundPlugin);
         app.init_resource::<Play>()
-            .init_resource::<ShadowOnly>()
             .init_resource::<FrameTimes>()
             .init_resource::<PlayerInput>()
             .configure_sets(Update, (PlaySystems::Input, PlaySystems::Tick).chain())
+            .configure_sets(Update, PlaySystems::Placed.in_set(PlaySystems::Tick).after(follow_actors).before(sound::SoundSystems::Mix))
             .add_systems(First, end_frame)
             .add_systems(Last, finish_saves_on_exit)
             .add_systems(
                 Update,
-                (gather_input, hand_off, look_ahead, publish_frame_lights, publish_actor_frames, follow_actors, crate::map::face_sprites, crate::map::draw_coronas)
+                (gather_input, hand_off, publish_frame_facts, look_ahead, publish_frame_lights, publish_actor_frames, follow_actors)
                     .chain()
                     .in_set(PlaySystems::Tick)
                     .after(sound::SoundSystems::Stop)
                     .before(sound::SoundSystems::Mix),
             )
+            .add_systems(Update, photo::request_screenshot.after(hand_off).in_set(PlaySystems::Tick))
             // The renderer copies a changed asset only in the frame its change event is sent; unordered, that ran
             // before the particle meshes were rewritten on some frames, and those frames showed the previous ones.
             .configure_sets(PostUpdate, PlaySystems::Present.before(AssetEventSystems).before(TransformSystems::Propagate));
@@ -281,12 +278,6 @@ impl LookAhead {
     }
 }
 
-/// Whether a game is in play and paused: what moves by the engine's own clock (particles, panned textures) stands
-/// still then, as the game's actors do.
-pub(crate) fn game_paused(play: Option<&Play>) -> bool {
-    play.and_then(Play::world).is_some_and(PlayWorld::game_paused)
-}
-
 impl Play {
     pub(crate) fn generation(&self) -> u64 {
         self.generation
@@ -395,7 +386,7 @@ fn gather_input(time: Res<Time>, mut play: ResMut<Play>, mut input: ResMut<Playe
     world.shown.frame(time.delta_secs());
 }
 
-fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, drawn: DrawnActors, settings: Option<Res<crate::display::Settings>>) {
+fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, drawn: DrawnActors) {
     let (threaded, canvas) = (play.threaded, play.canvas);
     let play = &mut *play;
     let Some(world) = play.world.as_mut() else { return };
@@ -413,8 +404,7 @@ fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<Pl
         let waited = std::mem::take(&mut play.waited);
         let step = if play.smooth_step { play.clock.step(waited) } else { waited.min(MAX_STEP) };
         sent = play.backlog.mouse;
-        let fire_light = settings.is_some_and(|settings| settings.modern_level(MODERN_FIRE_LIGHT) > 0);
-        job = Some(Job { fire_light, ..next_job(world, drawn, &input, &mut play.backlog, &times, step, canvas) });
+        job = Some(next_job(world, drawn, &input, &mut play.backlog, &times, step, canvas));
     }
     if inline
         && world.frame.travel.is_none()
@@ -503,7 +493,6 @@ fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, back
         finished: std::mem::take(&mut world.finished),
         vm_profile: times.vm_profile,
         forces: world.wants_forces,
-        fire_light: false,
         movie_status: std::mem::take(&mut world.movie_status),
     }
 }
@@ -544,8 +533,8 @@ fn follow_actors(
     times.add("follow actors", started);
 }
 
-fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&crate::render::actor_light::ActorLit, &mut crate::render::actor_light::ActorFrame)>) {
-    use crate::render::actor_light::{ActorFrame, ActorPlace};
+fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&p2_render::actor_light::ActorLit, &mut p2_render::actor_light::ActorFrame)>) {
+    use p2_render::actor_light::{ActorFrame, ActorPlace};
     let world = play.world();
     for (lit, mut frame) in &mut lit {
         let actor = world.and_then(|world| world.actor(lit.actor));
@@ -558,13 +547,30 @@ fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&crate::render::actor_l
     }
 }
 
-/// Touched only when they changed, so the render systems' change detection stays meaningful.
-fn publish_frame_lights(play: Res<Play>, mut frame: ResMut<crate::render::bsp_light::FrameLights>) {
-    let lights = play.world().map_or(&[][..], |world| world.dynamic_lights());
-    if frame.0 != lights {
-        frame.0.clear();
-        frame.0.extend_from_slice(lights);
-    }
+fn publish_frame_lights(play: Res<Play>, frame: ResMut<p2_render::bsp_light::FrameLights>) {
+    p2_render::bsp_light::FrameLights::publish(frame, play.world().map_or(&[][..], |world| world.dynamic_lights()));
+}
+
+fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts::FrameFacts>) {
+    let Some(world) = play.world() else {
+        facts.set_if_neq(p2_render::frame_facts::FrameFacts::default());
+        return;
+    };
+    // Written in place: the two lists keep their memory from frame to frame.
+    let facts = facts.into_inner();
+    facts.in_play = true;
+    facts.paused = world.game_paused();
+    facts.game_step = world.game_step();
+    facts.origin = world.origin();
+    facts.cutscene = world.cutscene();
+    facts.eye_to_view_target = world.eye_to_view_target();
+    facts.cull_distances.clear();
+    facts.cull_distances.extend(world.actors.iter().filter(|(_, frame)| frame.cull_distance > 0.0).map(|(&actor, frame)| (actor, frame.cull_distance)));
+    facts.person_hits.clear();
+    facts.person_hits.extend_from_slice(world.person_hits());
+    facts.level_time = world.level_time();
+    facts.glows.clear();
+    facts.glows.extend_from_slice(world.glows());
 }
 
 #[cfg(test)]

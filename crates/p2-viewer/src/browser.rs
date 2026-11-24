@@ -22,12 +22,13 @@ use p2_script::Source;
 use crate::ViewerState;
 use crate::controls::ViewerInput;
 use p2_engine::animation::{Animated, AnimationSystems};
-use p2_engine::game_dir_form::GameDirForm;
-use p2_engine::library::Library;
+use p2_host::game_dir_form::GameDirForm;
+use p2_bevy_assets::library::Library;
 use p2_engine::map::{
-    MapSystems, SceneTargets, SectionChunks, Session, animate_mesh_with, material_images, sections_of_static_mesh, skeletal_mesh_sections, travel_package,
+    MapSystems, SceneTargets, Session, animate_mesh_with, travel_package,
 };
-use p2_engine::mesh_view::{ModelView, Scene};
+use p2_render::level::{SectionChunks, material_images, sections_of_static_mesh, skeletal_mesh_sections};
+use p2_render::scene::{ModelView, Scene, SectionView};
 use p2_engine::play::PlayWorld;
 
 fn loop_browsed_meshes(time: Res<Time>, animated: Res<Animated>, mut meshes: ResMut<Assets<Mesh>>) {
@@ -294,7 +295,7 @@ impl Browser {
         if let Some(preview) = self.preview.take() {
             t.contexts.remove_image(preview.image.id());
         }
-        t.scene.scenes.write(p2_engine::mesh_view::SceneChange::Clear);
+        t.scene.scenes.write(p2_render::scene::SceneChange::Clear);
     }
 }
 
@@ -354,12 +355,11 @@ fn show_static_mesh(open: &OpenPackage, index: usize, library: &mut Library, roo
         let (game, id) = game.as_mut().ok()?;
         material_images(game, t, *id, material)
     });
-    let textured = sections.iter().filter(|s| s.texture.is_some()).count();
+    let textured = show_model(&mut t.scene, sections, Transform::IDENTITY, min, max);
     let textures = match &game {
         Ok(_) => format!(", {textured} textured"),
         Err(e) => format!(" (no textures: {e})"),
     };
-    show_model(&mut t.scene, ModelView { sections, instances: vec![Transform::IDENTITY], zone: None, casts: true }, min, max);
     Ok(format!("{status}{textures}"))
 }
 
@@ -386,7 +386,6 @@ fn show_skeletal_mesh(open: &OpenPackage, index: usize, library: &mut Library, r
     if let Ok((game, id)) = library.open(root, path) {
         (sections, handles) = skeletal_mesh_sections(game, &mut t.scene.assets, &mut material_images, &mesh, id, &[], false);
     }
-    let textured = sections.iter().filter(|s| s.texture.is_some()).count();
     let animations: Vec<_> = (pkg.exports.iter())
         .filter(|e| pkg.object_name(e.class_index) == Some("MeshAnimation"))
         .filter_map(|e| p2_assets::read_mesh_animation(pkg, &open.data, e).ok().map(std::sync::Arc::new))
@@ -398,7 +397,7 @@ fn show_skeletal_mesh(open: &OpenPackage, index: usize, library: &mut Library, r
         }
         None => String::new(),
     };
-    show_model(&mut t.scene, ModelView { sections, instances: vec![placement], zone: None, casts: true }, min, max);
+    let textured = show_model(&mut t.scene, sections, placement, min, max);
     Ok(format!("{status}, {textured} textured{playing}"))
 }
 
@@ -406,9 +405,10 @@ fn bounds(points: impl Iterator<Item = Vec3>) -> (Vec3, Vec3) {
     points.fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)))
 }
 
-fn show_model(t: &mut SceneTargets, model: ModelView, min: Vec3, max: Vec3) {
-    t.scenes.write(p2_engine::mesh_view::SceneChange::Show(Box::new(Scene {
-        models: vec![model],
+fn show_model(t: &mut SceneTargets, sections: Vec<SectionView>, placement: Transform, min: Vec3, max: Vec3) -> usize {
+    let textured = sections.iter().filter(|s| s.texture.is_some()).count();
+    t.scenes.write(p2_render::scene::SceneChange::Show(Box::new(Scene {
+        models: vec![ModelView { sections, instances: vec![placement], zone: None, casts: true }],
         center: (min + max) / 2.0,
         radius: ((max - min).length() / 2.0).max(1.0),
         sky: None,
@@ -423,6 +423,7 @@ fn show_model(t: &mut SceneTargets, model: ModelView, min: Vec3, max: Vec3) {
         antiportals: Vec::new(),
         light_maps: Vec::new(),
     })));
+    textured
 }
 
 fn collect_packages(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {

@@ -5,6 +5,7 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::state::prelude::{AppExtStates, NextState, States, in_state};
 use bevy_egui::EguiPrimaryContextPass;
+use p2_package::ResolveError;
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MapState {
@@ -90,6 +91,48 @@ fn report_lost_vm(play: Res<Play>, session: Res<Session>, mut next: ResMut<NextS
     }
 }
 
+pub(super) fn play_loader(game: &Game, map: &str) -> Result<(Arc<Loader>, PackageId), ResolveError> {
+    Game::add_map(Game::script_loader(&game.system, p2_host::game_dir::config_folder())?, map, &LoadProgress::default())
+}
+
+/// After travel, `played` with the new map added, so every package keeps its id (`Vm::set_loader`). Package loading
+/// reports 0 to 0.45 to `progress`.
+pub(super) fn spawn_play_loader<T: Send + 'static>(
+    game: &Game,
+    map: &str,
+    played: Option<Loader>,
+    progress: Arc<LoadProgress>,
+    then: impl FnOnce(Arc<Loader>, PackageId) -> Result<T, LoadError> + Send + 'static,
+) -> std::thread::JoinHandle<Result<T, LoadError>> {
+    let (system, map) = (game.system.clone(), map.to_owned());
+    std::thread::Builder::new()
+        .name("map loading".into())
+        // The VM's script recursion (`start_vm` runs the map's start-up scripts here).
+        .stack_size(p2_vm::SCRIPT_STACK)
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let loader = match played {
+                Some(loader) => loader,
+                None => Game::script_loader(&system, p2_host::game_dir::config_folder())?,
+            };
+            let (loader, id) = Game::add_map(loader, &map, &progress)?;
+            bevy::log::info!("load: {map} packages read in {} ms", started.elapsed().as_millis());
+            then(loader, id)
+        })
+        .map_err(LoadError::Thread)
+        .unwrap_or_else(|error| std::thread::spawn(move || Err(error)))
+}
+
+pub(super) fn configs(game: &Game) -> Vec<(&'static str, Ini)> {
+    let read = |names: &[&str]| {
+        names.iter().find_map(|name| std::fs::read(game.system.join(name)).ok()).map(|bytes| Ini::from_bytes(&bytes))
+    };
+    [("System", read(&["Postal2.ini", "Default.ini"])), ("User", read(&["User.ini", "DefUser.ini"])), ("Selectors", read(&["Selectors.ini"])), ("Subtitles", read(&["Subtitles.ini"])), ("Settings", Some(p2_host::display::load_settings()))]
+        .into_iter()
+        .filter_map(|(name, ini)| Some((name, ini?)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,7 +149,7 @@ mod tests {
             bevy::asset::AssetPlugin::default(),
             bevy::transform::TransformPlugin,
             bevy::state::app::StatesPlugin,
-            crate::mesh_view::MeshViewPlugin,
+            p2_render::P2RenderPlugins,
             crate::play::PlayPlugin,
             crate::animation::AnimationPlugin,
             MapLoadPlugin,

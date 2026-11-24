@@ -17,7 +17,7 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::occlusion_culling::OcclusionCulling;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-use p2_engine::render::particle_material::{ParticleMaterial, ParticlePlugin};
+use p2_render::particle_material::{ParticleMaterial, ParticlePlugin};
 
 const SIZE: u32 = 64;
 
@@ -26,10 +26,11 @@ fn app() -> (App, Arc<Mutex<Vec<Vec<u8>>>>, bevy::asset::Handle<Image>) {
     common::headless_renderer(&mut app);
     app.add_plugins((
         ParticlePlugin,
-        p2_engine::render::blended::BlendedPlugin,
-        p2_engine::render::lightmapped::LightmappedPlugin,
-        p2_engine::render::actor_light::ActorLightPlugin,
-        p2_engine::render::mesh_light::MeshLightPlugin,
+        p2_render::translucent_order::TranslucentOrderPlugin,
+        p2_render::blended::BlendedPlugin,
+        p2_render::lightmapped::LightmappedPlugin,
+        p2_render::actor_light::ActorLightPlugin,
+        p2_render::mesh_light::MeshLightPlugin,
     ));
     app.finish();
     app.cleanup();
@@ -122,8 +123,9 @@ mod monday {
     use bevy::math::UVec2;
     use bevy::time::TimeUpdateStrategy;
     use p2_engine::animation::AnimationPlugin;
-    use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SceneTargets, Session, SpawnedActors};
-    use p2_engine::mesh_view::{MeshView, MeshViewPlugin, SceneView};
+    use p2_engine::map::{Fluids, Hud, Particles, Projectors, SceneTargets, Session, SpawnedActors};
+    use p2_render::level::MaterialSwitches;
+    use p2_render::view::{MeshView, SceneView};
     use p2_engine::play::{PlayPlugin, PlaySystems, PlayerInput};
 
     pub const W: u32 = 640;
@@ -148,7 +150,7 @@ mod monday {
         let root = common::game_dir()?;
         let mut app = App::new();
         common::headless_renderer(&mut app);
-        app.add_plugins((MeshViewPlugin, PlayPlugin, AnimationPlugin))
+        app.add_plugins((p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin))
         .init_resource::<Fluids>()
         .init_resource::<MaterialSwitches>()
         .init_resource::<Projectors>()
@@ -332,7 +334,7 @@ fn particles_take_the_scene_fog() {
 fn blended_layer_under_a_transparent_decal(blended: bool) -> ([u8; 3], [u8; 3]) {
     use bevy::light::ClusteredDecal;
     use bevy::material::AlphaMode;
-    use p2_engine::render::blended::{BlendedMaterial, OpaqueDecals};
+    use p2_render::blended::{BlendedMaterial, OpaqueDecals};
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -401,9 +403,9 @@ fn blended_layers_have_no_decal_squares() {
 
 fn projected_floor(vertex_lit: bool, floor: u8, texel: [u8; 3]) -> [u8; 3] {
     use bevy::light::ClusteredDecal;
-    use p2_engine::render::blended::{BlendedMaterial, OpaqueDecals};
-    use p2_engine::render::mesh_light::{DynamicLit, MeshLitMaterial};
-    use p2_engine::render::shader_layers::Layers;
+    use p2_render::blended::{BlendedMaterial, OpaqueDecals};
+    use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
+    use p2_render::shader_layers::Layers;
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -677,7 +679,7 @@ fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {
         let min = bounds.iter().map(|b| bevy::math::Vec3::from(b.min())).reduce(bevy::math::Vec3::min).expect("bounds");
         let max = bounds.iter().map(|b| bevy::math::Vec3::from(b.max())).reduce(bevy::math::Vec3::max).expect("bounds");
         for mesh in &mut meshes {
-            p2_engine::map::pad_bounds(mesh, min, max);
+            p2_render::particle_draw::bounds::pad_bounds(mesh, min, max);
         }
     }
     let actor = world.spawn_empty().id();
@@ -686,7 +688,7 @@ fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {
         let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
         let mut drawn = world.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default(), NoFrustumCulling));
         if actor_order {
-            drawn.insert(p2_engine::render::translucent_order::TranslucentDraw::Part { actor, order: index as u32 });
+            drawn.insert(p2_render::translucent_order::TranslucentDraw::Part { actor, order: index as u32 });
         }
     }
     let pixel = || frames.lock().expect("lock").last().map(|f| [0, 1, 2].map(|c| f[((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize + c]));
@@ -882,7 +884,7 @@ fn decals_stay_while_the_camera_turns() {
 }
 
 fn skinned_lit_quad(toward: Option<bool>) -> [u8; 3] {
-    use p2_engine::render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
+    use p2_render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -939,7 +941,7 @@ fn skinned_actors_lit_like_the_driver() {
 }
 
 fn bsp_lit_quad(light_z: Option<f32>) -> [u8; 3] {
-    use p2_engine::render::lightmapped::{BakedLight, LightmappedMaterial};
+    use p2_render::lightmapped::{BakedLight, LightmappedMaterial};
     dynamic_lit_quad(light_z, quad(100.0, -20.0), |world, mesh| {
         let material = world.resource_mut::<Assets<LightmappedMaterial>>().add(LightmappedMaterial { base: StandardMaterial::default(), extension: BakedLight::default() });
         world.spawn((mesh, MeshMaterial3d(material), Transform::default()));
@@ -947,7 +949,7 @@ fn bsp_lit_quad(light_z: Option<f32>) -> [u8; 3] {
 }
 
 fn dynamic_lit_quad(light_z: Option<f32>, mesh: Mesh, surface: impl FnOnce(&mut bevy::ecs::world::World, Mesh3d)) -> [u8; 3] {
-    use p2_engine::render::bsp_light::DynamicLight;
+    use p2_render::bsp_light::DynamicLight;
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -1004,7 +1006,7 @@ fn bsp_lit_by_dynamic_lights_like_retail() {
 #[test]
 #[ignore = "needs a GPU"]
 fn vertex_lit_meshes_take_dynamic_lights() {
-    use p2_engine::render::mesh_light::{DynamicLit, MeshLitMaterial};
+    use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
     let lit_quad = |light_z| {
         let mut mesh = quad(100.0, -20.0);
         let baked = 0.5f32.powf(2.2);
@@ -1026,8 +1028,9 @@ fn vertex_lit_meshes_take_dynamic_lights() {
 #[test]
 #[ignore = "needs a GPU"]
 fn shader_layers_like_the_driver() {
-    use p2_engine::render::mesh_light::{DynamicLit, MeshLitMaterial};
-    use p2_engine::render::shader_layers::{Layers, SpecularCoords, SpecularMode, SpecularParams};
+    use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
+    use p2_render::shader_layers::Layers;
+    use p2_bevy_assets::library::{SpecularCoords, SpecularMode, SpecularParams};
     let texel = |world: &mut bevy::ecs::world::World, rgba: [u8; 4]| {
         let size = Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
         let image = Image::new_fill(size, TextureDimension::D2, &rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);

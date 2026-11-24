@@ -5,14 +5,14 @@ use crate::natives::{bool_arg, float_arg, int_arg, name_arg, object_arg, orthogo
 use crate::Value;
 
 pub(crate) fn operate(native: Native, args: &mut [Value]) -> Option<Value> {
-    scalar(native, args)
+    scalar_operator(native, args)
         .or_else(|| spatial(native, args))
         .or_else(|| assignment(native, args))
         .or_else(|| increment(native, args))
         .or_else(|| vector_out(native, args))
 }
 
-fn scalar(native: Native, args: &[Value]) -> Option<Value> {
+fn scalar_operator(native: Native, args: &[Value]) -> Option<Value> {
     let v = |n: usize| vec3(args.get(n));
     let color = |n: usize| match args.get(n) {
         Some(Value::Struct(members)) => [0, 1, 2, 3].map(|i| members.get(i).map_or(0, int) as u8),

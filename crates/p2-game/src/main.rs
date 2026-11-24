@@ -22,10 +22,11 @@ use bevy::ecs::query::With;
 use bevy::window::{CursorGrabMode, CursorOptions, Monitor, PrimaryWindow, Window, WindowMode, WindowPlugin};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use p2_engine::diagnostics::{DiagnosticsPlugin, StageTimingPlugin, capture_layer, console_layer, install_panic_hook, log_frame_times};
-use p2_engine::display::{self, Display, Settings};
-use p2_engine::game_dir::known_game_dir;
+use p2_host::display::{self, Display, Settings};
+use p2_host::game_dir::known_game_dir;
 use p2_engine::map::{MapFailed, MapLoadPlugin, MapSystems, SceneTargets, Session, map_package, start_map};
-use p2_engine::play::{Play, PlaySystems, Pointer};
+use p2_engine::play::{Play, PlaySystems};
+use p2_vm::Pointer;
 use p2_engine::P2EnginePlugins;
 use p2_package::Ini;
 
@@ -71,13 +72,14 @@ fn run() {
         P2EnginePlugins,
         DiagnosticsPlugin,
         StageTimingPlugin,
+        p2_render::asset_churn::AssetChurnPlugin,
         LauncherPlugin,
         MapLoadPlugin,
         GamePlugin,
     ));
     #[cfg(feature = "profile")]
     {
-        app.world_mut().resource_mut::<p2_engine::play::FrameTimes>().vm_profile = p2_engine::play::VmProfile::TickByClass;
+        app.world_mut().resource_mut::<p2_host::frame_times::FrameTimes>().vm_profile = p2_host::frame_times::VmProfile::TickByClass;
     }
     app.run();
 }
@@ -167,7 +169,7 @@ fn frame(
     if let Some(MapFailed(failure)) = failed.read().last() {
         launcher.failure = Some(failure.clone());
         session.clear(&mut t);
-        t.scenes.write(p2_engine::mesh_view::SceneChange::Clear);
+        t.scenes.write(p2_render::scene::SceneChange::Clear);
         t.view.viewport = None;
         t.commands.remove_resource::<Session>();
         next.set(GameState::Launcher);

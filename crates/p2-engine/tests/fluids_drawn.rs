@@ -12,8 +12,8 @@ use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
 use bevy::transform::components::{GlobalTransform, Transform};
 use p2_engine::map::{SceneTargets, Session};
-use p2_engine::render::particle_material::ParticleMaterial;
-use p2_engine::mesh_view::SceneView;
+use p2_render::particle_material::ParticleMaterial;
+use p2_render::view::SceneView;
 use p2_engine::play::{PlaySystems, PlayerInput};
 
 #[derive(Resource)]

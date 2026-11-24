@@ -1,42 +1,19 @@
 use super::*;
 use super::drawn_pose::told_bone;
 use bevy::camera::visibility::RenderLayers;
-use crate::components::{CanvasDrawn, UNSEEN_LAYER};
+use p2_render::components::{CanvasDrawn, UNSEEN_LAYER};
+use crate::play::{BoneFrame, axes_matrix};
 
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) struct BoneFrame {
-    pub(crate) location: Vector,
-    pub(crate) axes: [Vector; 3],
+pub fn follow_transform(follow: &FollowBone, body: Mat4, bone: Mat4) -> Transform {
+    follow_transform_at(follow, follow_frame(follow, body, bone))
 }
 
-fn axes_matrix(axes: [Vector; 3], origin: Vec3) -> Mat4 {
-    let [x, y, z] = axes.map(|axis| Vec3::from_array(axis.into()).extend(0.0));
-    Mat4::from_cols(x, y, z, origin.extend(1.0))
+fn follow_frame(follow: &FollowBone, body: Mat4, bone: Mat4) -> Mat4 {
+    attachment_frame(body, bone, follow.relative_location, follow.relative_rotation)
 }
 
-impl BoneFrame {
-    fn of(frame: Mat4) -> Self {
-        let axes = [frame.x_axis, frame.y_axis, frame.z_axis].map(|axis| axis.truncate().to_array());
-        Self { location: frame.w_axis.truncate().to_array().into(), axes: axes.map(Vector::from) }
-    }
-
-    pub(crate) fn matrix(self) -> Mat4 {
-        axes_matrix(self.axes, Vec3::from_array(self.location.into()))
-    }
-}
-
-impl FollowBone {
-    pub fn transform(&self, body: Mat4, bone: Mat4) -> Transform {
-        self.transform_at(self.frame(body, bone))
-    }
-
-    fn frame(&self, body: Mat4, bone: Mat4) -> Mat4 {
-        attachment_frame(body, bone, self.relative_location, self.relative_rotation)
-    }
-
-    fn transform_at(&self, frame: Mat4) -> Transform {
-        skeletal_transform(frame, self.scale, self.pre_pivot, (self.mesh_scale, self.origin, self.rot_origin))
-    }
+fn follow_transform_at(follow: &FollowBone, frame: Mat4) -> Transform {
+    skeletal_transform(frame, follow.scale, follow.pre_pivot, (follow.mesh_scale, follow.origin, follow.rot_origin))
 }
 
 fn skeletal_transform(frame: Mat4, scale: Vector, pre_pivot: Vector, (mesh_scale, origin, rot_origin): (Vector, Vector, Rotator)) -> Transform {
@@ -80,13 +57,13 @@ pub(super) fn follow_bones(
         let body = placed
             .and_then(|(base, (location, rotation))| FollowActor { pre_pivot: base.pre_pivot, ..follow.base_follow }.mesh_matrix(location, rotation))
             .unwrap_or(follow.body);
-        let frame = follow.frame(body, bone);
+        let frame = follow_frame(&follow, body, bone);
         if let Some(world) = world {
             let told = told_bone(&poses.animated, follow.base, follow.bone, bone);
-            let told = if told == bone { frame } else { follow.frame(body, told) };
+            let told = if told == bone { frame } else { follow_frame(&follow, body, told) };
             world.shown.places.put_on_bone(follow.actor, follow.base, BoneFrame::of(told), BoneFrame::of(frame));
         }
-        transform.set_if_neq(follow.transform_at(frame));
+        transform.set_if_neq(follow_transform_at(&follow, frame));
     }
 }
 

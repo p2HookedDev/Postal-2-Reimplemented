@@ -1,6 +1,6 @@
 use super::*;
-use crate::mesh_view::ActorMaterialKey;
-use super::scene::{PendingAssets, VmAnimations};
+use p2_render::view::ActorMaterialCache;
+use super::scene::VmAnimations;
 use bevy::math::Affine3A;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -24,11 +24,12 @@ pub(super) fn static_model_key(path: &str, skins: &[Option<String>]) -> ModelKey
 #[derive(Resource, Default)]
 pub struct SpawnedActors {
     pub(super) spawn_models: HashMap<ModelKey, Option<SpawnModel>>,
-    spawn_materials: FxHashMap<ActorMaterialKey, SectionMaterial>,
+    spawn_materials: ActorMaterialCache,
     pub(super) spawn_builds: Vec<ModelBuild>,
     pub(super) texture_builds: Vec<TextureBuild>,
     spawn_waiting: Vec<SpawnedActor>,
     pub(super) actor_textures: FxHashMap<String, Option<ActorTexture>>,
+    pub(super) corona_materials: FxHashMap<String, Option<Handle<ParticleMaterial>>>,
 }
 
 pub(super) struct TextureBuild {
@@ -40,7 +41,7 @@ pub(super) struct TextureBuild {
 impl TextureBuild {
     fn start(game: &Game, assets: &AssetStores, path: &str) -> Self {
         let image = assets.images.get_handle_provider().reserve_handle().typed::<Image>();
-        let (mut built, mut assets, reserved, read_path) = (game.clone(), PendingAssets::new(assets), image.clone(), path.to_owned());
+        let (mut built, mut assets, reserved, read_path) = (game.clone(), PendingAssets::new(&assets.meshes, &assets.images, &assets.bindposes), image.clone(), path.to_owned());
         let task = AsyncComputeTaskPool::get().spawn(async move {
             catch_unwind(AssertUnwindSafe(move || {
                 let texture = ActorTexture::read(&mut built, &read_path, |read| assets.add_image_as(reserved, read));
@@ -92,11 +93,7 @@ pub(super) fn build_static_model<S: SceneAssets>(game: &mut Game, t: &mut S, pat
 
 pub(super) fn keep_static_meshes(meshes: &mut Assets<Mesh>, model: Option<&SpawnModel>) {
     let Some(SpawnModel::Static { sections, .. }) = model else { return };
-    for section in sections {
-        if let Some(mut mesh) = meshes.get_mut(&section.mesh) {
-            keep_for_relighting(&mut mesh);
-        }
-    }
+    keep_sections_for_relighting(meshes, sections);
 }
 
 fn build_skeletal_model(
@@ -189,7 +186,7 @@ struct BuiltModel {
 
 impl ModelBuild {
     pub(super) fn start_static(game: &Game, assets: &AssetStores, key: ModelKey, path: String) -> Self {
-        let (mut built, mut assets) = (game.clone(), PendingAssets::new(assets));
+        let (mut built, mut assets) = (game.clone(), PendingAssets::new(&assets.meshes, &assets.images, &assets.bindposes));
         let task = AsyncComputeTaskPool::get().spawn(async move {
             catch_unwind(AssertUnwindSafe(move || {
                 let model = build_static_model(&mut built, &mut assets, &path, &[]);
@@ -210,7 +207,7 @@ impl ModelBuild {
             SpawnedDraw::Static(a) => (false, a.static_mesh.clone(), a.skins.clone()),
             SpawnedDraw::Skeletal(a) => (true, a.mesh.clone(), a.skins.clone()),
         };
-        let (mut built, mut assets, vm_animations, mut animations) = (game.clone(), PendingAssets::new(assets), vm_animations.clone(), animations.clone());
+        let (mut built, mut assets, vm_animations, mut animations) = (game.clone(), PendingAssets::new(&assets.meshes, &assets.images, &assets.bindposes), vm_animations.clone(), animations.clone());
         let task = AsyncComputeTaskPool::get().spawn(async move {
             catch_unwind(AssertUnwindSafe(move || {
                 let model = if skeletal {
@@ -226,18 +223,10 @@ impl ModelBuild {
 }
 
 fn static_actor_sections(meshes: &mut Assets<Mesh>, mesh: &Arc<StaticMesh>, sections: &[SectionView], a: &MeshActor) -> (Vec<SectionView>, Option<ActorLit>) {
-    let mut sections = sections.to_vec();
-    let lit = (!a.lighting.unlit).then(|| {
-        for section in &mut sections {
-            if let Some(copy) = meshes.get(&section.mesh).cloned() {
-                section.mesh = meshes.add(copy);
-            }
-        }
-        let shading = Shading::Vertices { mesh: Arc::clone(mesh), sphere: crate::render::actor_light::mesh_sphere(mesh), scale: a.scale, pre_pivot: a.pre_pivot };
-        // Not its `MaxLights`: retail sets every listed light and the driver takes the first 8.
-        ActorLit::new(a.object, MAX_HARDWARE_LIGHTS, 0.0, shading)
-    });
-    (sections, lit)
+    if a.lighting.unlit {
+        return (sections.to_vec(), None);
+    }
+    (relit_sections(meshes, sections), Some(ActorLit::static_mesh(a.object, Arc::clone(mesh), a.scale, a.pre_pivot)))
 }
 
 fn spawn_actor_model(spawned: SpawnedActor, origin: Vec3, t: &mut SpawnTargets) {
@@ -271,23 +260,7 @@ fn spawn_actor_model(spawned: SpawnedActor, origin: Vec3, t: &mut SpawnTargets) 
         None => (Transform::default(), Visibility::Inherited),
     };
     let parent = t.commands.spawn((MapScoped, ActorModel(actor), Transform::from_translation(origin), Visibility::default())).id();
-    let (materials, mesh_lit) = (&mut t.assets.materials, &mut t.assets.mesh_lit);
-    let material = |section: &SectionView| spawned_material(shared, materials, mesh_lit, section);
-    spawn_actor_sections(t.commands, parent, sections, placed, (actor, follow), material, lit, shown);
-}
-
-fn spawned_material(
-    shared: &mut FxHashMap<ActorMaterialKey, SectionMaterial>,
-    materials: &mut Assets<StandardMaterial>,
-    mesh_lit: &mut Assets<MeshLitMaterial>,
-    section: &SectionView,
-) -> SectionMaterial {
-    crate::mesh_view::cached_actor_material(shared, section, materials, mesh_lit, || crate::mesh_view::actor_standard(section, crate::mesh_view::SceneLights::Ignored))
-}
-
-pub fn material_images<S: SceneAssets>(game: &mut Game, t: &mut S, package: PackageId, material: i32) -> Option<MaterialImages> {
-    let texture = game.material_texture(package, material)?;
-    Some(MaterialImages { image: t.add_image(texture.image), glow: texture.glow.map(|glow| t.add_image(glow)), detail: texture.detail.map(|detail| t.add_image(detail)), specular: texture.specular.map(|(cube, params)| (t.add_image(cube), params)), state: texture.state })
+    spawn_actor_sections(t.commands, parent, sections, placed, (actor, follow), (&mut t.assets.actor_materials, ActorLook::Spawned(shared)), lit, shown);
 }
 
 impl Session {
@@ -336,7 +309,7 @@ impl Session {
         for TextureBuild { path, task, .. } in done {
             let texture = match block_on(task) {
                 Ok((built, assets, texture)) => {
-                    assets.insert(t.assets);
+                    assets.insert(&mut t.assets.meshes, &mut t.assets.images, &mut t.assets.bindposes, &mut t.assets.wet);
                     game.adopt(&built);
                     texture
                 }
@@ -361,7 +334,7 @@ impl Session {
         for ModelBuild { key, task } in done {
             let model = match block_on(task) {
                 Ok(built) => {
-                    built.assets.insert(t.assets);
+                    built.assets.insert(&mut t.assets.meshes, &mut t.assets.images, &mut t.assets.bindposes, &mut t.assets.wet);
                     game.adopt(&built.game);
                     for (id, animations) in built.animations {
                         if let Some(id) = game.same_package(&built.game, id) {
@@ -575,7 +548,7 @@ pub(super) fn update_projections(t: &mut ProjectionTargets) {
                     projector.material_blending
                 );
                 let decal = ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() };
-                let entity = t.commands.spawn((MapScoped, decal, transform, decal_aging::DecalAge::new(tag, projector.life, &projector.texture))).id();
+                let entity = t.commands.spawn((MapScoped, decal, transform, p2_render::wounds::DecalAge::new(tag, projector.life, &projector.texture))).id();
                 if let Some(old) = projectors.dynamic_decals.insert(actor, entity) {
                     t.commands.entity(old).despawn();
                 }
@@ -614,9 +587,8 @@ impl Session {
         let follow = FollowActor { actor: a.object, scale: a.scale, pre_pivot: a.pre_pivot, skeletal: None };
         let layer = RenderLayers::layer(OVERLAY_LAYERS[slot]);
         let parent = t.commands.spawn((MapScoped, Transform::from_translation(origin), Visibility::default())).id();
-        let (materials, mesh_lit, shared) = (&mut t.assets.materials, &mut t.assets.mesh_lit, spawn_materials);
-        let material = |section: &SectionView| spawned_material(shared, materials, mesh_lit, section);
-        spawn_actor_sections(t.commands, parent, sections, placed(follow), (a.object, follow), material, lit, (layer, CanvasDrawn(call)));
+        let look = ActorLook::Spawned(spawn_materials);
+        spawn_actor_sections(t.commands, parent, sections, placed(follow), (a.object, follow), (&mut t.assets.actor_materials, look), lit, (layer, CanvasDrawn(call)));
         Some(parent)
     }
 }

@@ -82,7 +82,8 @@ impl<L: LoaderRef> Vm<L> {
                 if focus.is_none() {
                     self.set_vector(this, Prop::FocalPoint, destination);
                 }
-                self.start_move(this, pawn, destination, false);
+                self.store.set(this, Prop::bAdvancedTactics, Value::Bool(false));
+                self.start_move(this, pawn, destination);
                 if radius_version {
                     self.move_toward_with_radius(pawn, destination, None, radius)?;
                     self.latent_wait(LatentMove::MoveToWithRadius);
@@ -117,7 +118,8 @@ impl<L: LoaderRef> Vm<L> {
                     self.set_move_timer(pawn, this, distance);
                 }
                 self.set_vector(this, Prop::Destination, destination);
-                self.start_move(this, pawn, destination, strafing);
+                self.store.set(this, Prop::bAdvancedTactics, Value::Bool(strafing));
+                self.start_move(this, pawn, destination);
                 let mut destination_offset = offset;
                 if self.store.is_a(target, Kind::NavigationPoint) {
                     if self.store.flag_of(target, Prop::bSpecialMove) {
@@ -126,7 +128,7 @@ impl<L: LoaderRef> Vm<L> {
                     let straight = self.store.flag_of(target, Prop::bNeverUseStrafing) || self.store.flag_of(target, Prop::bForceNoStrafing);
                     if !radius_version && offset == 0.0 && !straight && self.store.object_of(this, Prop::RouteGoal) != Some(target) {
                         let room = (self.store.float_of(pawn, Prop::NextPathRadius) - self.store.float_of(pawn, Prop::CollisionRadius)).max(0.0);
-                        destination_offset = (self.random() * 0.3 + 0.7) * room;
+                        destination_offset = (self.rng.frand() * 0.3 + 0.7) * room;
                     }
                 }
                 self.store.set(pawn, Prop::DestinationOffset, Value::Float(destination_offset));
@@ -177,10 +179,9 @@ impl<L: LoaderRef> Vm<L> {
         self.script.latent.movement = Some(action);
     }
 
-    fn start_move(&mut self, controller: ObjectId, pawn: ObjectId, destination: Vector, strafing: bool) {
+    fn start_move(&mut self, controller: ObjectId, pawn: ObjectId, destination: Vector) {
         self.store.set(controller, Prop::bAdjusting, Value::Bool(false));
         self.store.set(controller, Prop::CurrentPath, Value::Object(None));
-        self.store.set(controller, Prop::bAdvancedTactics, Value::Bool(strafing));
         self.set_vector(controller, Prop::AdjustLoc, destination);
         self.store.set(pawn, Prop::SerpentineTime, Value::Float(0.0));
         self.store.set(pawn, Prop::SerpentineDist, Value::Float(0.0));

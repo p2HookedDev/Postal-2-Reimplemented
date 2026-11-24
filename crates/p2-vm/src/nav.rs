@@ -636,14 +636,14 @@ impl<L: LoaderRef> Vm<L> {
     fn reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
         let volume = self.store.object_of(pawn, Prop::PhysicsVolume);
         if volume.is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume)) {
-            return self.swim_reachable(pawn, from, to, goal, HAND_OFFS);
+            return self.medium_reachable(pawn, from, to, goal, HAND_OFFS, Medium::Water);
         }
         if volume.is_some_and(|volume| self.store.is_a(volume, "LadderVolume")) {
             return self.ladder_reachable(pawn, from, to, goal);
         }
         match self.store.physics_of(pawn) {
             Some(EPhysics::Walking | EPhysics::Falling | EPhysics::Swimming | EPhysics::Ladder) => self.walk_reachable(pawn, from, to, goal),
-            Some(EPhysics::Flying) => self.fly_reachable(pawn, from, to, goal, HAND_OFFS),
+            Some(EPhysics::Flying) => self.medium_reachable(pawn, from, to, goal, HAND_OFFS, Medium::Air),
             _ => false,
         }
     }
@@ -666,7 +666,7 @@ impl<L: LoaderRef> Vm<L> {
         self.walk_reachable(pawn, from, to, goal)
     }
 
-    fn fly_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32) -> bool {
+    fn medium_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32, medium: Medium) -> bool {
         let step_size = self.store.float_of(pawn, Prop::CollisionRadius).max(FLY_STEP);
         let mut location = from;
         for _ in 0..WALK_STEPS {
@@ -676,33 +676,24 @@ impl<L: LoaderRef> Vm<L> {
             }
             let (step, threshold) = test_step(direction, step_size);
             let moved;
-            (location, moved) = self.fly_move(pawn, location, step, threshold, Medium::Air);
-            if !moved {
-                return false;
-            }
-            if self.water_at(location) {
-                return self.store.flag_of(pawn, Prop::bCanSwim) && !hurt_by_volume(&self.store, pawn, pawn) && hand_offs > 0 && self.swim_reachable(pawn, location, to, goal, hand_offs - 1);
-            }
-        }
-        false
-    }
-
-    fn swim_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32) -> bool {
-        let step_size = self.store.float_of(pawn, Prop::CollisionRadius).max(FLY_STEP);
-        let mut location = from;
-        for _ in 0..WALK_STEPS {
-            let direction = to - location;
-            if self.reached_destination(pawn, direction, goal) {
-                return true;
-            }
-            let (step, threshold) = test_step(direction, step_size);
-            let moved;
-            (location, moved) = self.fly_move(pawn, location, step, threshold, Medium::Water);
-            if !self.water_at(location) {
-                return hand_offs > 0 && self.leave_water_reachable(pawn, location, to, goal, hand_offs - 1);
-            }
-            if !moved || hurt_by_volume(&self.store, pawn, pawn) {
-                return false;
+            (location, moved) = self.fly_move(pawn, location, step, threshold, medium);
+            match medium {
+                Medium::Air => {
+                    if !moved {
+                        return false;
+                    }
+                    if self.water_at(location) {
+                        return self.store.flag_of(pawn, Prop::bCanSwim) && !hurt_by_volume(&self.store, pawn, pawn) && hand_offs > 0 && self.medium_reachable(pawn, location, to, goal, hand_offs - 1, Medium::Water);
+                    }
+                }
+                Medium::Water => {
+                    if !self.water_at(location) {
+                        return hand_offs > 0 && self.leave_water_reachable(pawn, location, to, goal, hand_offs - 1);
+                    }
+                    if !moved || hurt_by_volume(&self.store, pawn, pawn) {
+                        return false;
+                    }
+                }
             }
         }
         false
@@ -710,7 +701,7 @@ impl<L: LoaderRef> Vm<L> {
 
     fn leave_water_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>, hand_offs: u32) -> bool {
         if self.store.flag_of(pawn, Prop::bCanFly) {
-            return self.fly_reachable(pawn, from, to, goal, hand_offs);
+            return self.medium_reachable(pawn, from, to, goal, hand_offs, Medium::Air);
         }
         if !self.store.flag_of(pawn, Prop::bCanWalk) || to.z >= from.z + SWIM_EXIT_HEIGHT {
             return false;
@@ -718,7 +709,7 @@ impl<L: LoaderRef> Vm<L> {
         let height = self.store.float_of(pawn, Prop::CollisionHeight);
         let mut at = from;
         let rise = self.test_move(pawn, &mut at, [0.0, 0.0, (height + MAX_STEP_HEIGHT).max(to.z - from.z)].into());
-        rise.time >= 1.0 && self.fly_reachable(pawn, at, to, goal, hand_offs)
+        rise.time >= 1.0 && self.medium_reachable(pawn, at, to, goal, hand_offs, Medium::Air)
     }
 
     fn fly_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32, medium: Medium) -> (Vector, bool) {
@@ -784,7 +775,7 @@ impl<L: LoaderRef> Vm<L> {
             let mut answer = None;
             match walked {
                 WalkMove::Moved => {}
-                _ if self.store.flag_of(pawn, Prop::bCanFly) => answer = Some(self.fly_reachable(pawn, location, to, goal, HAND_OFFS)),
+                _ if self.store.flag_of(pawn, Prop::bCanFly) => answer = Some(self.medium_reachable(pawn, location, to, goal, HAND_OFFS, Medium::Air)),
                 WalkMove::Stopped if can_jump => {
                     let jumped;
                     (location, jumped) = self.find_jump_up(pawn, location, step);
@@ -800,7 +791,7 @@ impl<L: LoaderRef> Vm<L> {
             }
             let volume = self.physics_volume_at(location, None).ok().flatten();
             if volume.is_some_and(|volume| self.store.flag_of(volume, Prop::bWaterVolume)) {
-                return if self.store.flag_of(pawn, Prop::bCanSwim) { self.swim_reachable(pawn, location, to, goal, HAND_OFFS) } else { answer.unwrap_or(false) };
+                return if self.store.flag_of(pawn, Prop::bCanSwim) { self.medium_reachable(pawn, location, to, goal, HAND_OFFS, Medium::Water) } else { answer.unwrap_or(false) };
             }
             if let Some(ladder) = volume.filter(|&volume| self.store.flag_of(pawn, Prop::bCanClimbLadders) && self.store.is_a(volume, "LadderVolume"))
                 && let Some(goal) = goal.filter(|&goal| self.store.object_of(goal, Prop::PhysicsVolume) == Some(ladder))

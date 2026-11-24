@@ -1,4 +1,27 @@
 use super::*;
+use bevy::math::{Mat4, Vec3};
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct BoneFrame {
+    pub(crate) location: Vector,
+    pub(crate) axes: [Vector; 3],
+}
+
+pub(crate) fn axes_matrix(axes: [Vector; 3], origin: Vec3) -> Mat4 {
+    let [x, y, z] = axes.map(|axis| Vec3::from_array(axis.into()).extend(0.0));
+    Mat4::from_cols(x, y, z, origin.extend(1.0))
+}
+
+impl BoneFrame {
+    pub(crate) fn of(frame: Mat4) -> Self {
+        let axes = [frame.x_axis, frame.y_axis, frame.z_axis].map(|axis| axis.truncate().to_array());
+        Self { location: frame.w_axis.truncate().to_array().into(), axes: axes.map(Vector::from) }
+    }
+
+    pub(crate) fn matrix(self) -> Mat4 {
+        axes_matrix(self.axes, Vec3::from_array(self.location.into()))
+    }
+}
 
 /// Where each actor is drawn, and the only way to a drawn place. One hung on a bone has the place its bone gave it and
 /// none before that: its own stored location is where the game spawned it, which does not follow the bone.

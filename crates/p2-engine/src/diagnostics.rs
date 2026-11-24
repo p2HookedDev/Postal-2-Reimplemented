@@ -36,23 +36,15 @@ use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::display::{
+use p2_host::display::{
     MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_INDIRECT, MODERN_LAMP_SHADOWS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
     MODERN_SHARPEN, MODERN_SPECULAR, Settings,
 };
 use crate::map::{Particles, Session};
-use crate::components::{FollowActor, FollowBone};
-use crate::mesh_view::SceneView;
-use crate::play::{FrameTimes, Play, VmProfile};
-use crate::render::actor_light::ActorLitMaterial;
-use crate::render::mesh_light::MeshLitMaterial;
-use crate::render::blended::TerrainLayerMaterial;
-use crate::render::terrain_material::TerrainMaterial;
-use bevy::light::ClusteredDecal;
-use bevy::asset::{Asset, AssetEvent, Assets};
-use bevy::ecs::prelude::resource_exists;
-use bevy::mesh::Mesh;
-use bevy::image::Image;
+use p2_host::frame_times::{FrameTimes, VmProfile};
+use p2_render::components::{FollowActor, FollowBone};
+use p2_render::view::SceneView;
+use crate::play::Play;
 
 mod system_spans;
 mod stage_timing;
@@ -60,7 +52,6 @@ mod stage_timing;
 use system_spans::{SpanTiming, SystemSpans};
 use stage_timing::a_second_passed;
 pub use stage_timing::{FrameWindow, StageTimingPlugin, log_frame_times};
-pub(crate) use stage_timing::{MeshWrite, mesh_written};
 
 const MAX_LINES: usize = 500;
 const NEAR: f32 = 1500.0;

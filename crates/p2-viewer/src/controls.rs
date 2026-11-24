@@ -10,8 +10,8 @@ use bevy::math::{EulerRot, Quat, Vec3};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_bevy_assets::to_bevy;
-use p2_engine::map::LevelCollision;
-use p2_engine::mesh_view::{MeshViewSystems, SceneView, ShownScene};
+use p2_render::level_collision::LevelCollision;
+use p2_render::view::{MeshViewSystems, SceneView, ShownScene};
 use p2_math::Vector;
 
 use crate::walk::{Body, EYE_HEIGHT, step};

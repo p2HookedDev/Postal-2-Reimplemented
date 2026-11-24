@@ -62,16 +62,16 @@ pub(super) fn random_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, args: 
     let value = match native {
         // Draws yaw first, then pitch, then roll when asked, as retail.
         Native::RotRand => {
-            let mut turn = || (vm.rand() * 2) % 0xffff;
+            let mut turn = || (vm.rng.rand() * 2) % 0xffff;
             let (yaw, pitch) = (turn(), turn());
             Value::Rotator([pitch, yaw, if bool_arg(args, 0) { turn() } else { 0 }].into())
         }
-        Native::FRand => Value::Float(vm.random()),
+        Native::FRand => Value::Float(vm.rng.frand()),
         // `rand() % Max`, so never above 32767; 0 for Max <= 0.
-        Native::Rand => Value::Int(if int_arg(args, 0) > 0 { vm.rand() % int_arg(args, 0) } else { 0 }),
+        Native::Rand => Value::Int(if int_arg(args, 0) > 0 { vm.rng.rand() % int_arg(args, 0) } else { 0 }),
         // Size squared summed Y, X, Z, with the square root in double precision, as retail.
         Native::VRand => loop {
-            let v = Vector::from([0; 3].map(|_| vm.random() * 2.0 - 1.0));
+            let v = Vector::from([0; 3].map(|_| vm.rng.frand() * 2.0 - 1.0));
             let size_squared = v.y * v.y + v.x * v.x + v.z * v.z;
             if size_squared <= 1.0 {
                 break Value::Vector(v * (1.0 / (f64::from(size_squared).sqrt() as f32)));

@@ -67,3 +67,33 @@ pub enum ShapeExtend {
     Circle,
     Other,
 }
+
+impl DrawStyle {
+    pub(crate) const BY_INDEX: [Self; 7] =
+        [Self::Regular, Self::AlphaBlend, Self::Modulated, Self::Translucent, Self::AlphaModulate, Self::Darken, Self::Brighten];
+}
+
+impl CoordinateSystem {
+    pub(crate) const BY_INDEX: [Self; 3] = [Self::Independent, Self::Relative, Self::Absolute];
+}
+
+impl StartLocationShape {
+    pub(crate) const BY_INDEX: [Self; 3] = [Self::Box, Self::Sphere, Self::Polar];
+}
+
+impl RotationSource {
+    pub(crate) const BY_INDEX: [Self; 4] = [Self::None, Self::Actor, Self::Offset, Self::Normal];
+}
+
+impl VelocityDirection {
+    pub(crate) const BY_INDEX: [Self; 4] = [Self::None, Self::StartPositionAndOwner, Self::OwnerAndStartPosition, Self::AddRadial];
+}
+
+impl DirectionUsage {
+    pub(crate) const BY_INDEX: [Self; 7] =
+        [Self::None, Self::Up, Self::Right, Self::Forward, Self::Normal, Self::UpAndNormal, Self::RightAndNormal];
+}
+
+impl ShapeExtend {
+    pub(crate) const BY_INDEX: [Self; 4] = [Self::None, Self::Line, Self::Circle, Self::Other];
+}

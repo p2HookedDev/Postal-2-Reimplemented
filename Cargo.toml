@@ -17,6 +17,8 @@ p2-script = { path = "crates/p2-script" }
 p2-vm = { path = "crates/p2-vm" }
 p2-collision = { path = "crates/p2-collision" }
 p2-engine = { path = "crates/p2-engine" }
+p2-host = { path = "crates/p2-host" }
+p2-render = { path = "crates/p2-render" }
 p2-particles = { path = "crates/p2-particles" }
 p2-render-cpu = { path = "crates/p2-render-cpu" }
 p2-physics = { path = "crates/p2-physics" }
@@ -119,6 +121,10 @@ opt-level = 3
 # The VM is generic (`Vm<L: LoaderRef>`): its code is compiled where it is instantiated, and the game's
 # `Vm<Arc<Loader>>` is instantiated here. At opt-level 1 the whole VM tick ran barely optimised despite p2-vm's 3.
 [profile.dev.package.p2-engine]
+opt-level = 3
+[profile.dev.package.p2-host]
+opt-level = 3
+[profile.dev.package.p2-render]
 opt-level = 3
 
 [profile.release]

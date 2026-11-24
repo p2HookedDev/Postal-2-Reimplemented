@@ -25,6 +25,14 @@ impl PlayWorld {
         &self.frame.dynamic_lights
     }
 
+    pub fn glows(&self) -> &[p2_render::frame_facts::GlowSource] {
+        &self.frame.glows
+    }
+
+    pub fn level_time(&self) -> f32 {
+        self.frame.level_time
+    }
+
     pub fn actor_forces(&self) -> &[ActorForce] {
         &self.frame.forces
     }
@@ -87,15 +95,15 @@ impl PlayWorld {
         self.frame.quit
     }
 
-    pub fn volume_fog(&self) -> Option<crate::actors::ZoneFog> {
+    pub fn volume_fog(&self) -> Option<p2_render::scene::ZoneFog> {
         self.frame.volume_fog
     }
 
-    pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<crate::actors::ZoneFog>>> {
+    pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<p2_render::scene::ZoneFog>>> {
         self.frame.zone_fogs.take()
     }
 
-    pub fn take_display(&mut self) -> (Option<p2_vm::WindowRequest>, Option<crate::display::Settings>) {
+    pub fn take_display(&mut self) -> (Option<p2_vm::WindowRequest>, Option<p2_host::display::Settings>) {
         (self.frame.window.take(), self.frame.settings.take())
     }
 

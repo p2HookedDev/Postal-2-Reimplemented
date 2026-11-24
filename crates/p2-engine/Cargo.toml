@@ -10,10 +10,7 @@ repository.workspace = true
 p2-math.workspace = true
 bevy = { workspace = true, features = ["async_executor", "bevy_asset", "bevy_log", "bevy_state", "std", "bevy_winit", "bevy_clipboard", "multi_threaded", "bevy_camera", "bevy_color", "bevy_curve", "bevy_image", "bevy_mesh", "bevy_shader", "bevy_material", "bevy_window", "bevy_light", "bevy_mikktspace", "bevy_render", "bevy_core_pipeline", "bevy_anti_alias", "bevy_pbr", "bevy_post_process", "bevy_audio", "wav", "vorbis", "png", "pbr_clustered_decals", "pbr_anisotropy_texture", "bevy_sprite_render", "smaa_luts"] }
 bevy_egui.workspace = true
-dirs.workspace = true
-chrono.workspace = true
 rustc-hash.workspace = true
-rfd.workspace = true
 rodio = { workspace = true, features = ["playback"] }
 wgpu-types.workspace = true
 p2-assets.workspace = true
@@ -23,17 +20,10 @@ p2-script.workspace = true
 p2-vm.workspace = true
 p2-movie.workspace = true
 p2-collision.workspace = true
+p2-host.workspace = true
+p2-render.workspace = true
 p2-particles.workspace = true
 p2-render-cpu.workspace = true
-thiserror.workspace = true
-steamlocate.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-winreg.workspace = true
-
-[dev-dependencies]
-naga = { workspace = true, features = ["wgsl-in"] }
-wesl.workspace = true
 
 [lints]
 workspace = true

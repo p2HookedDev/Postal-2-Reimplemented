@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod actor_natives;
 mod actors;
 mod bolton;
@@ -76,6 +78,11 @@ pub use client::{InteractionOrder, Pointer, VideoMode};
 pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
 pub use profiling::{FunctionProfiling, FunctionTime};
+
+/// Stack of every thread that runs scripts (bytes): scripts call by recursion, up to the engine's 1000 nested calls.
+/// The VM's thread and the host's system threads get it; each program's `build.rs` gives the main thread the same by
+/// hand (`/STACK:67108864`): the three must match.
+pub const SCRIPT_STACK: usize = 64 << 20;
 pub use memory::Mem as PropertyBlock;
 pub use object_store::ObjectStore;
 
@@ -440,15 +447,6 @@ impl<L: LoaderRef> Vm<L> {
 
     pub fn take_commands(&mut self, mut pick: impl FnMut(&HostCommand) -> bool) -> impl Iterator<Item = HostCommand> {
         self.host.commands.extract_if(.., move |command| pick(command))
-    }
-
-    /// `rand()` / 32767, in `0..=1` (deterministic per VM).
-    pub fn random(&mut self) -> f32 {
-        self.rng.frand()
-    }
-
-    pub(crate) fn rand(&mut self) -> i32 {
-        self.rng.rand()
     }
 
     pub fn intern(&mut self, name: &str) -> NameId {

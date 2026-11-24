@@ -8,8 +8,8 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::ViewerState;
 use crate::browser::Browser;
-use p2_engine::game_dir_form::GameDirForm;
-use p2_engine::game_dir::save_game_dir;
+use p2_host::game_dir_form::GameDirForm;
+use p2_host::game_dir::save_game_dir;
 use p2_engine::map::{Hud, Particles, SpawnedActors};
 
 pub struct GameDirPlugin;

@@ -108,7 +108,7 @@ pub(super) fn pawn_models(
             parts.animated.push(item);
             let follow = FollowBone { mesh_scale: mesh.scale, origin: mesh.origin, rot_origin: mesh.rot_origin, ..follow };
             let lit = ActorLit::skeletal(follow.base, &mesh, follow.scale, &lighting);
-            parts.attached.push(MovingModel { sections: sections.clone(), transform: follow.transform(follow.body, bone), follow, lit });
+            parts.attached.push(MovingModel { sections: sections.clone(), transform: crate::animation::follow_transform(&follow, follow.body, bone), follow, lit });
             parts.drawn_attachments += 1;
         }
     }

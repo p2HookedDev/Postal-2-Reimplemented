@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,45 +19,42 @@ use bevy::color::Color;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiTextureHandle, PrimaryEguiContext, egui};
 use rustc_hash::{FxHashMap, FxHashSet};
 use wgpu_types::BlendState;
-use p2_assets::{Blending, DecoMaps, Font, MeshAnimation, Model, ModelPolygon, RenderState, SkeletalMesh, StaticMesh, TexelMap, poly_flags, read_convex_volume, read_font, read_level, read_mesh_animation, read_model, read_skeletal_mesh, read_static_mesh, read_static_mesh_instance, read_static_mesh_materials, read_terrain, texture_alpha, texture_bgra, texture_heights};
-use p2_render_cpu::{AntiportalActor, MeshPlacement, instance_fits};
-use p2_bevy_assets::{
-    alpha_map_image, bone_matrices, lighting_colors, model_polygons_to_mesh, modulate_2x, rotator_matrix, skeletal_mesh_to_meshes, skin_bind, static_mesh_to_meshes,
-    terrain_layer_mesh, texture_to_image, to_bevy, unreal_mesh_matrix, unreal_to_bevy, unreal_transform,
-};
-use p2_collision::MeshCollision;
+use p2_assets::{Font, MeshAnimation, Model, SkeletalMesh, StaticMesh, read_font, read_level, read_mesh_animation, read_model, read_static_mesh, read_static_mesh_materials, read_terrain};
+use p2_render_cpu::MeshPlacement;
+use p2_bevy_assets::{bone_matrices, rotator_matrix, to_bevy, unreal_mesh_matrix, unreal_to_bevy, unreal_transform};
 use p2_package::{Ini, LoadedPackage, Loader, Package, PackageId};
 use p2_particles::{DrawStyle, Emitter, SpriteParticle};
 use p2_vm::{CanvasItem, Kind, ObjectId, ParticleCommand, ProjectorEvent, Vm};
 
-use crate::render::actor_light::{
-    ActorLighting, ActorLit, DEFAULT_MAX_LIGHTS, LightEnvironment, MAX_HARDWARE_LIGHTS, MeshLighting, Shading, keep_for_relighting,
+use p2_render::actor_light::{
+    ActorLighting, ActorLit, DEFAULT_MAX_LIGHTS, LightEnvironment, MeshLighting, keep_sections_for_relighting, relit_sections,
 };
 use crate::actors::{
-    EmitterActor, MeshActor, ProjectorActor, SkeletalActor, SpriteActor, antiportal_actor, emitter_actor, location_rotation, mesh_actor, mesh_light,
+    CoronaActor, EmitterActor, MeshActor, ProjectorActor, SkeletalActor, SpriteActor, antiportal_actor, corona_actor, emitter_actor, location_rotation, mesh_actor, mesh_light,
     projector_actor, skeletal_actor, sprite_actor, zone_ambient, zone_fog,
 };
-use crate::animation::{Animated, AnimatedMesh, FollowBone};
-use crate::components::{LeftCanvasActor, MapScoped};
-use crate::library::{Game, Library, LoadError, LoadProgress, PlayLoaderTask};
-use crate::loading::ProgressBar;
-use crate::render::translucent_order::TranslucentDraw;
-use crate::mesh_view::{
-    ActorModel, CanvasDrawn, FollowActor, MaterialImages, MeshView, ModelView, MapModel, MovingModel, Scene, SectionMaterial, SectionView, Sky, SceneView, Skin,
-    LayeredByZone, ZoneCulled, OVERLAY_LAYERS, bounds, merged_box, spawn_actor_sections,
-};
-use crate::render::mesh_light::MeshLitMaterial;
-use crate::render::particle_material::ParticleMaterial;
-use crate::play::{FrameTimes, Overlay, OverlayTitle, Play, PlayWorld};
-pub use crate::level_collision::{LevelCollision, StaticCollision};
+use crate::animation::{Animated, AnimatedMesh};
+use p2_render::components::FollowBone;
+use p2_render::components::{LeftCanvasActor, MapScoped};
+use p2_bevy_assets::library::{Game, Library, LoadError, LoadProgress, export_reference};
+use loading::ProgressBar;
+use p2_render::translucent_order::TranslucentDraw;
+use p2_render::view::{ActorLook, ActorMaterials, ActorModel, CanvasDrawn, FollowActor, MeshView, MapModel, SceneView, OVERLAY_LAYERS, spawn_actor_sections};
+use p2_render::scene::{MaterialImages, MovingModel, Scene, SectionView, Sky, LayeredByZone, ZoneCulled};
+use p2_render::particle_material::ParticleMaterial;
+use p2_render::level::{ActorTexture, MaterialSwitches, PendingAssets, SceneAssets, SectionChunks, material_images, projector_image, sections_of_static_mesh, skeletal_sections};
+use p2_host::frame_times::FrameTimes;
+use crate::play::{Overlay, OverlayTitle, Play, PlayWorld};
+use p2_render::level_collision::LevelCollision;
 
 mod canvas_actors;
 mod coronas;
 mod decal_aging;
 mod fluids;
-mod liquid_flow;
+pub(crate) mod liquid_flow;
 mod hud;
 mod load;
+mod loading;
 mod movie;
 mod particles;
 mod scene;
@@ -67,18 +64,15 @@ mod sprites;
 use hud::{HudAssets, paint_canvas, paint_hud, paint_overlay};
 pub use hud::Hud;
 pub use load::{LoadMap, MapFailed, MapLoadPlugin, MapState};
+use load::{configs, play_loader, spawn_play_loader};
 use movie::Movies;
 pub use particles::{ParticleReport, Particles};
-pub use particles::pad_bounds;
-pub use sprites::{SpriteQuad, face_sprites};
-pub use coronas::{CORONA_SIZE, CoronaActor, corona_actor, draw_coronas, is_corona};
-pub use spawned::{SpawnedActors, material_images};
+pub use spawned::SpawnedActors;
 use spawned::SpawnTargets;
 use canvas_actors::HudTargets;
 pub use fluids::Fluids;
-pub use scene::MaterialSwitches;
-pub use scene::{SceneAssets, SectionChunks, animate_mesh_with, sections_of_static_mesh, skeletal_mesh_sections, skeletal_sections};
-use scene::{ActorTexture, projector_image, projector_tag, projector_transform, scene_preparer};
+pub use scene::animate_mesh_with;
+use scene::{projector_tag, projector_transform, scene_preparer};
 pub use scene::projector_box;
 
 pub struct MapPlugin;
@@ -88,12 +82,14 @@ pub enum MapSystems {
     /// In the egui pass: a host that paints a map's frame does it after this.
     Load,
     Present,
+    Particles,
+    Sprites,
 }
 
 impl bevy::app::Plugin for MapPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
-        app.add_plugins((decal_aging::DecalAgingPlugin, crate::render::wounds::WoundsPlugin))
+        app.add_plugins(decal_aging::DecalAgingPlugin)
             .init_resource::<Fluids>()
             .init_resource::<MaterialSwitches>()
             .init_resource::<Projectors>()
@@ -101,6 +97,7 @@ impl bevy::app::Plugin for MapPlugin {
             .init_resource::<SpawnedActors>()
             .init_resource::<Hud>()
             .add_systems(bevy::app::Startup, spawn_hud_camera)
+            .add_systems(bevy::app::Update, (sprites::face_sprites, coronas::draw_coronas).chain().in_set(MapSystems::Sprites))
             .configure_sets(bevy::app::PostUpdate, MapSystems::Present.in_set(crate::play::PlaySystems::Present).run_if(map_shown))
             .add_systems(
                 bevy::app::PostUpdate,
@@ -114,8 +111,7 @@ impl bevy::app::Plugin for MapPlugin {
                     scene::present_material_switches,
                     // Before `update_particles`, which takes the frame's step.
                     fluids::present_fluids,
-                    // Wounds age by the same step.
-                    particles::present_particles.after(crate::render::wounds::present_wounds),
+                    particles::present_particles.in_set(MapSystems::Particles),
                 )
                     // Spawns and despawns queued by one part reach the world after the last part, as when all were one system.
                     .chain_ignore_deferred()
@@ -153,8 +149,8 @@ pub struct SceneTargets<'w, 's> {
     pub(crate) canvas: CanvasModels<'w, 's>,
     pub(crate) models: ActorModels<'w, 's>,
     pub view: ResMut<'w, MeshView>,
-    pub scenes: bevy::ecs::prelude::MessageWriter<'w, crate::mesh_view::SceneChange>,
-    pub(crate) shown: ResMut<'w, crate::shown_scene::ShownScene>,
+    pub scenes: bevy::ecs::prelude::MessageWriter<'w, p2_render::scene::SceneChange>,
+    pub(crate) shown: ResMut<'w, p2_render::view::ShownScene>,
     pub animated: ResMut<'w, Animated>,
     pub times: ResMut<'w, FrameTimes>,
     pub play: ResMut<'w, Play>,
@@ -163,6 +159,7 @@ pub struct SceneTargets<'w, 's> {
     pub(crate) switches: ResMut<'w, MaterialSwitches>,
     pub(crate) projectors: ResMut<'w, Projectors>,
     pub(crate) particles: ResMut<'w, Particles>,
+    pub(crate) particle_frame: ResMut<'w, p2_render::particle_frame::DrawnParticles>,
     pub(crate) spawned: ResMut<'w, SpawnedActors>,
     pub(crate) hud: ResMut<'w, Hud>,
 }
@@ -188,13 +185,30 @@ impl<'w, 's> SceneTargets<'w, 's> {
 pub struct AssetStores<'w> {
     pub images: ResMut<'w, Assets<Image>>,
     pub meshes: ResMut<'w, Assets<Mesh>>,
-    pub materials: ResMut<'w, Assets<StandardMaterial>>,
-    pub mesh_lit: ResMut<'w, Assets<MeshLitMaterial>>,
+    pub actor_materials: ActorMaterials<'w>,
     pub particle_materials: ResMut<'w, Assets<ParticleMaterial>>,
     pub sprite_buffers: Option<ResMut<'w, Assets<bevy::render::storage::ShaderBuffer>>>,
     pub audio: Option<ResMut<'w, Assets<bevy::audio::AudioSource>>>,
     pub bindposes: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
-    pub wet: ResMut<'w, crate::render::wet::WetTextures>,
+    pub wet: ResMut<'w, p2_render::wet::WetTextures>,
+}
+
+impl SceneAssets for AssetStores<'_> {
+    fn add_mesh(&mut self, mesh: Mesh) -> Handle<Mesh> {
+        self.meshes.add(mesh)
+    }
+
+    fn add_image(&mut self, image: Image) -> Handle<Image> {
+        self.images.add(image)
+    }
+
+    fn add_bindposes(&mut self, bindposes: SkinnedMeshInverseBindposes) -> Handle<SkinnedMeshInverseBindposes> {
+        self.bindposes.add(bindposes)
+    }
+
+    fn image_size(&self, image: &Handle<Image>) -> Option<UVec2> {
+        self.images.get(image).map(Image::size)
+    }
 }
 
 #[derive(SystemParam)]
@@ -300,8 +314,8 @@ fn despawn_map_scoped(world: &mut bevy::ecs::world::World) {
     }
 }
 
-fn map_shown(session: Option<Res<Session>>, play: Res<Play>) -> bool {
-    session.is_some_and(|session| session.loading().is_none()) && play.world().is_some()
+pub(crate) fn map_shown(session: Option<Res<Session>>, play: Option<Res<Play>>) -> bool {
+    session.is_some_and(|session| session.loading().is_none()) && play.is_some_and(|play| play.world().is_some())
 }
 
 /// Frames the engine draws as travel begins (P2Screen.uc: three duplicates, one for a loading message, and one with
@@ -311,7 +325,7 @@ const TRAVEL_FRAMES: usize = 5;
 struct PendingLoad {
     package: String,
     progress: Arc<LoadProgress>,
-    task: PlayLoaderTask<scene::PreparedScene>,
+    task: std::thread::JoinHandle<Result<scene::PreparedScene, LoadError>>,
 }
 
 pub(crate) struct StartedVm {
@@ -352,11 +366,11 @@ fn start_vm(
                     bevy::log::info!("modern menu: P2Modern.{ours} not found, retail {retail}");
                 }
             }
-            vm.options.steam_apps = crate::install::steam_installed_apps();
+            vm.options.steam_apps = p2_host::install::steam_installed_apps();
             vm
         }
     };
-    crate::render::photo::clear_photo_active(&mut vm);
+    crate::play::photo::clear_photo_active(&mut vm);
     if fresh && let Some(dir) = crate::saves::save_dir() {
         vm.options.data_dir = dir.parent().map(Path::to_path_buf);
         vm.set_save_dir(dir);
@@ -427,10 +441,6 @@ fn open_game<'a>(library: &'a mut Library, system: Option<&Path>) -> Option<&'a 
     library.game(system?)
 }
 
-fn export_reference(export: usize) -> i32 {
-    export as i32 + 1
-}
-
 fn map_name(package: &str) -> &str {
     Path::new(package).file_stem().and_then(|s| s.to_str()).unwrap_or_default()
 }
@@ -439,7 +449,7 @@ impl Session {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            library: Library::default(),
+            library: Library::new(p2_host::game_dir::config_folder()),
             map: None,
             map_system: None,
             pending: None,
@@ -475,8 +485,9 @@ impl Session {
         particles.actors.clear();
         particles.particle_emitters.clear();
         particles.pool_materials.clear();
-        particles.emitter_materials.clear();
-        particles.corona_materials.clear();
+        particles.born.clear();
+        t.particle_frame.born.clear();
+        t.particle_frame.level = t.particle_frame.level.wrapping_add(1);
         *t.fluids = Fluids::default();
     }
 
@@ -484,7 +495,7 @@ impl Session {
         let started = std::time::Instant::now();
         t.hud.start_frame(started);
         t.play.set_canvas_size([rect.width(), rect.height()]);
-        t.play.set_hud_inset(if t.view.modern.safe_area { crate::render::modern_view::hud_area(rect).min.x - rect.min.x } else { 0.0 });
+        t.play.set_hud_inset(if t.view.modern.safe_area { p2_render::modern_view::hud_area(rect).min.x - rect.min.x } else { 0.0 });
         t.view.canvas_below = [false; OVERLAY_LAYERS.len()];
         // Until a new map's first VM frame is presented, the last image (the load screen) stays up, as in the
         // engine's frame buffer; its canvas actors belong to the level left.
@@ -545,19 +556,17 @@ impl Session {
             projections: &t.particle_view.projections,
             commands: &mut t.commands,
             meshes: &mut t.assets.meshes,
-            materials: &mut t.assets.materials,
-            mesh_lit: &mut t.assets.mesh_lit,
+            materials: &mut t.assets.actor_materials,
         });
         t.times.add("fluids", started);
         let started = std::time::Instant::now();
         particles::update_particles(&mut particles::ParticleTargets {
             particles: &mut t.particles,
+            drawn: &mut t.particle_frame,
             play: &mut t.play,
             canvas: &t.hud.canvas_actors,
             view: &mut t.particle_view,
             commands: &mut t.commands,
-            meshes: &mut t.assets.meshes,
-            sprite_buffers: t.assets.sprite_buffers.as_mut(),
         });
         t.times.add("particles", started);
     }
@@ -611,10 +620,10 @@ impl Session {
         }
         let previous = url.as_ref().and_then(|_| t.play.take_vm());
         let played = previous.as_ref().map(|vm| Loader::clone(vm.loader()));
-        let configs = game.configs();
+        let configs = configs(game);
         let progress = Arc::new(LoadProgress::default());
         let thread_progress = Arc::clone(&progress);
-        let task = game.spawn_play_loader(map_name, played, Arc::clone(&progress), move |loader, id| {
+        let task = spawn_play_loader(game, map_name, played, Arc::clone(&progress), move |loader, id| {
             let started = std::time::Instant::now();
             let vm = start_vm(previous, url.as_deref(), loader, id, configs, &thread_progress);
             bevy::log::info!("load: VM started in {} ms", started.elapsed().as_millis());

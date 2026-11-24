@@ -28,7 +28,7 @@ impl Simulation {
         );
     }
 
-    pub(in crate::play) fn read_after_hud(&mut self, frame: &mut VmFrame, watched: &[ObjectId], forces: bool, fire_light: bool) {
+    pub(in crate::play) fn read_after_hud(&mut self, frame: &mut VmFrame, watched: &[ObjectId], forces: bool) {
         let mut started = Instant::now();
         let mut part = |frame: &mut VmFrame, name: &'static str| frame.times.push((name, std::mem::replace(&mut started, Instant::now()).elapsed()));
         self.begin_reads();
@@ -47,9 +47,7 @@ impl Simulation {
         part(frame, "after hud: watched actors");
         self.update_tracked_lists(frame, &new);
         self.animate_dynamic_lights(frame);
-        if fire_light {
-            self.light_glows(frame);
-        }
+        self.read_glows(frame);
         part(frame, "after hud: lights, switches, coronas");
         self.recent.swap(0, 1);
         self.recent[0] = new;
@@ -69,6 +67,7 @@ impl Simulation {
         let vm = &self.vm;
         frame.movies.extend(vm.movie_textures().filter_map(|(texture, movie)| Some((vm.store.object(texture).path.clone(), movie, vm.movie(movie)?.clone()))));
         frame.paused = vm.paused();
+        frame.level_time = level_time(vm);
         frame.time_dilation = vm.time_dilation();
         frame.quit = self.quit;
         self.read_audio(frame);
@@ -77,7 +76,7 @@ impl Simulation {
         frame.volume_fog = self.volume_fog();
     }
 
-    fn volume_fog(&self) -> Option<crate::actors::ZoneFog> {
+    fn volume_fog(&self) -> Option<p2_render::scene::ZoneFog> {
         let vm = &self.vm;
         let target = self.view?.actor?;
         let volume = vm.store.object_of(target, if vm.store.is_a(target, Kind::Pawn) { Prop::HeadVolume } else { Prop::PhysicsVolume })?;
@@ -155,7 +154,7 @@ impl Simulation {
                     skeletal: skeletal_actor(&self.vm, actor),
                     emitter: emitter_actor(&self.vm, actor),
                     sprite: crate::actors::sprite_actor(&self.vm, actor),
-                    corona: crate::map::corona_actor(&self.vm, actor),
+                    corona: crate::actors::corona_actor(&self.vm, actor),
                     restyled: false,
                 })
                 .filter(|s| s.mesh.is_some() || s.skeletal.is_some() || s.emitter.is_some() || s.sprite.is_some() || s.corona.is_some()),
@@ -173,7 +172,7 @@ impl Simulation {
         );
         track(&mut self.glows, new, |actor| glows(vm, actor), destroyed);
         track(&mut self.volumes, new, |actor| vm.store.is_a(actor, Kind::Volume), destroyed);
-        track(&mut self.corona_lights, new, |actor| crate::map::is_corona(vm, actor), destroyed);
+        track(&mut self.corona_lights, new, |actor| crate::actors::is_corona(vm, actor), destroyed);
         Self::pass_switches(vm, &mut self.switches, new, frame);
         fluid_touchers(vm, &self.fluid_surfaces, &mut frame.fluid_touchers);
         // Retail's corona line, traced by the VM's level check so static meshes count as in retail.
@@ -248,11 +247,11 @@ impl Simulation {
     fn read_settings(&mut self, frame: &mut VmFrame) {
         let changed = self.vm.take_changed_settings();
         if let Some(settings) = &changed {
-            crate::display::save_settings(settings);
+            p2_host::display::save_settings(settings);
         }
         if changed.is_some() || !std::mem::replace(&mut self.settings_sent, true) {
             let vm = &mut self.vm;
-            frame.settings = Some(crate::display::Settings::read(|query| vm.get_command(query).unwrap_or_default()));
+            frame.settings = Some(p2_host::display::Settings::read(|query| vm.get_command(query).unwrap_or_default()));
         }
     }
 }
@@ -279,7 +278,7 @@ fn fluid_touchers(vm: &Vm<Arc<Loader>>, surfaces: &[ObjectId], touchers: &mut Ve
     }
 }
 
-pub(super) fn level_time(vm: &Vm<Arc<Loader>>) -> f32 {
+fn level_time(vm: &Vm<Arc<Loader>>) -> f32 {
     match vm.level().and_then(|level| vm.store.get(level, Prop::TimeSeconds)) {
         Some(p2_vm::Value::Float(time)) => time,
         _ => 0.0,

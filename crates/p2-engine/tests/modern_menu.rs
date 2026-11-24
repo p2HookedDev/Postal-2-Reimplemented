@@ -8,7 +8,7 @@ use p2_vm::Vm;
 #[test]
 fn our_options_page_loads_and_replaces_the_retail_one() {
     let Some(dir) = game_dir() else { return };
-    let Some(own) = dirs::config_dir().map(|dir| dir.join("p2-reimplemented").join("Packages")) else { return };
+    let Some(own) = p2_host::game_dir::config_folder().map(|dir| dir.join("Packages")) else { return };
     if !own.join("P2Modern.u").is_file() {
         eprintln!("P2Modern.u not built, skipping");
         return;

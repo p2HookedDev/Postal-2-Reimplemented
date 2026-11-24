@@ -198,7 +198,7 @@ fn read_lod_model(r: &mut Reader) -> Result<LodModel, Error> {
         Ok(position)
     })?;
     let num_wedges = r.i32()?;
-    let sections = array(r, read_section)?;
+    let sections = array(r, read_skel_mesh_section)?;
     skip_array(r, 18)?;
     let indices = array(r, |r| Ok(r.u16()?))?;
     r.i32()?;
@@ -269,7 +269,7 @@ fn normalize_weights(influences: &mut [Influence]) {
 }
 
 /// On disk: 9 `WORD`s (one in-memory `WORD` is not stored).
-fn read_section(r: &mut Reader) -> Result<SkelMeshSection, Error> {
+fn read_skel_mesh_section(r: &mut Reader) -> Result<SkelMeshSection, Error> {
     let material = r.u16()?;
     r.bytes(12)?; // MinStreamIndex, MinWedgeIndex, MaxWedgeIndex, NumStreamIndices, BoneIndex, MaxInfluences (unverified)
     Ok(SkelMeshSection { material, first_face: r.u16()?, num_faces: r.u16()? })

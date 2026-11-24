@@ -10,7 +10,7 @@ use bevy::tasks::{IoTaskPool, Task, block_on};
 use p2_vm::{SaveGame, TravelUrl, save_file_name};
 
 pub fn save_dir() -> Option<PathBuf> {
-    Some(crate::game_dir::config_folder()?.join("Save"))
+    Some(p2_host::game_dir::config_folder()?.join("Save"))
 }
 
 fn save_file(slot: i32) -> Option<PathBuf> {

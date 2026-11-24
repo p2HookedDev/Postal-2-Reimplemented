@@ -7,63 +7,9 @@ use crate::play::Play;
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::math::{Mat3, Quat};
 use bevy::time::{Real, Time};
-use p2_math::{Rotator, Vector};
+use p2_math::Vector;
 use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_square_scale, size_factor, within_light_radius};
-use p2_vm::{LoaderRef, Prop, Value};
-
-pub const CORONA_SIZE: f32 = 1024.0;
-
-pub struct CoronaActor {
-    pub object: ObjectId,
-    pub texture: String,
-    pub location: Vector,
-    pub rotation: Rotator,
-    pub draw_scale: f32,
-    pub draw_scale3d: [f32; 3],
-    pub hue: u8,
-    pub saturation: u8,
-    pub sizes: Option<(f32, f32)>,
-    pub light_radius: f32,
-}
-
-fn corona_texture(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<ObjectId> {
-    let lit = matches!(vm.store.get(actor, Prop::LightType), Some(Value::Byte(light_type)) if light_type != 0);
-    if !vm.store.flag_of(actor, Prop::bCorona) || !lit || vm.store.flag_of(actor, Prop::bDeleteMe) || vm.store.is_deleted(actor) {
-        return None;
-    }
-    let Some(Value::Array(skins)) = vm.store.get(actor, Prop::Skins) else { return None };
-    let Some(&Value::Object(Some(texture))) = skins.first() else { return None };
-    // Textures are mostly stubs (known by reference, no class loaded): `is_a` alone rejected every corona.
-    if !vm.store.is_a(texture, "Texture") && !vm.stub_is_a(texture, "Texture") {
-        return None;
-    }
-    Some(texture)
-}
-
-pub fn is_corona(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> bool {
-    corona_texture(vm, actor).is_some()
-}
-
-pub fn corona_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<CoronaActor> {
-    let texture = corona_texture(vm, actor)?;
-    let float = |property: Prop, default: f32| match vm.store.get(actor, property) {
-        Some(Value::Float(value)) => value,
-        _ => default,
-    };
-    let (location, rotation) = location_rotation(vm, actor);
-    Some(CoronaActor {
-        object: actor,
-        texture: vm.store.object(texture).path.clone(),
-        location,
-        rotation,
-        draw_scale: float(Prop::DrawScale, 1.0),
-        draw_scale3d: vm.store.vector(actor, Prop::DrawScale3D).into(),
-        hue: vm.store.byte_of(actor, Prop::LightHue),
-        saturation: vm.store.byte_of(actor, Prop::LightSaturation),
-        sizes: vm.store.is_a(actor, "Light").then(|| (float(Prop::MinCoronaSize, 0.0), float(Prop::MaxCoronaSize, 0.0))),
-        light_radius: float(Prop::LightRadius, 0.0),
-    })
-}
+use crate::actors::{CORONA_SIZE, CoronaActor};
 
 #[derive(bevy::ecs::component::Component)]
 pub struct CoronaQuad {
@@ -81,7 +27,7 @@ impl Session {
         for corona in coronas {
             let (images, particle_materials) = (&mut t.assets.images, &mut t.assets.particle_materials);
             let textures = &mut t.spawned.actor_textures;
-            let material = t.particles.corona_materials.entry(corona.texture.clone()).or_insert_with_key(|path| {
+            let material = t.spawned.corona_materials.entry(corona.texture.clone()).or_insert_with_key(|path| {
                 let texture = textures.entry(path.clone()).or_insert_with(|| ActorTexture::read(game, path, |image| images.add(image))).as_ref()?;
                 let material = ParticleMaterial::corona(texture.image.clone());
                 Some(particle_materials.add(material))
@@ -173,7 +119,7 @@ pub fn draw_coronas(
         if quad.color != color
             && let Some(mut mesh) = meshes.get_mut(&mesh.0)
         {
-            crate::diagnostics::mesh_written(crate::diagnostics::MeshWrite::Corona);
+            p2_host::frame_times::mesh_written(p2_host::frame_times::MeshWrite::Corona);
             let [r, g, b] = color;
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[r, g, b, 1.0]; 4]);
             quad.color = color;

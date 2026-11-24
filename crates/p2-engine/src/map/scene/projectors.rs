@@ -42,13 +42,6 @@ pub(crate) fn plain_projector_blend(final_blend: Option<FinalBlend>) -> u32 {
     final_blend.map_or(u32::from(FB_MODULATE), |inner| blend_bits(inner.blending.byte(), inner.alpha_ref))
 }
 
-pub(crate) fn projector_image(game: &mut Game, add: impl FnOnce(Image) -> Handle<Image>, texture: &str) -> Option<(Handle<Image>, Vec2, Option<FinalBlend>)> {
-    let (package, export) = game.export_by_path(texture)?;
-    let texture = game.material_texture(package, export_reference(export))?;
-    let size = texture.image.size().as_vec2();
-    Some((add(texture.image), size, texture.state.final_blend))
-}
-
 /// The box holds retail's frustum. Orthographic: the near square (side ½·√2·√(w² + h²)) and
 /// `MaxTraceDistance`. Perspective: the far end of a frustum with apex ½·w / tan(½·FOV) behind it.
 pub(crate) fn projector_transform(projector: &ProjectorActor, texels: Vec2) -> Transform {

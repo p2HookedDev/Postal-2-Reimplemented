@@ -19,10 +19,10 @@ use controls::ViewerControlsPlugin;
 use game_dir::GameDirPlugin;
 use p2_engine::P2EnginePlugins;
 use p2_engine::diagnostics::{DiagnosticsPlugin, capture_layer, install_panic_hook};
-use p2_engine::display::DisplayPlugin;
-use p2_engine::game_dir_form::GameDirForm;
-use p2_engine::render::gamma::GammaPlugin;
-use p2_engine::render::modern::ModernGraphicsPlugin;
+use p2_host::display::DisplayPlugin;
+use p2_host::game_dir_form::GameDirForm;
+use p2_render::gamma::GammaPlugin;
+use p2_render::modern::ModernGraphicsPlugin;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
 enum ViewerState {
@@ -43,7 +43,7 @@ fn main() {
         .add_plugins(P2EnginePlugins.build().disable::<DisplayPlugin>().disable::<GammaPlugin>().disable::<ModernGraphicsPlugin>())
         .add_plugins(DiagnosticsPlugin);
 
-    let state = match p2_engine::game_dir::known_game_dir() {
+    let state = match p2_host::game_dir::known_game_dir() {
         Some(dir) => match Browser::new(dir.clone(), package.as_deref(), asset) {
             Ok((browser, session)) => {
                 app.insert_resource(browser);

@@ -1,6 +1,8 @@
 //! `UnrealScript` definitions in `.u` packages (version 118, licensee 2). Object references (`i32`)
 //! and names (`usize`) are relative to the package the definition was read from.
 
+#![forbid(unsafe_code)]
+
 pub mod bytecode;
 pub mod disasm;
 pub mod flags;

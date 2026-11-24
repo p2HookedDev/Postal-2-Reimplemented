@@ -70,7 +70,7 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
 
     skip_primitive(r)?;
 
-    let sections = array(r, read_section)?;
+    let sections = array(r, read_mesh_section)?;
     skip_box(r)?;
 
     let (mut positions, mut normals) = (Vec::new(), Vec::new());
@@ -189,7 +189,7 @@ pub fn read_static_mesh_instance(pkg: &Package, file: &[u8], export: &Export) ->
     Ok(StaticMeshInstance { colors, lights })
 }
 
-fn read_section(r: &mut Reader) -> Result<MeshSection, Error> {
+fn read_mesh_section(r: &mut Reader) -> Result<MeshSection, Error> {
     Ok(MeshSection {
         is_strip: r.i32()? != 0,
         first_index: r.u16()?,

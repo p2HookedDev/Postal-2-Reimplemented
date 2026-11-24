@@ -54,10 +54,6 @@ impl Printer<'_> {
         }
     }
 
-    fn name(&self, name: usize) -> &str {
-        self.pkg.name(name)
-    }
-
     fn args(&self, args: &[Expr]) -> String {
         args.iter().map(|arg| self.expr(arg)).collect::<Vec<_>>().join(", ")
     }
@@ -75,9 +71,9 @@ impl Printer<'_> {
                 Some(native) => format!("{}({})", native.name, self.args(args)),
                 None => format!("native{index}({})", self.args(args)),
             },
-            Callee::Virtual(name) | Callee::Delegate { name, .. } => format!("{}({})", self.name(name), self.args(args)),
+            Callee::Virtual(name) | Callee::Delegate { name, .. } => format!("{}({})", self.pkg.name(name), self.args(args)),
             Callee::Final(function) => format!("{}({})", self.object(function), self.args(args)),
-            Callee::Global(name) => format!("Global.{}({})", self.name(name), self.args(args)),
+            Callee::Global(name) => format!("Global.{}({})", self.pkg.name(name), self.args(args)),
         }
     }
 
@@ -99,7 +95,7 @@ impl Printer<'_> {
             Expr::Case { value: None, .. } => "default:".to_owned(),
             Expr::Nothing => "nothing".to_owned(),
             Expr::LabelTable(labels) => {
-                let labels: Vec<String> = labels.iter().map(|(name, code)| format!("{}={code:04x}", self.name(*name))).collect();
+                let labels: Vec<String> = labels.iter().map(|(name, code)| format!("{}={code:04x}", self.pkg.name(*name))).collect();
                 format!("labels {}", labels.join(" "))
             }
             Expr::GotoLabel(label) => format!("goto {}", self.expr(label)),
@@ -124,7 +120,7 @@ impl Printer<'_> {
             Expr::FloatConst(v) => format!("{v:?}"),
             Expr::StringConst(v) | Expr::UnicodeStringConst(v) => format!("{v:?}"),
             Expr::ObjectConst(r) => format!("'{}'", self.object(*r)),
-            Expr::NameConst(name) => format!("'{}'", self.name(*name)),
+            Expr::NameConst(name) => format!("'{}'", self.pkg.name(*name)),
             Expr::RotationConst([pitch, yaw, roll]) => format!("rot({pitch}, {yaw}, {roll})"),
             Expr::VectorConst([x, y, z]) => format!("vect({x:?}, {y:?}, {z:?})"),
             Expr::ByteConst(v) | Expr::IntConstByte(v) => v.to_string(),
@@ -151,7 +147,7 @@ impl Printer<'_> {
                 format!("{}.Remove({}, {})", self.expr(array), self.expr(index), self.expr(count))
             }
             Expr::DebugInfo { line, opcode, .. } => format!("// debug line {line} {opcode}"),
-            Expr::DelegateProperty(name) => self.name(*name).to_owned(),
+            Expr::DelegateProperty(name) => self.pkg.name(*name).to_owned(),
         }
     }
 }

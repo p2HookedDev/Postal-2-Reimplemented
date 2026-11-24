@@ -517,7 +517,7 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(scene, Prop::TimeDilation, Value::Float(speed));
         } else if self.store.is_a(sub_action, Kind::SubActionCameraShake) {
             let shake = ["X", "Y", "Z"].map(|axis| (self.float_at(sub_action, &["Shake", axis, "Min"]), self.float_at(sub_action, &["Shake", axis, "Max"])));
-            let offset = shake.map(|(min, max)| min + (max - min) * self.random());
+            let offset = shake.map(|(min, max)| min + (max - min) * self.rng.frand());
             let total = self.store.vec3_of(scene, Prop::CameraShake) + offset.into();
             self.set_vector(scene, Prop::CameraShake, total);
         } else if self.store.is_a(sub_action, Kind::SubActionTrigger) {

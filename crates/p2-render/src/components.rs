@@ -1,0 +1,112 @@
+use bevy::ecs::prelude::{Component, Entity, Resource};
+use bevy::math::{Mat4, Quat, Vec3};
+use bevy::transform::components::Transform;
+use p2_bevy_assets::{rotator_matrix, unreal_mesh_matrix, unreal_to_bevy, unreal_transform};
+use p2_math::{Rotator, Vector};
+use p2_vm::ObjectId;
+
+pub const SKY_LAYER: usize = 2;
+
+pub const OVERLAY_LAYERS: [usize; 4] = [1, 4, 5, 6];
+
+/// The layer the view camera adds while modern graphics are on, shared by the sun and fills so the view sees them while
+/// the sun keeps its own casters (Bevy: a light's casters are the meshes sharing a layer with it). No mesh is on it.
+/// Layers 0 to 6 are the view, overlay, sky and gamma ones (`render/view.rs`, `gamma.rs`).
+pub const SUN_VIEW_LAYER: usize = 7;
+
+/// The layer the modern look adds to every solid mesh in the world: the sun's casters. No camera sees it.
+pub const CASTER_LAYER: usize = 8;
+
+/// The layer it adds to moving objects only.
+pub const MOVER_LAYER: usize = 9;
+
+/// The layer it adds to every other caster: the static world.
+pub const STATIC_CASTER_LAYER: usize = 10;
+
+/// The layer it adds to a placed mesh that stands still. Its lamp shadow is drawn with the movers': the lamps' atlas
+/// holds only what can never move.
+pub const RESTING_PROP_LAYER: usize = 11;
+
+/// Where a draw waits, in place of layer 0, while its actor is kept only to cast the sun's shadow from a zone the eye
+/// cannot see. No camera sees it.
+pub const UNSEEN_LAYER: usize = 12;
+
+#[derive(Component)]
+pub struct SunShadow;
+
+#[derive(Component, Clone, Copy)]
+pub struct FollowActor {
+    pub actor: ObjectId,
+    pub scale: Vector,
+    pub pre_pivot: Vector,
+    pub skeletal: Option<(Vector, Vector, Rotator)>,
+}
+
+impl FollowActor {
+    pub fn mesh_matrix(&self, location: Vector, rotation: Rotator) -> Option<Mat4> {
+        let (mesh_scale, origin, rot_origin) = self.skeletal?;
+        Some(unreal_mesh_matrix(location, rotator_matrix(rotation), self.scale, self.pre_pivot, mesh_scale, origin, rot_origin))
+    }
+
+    pub fn transform(&self, location: Vector, rotation: Rotator) -> Transform {
+        match self.mesh_matrix(location, rotation) {
+            Some(matrix) => unreal_to_bevy(matrix),
+            None => unreal_transform(location, rotation, self.scale, self.pre_pivot),
+        }
+    }
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct CanvasDrawn(pub usize);
+
+#[derive(Component, Clone, Copy)]
+pub struct SpriteQuad {
+    pub texels: f32,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct FollowBone {
+    pub actor: ObjectId,
+    pub base: ObjectId,
+    pub bone: usize,
+    pub body: Mat4,
+    pub base_follow: FollowActor,
+    pub relative_location: Vector,
+    pub relative_rotation: Rotator,
+    pub scale: Vector,
+    pub pre_pivot: Vector,
+    pub mesh_scale: Vector,
+    pub origin: Vector,
+    pub rot_origin: Rotator,
+}
+
+#[derive(Component, Clone, Copy, Default)]
+pub struct SceneView {
+    pub position: Vec3,
+    pub rotation: Quat,
+}
+
+/// The view the game last gave, while the scene's camera has turned on with the mouse and glides between ticks: what
+/// the game draws over the scene (the held weapon) was placed for this view, so its cameras keep it.
+#[derive(Resource, Default)]
+pub struct OverlayLook(pub Option<Transform>);
+
+/// An egui context on a camera ordered just before the slot's `OverlayCamera`, sharing its target texture, so the
+/// `DrawActor` call draws over the 2D items painted before it, as in retail.
+#[derive(Component)]
+pub(crate) struct CanvasLayer(pub(crate) usize);
+
+#[derive(Component, Clone, Copy)]
+pub struct ActorModel(pub ObjectId);
+
+/// On a map attachment: the model of the actor it is on, found through other attachments. `None`: it has none.
+#[derive(Component)]
+pub struct BaseModel(pub Option<Entity>);
+
+/// On the root of what is made for the map being played and the scene does not own.
+#[derive(Component)]
+pub struct MapScoped;
+
+/// A HUD-drawn model of the map left stays on the load screen, as the engine's frame buffer keeps it.
+#[derive(Component)]
+pub struct LeftCanvasActor;

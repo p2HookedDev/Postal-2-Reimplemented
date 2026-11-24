@@ -4,7 +4,7 @@ pub(super) struct MapActors {
     pub(super) terrain_infos: Vec<p2_assets::Terrain>,
     pub(super) start: Option<(Vector, Rotator)>,
     pub(super) mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>>,
-    pub(super) zone_fogs: Vec<Option<crate::actors::ZoneFog>>,
+    pub(super) zone_fogs: Vec<Option<p2_render::scene::ZoneFog>>,
     pub(super) terrain_zones: Vec<bool>,
     pub(super) mesh_lights: FxHashMap<i32, p2_render_cpu::MeshLight>,
     pub(super) zone_ambients: Vec<[f32; 3]>,

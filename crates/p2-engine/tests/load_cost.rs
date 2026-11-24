@@ -15,9 +15,13 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use p2_engine::animation::Animated;
-use p2_engine::map::{Fluids, Hud, MaterialSwitches, Particles, Projectors, SceneTargets, Session, SpawnedActors};
-use p2_engine::mesh_view::{MeshViewPlugin, MeshViewSystems};
-use p2_engine::play::{FrameTimes, Play};
+use p2_engine::map::{Fluids, Hud, Particles, Projectors, SceneTargets, Session, SpawnedActors};
+use p2_render::level::MaterialSwitches;
+use p2_render::P2RenderPlugins;
+use p2_render::view::MeshViewSystems;
+use p2_host::frame_times::FrameTimes;
+use p2_engine::FrameOrderPlugin;
+use p2_engine::play::Play;
 
 #[derive(Resource)]
 struct Holder {
@@ -37,7 +41,7 @@ fn monday_scene_build_cost() {
         .init_asset::<StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
-        .add_plugins(MeshViewPlugin)
+        .add_plugins((P2RenderPlugins, FrameOrderPlugin))
         .init_resource::<Animated>()
         .init_resource::<Play>()
         .init_resource::<FrameTimes>()

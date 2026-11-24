@@ -9,9 +9,9 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
 use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
-use p2_engine::render::actor_light::{ActorLightCache, ActorLit, ActorLitMaterial, Shading};
+use p2_render::actor_light::{ActorLightCache, ActorLit, ActorLitMaterial, Shading};
 use p2_engine::map::{SceneTargets, Session};
-use p2_engine::mesh_view::{MeshView, SKY_LAYER};
+use p2_render::view::{MeshView, SKY_LAYER};
 use p2_engine::play::PlaySystems;
 
 #[derive(Resource)]

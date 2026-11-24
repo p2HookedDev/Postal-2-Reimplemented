@@ -1,4 +1,6 @@
 use super::*;
+use bevy::ecs::prelude::{Add, On};
+use p2_render::world_pass::WorldCamera;
 
 pub struct SoundPlugin;
 
@@ -17,8 +19,13 @@ impl Plugin for SoundPlugin {
             .add_systems(Update, watch_audio)
             .add_systems(Update, stop_old_songs.in_set(SoundSystems::Stop))
             .add_systems(Update, start_sounds.in_set(SoundSystems::Start).after(hand_off).before(look_ahead))
-            .add_systems(Update, (heard_volume, sound_limits, fade_sounds, pause_movie_sound).chain().in_set(SoundSystems::Mix));
+            .add_systems(Update, (heard_volume, sound_limits, fade_sounds, pause_movie_sound).chain().in_set(SoundSystems::Mix))
+            .add_observer(listen_from_world_camera);
     }
+}
+
+fn listen_from_world_camera(add: On<Add<WorldCamera>>, mut commands: Commands) {
+    commands.entity(add.event().entity).insert(sound_listener());
 }
 
 struct PlayingAmbient {
@@ -74,7 +81,7 @@ fn start_sounds(
     let Some(world) = play.world.as_mut().filter(|world| world.fresh) else { return };
     let camera = cameras.iter().next().map(|camera| camera.translation);
     play_world_sounds(&mut commands, world, &mut book, &mut sources, camera, generation);
-    play_music(&mut commands, world, &mut book, &mut sources, camera, generation);
+    apply_music_commands(&mut commands, world, &mut book, &mut sources, camera, generation);
 }
 
 #[derive(Component)]
@@ -216,8 +223,12 @@ pub(super) fn pitch_factor(pitch: f32) -> f32 {
     pitch.clamp(0.5, 2.0)
 }
 
-fn spatial(settings: PlaybackSettings) -> PlaybackSettings {
+fn spatialized(settings: PlaybackSettings) -> PlaybackSettings {
     PlaybackSettings { spatial: true, spatial_scale: Some(SpatialScale(Vec3::splat(PAN_SCALE))), ..settings }
+}
+
+fn listener_gain(camera: Option<Vec3>, heard_at: Option<Vec3>, radius: f32) -> f32 {
+    camera.zip(heard_at).map_or(1.0, |(camera, place)| distance_gain(camera.distance(place), radius))
 }
 
 #[derive(Component)]
@@ -259,24 +270,21 @@ fn stop_old_songs(mut commands: Commands, play: Res<Play>, songs: Query<(Entity,
     }
 }
 
-fn play_music(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, sources: &mut Assets<AudioSource>, camera: Option<Vec3>, generation: u64) {
+fn apply_music_commands(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundBook, sources: &mut Assets<AudioSource>, camera: Option<Vec3>, generation: u64) {
     for (command, position, song) in std::mem::take(&mut world.frame.music) {
         match command {
             MusicCommand::Play { handle, actor, volume, radius, pitch, fade_in, .. } => {
                 let Some(bytes) = song else { continue };
-                let place = position.map(|position| world.scene_position(position));
-                let gain = match (camera, place) {
-                    (Some(camera), Some(place)) if radius > 0.0 => distance_gain(camera.distance(place), radius),
-                    _ => 1.0,
-                };
+                let heard_at = position.map(|position| world.scene_position(position)).filter(|_| radius > 0.0);
+                let gain = listener_gain(camera, heard_at, radius);
                 let source = sources.add(AudioSource { bytes });
                 let settings = PlaybackSettings::LOOP.with_volume(Volume::Linear(volume * gain)).with_speed(pitch_factor(pitch));
-                let entity = match place.filter(|_| radius > 0.0) {
+                let entity = match heard_at {
                     Some(position) => {
                         let fading_in = fade_in > 0.0;
                         let heard = HeardSound { actor, position, volume, radius, fade: if fading_in { 0.0 } else { 1.0 } };
                         let settings = if fading_in { settings.with_volume(Volume::SILENT) } else { settings };
-                        let entity = commands.spawn((AudioPlayer::new(source), spatial(settings), Song(generation), heard, Transform::from_translation(position))).id();
+                        let entity = commands.spawn((AudioPlayer::new(source), spatialized(settings), Song(generation), heard, Transform::from_translation(position))).id();
                         if fading_in {
                             commands.entity(entity).insert(Fade::new(0.0, 1.0, fade_in, FadeEnd::Keep));
                         }
@@ -336,7 +344,7 @@ fn play_ambients(commands: &mut Commands, world: &mut PlayWorld, book: &mut Soun
             commands.entity(old.entity).despawn();
         }
         let Some(source) = book.sound(&path).map(|loaded| loaded.source) else { continue };
-        let settings = spatial(PlaybackSettings::LOOP.with_volume(Volume::SILENT).with_speed(pitch_factor(ambient.pitch)));
+        let settings = spatialized(PlaybackSettings::LOOP.with_volume(Volume::SILENT).with_speed(pitch_factor(ambient.pitch)));
         let entity = commands.spawn((AudioPlayer::new(source), settings, heard, Song(generation), Transform::from_translation(position))).id();
         book.ambients.insert(actor, PlayingAmbient { sound: ambient.sound, entity, said });
     }
@@ -404,18 +412,15 @@ fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundB
             }
             playing.despawn();
         }
-        let place = position.map(|position| world.scene_position(position));
-        let gain = match (camera, place) {
-            (Some(camera), Some(place)) if played.attenuate => distance_gain(camera.distance(place), played.radius),
-            _ => 1.0,
-        };
+        let heard_at = position.map(|position| world.scene_position(position)).filter(|_| played.attenuate);
+        let gain = listener_gain(camera, heard_at, played.radius);
         let mode = if loaded.looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
         let settings = mode.with_volume(Volume::Linear(played.volume * gain)).with_speed(pitch_factor(played.pitch));
         let channel = Channel { loudness: played.volume * gain, looping: loaded.looping, generation, actor: played.actor.filter(|_| played.slot == SLOT_AMBIENT) };
-        let entity = match place.filter(|_| played.attenuate) {
+        let entity = match heard_at {
             Some(position) => {
                 let heard = HeardSound { actor: played.actor, position, volume: played.volume, radius: played.radius, fade: 1.0 };
-                commands.spawn((AudioPlayer::new(source), spatial(settings), heard, channel, Transform::from_translation(position))).id()
+                commands.spawn((AudioPlayer::new(source), spatialized(settings), heard, channel, Transform::from_translation(position))).id()
             }
             None => commands.spawn((AudioPlayer::new(source), settings, channel)).id(),
         };

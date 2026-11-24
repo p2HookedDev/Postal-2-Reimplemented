@@ -55,20 +55,20 @@ impl<L: LoaderRef> Vm<L> {
         if distance_squared > reach_squared {
             return false;
         }
-        if check == SightCheck::Periodic && reach_squared * 0.25 < distance_squared && self.random() < 0.5 {
+        if check == SightCheck::Periodic && reach_squared * 0.25 < distance_squared && self.rng.frand() < 0.5 {
             return false;
         }
         let facing = offset.safe_normal().dot(self.store.rotator_of(controller, Prop::Rotation).vector());
         if facing < self.store.float_of(pawn, Prop::PeripheralVision) {
             return false;
         }
-        if check == SightCheck::Periodic && self.random() * distance_squared > reach_squared * 0.01 {
+        if check == SightCheck::Periodic && self.rng.frand() * distance_squared > reach_squared * 0.01 {
             let flat = Vector::new(offset.x, offset.y, offset.z * 2.0);
             if flat.safe_normal().dot(self.store.rotator_of(controller, Prop::Rotation).vector()) < self.store.float_of(pawn, Prop::PeripheralVision) {
                 return false;
             }
             let rise = offset[2].abs();
-            if self.random() < rise * rise / distance_squared {
+            if self.rng.frand() < rise * rise / distance_squared {
                 return false;
             }
         }

@@ -1,5 +1,7 @@
 mod coords;
+pub mod library;
 mod lighting;
+pub mod material_class;
 mod mesh;
 mod quality;
 mod skin;

@@ -212,7 +212,7 @@ pub fn read_model(pkg: &Package, file: &[u8], export: &Export) -> Result<Model, 
     let root_outside = r.i32()? != 0;
     let linked = r.i32()? != 0;
 
-    let sections = array(r, read_section)?;
+    let sections = array(r, read_bsp_section)?;
     let light_maps = array(r, read_light_map)?;
     let light_map_textures = array(r, read_light_map_texture)?;
 
@@ -457,7 +457,7 @@ fn read_surface(r: &mut Reader) -> Result<BspSurface, Error> {
     })
 }
 
-fn read_section(r: &mut Reader) -> Result<BspSection, Error> {
+fn read_bsp_section(r: &mut Reader) -> Result<BspSection, Error> {
     let vertices = array(r, |r| {
         let position = vec3(r)?;
         let uv = [r.f32()?, r.f32()?];

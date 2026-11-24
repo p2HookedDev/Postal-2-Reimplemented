@@ -199,78 +199,13 @@ fn log_stage_timing(clocks: Res<StageClocks>, spans: Option<Res<SystemSpans>>, t
     }
 }
 
-/// A changed asset is a queued write, which `finish encoders and submit` pays for.
-/// What rewrote a mesh, for the profile log: each rewrite is uploaded again.
-#[derive(Clone, Copy)]
-pub(crate) enum MeshWrite {
-    Strip,
-    Beam,
-    SpriteGrid,
-    Fluid,
-    Corona,
-    ActorLight,
-    TerrainLight,
-}
-
-const MESH_WRITERS: [&str; 7] = ["strips", "beams", "sprite grids", "fluids", "coronas", "actor vertex light", "terrain light"];
-static MESH_WRITES: [std::sync::atomic::AtomicU32; 7] = [const { std::sync::atomic::AtomicU32::new(0) }; 7];
-
-pub(crate) fn mesh_written(by: MeshWrite) {
-    MESH_WRITES[by as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
-fn log_asset_churn(
-    time: Res<Time<Real>>,
-    meshes: Res<Assets<Mesh>>,
-    images: Res<Assets<Image>>,
-    actor_materials: Res<Assets<ActorLitMaterial>>,
-    mesh_materials: Res<Assets<MeshLitMaterial>>,
-    terrain_passes: Option<Res<Assets<TerrainMaterial>>>,
-    terrain_layers: Option<Res<Assets<TerrainLayerMaterial>>>,
-    decals: Query<(), With<ClusteredDecal>>,
-    mut mesh_events: MessageReader<AssetEvent<Mesh>>,
-    mut actor_events: MessageReader<AssetEvent<ActorLitMaterial>>,
-    mut mesh_material_events: MessageReader<AssetEvent<MeshLitMaterial>>,
-    mut counts: Local<[u32; 3]>,
-    mut since: Local<f32>,
-) {
-    fn changed<A: Asset>(events: &mut MessageReader<AssetEvent<A>>) -> u32 {
-        events.read().filter(|event| matches!(event, AssetEvent::Modified { .. })).count() as u32
-    }
-    counts[0] += changed(&mut mesh_events);
-    counts[1] += changed(&mut actor_events);
-    counts[2] += changed(&mut mesh_material_events);
-    if !a_second_passed(&mut since, time.delta_secs()) {
-        return;
-    }
-    let per_second = 1.0 / std::mem::take(&mut *since);
-    let [mesh_writes, actor_writes, material_writes] = std::mem::take(&mut *counts).map(|count| (count as f32 * per_second) as u32);
-    bevy::log::info!(
-        "assets, changed a second: meshes {} ({mesh_writes}), images {}, actor materials {} ({actor_writes}), mesh materials {} ({material_writes}); one-pass terrains {}, terrain layer passes {}, decals {}",
-        meshes.len(),
-        images.len(),
-        actor_materials.len(),
-        mesh_materials.len(),
-        terrain_passes.map_or(0, |store| store.len()),
-        terrain_layers.map_or(0, |store| store.len()),
-        decals.iter().count()
-    );
-    let by: Vec<String> = MESH_WRITERS
-        .iter()
-        .zip(&MESH_WRITES)
-        .map(|(name, count)| format!("{name} {}", (count.swap(0, std::sync::atomic::Ordering::Relaxed) as f32 * per_second) as u32))
-        .collect();
-    bevy::log::info!("mesh writes a second by writer: {}", by.join(", "));
-}
-
 fn log_scene_counts(
     clocks: Res<StageClocks>,
     settings: Option<Res<Settings>>,
     time: Res<Time<Real>>,
     (meshes, culled): (Query<(&ViewVisibility, Has<FollowActor>, Has<FollowBone>), With<Mesh3d>>, Query<&InheritedVisibility, Without<NoCpuCulling>>),
     (cameras, windows): (Query<&Camera>, Query<&Window>),
-    tiles: Option<Res<crate::render::lamps::MoverTiles>>,
+    tiles: Option<Res<p2_render::lamps::MoverTiles>>,
     mut since: Local<f32>,
 ) {
     if let Some(settings) = settings.as_ref().filter(|settings| settings.is_changed()) {
@@ -338,7 +273,7 @@ fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, m
     let mut rank = 0;
     list.retain(|(_, name)| {
         rank += 1;
-        rank <= 14 || name == crate::render::lamps::LAMP_SHADOW_SPAN
+        rank <= 14 || name == p2_render::lamps::LAMP_SHADOW_SPAN
     });
     let list: Vec<String> = list.iter().map(|(ms, name)| format!("{name} {ms:.2}")).collect();
     bevy::log::info!("gpu ms per frame by pass, nested passes overlap: {}", list.join(", "));
@@ -359,7 +294,6 @@ impl Plugin for StageTimingPlugin {
         app.insert_resource(clocks);
         app.add_plugins(RenderDiagnosticsPlugin);
         app.add_systems(Update, (log_stage_timing, log_scene_counts, log_gpu_timing));
-        app.add_systems(Update, log_asset_churn.run_if(resource_exists::<Assets<ActorLitMaterial>>).run_if(resource_exists::<Assets<MeshLitMaterial>>));
         app.add_systems(First, update_mark::<1>);
         app.add_systems(Last, update_mark::<0>);
         app.add_systems(

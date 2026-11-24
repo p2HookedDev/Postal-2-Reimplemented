@@ -2,6 +2,8 @@
 //! units and axes (Z up), rotations quaternions (X, Y, Z, W); the VM converts rotators and owns which actor a body
 //! belongs to.
 
+#![forbid(unsafe_code)]
+
 use std::sync::Mutex;
 
 use rapier3d::prelude::*;
