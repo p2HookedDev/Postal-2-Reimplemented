@@ -19,6 +19,7 @@ p2-bevy-assets.workspace = true
 p2-package.workspace = true
 p2-vm.workspace = true
 p2-collision.workspace = true
+rayon.workspace = true
 p2-host.workspace = true
 p2-particles.workspace = true
 p2-physics.workspace = true

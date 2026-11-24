@@ -1,6 +1,5 @@
 //! The probe bake: a ray tree of the level, the light each grid point sees second hand, and the atlas that holds it.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bevy::math::{IVec3, Vec3};
 use p2_assets::Model;
@@ -315,30 +314,14 @@ fn write_probe(pixels: &mut [u8], grid: ProbeGrid, cell: IVec3, probe: &Probe) {
     }
 }
 
-/// Batches handed out in turn, so threads that drew closed probes take more.
-fn in_parallel<T: Send>(cells: &[IVec3], threads: usize, each: impl Fn(IVec3) -> T + Sync) -> Vec<T> {
-    let next = AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads.max(1))
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut done = Vec::new();
-                    loop {
-                        let start = next.fetch_add(CELLS_PER_BATCH, Ordering::Relaxed);
-                        if start >= cells.len() {
-                            return done;
-                        }
-                        done.extend(cells[start..(start + CELLS_PER_BATCH).min(cells.len())].iter().map(|&cell| each(cell)));
-                    }
-                })
-            })
-            .collect();
-        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_default()).collect()
-    })
+/// In the light bakes' pool, in batches; a thread that drew closed probes takes more.
+fn in_parallel<T: Send>(cells: &[IVec3], each: impl Fn(IVec3) -> T + Sync + Send) -> Vec<T> {
+    use rayon::prelude::*;
+    crate::lamps::in_bake_pool(|| cells.par_iter().with_min_len(CELLS_PER_BATCH).map(|&cell| each(cell)).collect())
 }
 
 /// `solid` tells whether a point in the scene's space is inside the level's walls.
-pub(super) fn bake_probes(world: &ProbeWorld, grid: ProbeGrid, threads: usize, solid: impl Fn(Vec3) -> bool + Sync) -> Option<ProbeBake> {
+pub(super) fn bake_probes(world: &ProbeWorld, grid: ProbeGrid, solid: impl Fn(Vec3) -> bool + Sync + Send) -> Option<ProbeBake> {
     let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
     for corner in world.triangles.iter().flatten() {
         min = min.min(Vec3::from(*corner));
@@ -355,7 +338,7 @@ pub(super) fn bake_probes(world: &ProbeWorld, grid: ProbeGrid, threads: usize, s
     let bvh = Bvh::new(world.triangles);
     let bins = LampBins::new(world);
     let ways = ray_ways();
-    let mut probes = in_parallel(&cells, threads, |cell| {
+    let mut probes = in_parallel(&cells, |cell| {
         let point = cell.as_vec3() * spacing;
         let closed = solid(point) || terrain_above(&bvh, world.terrain_from, point);
         (cell, if closed { Probe::default() } else { bake_probe(world, &bvh, &bins, &ways, point) })
@@ -516,14 +499,14 @@ mod tests {
     }
 
     #[test]
-    fn a_bake_fills_the_whole_atlas_from_any_thread_count() {
+    fn a_bake_fills_the_whole_atlas() {
         let triangles = room(100.0);
         let scene = world(&triangles, &[]);
-        let one = bake_probes(&scene, FINE, 1, |_| false).expect("a bake");
-        let many = bake_probes(&scene, FINE, 3, |point| point.y > 0.0).expect("a bake");
+        let open = bake_probes(&scene, FINE, |_| false).expect("a bake");
+        let half_closed = bake_probes(&scene, FINE, |point| point.y > 0.0).expect("a bake");
         let (width, height) = FINE.atlas_size();
-        assert_eq!(one.pixels.len(), width * height * 4);
-        assert_eq!(one.spacing, many.spacing);
-        assert!(bake_probes(&world(&[], &[]), FINE, 1, |_| false).is_none());
+        assert_eq!(open.pixels.len(), width * height * 4);
+        assert_eq!(open.spacing, half_closed.spacing);
+        assert!(bake_probes(&world(&[], &[]), FINE, |_| false).is_none());
     }
 }

@@ -24,16 +24,16 @@ pub struct MaterialCache {
     speculars: Mutex<FxHashMap<SpecularSource, Arc<OnceLock<Option<Handle<Image>>>>>>,
 }
 
-fn cell<K: Hash + Eq, V, S: BuildHasher>(map: &Mutex<HashMap<K, Arc<OnceLock<V>>, S>>, key: K) -> Arc<OnceLock<V>> {
+fn entry_cell<K: Hash + Eq, V, S: BuildHasher>(map: &Mutex<HashMap<K, Arc<OnceLock<V>>, S>>, key: K) -> Arc<OnceLock<V>> {
     Arc::clone(map.lock().unwrap_or_else(PoisonError::into_inner).entry(key).or_default())
 }
 
 impl MaterialCache {
     pub fn images(&self, game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32) -> Option<MaterialImages> {
-        cell(&self.cache, (package, material))
+        entry_cell(&self.cache, (package, material))
             .get_or_init(|| {
                 let (source, state) = game.material_source(package, material)?;
-                let image = cell(&self.images, source)
+                let image = entry_cell(&self.images, source)
                     .get_or_init(|| {
                         let SourceLayers { image, glow, wet } = game.source_layers(source, TextureDecode::Keep)?;
                         let albedo = mean_albedo(&image);
@@ -41,11 +41,11 @@ impl MaterialCache {
                         t.set_albedo(handle.id(), albedo);
                         let glow = glow.map(|glow| t.add_image(glow));
                         let detail = source.detail.and_then(|key| {
-                            cell(&self.details, key).get_or_init(|| game.detail_image(source).map(|detail| t.add_image(detail))).clone()
+                            entry_cell(&self.details, key).get_or_init(|| game.detail_image(source).map(|detail| t.add_image(detail))).clone()
                         });
                         let specular = source.specular.and_then(|specular| {
                             let key = SpecularSource { mask: SpecularMask::None, env_map: None, ..specular };
-                            let cube = cell(&self.speculars, key).get_or_init(|| game.specular_image(specular).map(|cube| t.add_image(cube))).clone()?;
+                            let cube = entry_cell(&self.speculars, key).get_or_init(|| game.specular_image(specular).map(|cube| t.add_image(cube))).clone()?;
                             Some((cube, specular_params(source)?))
                         });
                         if let Some(wet) = wet {

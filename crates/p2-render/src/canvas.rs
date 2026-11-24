@@ -64,6 +64,11 @@ struct PaintedFont {
     pages: Vec<Option<(egui::TextureId, egui::Vec2)>>,
 }
 
+/// Whether an object path (`Package.Group.Name`) lies in `package`.
+pub fn in_package(path: &str, package: &str) -> bool {
+    path.split_once('.').is_some_and(|(first, _)| first.eq_ignore_ascii_case(package))
+}
+
 #[derive(Resource, Default)]
 pub struct CanvasPainter {
     textures: FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
@@ -84,9 +89,8 @@ impl CanvasPainter {
     /// At a map change: what the map left drew from its own package goes, and a read that failed is tried again. The
     /// fonts and textures of the other packages, the same for every map, and the loading bar stay.
     pub fn forget_map(&mut self, map: &str) {
-        let own = |path: &String| path.split_once('.').is_some_and(|(package, _)| package.eq_ignore_ascii_case(map));
-        self.textures.retain(|path, painted| painted.is_some() && !own(path));
-        self.fonts.retain(|path, painted| painted.is_some() && !own(path));
+        self.textures.retain(|path, painted| painted.is_some() && !in_package(path, map));
+        self.fonts.retain(|path, painted| painted.is_some() && !in_package(path, map));
     }
 
     /// The texture and font paths already painted, which a map's start need not read ahead.

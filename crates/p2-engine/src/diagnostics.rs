@@ -13,10 +13,12 @@ use bevy::camera::visibility::{InheritedVisibility, NoCpuCulling, ViewVisibility
 use bevy::core_pipeline::core_3d::{AlphaMask3d, Opaque3d, Transparent3d};
 use bevy::core_pipeline::prepass::{AlphaMask3dPrepass, Opaque3dPrepass};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
+#[cfg(feature = "gpu-timers")]
 use bevy::diagnostic::DiagnosticsStore;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::mesh::Mesh3d;
 use bevy::pbr::Shadow;
+#[cfg(feature = "gpu-timers")]
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::render::render_phase::{BinnedPhaseItem, ViewBinnedRenderPhases, ViewSortedRenderPhases};
 use bevy::render::renderer::{RenderGraph, RenderGraphSystems, RenderInstance};

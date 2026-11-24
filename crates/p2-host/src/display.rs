@@ -181,7 +181,7 @@ pub const MODERN_GRAPHICS: &str = "ini:Engine.Engine.RenderDevice ModernGraphics
 pub const MODERN_PRESET: &str = "ini:Engine.Engine.RenderDevice ModernPreset";
 pub const MODERN_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernSunShadows";
 pub const MODERN_SHADOW_DISTANCE: &str = "ini:Engine.Engine.RenderDevice ModernShadowDistance";
-/// The shadow edge's width: 0 sharp, 1 soft, 2 softer.
+/// The shadow edge's width: 0 sharp, 1 soft, 2 softer, 3 contact hardening (sharp at contact, softer with distance).
 pub const MODERN_SHADOW_FILTER: &str = "ini:Engine.Engine.RenderDevice ModernShadowFilter";
 pub const MODERN_LAMP_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernLampShadows";
 pub const MODERN_CONTACT_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernContactShadows";
@@ -317,7 +317,7 @@ const LEVELS: [(&str, u8, u8); 53] = [
     (MODERN_PHOTO_SHARPEN, 4, 10),
     (MODERN_PHOTO_WARMTH, NEUTRAL_LEVEL, 10),
     (MODERN_PHOTO_HIDE_PLAYER, 0, 1),
-    (MODERN_SHADOW_FILTER, 0, 2),
+    (MODERN_SHADOW_FILTER, 0, 3),
 ];
 
 
@@ -600,7 +600,7 @@ mod tests {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
         assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 6, 0, 0, 5, 1, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0, 0]);
         let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
-        assert_eq!(top, [4, 5, 4, 2, 3, 2, 2, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 10, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1, 2]);
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 2, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 10, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1, 3]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
         assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 0);
         assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);

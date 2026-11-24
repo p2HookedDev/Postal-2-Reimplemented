@@ -58,8 +58,8 @@ pub(crate) struct ProbeJob {
 /// Keyed by the grid's columns.
 pub(crate) type ProbePrebake = crate::lamps::Prebaked<i32, Option<ProbeBake>>;
 
-pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8, threads: usize) -> ProbePrebake {
-    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, world, origin, grid, threads)))
+pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8) -> ProbePrebake {
+    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, world, origin, grid)))
 }
 
 fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
@@ -70,7 +70,7 @@ fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
     image
 }
 
-fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, grid: ProbeGrid, threads: usize) -> Option<ProbeBake> {
+fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, grid: ProbeGrid) -> Option<ProbeBake> {
     let lamps = map_lamps(environment);
     let sun = environment.sun.as_ref().map(|(_, hardware)| {
         (-Vec3::from(p2_bevy_assets::to_bevy(hardware.direction)).normalize_or_zero(), sun_color(environment.sun_set()))
@@ -90,7 +90,7 @@ fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: 
         let at = Vector::from(p2_bevy_assets::to_bevy((point - origin).to_array()));
         p2_collision::line_check(&collision.model, at, Vector::new(at.x, at.y, at.z + 1.0)).is_some_and(|hit| hit.time == 0.0)
     };
-    bake_probes(&world, grid, threads, solid)
+    bake_probes(&world, grid, solid)
 }
 
 pub(crate) fn follow_probes(settings: Res<Settings>, shown: Option<Res<ShownScene>>, level: Option<Res<LevelCollision>>, mut atlas: ResMut<ProbeAtlas>, mut job: Local<ProbeJob>, mut images: ResMut<Assets<Image>>) {
@@ -109,7 +109,7 @@ pub(crate) fn follow_probes(settings: Res<Settings>, shown: Option<Res<ShownScen
             let origin = shown.origin;
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.probes.take(&grid.columns));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { bake_map(&environment, &collision, &world_triangles(&collision, origin), origin, grid, crate::lamps::bake_threads()) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { bake_map(&environment, &collision, &world_triangles(&collision, origin), origin, grid) }));
             }
         }
     }

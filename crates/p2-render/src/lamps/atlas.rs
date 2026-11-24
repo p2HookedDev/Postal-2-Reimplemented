@@ -194,10 +194,10 @@ fn draw_index(tiles: &[Option<Tile>]) -> Vec<Option<usize>> {
 }
 
 /// Lamp positions and triangles in the scene's space.
-pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], lamps: &[([f32; 3], f32)], threads: usize) -> LampBake {
+pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], lamps: &[([f32; 3], f32)]) -> LampBake {
     let radii: Vec<f32> = lamps.iter().map(|&(_, radius)| radius).collect();
     let tiles = pack(&radii);
-    let near = super::on_threads(lamps.len(), threads, |lamp| {
+    let near = super::on_threads(lamps.len(), |lamp| {
         let (position, radius) = lamps[lamp];
         tiles[lamp]?;
         let near = triangles.iter().enumerate().filter(|(_, triangle)| near_sphere(triangle, position, radius));
@@ -726,7 +726,7 @@ mod tests {
     fn a_lamp_gets_only_triangles_in_its_reach() {
         let near = [[10.0, 0.0, 0.0], [10.0, 5.0, 0.0], [10.0, 0.0, 5.0]];
         let far = [[900.0, 0.0, 0.0], [900.0, 5.0, 0.0], [900.0, 0.0, 5.0]];
-        let bake = lamp_bake(&[far, near], &[], &[([0.0; 3], 100.0)], 1);
+        let bake = lamp_bake(&[far, near], &[], &[([0.0; 3], 100.0)]);
         assert_eq!(bake.draws[0].count, 3);
         assert_eq!(bake.indices, [3, 4, 5]);
         assert_eq!(bake.vertices.len(), 6);

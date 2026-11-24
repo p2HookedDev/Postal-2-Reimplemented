@@ -13,8 +13,8 @@ mod movers;
 mod shadow_mask;
 mod tile_grid;
 
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::asset::{Asset, AssetEvent, AssetEventSystems, Assets, Handle, RenderAssetUsages};
@@ -67,34 +67,24 @@ const SHADOWED_CELL: f32 = 128.0;
 const UNSHADOWED_CELL: f32 = 512.0;
 const ITEMS_PER_BATCH: usize = 8;
 
-/// The threads a light bake may take: all but two, left to the game (the slowest machine it must run on has four).
-/// Bakes that run together share them.
-pub(crate) fn bake_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(2).max(1))
+/// Runs `work` in the light bakes' pool: all threads but two, left to the game (the slowest machine it must run on has
+/// four). Bakes that run at once share the pool, each thread taking whichever bake's work is left.
+pub(crate) fn in_bake_pool<R: Send>(work: impl FnOnce() -> R + Send) -> R {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| {
+        let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(2).max(1));
+        rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|index| format!("light bake {index}")).build().ok()
+    });
+    match pool {
+        Some(pool) => pool.install(work),
+        None => work(),
+    }
 }
 
-/// `work` on each of `count` items, on `threads` threads, the results in the items' order.
-fn on_threads<T: Send>(count: usize, threads: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
-    let next = AtomicUsize::new(0);
-    let mut done: Vec<(usize, T)> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads.max(1))
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut done = Vec::new();
-                    loop {
-                        let start = next.fetch_add(ITEMS_PER_BATCH, Ordering::Relaxed);
-                        if start >= count {
-                            return done;
-                        }
-                        done.extend((start..count.min(start + ITEMS_PER_BATCH)).map(|item| (item, work(item))));
-                    }
-                })
-            })
-            .collect();
-        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
-    });
-    done.sort_unstable_by_key(|&(item, _)| item);
-    done.into_iter().map(|(_, result)| result).collect()
+/// `work` on each of `count` items in the bake pool, the results in the items' order.
+fn on_threads<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
+    use rayon::prelude::*;
+    in_bake_pool(|| (0..count).into_par_iter().with_min_len(ITEMS_PER_BATCH).map(work).collect())
 }
 
 /// Set above the tile in a lamp's colour texel when the lamp has a size of its own. Under 2^24, so it stays exact as a
@@ -251,15 +241,15 @@ struct LampJob {
     ready: Option<LampJobResult>,
 }
 
-fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], origin: Vec3, side: u32, threads: usize) -> LampJobResult {
+fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], origin: Vec3, side: u32) -> LampJobResult {
     let lamps = map_lamps(environment);
     let spheres: Vec<_> = lamps.iter().map(|light| (scene_place(light, origin).0.to_array(), light.world_radius())).collect();
-    let bake = (side > 0).then(|| lamp_bake(triangles, &world_masked(collision, origin), &spheres, threads));
+    let bake = (side > 0).then(|| lamp_bake(triangles, &world_masked(collision, origin), &spheres));
     let records: Vec<_> = lamps.iter().enumerate().map(|(index, light)| lamp_record(light, environment.level_brightness, origin, bake.as_ref().map_or(UNMAPPED, |bake| bake.tile_bits(index)))).collect();
     let cells = {
         let drawn: Vec<_> = bake.as_ref().map_or_else(|| vec![None; lamps.len()], |bake| bake.drawn(side / ATLAS_UNITS).collect());
         let cell_lamps: Vec<_> = records.iter().zip(drawn).map(|(record, drawn)| CellLamp::of(record, drawn.map(|(face, _)| face), drawn.map_or(&[], |(_, casters)| casters))).collect();
-        lamp_cells(bake.as_ref().map_or(&[], |bake| &bake.vertices), &cell_lamps, if side > 0 { SHADOWED_CELL } else { UNSHADOWED_CELL }, threads)
+        lamp_cells(bake.as_ref().map_or(&[], |bake| &bake.vertices), &cell_lamps, if side > 0 { SHADOWED_CELL } else { UNSHADOWED_CELL })
     };
     let lit = cells.starts.windows(2).filter(|pair| pair[1] > pair[0]).count().max(1);
     let listed = format!(
@@ -270,7 +260,7 @@ fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangl
         cells.in_reach
     );
     let book = book_texels(&cells, &records);
-    let zones = on_threads(lamps.len(), threads, |lamp| p2_collision::light_zones(&collision.model, lamps[lamp].location, lamps[lamp].world_radius()));
+    let zones = on_threads(lamps.len(), |lamp| p2_collision::light_zones(&collision.model, lamps[lamp].location, lamps[lamp].world_radius()));
     let lamps = lamps.into_iter().zip(zones).zip(cells.reach).map(|((light, zones), reach)| (light, zones, reach)).collect();
     LampJobResult { lamps, bake, book, listed }
 }
@@ -333,12 +323,9 @@ pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCo
     let levels = LOAD_LEVELS.load(Ordering::Relaxed);
     let side = lamp_quality((levels & 255) as u8).atlas_side;
     let world = world_triangles(collision, origin);
-    let threads = bake_threads();
-    let probe_threads = (threads / 2).max(1);
     let (lamps, probes) = std::thread::scope(|scope| {
-        let probes = scope.spawn(|| crate::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8, probe_threads));
-        let lamps = lamp_job(environment, collision, &world.triangles, origin, side, threads.saturating_sub(probe_threads).max(1));
-        (lamps, probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+        let probes = scope.spawn(|| crate::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8));
+        (lamp_job(environment, collision, &world.triangles, origin, side), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
     });
     Some(Arc::new(LightBakes { lamps: Prebaked::new(side, lamps), probes }))
 }
@@ -399,7 +386,7 @@ fn follow_lamps(
             let origin = shown.origin;
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.lamps.take(&side));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, origin, side, bake_threads()) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, origin, side) }));
             }
         }
     }

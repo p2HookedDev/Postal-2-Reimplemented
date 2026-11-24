@@ -1,6 +1,6 @@
 class ModernMenuLighting extends ModernMenuPage;
 
-var localized string    FilterNames[3];
+var localized string    FilterNames[4];
 
 function CreateMenuContents()
 {
@@ -15,7 +15,7 @@ function CreateMenuContents()
 	Combo = AddLevelCombo(0, "ModernSunShadows", 3, 4);
 	AddNames(Combo, 0, 4);
 	AddLevelSlider(1, "ModernShadowDistance", 1, 5, 4);
-	Combo = AddLevelCombo(2, "ModernShadowFilter", 0, 2);
+	Combo = AddLevelCombo(2, "ModernShadowFilter", 0, 3);
 	for (i = 0; i < ArrayCount(FilterNames); i++)
 		Combo.AddItem(FilterNames[i]);
 	Combo = AddLevelCombo(3, "ModernLampShadows", 3, 4);
@@ -48,6 +48,7 @@ defaultproperties
 	FilterNames(0)="Sharp"
 	FilterNames(1)="Soft"
 	FilterNames(2)="Softer"
+	FilterNames(3)="Contact hardening"
 
 	Labels(0)="Sun shadows"
 	Labels(1)="Shadow distance"
@@ -60,7 +61,7 @@ defaultproperties
 
 	Helps(0)="Sun shadows from characters and moving objects; higher is sharper."
 	Helps(1)="How far away sun shadows are drawn."
-	Helps(2)="How soft shadow edges are; lamp shadows soften less than the sun's."
+	Helps(2)="How soft shadow edges are; contact hardening keeps them sharp where things touch the ground."
 	Helps(3)="Shadows from lamps and other lights in the level."
 	Helps(4)="Larger lamps give wider, softer highlights on surfaces."
 	Helps(5)="Small sharp shadows where objects touch the ground and walls."

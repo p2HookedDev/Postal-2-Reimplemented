@@ -340,12 +340,12 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(
 }
 
 /// Cells no smaller than `smallest_cell`, grown until the grid over every lamp's reach is small enough to hold.
-pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cell: f32, threads: usize) -> LampCells {
+pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cell: f32) -> LampCells {
     if lamps.is_empty() {
         return LampCells::default();
     }
     let mut grid = grid(lamps, smallest_cell);
-    let lit = super::on_threads(lamps.len(), threads, |lamp| lit_cells(&grid, &lamps[lamp], vertices));
+    let lit = super::on_threads(lamps.len(), |lamp| lit_cells(&grid, &lamps[lamp], vertices));
     let cells = grid.dims.iter().product::<u32>() as usize;
     let mut starts = vec![0u32; cells + 1];
     for &(cell, _) in lit.iter().flat_map(|(cells, ..)| cells) {
@@ -439,7 +439,7 @@ mod tests {
 
     fn cells_of(vertices: &[[f32; 3]], face: Option<u32>) -> LampCells {
         let casters: Vec<u32> = (0..vertices.len() as u32).collect();
-        lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 1000.0, face, casters: &casters, strength: 1.0, spot: None }], 128.0, 2)
+        lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 1000.0, face, casters: &casters, strength: 1.0, spot: None }], 128.0)
     }
 
     fn cell_at(cells: &LampCells, point: [f32; 3]) -> usize {
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn a_cell_lists_its_strongest_lamp_first() {
         let lamp = |x: f32, strength: f32| CellLamp { position: [x, 0.0, 0.0], radius: 1000.0, face: None, casters: &[], strength, spot: None };
-        let cells = lamp_cells(&[], &[lamp(0.0, 0.5), lamp(0.0, 2.0), lamp(800.0, 1.0)], 128.0, 2);
+        let cells = lamp_cells(&[], &[lamp(0.0, 0.5), lamp(0.0, 2.0), lamp(800.0, 1.0)], 128.0);
         assert_eq!(cells.of(cell_at(&cells, [10.0, 10.0, 10.0])), [1, 0, 2]);
         assert_eq!(cells.of(cell_at(&cells, [790.0, 10.0, 10.0])), [2, 1, 0]);
     }
@@ -490,7 +490,7 @@ mod tests {
         let vertices = wall(300.0);
         let casters: Vec<u32> = (0..vertices.len() as u32).collect();
         let lamp = CellLamp { position: [37.0, -11.0, 5.0], radius: 1000.0, face: Some(64), casters: &casters, strength: 1.0, spot: None };
-        let cells = lamp_cells(&vertices, std::slice::from_ref(&lamp), 128.0, 1);
+        let cells = lamp_cells(&vertices, std::slice::from_ref(&lamp), 128.0);
         let cube = Cube::drawn(64, &lamp, &vertices);
         let mut alone = Vec::new();
         for z in 0..cells.dims[2] {
@@ -537,7 +537,7 @@ mod tests {
         let narrow = spot_record(Vec3::new(-0.7, 0.1, 0.7).normalize(), 0.875, 1.0);
         for (record, most_listed) in [(point_lamp, 1.0), (down, 0.45), (narrow, 0.2)] {
             let lamp = CellLamp::of(&record, None, &[]);
-            let cells = lamp_cells(&[], std::slice::from_ref(&lamp), 128.0, 2);
+            let cells = lamp_cells(&[], std::slice::from_ref(&lamp), 128.0);
             let (mut listed, mut dropped) = (0, 0);
             for index in 0..cells.starts.len() - 1 {
                 let at = [index as u32 % cells.dims[0], index as u32 / cells.dims[0] % cells.dims[1], index as u32 / (cells.dims[0] * cells.dims[1])];

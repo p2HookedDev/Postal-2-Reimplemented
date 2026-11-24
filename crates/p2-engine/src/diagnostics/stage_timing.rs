@@ -272,9 +272,11 @@ fn log_scene_counts(
 }
 
 /// A pass that draws only in some frames keeps its old samples; past this age they say nothing of now.
+#[cfg(feature = "gpu-timers")]
 const STALE_PASS: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A pass runs once per camera and each run adds a sample, so a path's time per frame is its samples' rate over the frame rate.
+#[cfg(feature = "gpu-timers")]
 fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, mut since: Local<f32>, mut frames: Local<u32>) {
     *frames += 1;
     if !a_second_passed(&mut since, time.delta_secs()) {
@@ -317,8 +319,9 @@ impl Plugin for StageTimingPlugin {
         let pass_clock = RenderPassClock(clocks.passes.clone());
         let draw_groups = RenderDrawGroups(clocks.draw_groups.clone());
         app.insert_resource(clocks);
-        app.add_plugins(RenderDiagnosticsPlugin);
-        app.add_systems(Update, (log_stage_timing, log_scene_counts, log_gpu_timing));
+        #[cfg(feature = "gpu-timers")]
+        app.add_plugins(RenderDiagnosticsPlugin).add_systems(Update, log_gpu_timing);
+        app.add_systems(Update, (log_stage_timing, log_scene_counts));
         app.add_systems(First, update_mark::<1>);
         app.add_systems(Last, update_mark::<0>);
         app.add_systems(

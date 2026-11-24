@@ -434,8 +434,8 @@ pub(crate) fn sun_quality(level: u8) -> (usize, usize) {
     }
 }
 
-/// Two, as a sun with one cascade reads as a cached level.
-const MOVER_CASCADES: usize = 2;
+/// Three, so a body lying in the middle distance still casts on fine texels; one cascade would read as a cached level.
+const MOVER_CASCADES: usize = 3;
 
 /// In Unreal units. Every mover in a cascade is queued and drawn again each frame, and past this its shadow is a few
 /// pixels wide.

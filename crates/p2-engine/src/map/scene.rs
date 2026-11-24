@@ -58,15 +58,15 @@ pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option
 pub(super) const SCENE_START: f32 = 0.1;
 const BAKE_PHASE: &str = "lamps and probes";
 /// The scene build's phases and their time in ms on a large map (suburbs-3), so the bar moves as the time goes. The
-/// engine weights its loading phases too. The BSP builds beside them on its own thread.
+/// engine weights its loading phases too. The BSP and the terrain build beside them on threads of their own.
 const SCENE_PHASES: [(&str, f32); 9] = [
     ("map file", 7.0),
     ("HUD", 10.0),
     ("actors", 20.0),
     ("projectors and meshes found", 5.0),
-    ("terrain", 490.0),
     ("static meshes", 320.0),
     ("pawns", 235.0),
+    ("terrain, waited for", 150.0),
     ("rest", 1.0),
     (BAKE_PHASE, 2200.0),
 ];
@@ -255,27 +255,38 @@ impl PreparedScene {
         phase("projectors and meshes found");
 
         let zones = TerrainZones { model: &model, sky_zone, terrain_zones: &terrain_zones };
-        let TerrainParts { models: terrain_drawn, sky_models: terrain_sky, static_terrains, terrain_albedos, terrain_sectors, terrains, hidden_terrains, drawn_decorations } =
-            terrain_models(game, t, &mut texture, id, &zones, terrain_infos);
-        phase("terrain");
         let actors: usize = placements.values().map(Vec::len).sum();
         let meshes = placements.keys().map(|(mesh, _)| mesh).collect::<HashSet<_>>().len();
-        let environment = Arc::new(
-            LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).suns_of_one_zone(|at| p2_collision::point_zone(&model, at)).with_terrain(terrain_sectors),
-        );
-        let level = StaticLevel { pkg, file, model: &model, environment: &environment, sky_zone };
-        let (parts, static_missing, static_batches) = static_models(game, t, &mut texture, &level, placements);
-        missing += static_missing;
-        let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lamp_casters, lamp_caster_albedos, lamp_masked, lit_actors, .. } = parts;
-        phase("static meshes");
-
+        // The static meshes' colours read no terrain: the terrain's sectors join the lights once it is built.
+        let lights = LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).suns_of_one_zone(|at| p2_collision::point_zone(&model, at));
         let vm_animations = VmAnimations::of(&played.0, &played.1);
         let mut animations = HashMap::new();
-        let pawn_parts = pawn_models(game, t, &mut texture, &mut animations, &vm_animations, pawns, &attachments);
+        // The terrain builds on a thread of its own, with a copy of the game that loads no package (as the BSP's).
+        let (terrain, (parts, static_missing, static_batches), pawn_parts) = std::thread::scope(|scope| {
+            let terrain = {
+                let (mut game, mut t, materials, zones) = (game.frozen_clone(), t.fork(), &materials, &zones);
+                scope.spawn(move || {
+                    let mut texture = |game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32| materials.images(game, t, package, material);
+                    (terrain_models(&mut game, &mut t, &mut texture, id, zones, terrain_infos), t)
+                })
+            };
+            let level = StaticLevel { pkg, file, model: &model, environment: &lights, sky_zone };
+            let statics = static_models(game, t, &mut texture, &level, placements);
+            phase("static meshes");
+            let pawn_parts = pawn_models(game, t, &mut texture, &mut animations, &vm_animations, pawns, &attachments);
+            phase("pawns");
+            (terrain.join(), statics, pawn_parts)
+        });
+        let (terrain, terrain_assets) = terrain.map_err(|_| LoadError::Panicked { package: package.to_owned() })?;
+        t.merge(terrain_assets);
+        let TerrainParts { models: terrain_drawn, sky_models: terrain_sky, static_terrains, terrain_albedos, terrain_sectors, terrains, hidden_terrains, drawn_decorations } = terrain;
+        phase("terrain, waited for");
+        let environment = Arc::new(lights.with_terrain(terrain_sectors));
+        missing += static_missing;
+        let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lamp_casters, lamp_caster_albedos, lamp_masked, lit_actors, .. } = parts;
         followers.extend(pawn_parts.followers);
         let animated_meshes = pawn_parts.animated;
         let (attached, drawn_pawns, drawn_attachments) = (pawn_parts.attached, pawn_parts.drawn_pawns, pawn_parts.drawn_attachments);
-        phase("pawns");
         let (bsp, bsp_assets) = bsp.join().map_err(|_| LoadError::Panicked { package: package.to_owned() })?;
         let BspBuilt { parts, drawn, polygons } = bsp;
         let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos } =

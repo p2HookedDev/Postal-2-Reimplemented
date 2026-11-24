@@ -134,9 +134,9 @@ fn sun_shadow_quality_follows_its_levels() {
     assert_eq!([1, 2, 3, 4].map(sun_quality), [(1024, 3), (2048, 3), (2048, 4), (4096, 4)]);
     assert_eq!([1, 2, 3, 4, 5].map(shadow_reach), [2048.0, 4096.0, 8192.0, 16384.0, 32768.0]);
     let farthest = sun_cascades(5);
-    assert_eq!(farthest.bounds.len(), 2);
-    assert!((farthest.bounds[0] - FIRST_CASCADE_FAR).abs() < 1.0 && (farthest.bounds[1] - 4096.0).abs() < 1.0);
-    assert!((sun_cascades(1).bounds[1] - 2048.0).abs() < 1.0);
+    assert_eq!(farthest.bounds.len(), 3);
+    assert!((farthest.bounds[0] - FIRST_CASCADE_FAR).abs() < 1.0 && (farthest.bounds[2] - 4096.0).abs() < 1.0);
+    assert!((sun_cascades(1).bounds[2] - 2048.0).abs() < 1.0);
     assert!((sun_cascades(1).overlap_proportion - SUN_OVERLAP).abs() < 1e-6);
 }
 

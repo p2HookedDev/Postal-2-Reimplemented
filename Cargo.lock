@@ -4229,6 +4229,7 @@ dependencies = [
  "p2-script",
  "p2-test-package",
  "p2-vm",
+ "rayon",
  "rustc-hash 2.1.3",
  "wesl",
  "wgpu-types",

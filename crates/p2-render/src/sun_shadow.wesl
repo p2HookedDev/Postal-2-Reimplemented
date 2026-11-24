@@ -5,7 +5,7 @@ import bevy_pbr::render::{
     shadow_sampling::sample_shadow_map_hardware,
 };
 import package::p2_render::sun_levels::{
-    LevelAtlas, LevelRecord, LevelSource, level_atlas, level_count, level_is_sky, level_local, level_record, level_rows_xy, level_tap, level_texel_size, level_xy,
+    LevelAtlas, LevelRecord, LevelSource, atlas_quad, level_atlas, level_count, level_is_sky, level_local, level_record, level_rows_xy, level_tap, level_texel_size, level_xy,
 };
 @if(CONTACT_SHADOWS)
 import bevy_pbr::render::mesh_view_bindings::contact_shadows_settings;
@@ -181,6 +181,44 @@ fn shadow_tap(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>, offset: vec
     return sample_shadow_map_hardware(uv + offset, at, i32(lights.directional_lights[shade.sun].depth_texture_base_index + shade.cascade));
 }
 
+// Contact hardening: the shadow's edge widens by this many world units for each unit between caster and receiver (the
+// sun's disc, made wider than the real one's 0.009 so the change shows), from a search of this many depth reads.
+const SUN_SPREAD: f32 = 0.02;
+const BLOCKER_TAPS: i32 = 8;
+
+@if(SHADOW_CONTACT_HARDENING)
+fn raw_depth(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>) -> f32 {
+    if shade.level {
+        let spot = clamp(uv * shade.record.size - 0.5, vec2(0.0), vec2(shade.record.size - 2.0));
+        let quad = atlas_quad(atlas, shade.record.corner + floor(spot) + 1.0);
+        return max(max(quad.x, quad.y), max(quad.z, quad.w));
+    }
+    let size = vec2<i32>(textureDimensions(directional_shadow_textures).xy);
+    let texel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2(0), size - 1);
+    return textureLoad(directional_shadow_textures, texel, i32(lights.directional_lights[shade.sun].depth_texture_base_index + shade.cascade), 0);
+}
+
+// World units from the receiver to the casters found within `reach` of it, on average; 0 without one. A stored depth
+// above the receiver's (held against its slope) is nearer the sun.
+@if(SHADOW_CONTACT_HARDENING)
+fn caster_gap(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>, depth: f32, slope: vec2<f32>, depth_per_unit: f32, reach: f32) -> f32 {
+    var sum = 0.0;
+    var found = 0.0;
+    for (var tap = 0; tap < BLOCKER_TAPS; tap++) {
+        let offset = vogel_tap(tap, BLOCKER_TAPS, 0.0) * reach;
+        let receiver = depth + dot(offset, slope);
+        let stored = raw_depth(atlas, shade, uv + offset);
+        if stored > receiver {
+            sum += stored - receiver;
+            found += 1.0;
+        }
+    }
+    if found == 0.0 {
+        return 0.0;
+    }
+    return sum / found / max(depth_per_unit, 1e-6);
+}
+
 // Sharp on purpose: a rim that settles most pixels, then a 3 x 3 texel filter in four bilinear taps.
 fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, normal: vec3<f32>, sharp: bool, lookup: ShadowLookup) -> f32 {
     let to_sun = shade.to_sun;
@@ -209,8 +247,14 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
         return shadow_tap(atlas, shade, local.xy, vec2(0.0), local.z, slope);
     }
     let least = select(SOFT_EDGE_LEAST_TEXELS, HELD_EDGE_LEAST_TEXELS, held);
-    let radius = clamp(SOFT_EDGE_UNITS / texel_world, least, SOFT_EDGE_MOST_TEXELS) * texel;
-    let rim = radius + texel;
+    var radius = clamp(SOFT_EDGE_UNITS / texel_world, least, SOFT_EDGE_MOST_TEXELS) * texel;
+    var rim = radius + texel;
+@if(SHADOW_CONTACT_HARDENING) {
+    // The widest edge the gap could ask for settles the pixel first: wholly lit or wholly in shadow needs no search.
+    if !held {
+        rim = (SOFT_EDGE_MOST_TEXELS + 1.0) * texel;
+    }
+}
     let settled = shadow_tap(atlas, shade, local.xy, vec2(0.0), local.z, slope)
         + shadow_tap(atlas, shade, local.xy, vec2(rim, 0.0), local.z, slope)
         + shadow_tap(atlas, shade, local.xy, vec2(0.0, rim), local.z, slope)
@@ -222,6 +266,12 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
     if settled > 5.0 - 1e-3 {
         return 1.0;
     }
+@if(SHADOW_CONTACT_HARDENING) {
+    if !held {
+        let gap = caster_gap(atlas, shade, local.xy, local.z, slope, length(along_z), rim - texel);
+        radius = clamp((SOFT_EDGE_UNITS + gap * SUN_SPREAD) / texel_world, least, SOFT_EDGE_MOST_TEXELS) * texel;
+    }
+}
     if held {
         let turn = disk_turn(lookup.seed);
         var lit = 0.0;
@@ -319,14 +369,15 @@ fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: Shado
     }
     // The sun's own cascades read no level.
     let atlas = LevelAtlas();
-    // Past the nearest cascade a shadow is small on screen: one filtered tap.
-    var shadow = cascade_shadow(atlas, cascade_source(sun, index), position.xyz, normal, index == 0u && sharp_filter(), lookup);
+    // In the farthest cascade a shadow is small on screen: one filtered tap.
+    let last = (*light).num_cascades - 1u;
+    var shadow = cascade_shadow(atlas, cascade_source(sun, index), position.xyz, normal, index < last && sharp_filter(), lookup);
     let next = index + 1u;
     if next < (*light).num_cascades {
         let far_bound = (*light).cascades[index].far_bound;
         let next_near = (1.0 - (*light).cascades_overlap_proportion) * far_bound;
         if -view_z >= next_near {
-            shadow = mix(shadow, cascade_shadow(atlas, cascade_source(sun, next), position.xyz, normal, false, lookup), (-view_z - next_near) / (far_bound - next_near));
+            shadow = mix(shadow, cascade_shadow(atlas, cascade_source(sun, next), position.xyz, normal, next < last && sharp_filter(), lookup), (-view_z - next_near) / (far_bound - next_near));
         }
     } else {
         let far_bound = (*light).cascades[index].far_bound;
@@ -408,8 +459,9 @@ fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32
     let map = sun_map(source, sun, position, normal, lookup);
     var direct = map;
     let contact = 1.0 - smoothstep(CONTACT_NEAR, CONTACT_FAR, distance(view.world_position.xyz, position.xyz));
+    // The march and the map see the same casters: the darker of the two, never both, or a person's shadow doubles.
     if direct > 0.0 && contact > 0.0 {
-        direct *= mix(1.0, contact_clear(position.xyz, frag_coord, to_sun), contact);
+        direct = min(direct, mix(1.0, contact_clear(position.xyz, frag_coord, to_sun), contact));
     }
     return vec3(direct, map, open);
 }
@@ -449,7 +501,7 @@ fn sun_visibility(source: LevelSource, sun: u32, world_position: vec4<f32>, norm
     var visibility = sun_map_visibility(source, sun, world_position, normal, frag_coord);
     let contact_sun = contact_sun_index();
     if visibility > 0.0 && contact_sun < lights.n_directional_lights {
-        visibility *= contact_clear(world_position.xyz, frag_coord, lights.directional_lights[contact_sun].direction_to_light);
+        visibility = min(visibility, contact_clear(world_position.xyz, frag_coord, lights.directional_lights[contact_sun].direction_to_light));
     }
     return visibility;
 }

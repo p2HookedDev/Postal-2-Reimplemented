@@ -12,7 +12,7 @@ dev = ["bevy/dynamic_linking"]
 # Developer builds only: Tracy profiler spans.
 tracy = ["bevy/trace_tracy"]
 # Developer builds only: time per Bevy system in diagnostics.txt.
-profile = ["bevy/trace"]
+profile = ["bevy/trace", "p2-engine/gpu-timers"]
 
 [dependencies]
 anyhow.workspace = true

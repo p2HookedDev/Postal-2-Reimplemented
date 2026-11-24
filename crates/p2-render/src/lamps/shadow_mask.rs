@@ -52,7 +52,7 @@ const SUN_PIXELS: u32 = 4;
 pub(super) struct ShadowMask {
     image: Option<Handle<Image>>,
     size: UVec2,
-    /// The shadow filter level: 0 sharp, 1 soft, 2 softer.
+    /// The shadow filter level: 0 sharp, 1 soft, 2 softer, 3 contact hardening.
     softness: u8,
 }
 
@@ -94,7 +94,8 @@ impl MaskKey {
         match self.softness {
             0 => None,
             1 => Some("SHADOW_SOFT"),
-            _ => Some("SHADOW_SOFTER"),
+            2 => Some("SHADOW_SOFTER"),
+            _ => Some("SHADOW_CONTACT_HARDENING"),
         }
     }
 }
@@ -243,7 +244,7 @@ fn unmark_mask(mask: Res<ShadowMask>, images: Res<RenderAssets<GpuImage>>, queue
 /// The pipeline for `key`, or while it builds one of another softness with the same filter.
 fn ready_pipeline<'a>(pipeline: &MaskPipeline, cache: &'a PipelineCache, key: MaskKey) -> Option<&'a ComputePipeline> {
     let ready = |key: &MaskKey| pipeline.pipelines.get(key).and_then(|id| cache.get_compute_pipeline(*id));
-    ready(&key).or_else(|| (0..=2).map(|softness| MaskKey { softness, ..key }).find_map(|key| ready(&key)))
+    ready(&key).or_else(|| (0..=3).map(|softness| MaskKey { softness, ..key }).find_map(|key| ready(&key)))
 }
 
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]

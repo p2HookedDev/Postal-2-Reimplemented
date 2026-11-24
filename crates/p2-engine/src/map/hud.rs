@@ -23,9 +23,8 @@ impl Hud {
     /// not yet painted stay too, except the map's own.
     pub(super) fn leave_map(&mut self, map: Option<&str>, commands: &mut Commands) {
         if let Some(map) = map {
-            let own = |path: &String| path.split_once('.').is_some_and(|(package, _)| package.eq_ignore_ascii_case(map));
-            self.hud_assets.fonts.retain(|path, _| !own(path));
-            self.hud_assets.textures.retain(|path, _| !own(path));
+            self.hud_assets.fonts.retain(|path, _| !p2_render::canvas::in_package(path, map));
+            self.hud_assets.textures.retain(|path, _| !p2_render::canvas::in_package(path, map));
         }
         self.movies.stop(commands);
         self.canvas_actors.clear();
