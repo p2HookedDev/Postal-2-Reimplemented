@@ -2,13 +2,13 @@
 
 use std::ops::Range;
 
-use bevy::asset::Assets;
+use bevy::asset::{AssetEvent, AssetId, Assets};
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::{InheritedVisibility, RenderLayers, Visibility};
 use bevy::camera::{Camera, Projection};
-use bevy::ecs::prelude::{ChildOf, Entity, Local, Or, Query, Res, ResMut, With};
-use bevy::math::{Mat4, Vec3};
-use bevy::mesh::Mesh3d;
+use bevy::ecs::prelude::{ChildOf, DetectChanges, DetectChangesMut, Entity, Local, MessageReader, Or, Query, Ref, Res, ResMut, With};
+use bevy::math::{Mat4, Vec2, Vec3};
+use bevy::mesh::{Mesh, Mesh3d};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
@@ -125,20 +125,140 @@ impl Bounds {
     }
 }
 
+/// A column's side in world units, unless the movers spread wider than `LAMP_COLUMNS_MOST` of them.
+const LAMP_COLUMN: f32 = 512.0;
+const LAMP_COLUMNS_MOST: f32 = 64.0;
+
+/// The lamps that may reach each column of a grid in x and z over the near movers' middles, each column's list in the
+/// lamps' own order, so a mover scores them as it would score the whole list.
+#[derive(Default)]
+struct LampGrid {
+    low: Vec2,
+    side: f32,
+    across: usize,
+    down: usize,
+    starts: Vec<u32>,
+    listed: Vec<u32>,
+}
+
+impl LampGrid {
+    fn column(&self, at: f32, low: f32, count: usize) -> usize {
+        ((at - low) / self.side).floor().clamp(0.0, count.saturating_sub(1) as f32) as usize
+    }
+
+    /// The columns a lamp may reach, with the same slack as `may_light`.
+    fn reach(&self, lamp: &Lit) -> (Range<usize>, Range<usize>) {
+        let reach = lamp.range.abs() * 1.001 + 1.0;
+        let xs = self.column(lamp.at.x - reach, self.low.x, self.across)..self.column(lamp.at.x + reach, self.low.x, self.across) + 1;
+        let zs = self.column(lamp.at.z - reach, self.low.y, self.down)..self.column(lamp.at.z + reach, self.low.y, self.down) + 1;
+        (xs, zs)
+    }
+
+    fn build(&mut self, lamps: &[Lit], low: Vec3, high: Vec3) {
+        self.low = Vec2::new(low.x, low.z);
+        let size = Vec2::new(high.x - low.x, high.z - low.z).max(Vec2::ZERO);
+        self.side = LAMP_COLUMN.max(size.max_element() / LAMP_COLUMNS_MOST);
+        (self.across, self.down) = ((size.x / self.side) as usize + 1, (size.y / self.side) as usize + 1);
+        self.starts.clear();
+        self.starts.resize(self.across * self.down + 1, 0);
+        for lamp in lamps {
+            let (xs, zs) = self.reach(lamp);
+            for z in zs {
+                for x in xs.clone() {
+                    self.starts[z * self.across + x + 1] += 1;
+                }
+            }
+        }
+        for column in 1..self.starts.len() {
+            self.starts[column] += self.starts[column - 1];
+        }
+        self.listed.clear();
+        self.listed.resize(self.starts.last().map_or(0, |&total| total as usize), 0);
+        let mut next = self.starts.clone();
+        for (index, lamp) in lamps.iter().enumerate() {
+            let (xs, zs) = self.reach(lamp);
+            for z in zs {
+                for x in xs.clone() {
+                    let slot = &mut next[z * self.across + x];
+                    self.listed[*slot as usize] = index as u32;
+                    *slot += 1;
+                }
+            }
+        }
+    }
+
+    /// The lamps that may reach `middle`, by their place in the list the grid was built from.
+    fn near(&self, middle: Vec3) -> &[u32] {
+        let column = self.column(middle.z, self.low.y, self.down) * self.across + self.column(middle.x, self.low.x, self.across);
+        match (self.starts.get(column), self.starts.get(column + 1)) {
+            (Some(&start), Some(&end)) => &self.listed[start as usize..end as usize],
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct PickState {
     made: u32,
     movers: FxHashMap<Entity, MoverState>,
     bounds: FxHashMap<Entity, Bounds>,
     near: Vec<(f32, Entity)>,
+    /// This frame's casting meshes and their movers, in the meshes' order.
+    casting: Vec<(Entity, Entity)>,
     lamps: Vec<Lit>,
+    lamp_grid: LampGrid,
     scored: Vec<Lit>,
     order: Vec<(f32, Entity)>,
     numbers: FxHashMap<Entity, u32>,
+    grid_made_from: Vec<u32>,
+    skins: Skins,
+}
+
+#[derive(Default)]
+struct BuiltSkin {
+    joints: Vec<Entity>,
+    inverse: AssetId<SkinnedMeshInverseBindposes>,
+    matrices: Vec<Mat4>,
+}
+
+/// Each skinned caster's joint matrices as the last run and this one built them, by the caster.
+#[derive(Default)]
+struct Skins {
+    last: FxHashMap<Entity, BuiltSkin>,
+    now: FxHashMap<Entity, BuiltSkin>,
 }
 
 fn lamp_score(lamp: &Lit, middle: Vec3) -> f32 {
     lamp.strength * lamp_falloff(lamp.at, lamp.range, lamp.spot, middle)
+}
+
+/// Whether the lamp may score above 0 somewhere in the box; the slack covers rounding, so it never says no to such a lamp.
+fn may_light(lamp: &Lit, low: Vec3, high: Vec3) -> bool {
+    let gap = (low - lamp.at).max(lamp.at - high).max(Vec3::ZERO);
+    gap.length_squared() <= (lamp.range.abs() * 1.001 + 1.0).powi(2)
+}
+
+fn bits<const N: usize>(floats: [f32; N]) -> [u32; N] {
+    floats.map(f32::to_bits)
+}
+
+fn tile_key(tile: &MoverTile) -> (u32, u32, u32, u32, u32, Drawn, [u32; 10]) {
+    let MoverTile { mover, lamp, lamp_at, lamp_radius, axis, tan_half, near, x, y, size, fade, drawn } = *tile;
+    (mover, lamp, x, y, size, drawn, bits([lamp_at.x, lamp_at.y, lamp_at.z, lamp_radius, axis.x, axis.y, axis.z, tan_half, near, fade]))
+}
+
+fn caster_key(caster: &MoverCaster) -> (AssetId<Mesh>, [u32; 16], Option<Range<u32>>, u32) {
+    let MoverCaster { mesh, world_from_mesh, joints, mover } = caster;
+    (*mesh, bits(world_from_mesh.to_cols_array()), joints.clone(), *mover)
+}
+
+/// Moves `next` into `held` when they differ, and says whether they did.
+fn take_if_new<T>(held: &mut Vec<T>, next: &mut Vec<T>, same: impl Fn(&T, &T) -> bool) -> bool {
+    if held.len() == next.len() && held.iter().zip(next.iter()).all(|(a, b)| same(a, b)) {
+        return false;
+    }
+    std::mem::swap(held, next);
+    true
 }
 
 /// The tile's axis, the tangent of its half angle and the lamp's distance to the mover's middle.
@@ -253,16 +373,35 @@ fn resize(book: &mut FaceBook, held: Option<Square>, level: usize) -> Option<Squ
     }
 }
 
-fn skin_joints(skin: &SkinnedMesh, bindposes: &Assets<SkinnedMeshInverseBindposes>, joints: &Query<&GlobalTransform>, into: &mut Vec<Mat4>) -> Option<Range<u32>> {
-    let inverse = bindposes.get(&skin.inverse_bindposes)?;
-    let start = into.len();
-    for (&joint, bind) in skin.joints.iter().zip(inverse.iter()) {
-        let Ok(placed) = joints.get(joint) else {
-            into.truncate(start);
-            return None;
-        };
-        into.push(placed.to_matrix() * *bind);
+/// Matrices built at the last run are kept only while no joint has changed since, which the joints' change ticks
+/// can tell because that run is this system's last.
+fn skin_joints(
+    caster: Entity,
+    skin: &SkinnedMesh,
+    bindposes: &Assets<SkinnedMeshInverseBindposes>,
+    joints: &Query<Ref<GlobalTransform>>,
+    skins: &mut Skins,
+    into: &mut Vec<Mat4>,
+) -> Option<Range<u32>> {
+    let last = skins.last.get_mut(&caster).map(std::mem::take);
+    let still = last.as_ref().is_some_and(|built| {
+        built.inverse == skin.inverse_bindposes.id()
+            && built.joints == skin.joints
+            && skin.joints.iter().all(|&joint| joints.get(joint).is_ok_and(|placed| !placed.is_changed()))
+    });
+    let mut built = last.unwrap_or_default();
+    if !still {
+        let inverse = bindposes.get(&skin.inverse_bindposes)?;
+        built.matrices.clear();
+        for (&joint, bind) in skin.joints.iter().zip(inverse.iter()) {
+            built.matrices.push(joints.get(joint).ok()?.to_matrix() * *bind);
+        }
+        built.joints.clone_from(&skin.joints);
+        built.inverse = skin.inverse_bindposes.id();
     }
+    let start = into.len();
+    into.extend_from_slice(&built.matrices);
+    skins.now.insert(caster, built);
     Some(start as u32..into.len() as u32)
 }
 
@@ -287,6 +426,9 @@ impl PickState {
         self.near.extend(self.bounds.iter().map(|(&root, bounds)| (bounds.sphere().0.distance(eye), root)).filter(|&(distance, _)| distance <= MOVER_REACH));
         self.near.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         self.near.truncate(MOST_MOVERS);
+        let (low, high) = self.near.iter().filter_map(|(_, root)| self.bounds.get(root)).map(|bounds| bounds.sphere().0).fold((Vec3::MAX, Vec3::MIN), |(low, high), middle| (low.min(middle), high.max(middle)));
+        self.lamps.retain(|lamp| may_light(lamp, low, high));
+        self.lamp_grid.build(&self.lamps, low, high);
 
         for mover in self.movers.values_mut() {
             mover.near = false;
@@ -297,7 +439,8 @@ impl PickState {
             let mover = self.movers.entry(root).or_default();
             mover.near = true;
             self.scored.clear();
-            self.scored.extend(self.lamps.iter().filter_map(|lamp| {
+            self.scored.extend(self.lamp_grid.near(middle).iter().filter_map(|&index| {
+                let lamp = self.lamps.get(index as usize)?;
                 let score = lamp_score(lamp, middle);
                 (score > 0.0).then_some(Lit { score, ..*lamp })
             }));
@@ -426,6 +569,7 @@ pub(super) fn pick_mover_tiles(
     mut squares: ResMut<DetailSquares>,
     mut atlas: ResMut<LampAtlas>,
     mut out: ResMut<MoverTiles>,
+    mut next: Local<MoverTiles>,
     level: Option<Res<LevelCollision>>,
     shown: Option<Res<ShownScene>>,
     bindposes: Res<Assets<SkinnedMeshInverseBindposes>>,
@@ -436,7 +580,8 @@ pub(super) fn pick_mover_tiles(
         Or<(With<FollowActor>, With<FollowBone>)>,
     >,
     models: Query<(), With<ActorModel>>,
-    joints: Query<&GlobalTransform>,
+    joints: Query<Ref<GlobalTransform>>,
+    mut bindpose_events: MessageReader<AssetEvent<SkinnedMeshInverseBindposes>>,
 ) {
     // A head or bolt-on casts with the body it is on. Every map attachment shares one parent, which is no mover.
     let mover_of = |entity: Entity, child: Option<&ChildOf>, base: Option<&BaseModel>| {
@@ -444,6 +589,11 @@ pub(super) fn pick_mover_tiles(
         base.and_then(|base| base.0).or(own).unwrap_or(entity)
     };
     let state = &mut *state;
+    std::mem::swap(&mut state.skins.last, &mut state.skins.now);
+    state.skins.now.clear();
+    if bindpose_events.read().count() > 0 {
+        state.skins.last.clear();
+    }
     if state.made != squares.made || squares.book.is_none() {
         state.made = squares.made;
         state.movers.clear();
@@ -474,13 +624,16 @@ pub(super) fn pick_mover_tiles(
     }));
 
     state.bounds.clear();
+    state.casting.clear();
     for (entity, child, _, aabb, placed, layers, seen, still, _, base) in &meshes {
         if !casts(layers, seen) {
             continue;
         }
         let (min, max) = world_min_max(aabb, placed);
         let resting = still.is_some_and(|still| still.0) || layers.intersects(&resting_layer);
-        state.bounds.entry(mover_of(entity, child, base))
+        let root = mover_of(entity, child, base);
+        state.casting.push((entity, root));
+        state.bounds.entry(root)
             .and_modify(|bounds| {
                 bounds.min = bounds.min.min(min);
                 bounds.max = bounds.max.max(max);
@@ -496,27 +649,35 @@ pub(super) fn pick_mover_tiles(
             atlas.faces = slots;
         }
     }
-    let out = &mut *out;
-    state.fill_tiles(out);
-    tile_grid_rows(eye.at, &out.tiles, &mut out.tile_grid);
+    let next = &mut *next;
+    state.fill_tiles(next);
     let capsules = state.near.iter().filter_map(|(_, root)| state.bounds.get(root)).map(|bounds| Capsule::of_box(bounds.min, bounds.max));
-    out.grounding.clear();
+    next.grounding.clear();
     for column_units in GRID_COLUMNS {
-        grounding_row(eye.at, capsules.clone(), column_units, &mut out.grounding);
+        grounding_row(eye.at, capsules.clone(), column_units, &mut next.grounding);
     }
-    for (entity, child, mesh, _, placed, layers, seen, _, skinned, base) in &meshes {
-        let Some(&mover) = state.numbers.get(&mover_of(entity, child, base)) else { continue };
-        if !casts(layers, seen) {
-            continue;
-        }
+    for &(entity, root) in &state.casting {
+        let (Some(&mover), Ok((_, _, mesh, _, placed, .., skinned, _))) = (state.numbers.get(&root), meshes.get(entity)) else { continue };
         let posed = match skinned {
-            Some(skin) => match skin_joints(skin, &bindposes, &joints, &mut out.joints) {
+            Some(skin) => match skin_joints(entity, skin, &bindposes, &joints, &mut state.skins, &mut next.joints) {
                 Some(range) => Some(range),
                 None => continue,
             },
             None => None,
         };
-        out.casters.push(MoverCaster { mesh: mesh.0.id(), world_from_mesh: placed.to_matrix(), joints: posed, mover });
+        next.casters.push(MoverCaster { mesh: mesh.0.id(), world_from_mesh: placed.to_matrix(), joints: posed, mover });
+    }
+    // Only a frame whose bits differ marks the resource changed, since a changed resource is cloned whole to render.
+    let held = out.bypass_change_detection();
+    let changed = [
+        tile_grid_rows(eye.at, &next.tiles, &mut held.tile_grid, &mut state.grid_made_from),
+        take_if_new(&mut held.tiles, &mut next.tiles, |a, b| tile_key(a) == tile_key(b)),
+        take_if_new(&mut held.casters, &mut next.casters, |a, b| caster_key(a) == caster_key(b)),
+        take_if_new(&mut held.joints, &mut next.joints, |a, b| bits(a.to_cols_array()) == bits(b.to_cols_array())),
+        take_if_new(&mut held.grounding, &mut next.grounding, |a, b| bits(*a) == bits(*b)),
+    ];
+    if changed.into_iter().any(|changed| changed) {
+        out.set_changed();
     }
 }
 
@@ -527,6 +688,30 @@ mod tests {
 
     fn lamp(at: Vec3, spot: Option<(Vec3, f32)>) -> Lit {
         Lit { lamp: 0, at, range: 1000.0, strength: 2.0, spot, score: 0.0 }
+    }
+
+    #[test]
+    fn the_lamp_grid_hands_each_point_every_lamp_that_reaches_it_in_the_lamps_order() {
+        let mut seed = 7_u32;
+        let mut unit = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32
+        };
+        let lamps: Vec<Lit> = (0..200)
+            .map(|number| Lit { lamp: number, at: Vec3::new(unit() * 9000.0 - 4500.0, unit() * 400.0, unit() * 9000.0 - 4500.0), range: 100.0 + unit() * 1500.0, strength: 1.0, spot: None, score: 0.0 })
+            .collect();
+        let points: Vec<Vec3> = (0..300).map(|_| Vec3::new(unit() * 8192.0 - 4096.0, unit() * 400.0, unit() * 8192.0 - 4096.0)).collect();
+        let (low, high) = points.iter().fold((Vec3::MAX, Vec3::MIN), |(low, high), &point| (low.min(point), high.max(point)));
+        let mut grid = LampGrid::default();
+        grid.build(&lamps, low, high);
+        for &point in &points {
+            let near = grid.near(point);
+            assert!(near.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(near.len() < lamps.len() / 2, "{} of {}", near.len(), lamps.len());
+            for (index, _) in lamps.iter().enumerate().filter(|(_, lamp)| lamp_score(lamp, point) > 0.0) {
+                assert!(near.contains(&(index as u32)), "lamp {index} reaches {point} but is not listed");
+            }
+        }
     }
 
     #[test]
@@ -544,6 +729,41 @@ mod tests {
         let along = lamp_score(&lit, Vec3::new(0.0, -100.0, 0.0));
         let aside = lamp_score(&lit, Vec3::new(30.0, -100.0, 0.0));
         assert!(along > aside && aside > 0.0, "{along} {aside}");
+    }
+
+    #[test]
+    fn a_lamp_left_out_by_the_movers_box_scores_nothing_at_any_of_them() {
+        let mut seed = 11u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / 16_777_216.0
+        };
+        let (mut left_out, mut kept) = (0, 0);
+        for _ in 0..200 {
+            let centre = Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * 20000.0;
+            let middles: Vec<Vec3> = (0..8).map(|_| centre + Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * 3000.0).collect();
+            let (low, high) = middles.iter().fold((Vec3::MAX, Vec3::MIN), |(low, high), &middle| (low.min(middle), high.max(middle)));
+            for _ in 0..50 {
+                let at = centre + Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5) * 9000.0;
+                let spot = (next() < 0.5).then(|| (Vec3::new(next() - 0.5, -1.0, next() - 0.5).normalize(), next()));
+                let lit = Lit { range: 50.0 + next() * 3000.0, ..lamp(at, spot) };
+                if may_light(&lit, low, high) {
+                    kept += 1;
+                } else {
+                    left_out += 1;
+                    assert!(middles.iter().all(|&middle| lamp_score(&lit, middle) <= 0.0), "{lit:?} {low} {high}");
+                }
+            }
+        }
+        assert!(left_out > 0 && kept > 0, "{left_out} {kept}");
+    }
+
+    #[test]
+    fn a_lamp_just_out_of_reach_of_the_box_is_left_out_and_one_just_inside_is_kept() {
+        let (low, high) = (Vec3::new(-100.0, 0.0, -100.0), Vec3::new(100.0, 50.0, 100.0));
+        let inside = lamp(Vec3::new(1099.0, 20.0, 0.0), None);
+        assert!(may_light(&inside, low, high) && lamp_score(&inside, Vec3::new(100.0, 20.0, 0.0)) > 0.0);
+        assert!(!may_light(&lamp(Vec3::new(1200.0, 20.0, 0.0), None), low, high));
     }
 
     #[test]

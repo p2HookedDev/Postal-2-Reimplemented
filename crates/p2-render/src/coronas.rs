@@ -2,7 +2,7 @@
 //! additive, unlit, unfogged, with no Z test or write.
 
 use bevy::app::{App, Plugin, Update};
-use bevy::asset::{AssetId, Assets, Handle};
+use bevy::asset::{AssetId, Assets, Handle, RenderAssetUsages};
 use bevy::camera::visibility::{NoFrustumCulling, Visibility};
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::entity::EntityHashMap;
@@ -11,8 +11,9 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::Local;
 use bevy::image::Image;
 use bevy::math::{Mat3, Quat, Vec3};
-use bevy::mesh::{Mesh, Mesh3d};
+use bevy::mesh::{Mesh, Mesh3d, MeshTag};
 use bevy::pbr::MeshMaterial3d;
+use bevy::render::storage::ShaderBuffer;
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use p2_bevy_assets::{to_bevy, unreal_transform};
@@ -21,7 +22,8 @@ use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_s
 use rustc_hash::FxHashMap;
 use crate::components::SceneView;
 use crate::level_collision::LevelCollision;
-use crate::particle_material::ParticleMaterial;
+use crate::particle_frame::DrawnParticles;
+use crate::particle_material::{CORONA_COLORS, ParticleMaterial, RECORD_WORDS};
 use crate::scene::{LayeredByZone, ZoneCulled};
 use crate::sprites::sprite_quad;
 use crate::translucent_order::TranslucentDraw;
@@ -51,9 +53,58 @@ pub struct CoronaPlace {
 #[derive(Component)]
 struct CoronaColor([f32; 3]);
 
-/// Emptied whenever a corona goes, so the materials of a map that was left do not stay alive.
+/// Emptied when the map changes, so the materials of a map that was left do not stay alive.
 #[derive(Resource, Default)]
-struct CoronaMaterials(FxHashMap<AssetId<Image>, Handle<ParticleMaterial>>);
+struct CoronaMaterials {
+    level: u32,
+    materials: FxHashMap<AssetId<Image>, Handle<ParticleMaterial>>,
+}
+
+const MIN_COLOR_SLOTS: usize = 16;
+
+/// The records of `CORONA_COLORS`, one slot per corona. Grows only in steps: a new byte size makes a new GPU buffer.
+#[derive(Resource, Default)]
+struct CoronaColors {
+    records: Vec<[u32; RECORD_WORDS]>,
+    free: Vec<usize>,
+    dirty: bool,
+}
+
+impl CoronaColors {
+    fn take_slot(&mut self) -> usize {
+        let slot = self.free.pop().unwrap_or_else(|| {
+            let slot = self.records.len();
+            self.records.resize((slot * 2).max(MIN_COLOR_SLOTS), [0; RECORD_WORDS]);
+            self.free.extend((slot + 1..self.records.len()).rev());
+            slot
+        });
+        self.set(slot, [1.0; 3]);
+        slot
+    }
+
+    fn set(&mut self, slot: usize, color: [f32; 3]) {
+        if let Some(record) = self.records.get_mut(slot) {
+            record[0..3].copy_from_slice(&color.map(f32::to_bits));
+            self.dirty = true;
+        }
+    }
+
+    fn upload(&mut self, buffers: &mut Assets<ShaderBuffer>) {
+        if !std::mem::take(&mut self.dirty) {
+            return;
+        }
+        if !buffers.contains(CORONA_COLORS.id()) {
+            if let Err(error) = buffers.insert(CORONA_COLORS.id(), ShaderBuffer::new(self.records.clone(), RenderAssetUsages::default())) {
+                bevy::log::error!("corona colour buffer: {error}");
+            }
+            return;
+        }
+        if let Some(mut buffer) = buffers.get_mut(CORONA_COLORS.id()) {
+            buffer.clear();
+            buffer.extend_from_slice(&self.records);
+        }
+    }
+}
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CoronaSystems;
@@ -62,14 +113,23 @@ pub struct CoronaPlugin;
 
 impl Plugin for CoronaPlugin {
     fn build(&self, app: &mut App) {
+        // Before any corona's material is prepared: a material bound to a buffer not yet made gets Bevy's one-byte
+        // stand-in, which no storage binding takes.
+        if let Some(mut buffers) = app.world_mut().get_resource_mut::<Assets<ShaderBuffer>>()
+            && let Err(error) = buffers.insert(CORONA_COLORS.id(), ShaderBuffer::new(vec![[0u32; RECORD_WORDS]; MIN_COLOR_SLOTS], RenderAssetUsages::default()))
+        {
+            bevy::log::error!("corona colour buffer: {error}");
+        }
         app.init_resource::<CoronaMaterials>()
+            .init_resource::<CoronaColors>()
             .add_observer(add_corona_quad)
-            .add_observer(forget_corona_materials)
+            .add_observer(free_corona_slot)
             .configure_sets(Update, CoronaSystems.after(crate::sprites::SpriteSystems))
-            .add_systems(Update, draw_coronas.in_set(CoronaSystems));
+            .add_systems(Update, (draw_coronas, forget_corona_materials).in_set(CoronaSystems));
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "a Bevy observer's parameters")]
 fn add_corona_quad(
     add: On<Add<CoronaLook>>,
     mut commands: Commands,
@@ -77,15 +137,32 @@ fn add_corona_quad(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
     mut cache: ResMut<CoronaMaterials>,
+    mut colors: ResMut<CoronaColors>,
+    mut quad: Local<Option<Handle<Mesh>>>,
 ) {
     let entity = add.event().entity;
     let Ok(look) = looks.get(entity) else { return };
-    let material = cache.0.entry(look.image.id()).or_insert_with(|| materials.add(ParticleMaterial::corona(look.image.clone()))).clone();
-    commands.entity(entity).insert((Mesh3d(meshes.add(sprite_quad())), MeshMaterial3d(material), NoFrustumCulling, TranslucentDraw::AfterScene, CoronaColor([1.0; 3])));
+    let quad = quad.get_or_insert_with(|| meshes.add(sprite_quad())).clone();
+    let material = cache.materials.entry(look.image.id()).or_insert_with(|| materials.add(ParticleMaterial::corona(look.image.clone()))).clone();
+    let tag = MeshTag::new(u32::try_from(colors.take_slot()).unwrap_or(u32::MAX));
+    commands.entity(entity).insert((Mesh3d(quad), tag, MeshMaterial3d(material), NoFrustumCulling, TranslucentDraw::AfterScene, CoronaColor([1.0; 3])));
 }
 
-fn forget_corona_materials(_: On<Remove<CoronaLook>>, mut cache: ResMut<CoronaMaterials>) {
-    cache.0.clear();
+fn free_corona_slot(remove: On<Remove<CoronaLook>>, tags: Query<&MeshTag>, mut colors: ResMut<CoronaColors>) {
+    if let Ok(tag) = tags.get(remove.event().entity)
+        && let Ok(slot) = usize::try_from(tag.value)
+    {
+        colors.free.push(slot);
+    }
+}
+
+fn forget_corona_materials(drawn: Option<Res<DrawnParticles>>, mut cache: ResMut<CoronaMaterials>) {
+    if let Some(drawn) = drawn
+        && cache.level != drawn.level
+    {
+        cache.level = drawn.level;
+        cache.materials.clear();
+    }
 }
 
 /// The fade steps by 3 × the real seconds since the last frame. Lit ones face the view, or lie on the light's axes
@@ -96,9 +173,10 @@ fn draw_coronas(
     collision: Res<LevelCollision>,
     time: Res<Time<Real>>,
     views: Query<&SceneView>,
-    mut quads: Query<(Entity, &CoronaLook, &CoronaPlace, &mut CoronaColor, &Mesh3d, &mut Transform, &mut Visibility, &ChildOf)>,
+    mut quads: Query<(Entity, &CoronaLook, &CoronaPlace, &mut CoronaColor, &MeshTag, &mut Transform, &mut Visibility, &ChildOf)>,
     zones: Query<&Visibility, (With<ZoneCulled>, Without<CoronaLook>)>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mut colors: ResMut<CoronaColors>,
+    buffers: Option<ResMut<Assets<ShaderBuffer>>>,
     mut coronas: Local<Coronas<Entity>>,
     mut lit: Local<EntityHashMap<f32>>,
 ) {
@@ -122,7 +200,7 @@ fn draw_coronas(
     coronas.step(fade_delta(time.delta_secs()), seen, |_| true);
     lit.clear();
     lit.extend(coronas.lit());
-    for (entity, look, place, mut drawn, mesh, mut transform, mut shown, _) in &mut quads {
+    for (entity, look, place, mut drawn, tag, mut transform, mut shown, _) in &mut quads {
         let Some(&bright) = lit.get(&entity) else {
             shown.set_if_neq(Visibility::Hidden);
             continue;
@@ -145,14 +223,15 @@ fn draw_coronas(
             *transform = faced;
         }
         if drawn.0 != color
-            && let Some(mut mesh) = meshes.get_mut(&mesh.0)
+            && let Ok(slot) = usize::try_from(tag.value)
         {
-            p2_host::frame_times::mesh_written(p2_host::frame_times::MeshWrite::Corona);
-            let [r, g, b] = color;
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[r, g, b, 1.0]; 4]);
+            colors.set(slot, color);
             drawn.0 = color;
         }
         shown.set_if_neq(Visibility::Inherited);
+    }
+    if let Some(mut buffers) = buffers {
+        colors.upload(&mut buffers);
     }
 }
 
@@ -169,6 +248,7 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)))
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<ParticleMaterial>>()
+            .init_resource::<Assets<ShaderBuffer>>()
             .init_resource::<LevelCollision>()
             .add_plugins(CoronaPlugin);
         app.world_mut().spawn(SceneView::default());
@@ -188,5 +268,14 @@ mod tests {
             app.update();
         }
         assert_eq!([shown(&app, blocked), shown(&app, open)], [Visibility::Hidden, Visibility::Inherited]);
+        let world = app.world();
+        let uploaded = world.resource::<Assets<ShaderBuffer>>().get(CORONA_COLORS.id()).and_then(|buffer| buffer.cast_slice::<[u32; RECORD_WORDS]>()).expect("the colour buffer");
+        assert_eq!(uploaded, world.resource::<CoronaColors>().records.as_slice());
+        let tags = [blocked, open].map(|corona| world.entity(corona).get::<MeshTag>().expect("a slot").value as usize);
+        assert_ne!(tags[0], tags[1]);
+        let color = world.entity(open).get::<CoronaColor>().expect("a colour").0;
+        assert_eq!(uploaded[tags[1]][0..3], color.map(f32::to_bits));
+        app.world_mut().entity_mut(blocked).despawn();
+        assert_eq!(app.world().resource::<CoronaColors>().free.last(), Some(&tags[0]));
     }
 }

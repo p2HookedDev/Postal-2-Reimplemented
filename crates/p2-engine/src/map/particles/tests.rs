@@ -245,9 +245,9 @@ fn the_hand_over_is_refilled_in_place() {
 #[test]
 fn an_explosion_pushes_by_its_own_reach_and_a_hits_effect_by_its_class() {
     let at = Vector::new(10.0, 20.0, 30.0);
-    assert_eq!(blast_of("Transient.GrenadeExplosion3", Some((600.0, 60000.0)), at), Some(Blast { at, radius: 600.0, push: 600.0 }));
+    assert_eq!(blast_of("Transient.GrenadeExplosion3", Some((600.0, 60000.0)), at), Some(Blast { at, radius: 600.0, push: 600.0, way: Vector::ZERO }));
     assert_eq!(blast_of("Transient.NukeExplosion0", Some((1500.0, 900000.0)), at).map(|blast| blast.push), Some(PUSH_MOST));
-    let hit = |(radius, push): (f32, f32)| Some(Blast { at, radius, push });
+    let hit = |(radius, push): (f32, f32)| Some(Blast { at, radius, push, way: Vector::ZERO });
     for shot in ["Transient.SmokeHitPuffMachineGun12", "Transient.SparkHitMachineGun4", "Transient.DirtClodsMachineGun81", "Transient.BloodImpactHeadShot2", "Transient.EDPistolPuff7", "Transient.PickupHitPuff0"] {
         assert_eq!(blast_of(shot, None, at), hit(SHOT), "{shot}");
     }

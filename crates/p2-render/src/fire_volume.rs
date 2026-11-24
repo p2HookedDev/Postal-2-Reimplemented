@@ -17,12 +17,11 @@ use bevy::math::{Vec3, Vec4};
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::{
-    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferInitDescriptor,
-    BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, Extent3d, FragmentState, Operations, PipelineCache, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureSampleType, TextureUsages, binding_types,
+    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferId,
+    BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor,
+    ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
-use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
+use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::sync_component::SyncComponent;
 use bevy::render::texture::{CachedTexture, TextureCache};
 use bevy::render::view::{ExtractedView, Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
@@ -34,12 +33,11 @@ use bevy::transform::components::GlobalTransform;
 use crate::components::SceneView;
 use p2_host::display::{MODERN_FIRE_VOLUMES, Settings};
 use crate::MainPassExtraSystems;
-use crate::bounce::half_size;
 use crate::frame_facts::FrameFacts;
 use crate::particle_draw::ParticleDraws;
 use crate::particle_frame::DrawnParticles;
-use crate::screen_pass::modern_level;
-use crate::shaders::add_shaders;
+use crate::screen_pass::{HalfThenFull, ScreenStep, ViewBindGroups, half_texture, half_viewport, modern_level};
+use crate::shaders::{add_libraries, add_shaders};
 
 const FIRE_SHADER: Handle<Shader> = uuid_handle!("b3e81c5a-6d27-4f90-8a1e-2c7d94f05b63");
 const MARCHED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -65,6 +63,7 @@ impl Plugin for FireVolumePlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
+        add_libraries(app);
         add_shaders(app, [(FIRE_SHADER, Shader::from_wesl(include_str!("fire_volume.wesl"), "p2_render/fire_volume.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<FireVolumes>::default()).add_systems(PostUpdate, follow_fires.in_set(FireVolumeSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -234,6 +233,7 @@ impl SpecializedRenderPipeline for FirePipeline {
 }
 
 /// The texture cache hands out a new texture when the view's size changes.
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn prepare_fire_views(
     mut commands: Commands,
     pipeline_cache: Res<PipelineCache>,
@@ -241,96 +241,79 @@ fn prepare_fire_views(
     pipeline: Res<FirePipeline>,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
-    views: Query<(Entity, &ExtractedView, &ExtractedCamera, &FireVolumes)>,
+    render_queue: Res<RenderQueue>,
+    views: Query<(Entity, &ExtractedView, &FireVolumes, Option<&FireView>)>,
 ) {
-    for (entity, view, camera, fires) in &views {
+    for (entity, view, fires, prepared) in &views {
         // Asked for before the first fire is near: its sprites are hidden from the frame its volume is picked.
         let march = pipelines.specialize(&pipeline_cache, &pipeline, None);
         let composite = pipelines.specialize(&pipeline_cache, &pipeline, Some(view.target_format));
         if fires.volumes.is_empty() {
             continue;
         }
-        let Some(size) = camera.physical_target_size.filter(|size| size.min_element() > 0).map(half_size) else {
+        let Some(size) = half_viewport(view) else {
             continue;
         };
-        let marched = texture_cache.get(
-            &render_device,
-            TextureDescriptor {
-                label: Some("fire volume"),
-                size: Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: MARCHED_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            },
-        );
-        let fires = render_device.create_buffer_with_data(&BufferInitDescriptor { label: Some("fire volumes"), contents: &fires_bytes(fires), usage: BufferUsages::UNIFORM });
+        let marched = half_texture(&mut texture_cache, &render_device, "fire volume", MARCHED_FORMAT, size);
+        let bytes = fires_bytes(fires);
+        let fires = match prepared {
+            Some(prepared) => {
+                render_queue.write_buffer(&prepared.fires, 0, &bytes);
+                prepared.fires.clone()
+            }
+            None => render_device.create_buffer_with_data(&BufferInitDescriptor {
+                label: Some("fire volumes"),
+                contents: &bytes,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            }),
+        };
         commands.entity(entity).insert(FireView { march, composite, marched, fires });
     }
 }
 
 fn fire_volume(
-    view: ViewQuery<(&ViewTarget, &ViewPrepassTextures, &ViewUniformOffset, &FireVolumes, &FireView)>,
+    view: ViewQuery<(&ViewTarget, &ExtractedCamera, &ViewPrepassTextures, &ViewUniformOffset, &FireVolumes, &FireView)>,
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<FirePipeline>,
     view_uniforms: Res<ViewUniforms>,
+    mut scene_groups: Local<ViewBindGroups<(TextureViewId, TextureId, BufferId, BufferId)>>,
+    mut marched_groups: Local<ViewBindGroups<(TextureViewId, TextureId, BufferId, BufferId)>>,
     mut ctx: RenderContext,
 ) {
-    let (target, prepass, offset, fires, prepared) = view.into_inner();
+    let entity = view.entity();
+    let (target, camera, prepass, offset, fires, prepared) = view.into_inner();
     if fires.volumes.is_empty() {
         return;
     }
-    let (Some(march), Some(composite), Some(depth), Some(uniform)) = (
+    let (Some(march), Some(composite), Some(depth), Some(depth_texture), Some(uniform), Some(uniforms)) = (
         pipeline_cache.get_render_pipeline(prepared.march),
         pipeline_cache.get_render_pipeline(prepared.composite),
         prepass.depth_only_view(),
+        prepass.depth.as_ref().map(|depth| depth.texture.texture.id()),
         view_uniforms.uniforms.binding(),
+        view_uniforms.uniforms.buffer().map(|buffer| buffer.id()),
     ) else {
         return;
     };
     let layout = pipeline_cache.get_bind_group_layout(&pipeline.layout);
     let device = ctx.render_device();
-    let from_scene = device.create_bind_group(
-        "fire volume march",
-        &layout,
-        &BindGroupEntries::sequential((target.main_texture_view(), depth, uniform.clone(), prepared.fires.as_entire_binding())),
-    );
-    let from_marched = device.create_bind_group(
-        "fire volume",
-        &layout,
-        &BindGroupEntries::sequential((&prepared.marched.default_view, depth, uniform, prepared.fires.as_entire_binding())),
-    );
-    {
-        let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("fire volume march"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &prepared.marched.default_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations::default(),
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_render_pipeline(march);
-        pass.set_bind_group(0, &from_scene, &[offset.offset]);
-        pass.draw(0..3, 0..1);
-    }
-    let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-        label: Some("fire volume"),
-        color_attachments: &[Some(target.get_color_attachment())],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
+    let scene = target.main_texture_view();
+    let from_scene = scene_groups.get_or_make(entity, (scene.id(), depth_texture, uniforms, prepared.fires.id()), || {
+        device.create_bind_group("fire volume march", &layout, &BindGroupEntries::sequential((scene, depth, uniform.clone(), prepared.fires.as_entire_binding())))
     });
-    pass.set_render_pipeline(composite);
-    pass.set_bind_group(0, &from_marched, &[offset.offset]);
-    pass.draw(0..3, 0..1);
+    let marched = &prepared.marched.default_view;
+    let from_marched = marched_groups.get_or_make(entity, (marched.id(), depth_texture, uniforms, prepared.fires.id()), || {
+        device.create_bind_group("fire volume", &layout, &BindGroupEntries::sequential((marched, depth, uniform, prepared.fires.as_entire_binding())))
+    });
+    HalfThenFull {
+        span: "fire_volume",
+        half: marched,
+        march: ScreenStep { label: "fire volume march", pipeline: march, bind_group: from_scene },
+        march_blend_constant: None,
+        composite: ScreenStep { label: "fire volume", pipeline: composite, bind_group: from_marched },
+        offset: offset.offset,
+    }
+    .draw(&mut ctx, target, camera);
 }
 
 #[cfg(test)]

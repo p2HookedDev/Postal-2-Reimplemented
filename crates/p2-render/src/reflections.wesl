@@ -1,7 +1,7 @@
 // Screen-space reflections over the finished frame. The normal prepass's alpha holds a reflecting class in its two
 // bits: 0 tile or glass, 1 metal, 2 wood, 3 (the default prepass's 1) nothing.
 
-import package::p2_render::screen_pass::view_at;
+import package::p2_render::screen_pass::{gradient_noise, texel_at, view_at};
 
 struct Reflections {
     clip_from_view: mat4x4<f32>,
@@ -12,6 +12,11 @@ struct Reflections {
     // In view space: xyz the centre and w the radius of each puddle; `puddle_count.x` of them are set.
     puddles: array<vec4<f32>, 16>,
     puddle_count: vec4<f32>,
+    // The view's part of the frame as shares of it, corner in xy and size in zw: a viewport uv times zw plus xy is the
+    // frame's uv.
+    in_frame: vec4<f32>,
+    // A frame uv times zw plus xy is the viewport's uv.
+    from_frame: vec4<f32>,
 }
 
 @group(0) @binding(0) var scene: texture_2d<f32>;
@@ -89,24 +94,20 @@ fn wetness(at: vec3<f32>, normal: vec3<f32>) -> f32 {
     return wet * ground;
 }
 
-fn noise(at: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(dot(at, vec2(0.06711056, 0.00583715))));
-}
-
 fn uv_of(p: vec3<f32>) -> vec2<f32> {
     let c = reflections.clip_from_view * vec4(p, 1.0);
     let ndc = c.xy / c.w;
     return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
-fn depth_at(uv: vec2<f32>, size: vec2<f32>) -> f32 {
-    let texel = clamp(vec2<i32>(uv * size), vec2(0), vec2<i32>(size) - 1);
+fn depth_at(uv: vec2<f32>, viewport: vec4<f32>, size: vec2<f32>) -> f32 {
+    let texel = clamp(texel_at(uv, viewport), vec2(0), vec2<i32>(size) - 1);
     return textureLoad(depth, texel, 0);
 }
 
 // The sky stores depth 0: no ray is ever behind it.
-fn surface_z(uv: vec2<f32>, size: vec2<f32>) -> f32 {
-    let z = depth_at(uv, size);
+fn surface_z(uv: vec2<f32>, viewport: vec4<f32>, size: vec2<f32>) -> f32 {
+    let z = depth_at(uv, viewport, size);
     if z <= 0.0 {
         return -1e9;
     }
@@ -114,9 +115,9 @@ fn surface_z(uv: vec2<f32>, size: vec2<f32>) -> f32 {
 }
 
 // The hit's uv and its weight, 0 on a miss.
-fn march(origin: vec3<f32>, way: vec3<f32>, size: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
+fn march(origin: vec3<f32>, way: vec3<f32>, viewport: vec4<f32>, size: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let start = uv_of(origin);
-    let pixels_per_unit = max(length((uv_of(origin + way) - start) * size), 1e-3);
+    let pixels_per_unit = max(length((uv_of(origin + way) - start) * viewport.zw), 1e-3);
     let stride = PIXELS_PER_STEP * reflections.look.y / pixels_per_unit;
     let steps = i32(reflections.look.z);
     var reach = 1e9;
@@ -124,7 +125,7 @@ fn march(origin: vec3<f32>, way: vec3<f32>, size: vec2<f32>, pixel: vec2<f32>) -
         reach = max(-origin.z - 1.0, 0.0) / way.z;
     }
     var last = 0.0;
-    var t = stride * (0.5 + noise(pixel));
+    var t = stride * (0.5 + gradient_noise(pixel));
     for (var i = 0; i < steps; i++) {
         if t > reach {
             break;
@@ -134,14 +135,14 @@ fn march(origin: vec3<f32>, way: vec3<f32>, size: vec2<f32>, pixel: vec2<f32>) -
         if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) {
             break;
         }
-        let behind = surface_z(uv, size) - at.z;
+        let behind = surface_z(uv, viewport, size) - at.z;
         if behind > 0.0 && behind < stride * THICKNESS {
             var near = last;
             var far = t;
             for (var j = 0; j < REFINE_STEPS; j++) {
                 let mid = 0.5 * (near + far);
                 let m = origin + way * mid;
-                if surface_z(uv_of(m), size) > m.z {
+                if surface_z(uv_of(m), viewport, size) > m.z {
                     far = mid;
                 } else {
                     near = mid;
@@ -173,11 +174,14 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(depth));
     let packed = textureLoad(normals, clamp(vec2<i32>(in.position.xy), vec2(0), vec2<i32>(size) - 1), 0);
     var surface = surface_of_code(u32(round(packed.a * 3.0)));
-    let z = depth_at(in.uv, size);
+    // The pass covers the whole frame so the bars outside the viewport, whose depth is 0, are copied through.
+    let viewport = reflections.in_frame * vec4(size, size);
+    let uv = in.uv * reflections.from_frame.zw + reflections.from_frame.xy;
+    let z = depth_at(uv, viewport, size);
     if z <= 0.0 || (surface.x >= ROUGH_TO && reflections.puddle_count.x == 0.0) {
         return here;
     }
-    let origin = view_at(reflections.view_from_clip, in.uv, z);
+    let origin = view_at(reflections.view_from_clip, uv, z);
     let normal = normalize((reflections.view_from_world * vec4(packed.xyz * 2.0 - 1.0, 0.0)).xyz);
     surface = mix(surface, PUDDLE_SURFACE, wetness(origin, normal));
     let glossy = 1.0 - smoothstep(ROUGH_FROM, ROUGH_TO, surface.x);
@@ -186,11 +190,11 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     }
     let eye = normalize(-origin);
     // A ray that meets nothing on screen shows nothing: no stand-in light is put in its place.
-    let hit = march(origin, reflect(-eye, normal), size, in.position.xy);
+    let hit = march(origin, reflect(-eye, normal), viewport, size, in.position.xy);
     if hit.z <= 0.0 {
         return here;
     }
-    let found = blurred(hit.xy, surface.x, size) * hit.z;
+    let found = blurred(hit.xy * reflections.in_frame.zw + reflections.in_frame.xy, surface.x, size) * hit.z;
     let fresnel = surface.y + (1.0 - surface.y) * pow(1.0 - saturate(dot(normal, eye)), 5.0);
     let tint = mix(vec3(1.0), here.rgb / max(max(here.r, max(here.g, here.b)), 1e-3), surface.z);
     // The lit pass already gave the surface its light: a reflection shows only where it is brighter, and adds none.

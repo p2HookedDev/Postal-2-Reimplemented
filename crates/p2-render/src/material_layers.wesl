@@ -1,7 +1,7 @@
 // The layers of a material whose data is `ShaderLayers` itself; the actor shader wraps its own and declares it.
 
 import bevy_pbr::render::forward_io::VertexOutput;
-import package::p2_render::layer_bindings::ShaderLayers;
+import package::p2_render::layer_types::ShaderLayers;
 @if(BINDLESS)
 import package::p2_render::layer_bindings::indices;
 

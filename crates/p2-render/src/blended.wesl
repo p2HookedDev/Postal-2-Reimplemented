@@ -6,7 +6,7 @@ import bevy_pbr::{
         pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
     },
 };
-import package::p2_render::projector::{apply_decals, cluster_ranges, mesh_target, project};
+import package::p2_render::projector::{cluster_ranges, mesh_target, project};
 import package::p2_render::layer_bindings::{apply_layers, post_lighting};
 import package::p2_render::material_layers::material_layers;
 
@@ -21,7 +21,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     );
 
     let ranges = cluster_ranges(pbr_input);
-    apply_decals(&pbr_input, ranges);
 
     var color = pbr_input.material.base_color;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

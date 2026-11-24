@@ -264,7 +264,7 @@ fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elap
         PoseWork::Channels(actor_pose, from) => {
             let ActorPose { scales, turns, .. } = actor_pose;
             let shown = |index: usize, channel: &ChannelPose| shown_times.get(from + index).copied().unwrap_or(channel.time);
-            let mut key = std::hash::DefaultHasher::new();
+            let mut key = rustc_hash::FxHasher::default();
             for (index, (channel, alpha, bone)) in pose_channels(actor_pose).enumerate() {
                 (Arc::as_ptr(&channel.animation), channel.sequence, shown(index, channel).to_bits(), alpha.to_bits(), bone).hash(&mut key);
                 channel.tween.as_ref().map(|(from, weight)| (Arc::as_ptr(from).addr(), weight.to_bits())).hash(&mut key);

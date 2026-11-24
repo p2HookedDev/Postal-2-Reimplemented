@@ -562,7 +562,7 @@ fn publish_frame_lights(play: Res<Play>, frame: ResMut<p2_render::bsp_light::Fra
     p2_render::bsp_light::FrameLights::publish(frame, play.world().map_or(&[][..], |world| world.dynamic_lights()));
 }
 
-fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts::FrameFacts>) {
+fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts::FrameFacts>, mut culls: Local<FxHashMap<ObjectId, f32>>) {
     let Some(world) = play.world() else {
         facts.set_if_neq(p2_render::frame_facts::FrameFacts::default());
         return;
@@ -575,8 +575,12 @@ fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts
     facts.origin = world.origin();
     facts.cutscene = world.cutscene();
     facts.eye_to_view_target = world.eye_to_view_target();
-    facts.cull_distances.clear();
-    facts.cull_distances.extend(world.actors.iter().filter(|(_, frame)| frame.cull_distance > 0.0).map(|(&actor, frame)| (actor, frame.cull_distance)));
+    culls.clear();
+    culls.extend(world.actors.iter().filter(|(_, frame)| frame.cull_distance > 0.0).map(|(&actor, frame)| (actor, frame.cull_distance)));
+    if *culls != facts.cull_distances {
+        std::mem::swap(&mut *culls, &mut facts.cull_distances);
+        facts.cull_version = facts.cull_version.wrapping_add(1);
+    }
     facts.person_hits.clear();
     facts.person_hits.extend_from_slice(world.person_hits());
     facts.level_time = world.level_time();

@@ -68,7 +68,7 @@ fn world_gap_sky() -> [u8; 3] {
     let mut settled = None;
     for frame in 0.. {
         app.update();
-        assert!(start.elapsed() < Duration::from_secs(40), "the frame never drew: reading {reading}, frames {}, compiling {}, canvas target {:?}", frames.lock().expect("lock").len(), common::compiling(&app), image_of(&app, canvas).is_some());
+        assert!(start.elapsed() < Duration::from_secs(40), "the frame never drew: reading {reading}, frames {}, compiling {}, canvas target {:?}, waiting on {}", frames.lock().expect("lock").len(), common::compiling(&app), image_of(&app, canvas).is_some(), common::stuck_pipelines(&app));
         if !reading
             && let Some(target) = image_of(&app, canvas)
             && app.world().resource::<Assets<Image>>().get(&target).is_some_and(|image| image.width() == SIZE)

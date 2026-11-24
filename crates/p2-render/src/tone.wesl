@@ -1,4 +1,5 @@
 import package::p2_render::tone_curve::pbr_neutral;
+import package::p2_render::screen_pass::gradient_noise;
 
 // `sun`: its place on the screen in uv, the rays' strength (0 without rays) and the frame's width over its height.
 // `tint`: the rays' colour. `grade`: exposure, saturation, contrast, vignette. `lens`: colour fringe in uv at the corner.
@@ -36,10 +37,6 @@ fn vertex(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>) -> Verte
     return VertexOutput(vec4<f32>(position.xy, 0.5, 1.0), uv);
 }
 
-fn noise(at: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(dot(at, vec2(0.06711056, 0.00583715))));
-}
-
 fn across(offset: vec2<f32>) -> f32 {
     return length(offset * vec2(post.sun.w, 1.0));
 }
@@ -57,7 +54,7 @@ fn sun_rays(uv: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
         return vec3(0.0);
     }
     let step = to_sun * (RAY_LENGTH / f32(RAY_STEPS));
-    var at = uv + step * noise(pixel);
+    var at = uv + step * gradient_noise(pixel);
     var weight = 1.0;
     var sum = vec3(0.0);
     for (var i = 0; i < RAY_STEPS; i++) {

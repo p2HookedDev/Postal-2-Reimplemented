@@ -50,8 +50,8 @@ use crate::modern::linear_light;
 use crate::shaders::add_shaders;
 use crate::terrain_material::TerrainLayers;
 use crate::view::ShownScene;
-use atlas::{ATLAS_SHADER, ATLAS_UNITS, LAMP_MARK, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
-use cells::{BOOK_WIDTH, CellLamp, RECORD_TEXELS, book_texels, lamp_cells};
+use atlas::{ATLAS_SHADER, ATLAS_UNITS, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
+use cells::{BOOK_WIDTH, CellLamp, RECORD_TEXELS, TILE_GRID_FROM_END, book_texels, lamp_cells};
 use faces::{Eye, FaceBook, FaceLamp, FaceSlot};
 use mover_pass::{MOVER_CASTER_SHADER, draw_mover_tiles};
 use mover_pick::pick_mover_tiles;
@@ -92,15 +92,19 @@ fn on_threads<T: Send>(count: usize, threads: usize, work: impl Fn(usize) -> T +
     done.into_iter().map(|(_, result)| result).collect()
 }
 
+/// Set above the tile in a lamp's colour texel when the lamp has a size of its own. Under 2^24, so it stays exact as a
+/// float. `lamp_shadow.wesl` holds the same number.
+const BOOK_SIZED: u32 = 1 << 20;
+
 /// A lamp's texels in the book, as `lamp_shadow.wesl` reads them: place and radius (negative for a spot); linear colour
 /// and atlas tile; a spot's direction x and y, its cone's scale signed as the direction's z, and the cone's offset.
 /// The next three are written by the passes: two of detail squares, one of where its movers' tiles lie. The last holds
-/// the lamp's size, which the shader reads only when the tile carries `LAMP_MARK`: the lamp has a size of its own.
+/// the lamp's size, which the shader reads only when the tile carries `BOOK_SIZED`: the lamp has a size of its own.
 fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32) -> [[f32; 4]; RECORD_TEXELS] {
     let (at, spot) = scene_place(light, origin);
     let [r, g, b] = linear_light(light.color(level_brightness));
-    let sized = if light.corona > 0.0 { LAMP_MARK } else { 0 };
-    let look = [r, g, b, ((tile & (LAMP_MARK - 1)) | sized) as f32];
+    let sized = if light.corona > 0.0 { BOOK_SIZED } else { 0 };
+    let look = [r, g, b, (tile | sized) as f32];
     let size = [crate::lamp_size::lamp_size(light.world_radius(), Some(light.corona), None), 0.0, 0.0, 0.0];
     let Some(along) = spot else {
         return [[at.x, at.y, at.z, light.world_radius()], look, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4], size];
@@ -268,9 +272,9 @@ fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangl
 }
 
 /// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them, and Bevy asks for all a GPU offers.
-/// Eight more rows after the texels hold the movers' tile grid, their tiles and their capsules in two grids.
+/// More rows after the texels hold the movers' tile grid, their tiles and their capsules in two grids.
 fn book_image(texels: &[[f32; 4]]) -> Image {
-    let rows = texels.len().div_ceil(BOOK_WIDTH).max(1) + 8;
+    let rows = texels.len().div_ceil(BOOK_WIDTH).max(1) + TILE_GRID_FROM_END as usize;
     let mut bytes = bytes_of(texels);
     bytes.resize(rows * BOOK_WIDTH * 16, 0);
     Image::new(Extent3d { width: BOOK_WIDTH as u32, height: rows as u32, depth_or_array_layers: 1 }, TextureDimension::D2, bytes, TextureFormat::Rgba32Float, RenderAssetUsages::RENDER_WORLD)
@@ -609,6 +613,7 @@ impl Plugin for LampsPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaders::shader_const;
 
     #[test]
     fn the_lamp_sum_adds_the_lamps_in_range_by_their_falloff() {
@@ -634,10 +639,17 @@ mod tests {
     }
 
     #[test]
+    fn the_shader_reads_a_lamps_record_as_it_is_written() {
+        let shader = include_str!("lamp_shadow.wesl");
+        assert_eq!(shader_const(shader, "BOOK_SIZED"), f64::from(BOOK_SIZED));
+        assert_eq!(shader_const(shader, "LAMP_SIZE_SHIFT"), f64::from(crate::material_class::LEVEL_SHIFT_LAMP_SIZE));
+    }
+
+    #[test]
     fn a_lamps_record_holds_its_place_radius_colour_and_tile() {
         let light = MeshLight { location: p2_math::Vector::new(100.0, 200.0, 300.0), radius: 64.0, ..MeshLight::default() };
         let tile = 5 | 9 << 8 | 2 << 16;
-        let record = lamp_record(&light, 1.0, Vec3::new(1.0, 2.0, 3.0), LAMP_MARK | tile);
+        let record = lamp_record(&light, 1.0, Vec3::new(1.0, 2.0, 3.0), tile);
         let at = Vec3::from(p2_bevy_assets::to_bevy(light.location)) + Vec3::new(1.0, 2.0, 3.0);
         assert_eq!(record[0], [at.x, at.y, at.z, light.world_radius()]);
         let [r, g, b] = linear_light(light.color(1.0));
@@ -646,7 +658,7 @@ mod tests {
         assert_eq!(record[6], [light.world_radius() * crate::lamp_size::LAMP_SOURCE_SHARE, 0.0, 0.0, 0.0]);
         let crowned = lamp_record(&MeshLight { corona: 160.0, ..light }, 1.0, Vec3::ZERO, tile);
         assert_eq!(crowned[6][0], crate::lamp_size::lamp_size(light.world_radius(), Some(160.0), None));
-        assert_eq!(crowned[1][3] as u32, LAMP_MARK | tile);
+        assert_eq!(crowned[1][3] as u32, BOOK_SIZED | tile);
     }
 
     #[test]

@@ -63,10 +63,13 @@ fn fade_by_cull_distance(
     draws: Query<Option<&VisibilityRange>, With<Mesh3d>>,
     faded: Query<Entity, With<Faded>>,
     applied: Query<Entity, With<FadeApplied>>,
+    added: Query<Entity, Added<ActorModel>>,
+    mut last: Local<Option<(u8, u32, u32)>>,
 ) {
     let level = settings.modern_level(MODERN_FADE_IN);
     let eye_to_view_target = (facts.in_play && level > 0).then(|| facts.eye_to_view_target.unwrap_or(MAX_EYE_OFFSET));
     let Some(eye_offset) = eye_to_view_target.and_then(stepped_eye_offset) else {
+        *last = None;
         for entity in &faded {
             commands.entity(entity).remove::<(VisibilityRange, Faded)>();
         }
@@ -76,11 +79,14 @@ fn fade_by_cull_distance(
         return;
     };
     let joined: EntityHashSet = joined.iter().flat_map(|entity| parents.iter_ancestors(entity)).filter(|&root| models.contains(root)).collect();
-    for (root, model, applied) in &models {
+    // Every root only when what sets a band changed; else only the roots that are new or gained a draw.
+    let inputs = (level, eye_offset.to_bits(), facts.cull_version);
+    let every_root = last.replace(inputs) != Some(inputs);
+    let mut fade = |(root, model, applied): (Entity, &ActorModel, Option<&FadeApplied>)| {
         let cull_distance = facts.cull_distances.get(&model.0).copied().unwrap_or(0.0);
         let band = fade_band(cull_distance, level, eye_offset);
         if applied.is_some_and(|applied| applied.0 == band) && !joined.contains(&root) {
-            continue;
+            return;
         }
         commands.entity(root).insert(FadeApplied(band.clone()));
         let wanted = band.map(|end_margin| VisibilityRange { start_margin: 0.0..0.0, end_margin, use_aabb: false });
@@ -96,6 +102,11 @@ fn fade_by_cull_distance(
                 _ => {}
             }
         }
+    };
+    if every_root {
+        models.iter().for_each(&mut fade);
+    } else {
+        models.iter_many(joined.iter().copied().chain(&added)).matched().for_each(&mut fade);
     }
 }
 
@@ -173,7 +184,9 @@ mod tests {
         let late = world.spawn((Mesh3d::default(), ChildOf(root))).id();
         world.run_system(fade).unwrap();
         assert_eq!((end(&world, draw), end(&world, late)), (Some(1000.0), Some(1000.0)));
-        world.resource_mut::<FrameFacts>().cull_distances.insert(actor, 2000.0);
+        let mut facts = world.resource_mut::<FrameFacts>();
+        facts.cull_distances.insert(actor, 2000.0);
+        facts.cull_version += 1;
         world.entity_mut(draw).insert(elsewhere);
         world.run_system(fade).unwrap();
         assert_eq!((end(&world, draw), end(&world, late)), (Some(2000.0), Some(2000.0)));

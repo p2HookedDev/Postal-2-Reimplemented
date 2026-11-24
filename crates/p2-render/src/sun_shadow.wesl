@@ -18,7 +18,21 @@ const SOFT_EDGE_UNITS: f32 = 1.5;
 const SOFT_EDGE_LEAST_TEXELS: f32 = 0.75;
 const SOFT_EDGE_MOST_TEXELS: f32 = 8.0;
 const SOFT_EDGE_TAPS: i32 = 12;
-const GOLDEN_ANGLE: f32 = 2.3999632;
+// Tap n unturned: sqrt((n + 0.5) / 12) out along the angle n times the golden angle, 2.3999632.
+const SOFT_EDGE_DISK: array<vec2<f32>, 12> = array<vec2<f32>, 12>(
+    vec2(0.204124145, 0.000000000),
+    vec2(-0.260699246, 0.238821907),
+    vec2(0.039904120, -0.454687799),
+    vec2(0.328594758, 0.428593224),
+    vec2(-0.603011434, -0.106664010),
+    vec2(0.571224959, -0.363366728),
+    vec2(-0.191062876, 0.710747244),
+    vec2(-0.364379602, -0.701589271),
+    vec2(0.790556879, 0.288709464),
+    vec2(-0.822442295, 0.339492767),
+    vec2(0.396471272, -0.847236998),
+    vec2(0.292982695, 0.934074127),
+);
 // A receiver plane steeper than this many texels of depth per texel is noise.
 const SHADOW_SLOPE_CAP_TEXELS: f32 = 16.0;
 // In a level's half widths from the eye, not from its centre, which jumps at each redraw: a level is used out to where
@@ -153,11 +167,10 @@ fn cascade_shadow(sun: u32, cascade_index: u32, position: vec3<f32>, normal: vec
     let clip = view.clip_from_world * vec4(position, 1.0);
     let pixel = (clip.xy / clip.w * 0.5 + 0.5) * view.viewport.zw;
     let turn = 6.2831853 * fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+    let spin = mat2x2<f32>(cos(turn), sin(turn), -sin(turn), cos(turn));
     var lit = 0.0;
     for (var tap = 0; tap < SOFT_EDGE_TAPS; tap++) {
-        let out = sqrt((f32(tap) + 0.5) / f32(SOFT_EDGE_TAPS)) * radius;
-        let angle = f32(tap) * GOLDEN_ANGLE + turn;
-        lit += shadow_tap(local.xy, vec2(cos(angle), sin(angle)) * out, local.z, slope, layer);
+        lit += shadow_tap(local.xy, spin * SOFT_EDGE_DISK[tap] * radius, local.z, slope, layer);
     }
     return lit / f32(SOFT_EDGE_TAPS);
 }

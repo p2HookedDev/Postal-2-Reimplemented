@@ -27,6 +27,7 @@ impl MaterialExtension for BakedLight {
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         crate::shaders::cast_both_sides(descriptor, key.mesh_key);
+        crate::shaders::mark_see_through(descriptor, key.mesh_key);
         crate::reflections::write_class_in_prepass(descriptor, crate::reflections::LayersHeld::Alone);
         Ok(())
     }

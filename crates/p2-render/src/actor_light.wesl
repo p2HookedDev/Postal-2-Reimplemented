@@ -18,30 +18,11 @@ import package::p2_render::modern_base::to_eye;
 import package::p2_render::sun_shadow::{ROOFED_SKY, SKY_FACING_FADE, SUN_FACING_FADE, sun_found, sun_index, sun_visibility};
 import package::p2_render::lamp_shadow::{add_lamp, lamp_shown, no_lamps};
 import package::p2_render::surface::{add_dynamic, modern_light, shade_surface};
-import package::p2_render::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
+import package::p2_render::layer_bindings::{apply_layers, lit_color, post_lighting};
+import package::p2_render::layer_types::{ActorShading, HardwareLight, Lighting, ShaderLayers};
 import package::p2_render::tone_curve::pbr_neutral;
 @if(BINDLESS)
 import package::p2_render::layer_bindings::indices;
-
-struct HardwareLight {
-    position: vec4<f32>,
-    direction: vec3<f32>,
-    kind: u32,
-    color: vec4<f32>,
-    attenuation: vec4<f32>,
-}
-
-struct Lighting {
-    ambient: vec3<f32>,
-    count: u32,
-    lights: array<HardwareLight, 8>,
-}
-
-struct ActorShading {
-    lighting: Lighting,
-    layers: ShaderLayers,
-    overlay: u32,
-}
 
 @if(BINDLESS)
 @group(3) @binding(107) var<storage> shading_array: array<ActorShading>;
@@ -143,7 +124,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let flag = (*shading).layers.detail.z;
     let modern = is_modern(flag);
     let ranges = cluster_ranges(pbr_input);
-    let dynamic = dynamic_light(in.world_position, normal, ranges);
     var out: FragmentOutput;
     var lit = vec3(0.0);
     let overlay = (*shading).overlay != 0u;
@@ -152,12 +132,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if modern && (sun_on || overlay) {
         let darken = (*shading).layers.blend.x != 0.0;
         if sun_on {
-            let incoming = modern_light(in, pbr_input, sun_id, normal, normal, ranges, flag, (*shading).layers.blend, darken);
-            lit = shade_surface(incoming, (*shading).layers, base, normal, darken, false, dynamic).rgb;
+            let incoming = modern_light(in, pbr_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken);
+            lit = shade_surface(incoming, (*shading).layers, base, normal, darken, false, dynamic_light(in.world_position, normal, ranges)).rgb;
         } else {
             let gloss = allows_gloss(flag) && !darken;
             let surface = overlay_surface(select(base.rgb, vec3(1.0), darken), in.world_position.xyz, normal, ambient_occlusion(pbr_input.frag_coord.xy), gloss, *lighting);
-            lit = add_dynamic((*shading).layers, surface, base.rgb, darken, dynamic);
+            lit = add_dynamic((*shading).layers, surface, base.rgb, darken, dynamic_light(in.world_position, normal, ranges));
         }
     } else {
         var light = (*lighting).ambient;
@@ -187,7 +167,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 shine += actor_highlight(one, normal, to_light, eye);
             }
         }
-        light += dynamic;
+        light += dynamic_light(in.world_position, normal, ranges);
         // The driver clamps the lit colour to 1; the texture stage doubles it in display space: as a linear factor.
         let factor = to_linear(2.0 * clamp(light, vec3(0.0), vec3(1.0)));
         lit = base.rgb * factor + 2.0 * shine;

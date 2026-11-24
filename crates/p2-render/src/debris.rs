@@ -3,20 +3,26 @@
 //! blast moves it again; a spark bounces and burns out. Pieces share small physics worlds by place; nothing reads them back.
 
 use std::f32::consts::TAU;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use bevy::app::{App, Plugin, PostUpdate};
-use bevy::asset::{Assets, Handle, RenderAssetUsages};
+use bevy::asset::{Asset, AssetId, Assets, Handle, RenderAssetUsages, uuid_handle};
 use bevy::color::{Alpha, Color};
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
+use bevy::light::NotShadowCaster;
 use bevy::material::AlphaMode;
 use bevy::math::{EulerRot, Mat3, Mat4, Quat, Vec3};
-use bevy::mesh::{Indices, Mesh, Mesh3d, PrimitiveTopology};
-use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::mesh::{Indices, Mesh, Mesh3d, MeshTag, PrimitiveTopology};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin, MeshMaterial3d, StandardMaterial};
+use bevy::reflect::Reflect;
 use bevy::render::RenderApp;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::render::storage::ShaderBuffer;
+use bevy::shader::{Shader, ShaderRef};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_assets::{Model, Terrain, fan_triangles, poly_flags};
@@ -32,8 +38,15 @@ use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::particle_draw::ParticleDrawSystems;
 use crate::particle_frame::{Blast, DrawnParticles};
 use crate::screen_pass::modern_level;
+use crate::shaders::add_shaders;
 
 const PIECES_PER_LEVEL: usize = 64;
+/// The tint buffer's first size: the lying pieces' cap and the sparks' cap at the highest setting. Pieces fading out to
+/// make room count against neither, so it may grow, in steps, since a new size makes Bevy build a new GPU buffer.
+const SLOTS: u32 = 2 * 10 * PIECES_PER_LEVEL as u32;
+const DEBRIS_SHADER: Handle<Shader> = uuid_handle!("9c4e1a72-3d58-4b06-a8f1-6e27d0b5c934");
+/// Every piece's colour in linear light, at its `MeshTag`.
+const DEBRIS_TINTS: Handle<ShaderBuffer> = uuid_handle!("e5a03f81-7b6c-4d29-9e14-c83f20a6d7b5");
 /// One break or one head takes at most this share of the lying pieces' cap, so several lie at once.
 const BREAK_SHARE: usize = 4;
 const WORLDS: usize = 8;
@@ -74,10 +87,44 @@ impl Plugin for DebrisPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
+        add_shaders(app, [(DEBRIS_SHADER, Shader::from_wesl(include_str!("debris.wesl"), "p2_render/debris.wesl"))]);
+        let tints = ShaderBuffer::new(vec![[0.0f32; 4]; SLOTS as usize], RenderAssetUsages::default());
+        if let Err(error) = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().insert(DEBRIS_TINTS.id(), tints) {
+            bevy::log::error!("debris tint buffer: {error}");
+        }
+        app.add_plugins(MaterialPlugin::<ExtendedMaterial<StandardMaterial, DebrisTint>>::default());
         app.init_resource::<PieceBirths>().init_resource::<Debris>().add_systems(
             PostUpdate,
             (start_pieces, move_pieces).chain().in_set(DebrisSystems).in_set(ParticleDrawSystems).after(GpuParticleSystems),
         );
+    }
+}
+
+#[derive(Asset, AsBindGroup, Reflect, Clone)]
+struct DebrisTint {
+    #[storage(100, read_only)]
+    tints: Handle<ShaderBuffer>,
+}
+
+impl MaterialExtension for DebrisTint {
+    fn fragment_shader() -> ShaderRef {
+        ShaderRef::Handle(DEBRIS_SHADER)
+    }
+}
+
+/// Slots of the tint buffer: given back ones first, then ones never used.
+#[derive(Default)]
+struct Slots {
+    free: Vec<u32>,
+    used: u32,
+}
+
+impl Slots {
+    fn take(&mut self) -> u32 {
+        self.free.pop().unwrap_or_else(|| {
+            self.used += 1;
+            self.used - 1
+        })
     }
 }
 
@@ -121,20 +168,20 @@ struct Piece {
     rotation: [f32; 4],
     velocity: Vector,
     half: f32,
+    /// In display light.
+    tint: Vec3,
+    slot: u32,
     /// The group's age when the piece was last thrown or pushed.
     woke: f32,
     /// Moved since it was last drawn.
     stirred: bool,
 }
 
-/// Pieces thrown together: one material, one age.
+/// Pieces thrown together: one age.
 struct Group {
     parent: Entity,
     kind: PieceKind,
     pieces: Vec<Piece>,
-    material: Handle<StandardMaterial>,
-    /// In display light.
-    tint: Vec3,
     age: f32,
     seconds: f32,
     /// Fading out early to make room; its pieces no longer count against the cap.
@@ -158,6 +205,7 @@ struct Loose {
     seed: u32,
     /// The entities of pieces that went, for the systems to despawn.
     gone: Vec<Entity>,
+    slots: Slots,
 }
 
 impl Loose {
@@ -169,6 +217,7 @@ impl Loose {
                 place.world.remove_body(body);
             }
             self.gone.push(piece.entity);
+            self.slots.free.push(piece.slot);
         }
     }
 
@@ -207,14 +256,22 @@ impl Loose {
         true
     }
 
-    /// A world goes: the oldest in which no shard or lump still flies, else the oldest. What flew in it lies where it
-    /// is, and its sparks go at the next step.
+    /// A world goes: the oldest in which no shard or lump still flies, else the oldest. A shard or a lump still flying
+    /// in it goes rather than hang in the air, and its sparks go at the next step.
     fn retire_a_world(&mut self) {
         let flying = |id: u32| self.groups.iter().filter(|group| group.kind != PieceKind::Spark).flat_map(|group| &group.pieces).any(|piece| piece.body.is_some_and(|(world, _)| world == id));
         let Some(id) = self.worlds.iter().map(|place| place.id).find(|&id| !flying(id)).or(self.worlds.first().map(|place| place.id)) else { return };
-        for piece in self.groups.iter_mut().flat_map(|group| &mut group.pieces) {
-            if piece.body.is_some_and(|(world, _)| world == id) {
-                piece.body = None;
+        let held = |body: Option<(u32, BodyId)>| body.is_some_and(|(world, _)| world == id);
+        for group in &mut self.groups {
+            if group.kind == PieceKind::Spark {
+                for piece in group.pieces.iter_mut().filter(|piece| held(piece.body)) {
+                    piece.body = None;
+                }
+            } else {
+                for piece in group.pieces.extract_if(.., |piece| held(piece.body)) {
+                    self.gone.push(piece.entity);
+                    self.slots.free.push(piece.slot);
+                }
             }
         }
         self.worlds.retain(|place| place.id != id);
@@ -247,20 +304,21 @@ impl Loose {
     fn blast(&mut self, blast: &Blast, level: impl Fn(Vector) -> Vec<[[f32; 3]; 3]>) {
         let mut hits = Vec::new();
         for (g, group) in self.groups.iter().enumerate() {
-            for (p, piece) in group.pieces.iter().enumerate() {
+            for piece in &group.pieces {
                 if (piece.place - blast.at).size() < blast.radius {
-                    hits.push((g, p));
+                    hits.push((g, piece.entity));
                 }
             }
         }
         let up = Vector::new(0.0, 0.0, 1.0);
-        for (g, p) in hits {
-            // Read again: a world made for an earlier hit may have retired this piece's.
-            let Some((kind, age, piece)) = self.groups.get(g).and_then(|group| Some((group.kind, group.age, *group.pieces.get(p)?))) else { continue };
+        for (g, entity) in hits {
+            // Found by its entity again: a world made for an earlier hit may have retired this piece's world or taken
+            // a flying piece out of its group.
+            let Some((kind, age, piece)) = self.groups.get(g).and_then(|group| Some((group.kind, group.age, *group.pieces.iter().find(|piece| piece.entity == entity)?))) else { continue };
             let off = piece.place - blast.at;
             let distance = off.size();
             let away = if distance > 1e-3 { off / distance } else { up };
-            let lift = away + up;
+            let lift = away + blast.way + up;
             let share = 1.0 - distance / blast.radius;
             let change = lift / lift.size() * (blast.push * share);
             let spin = self.random_spin() * share;
@@ -279,7 +337,7 @@ impl Loose {
                 }
                 None => continue,
             };
-            if let Some(held) = self.groups.get_mut(g).and_then(|group| group.pieces.get_mut(p)) {
+            if let Some(held) = self.groups.get_mut(g).and_then(|group| group.pieces.iter_mut().find(|held| held.entity == entity)) {
                 (held.body, held.woke) = (Some(body), age);
             }
         }
@@ -310,7 +368,10 @@ impl Loose {
                 }
             }
             if group.kind == PieceKind::Spark {
-                self.gone.extend(group.pieces.extract_if(.., |piece| piece.body.is_none()).map(|piece| piece.entity));
+                for piece in group.pieces.extract_if(.., |piece| piece.body.is_none()) {
+                    self.gone.push(piece.entity);
+                    self.slots.free.push(piece.slot);
+                }
             }
         }
         let ended: Vec<Group> = self.groups.extract_if(.., |group| group.age >= group.seconds || group.pieces.is_empty()).collect();
@@ -326,8 +387,10 @@ struct Debris {
     map: u32,
     loose: Loose,
     /// The level the BSP's triangles were taken from, kept for the map.
-    bsp: Option<(Arc<StaticCollision>, Vec<[[f32; 3]; 3]>)>,
+    bsp: Option<(Arc<StaticCollision>, TriangleGrid)>,
     meshes: FxHashMap<(PieceKind, [u32; 4]), Handle<Mesh>>,
+    /// By texture and whether it adds.
+    materials: FxHashMap<(AssetId<Image>, bool), Handle<ExtendedMaterial<StandardMaterial, DebrisTint>>>,
     origin: Vec3,
     /// Bevy axes relative to the world's origin.
     eye: Vec3,
@@ -341,36 +404,53 @@ impl Debris {
         self.loose.worlds.clear();
         self.bsp = None;
         self.meshes.clear();
+        self.materials.clear();
     }
 
-    fn add(&mut self, commands: &mut Commands, birth: &PieceBirth, cap: usize, origin: Vec3, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-        let Self { loose, bsp, meshes: held_meshes, eye, .. } = self;
+    fn add(
+        &mut self,
+        commands: &mut Commands,
+        birth: &PieceBirth,
+        cap: usize,
+        origin: Vec3,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<ExtendedMaterial<StandardMaterial, DebrisTint>>,
+    ) {
+        let Self { loose, bsp, meshes: held_meshes, materials: held_materials, eye, .. } = self;
         let Some((collision, triangles)) = bsp.as_ref() else { return };
         if !loose.make_room(birth.parent, birth.kind, cap) {
             return;
         }
+        let slot = loose.slots.take();
         let world = loose.world_holding(birth.place, |centre| level_near(collision, triangles, centre));
         let at = match loose.joined(birth.parent, birth.kind) {
             Some(at) => at,
             None => {
-                let alpha_mode = match birth.kind {
-                    PieceKind::Flat | PieceKind::Lump => AlphaMode::Blend,
-                    PieceKind::Spark => AlphaMode::Add,
-                };
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(birth.tint.x, birth.tint.y, birth.tint.z),
-                    base_color_texture: Some(birth.image.clone()),
-                    alpha_mode,
-                    unlit: true,
-                    double_sided: true,
-                    cull_mode: None,
-                    ..Default::default()
-                });
-                let group = Group { parent: birth.parent, kind: birth.kind, pieces: Vec::new(), material, tint: birth.tint, age: 0.0, seconds: birth.seconds, ending: false };
+                let group = Group { parent: birth.parent, kind: birth.kind, pieces: Vec::new(), age: 0.0, seconds: birth.seconds, ending: false };
                 loose.groups.push(group);
                 loose.groups.len() - 1
             }
         };
+        let alpha_mode = match birth.kind {
+            PieceKind::Flat | PieceKind::Lump => AlphaMode::Blend,
+            PieceKind::Spark => AlphaMode::Add,
+        };
+        let material = held_materials
+            .entry((birth.image.id(), birth.kind == PieceKind::Spark))
+            .or_insert_with(|| {
+                materials.add(ExtendedMaterial {
+                    base: StandardMaterial {
+                        base_color_texture: Some(birth.image.clone()),
+                        alpha_mode,
+                        unlit: true,
+                        double_sided: true,
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    extension: DebrisTint { tints: DEBRIS_TINTS },
+                })
+            })
+            .clone();
         let rotation = match birth.kind {
             PieceKind::Flat | PieceKind::Lump => loose.random_rotation(),
             PieceKind::Spark => [0.0, 0.0, 0.0, 1.0],
@@ -380,15 +460,28 @@ impl Debris {
             .entry((birth.kind, birth.uv.map(f32::to_bits)))
             .or_insert_with(|| meshes.add(if birth.kind == PieceKind::Lump { crossed_quads(birth.uv) } else { quad(birth.uv) }))
             .clone();
-        let (Some(group), Some(held)) = (loose.groups.get_mut(at), loose.worlds.iter_mut().find(|place| place.id == world)) else { return };
-        let mut piece =
-            Piece { entity: Entity::PLACEHOLDER, body: None, place: birth.place, rotation, velocity: birth.velocity, half: birth.half, woke: group.age, stirred: false };
+        let (Some(group), Some(held)) = (loose.groups.get_mut(at), loose.worlds.iter_mut().find(|place| place.id == world)) else {
+            loose.slots.free.push(slot);
+            return;
+        };
+        let mut piece = Piece {
+            entity: Entity::PLACEHOLDER,
+            body: None,
+            place: birth.place,
+            rotation,
+            velocity: birth.velocity,
+            half: birth.half,
+            tint: birth.tint,
+            slot,
+            woke: group.age,
+            stirred: false,
+        };
         piece.body = Some((world, add_piece(&mut held.world, birth.kind, &piece, birth.velocity, spin)));
         let transform = match birth.kind {
             PieceKind::Flat | PieceKind::Lump => piece_transform(&piece, birth.kind, origin),
             PieceKind::Spark => spark_transform(&piece, *eye, origin),
         };
-        piece.entity = commands.spawn((Mesh3d(mesh), MeshMaterial3d(group.material.clone()), transform, DebrisPiece)).id();
+        piece.entity = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), MeshTag::new(slot), transform, NotShadowCaster, DebrisPiece)).id();
         group.pieces.push(piece);
     }
 }
@@ -427,6 +520,64 @@ fn reaching(triangles: &[[[f32; 3]; 3]], min: [f32; 3], max: [f32; 3]) -> impl I
     triangles.iter().copied().filter(move |triangle| p2_collision::triangle_reaches(min.into(), max.into(), triangle))
 }
 
+/// A triangle whose bounds cover more cells than this is tested for every world instead of listed in each cell.
+const CELLS_MOST: i64 = 4096;
+
+fn cells_of(min: [f32; 3], max: [f32; 3]) -> [RangeInclusive<i32>; 3] {
+    let cell = |value: f32| (value / REACH).floor() as i32;
+    std::array::from_fn(|k| cell(min[k])..=cell(max[k]))
+}
+
+fn each_cell([xs, ys, zs]: [RangeInclusive<i32>; 3]) -> impl Iterator<Item = [i32; 3]> {
+    xs.flat_map(move |x| {
+        let zs = zs.clone();
+        ys.clone().flat_map(move |y| zs.clone().map(move |z| [x, y, z]))
+    })
+}
+
+/// The map's BSP triangles, sorted once into a grid so a world tests only those near its box.
+#[derive(Default)]
+struct TriangleGrid {
+    triangles: Vec<[[f32; 3]; 3]>,
+    cells: FxHashMap<[i32; 3], Vec<u32>>,
+    wide: Vec<u32>,
+}
+
+impl TriangleGrid {
+    fn new(triangles: Vec<[[f32; 3]; 3]>) -> Self {
+        let mut grid = Self::default();
+        for (at, triangle) in triangles.iter().enumerate() {
+            let min = std::array::from_fn(|k| triangle.iter().map(|point| point[k]).fold(f32::INFINITY, f32::min));
+            let max = std::array::from_fn(|k| triangle.iter().map(|point| point[k]).fold(f32::NEG_INFINITY, f32::max));
+            let span = cells_of(min, max);
+            let count: i64 = span.iter().map(|range| (i64::from(*range.end()) - i64::from(*range.start()) + 1).max(0)).product();
+            if count > CELLS_MOST {
+                grid.wide.push(at as u32);
+                continue;
+            }
+            for cell in each_cell(span) {
+                grid.cells.entry(cell).or_default().push(at as u32);
+            }
+        }
+        grid.triangles = triangles;
+        grid
+    }
+
+    /// The same triangles in the same order as `reaching` over the whole list.
+    fn reaching(&self, min: [f32; 3], max: [f32; 3]) -> impl Iterator<Item = [[f32; 3]; 3]> {
+        let mut listed = self.wide.clone();
+        for cell in each_cell(cells_of(min, max)) {
+            listed.extend(self.cells.get(&cell).into_iter().flatten());
+        }
+        listed.sort_unstable();
+        listed.dedup();
+        listed
+            .into_iter()
+            .filter_map(move |at| self.triangles.get(at as usize).copied())
+            .filter(move |triangle| p2_collision::triangle_reaches(min.into(), max.into(), triangle))
+    }
+}
+
 fn terrain_near(terrain: &Terrain, min: [f32; 3], max: [f32; 3]) -> Vec<[[f32; 3]; 3]> {
     if terrain.vertices.len() != terrain.width * terrain.height {
         return Vec::new();
@@ -442,10 +593,10 @@ fn terrain_near(terrain: &Terrain, min: [f32; 3], max: [f32; 3]) -> Vec<[[f32; 3
     reaching(&triangles, min, max).collect()
 }
 
-fn level_near(collision: &StaticCollision, bsp: &[[[f32; 3]; 3]], centre: Vector) -> Vec<[[f32; 3]; 3]> {
+fn level_near(collision: &StaticCollision, bsp: &TriangleGrid, centre: Vector) -> Vec<[[f32; 3]; 3]> {
     let centre: [f32; 3] = centre.into();
     let (min, max) = (centre.map(|c| c - REACH), centre.map(|c| c + REACH));
-    let mut near: Vec<[[f32; 3]; 3]> = reaching(bsp, min, max).collect();
+    let mut near: Vec<[[f32; 3]; 3]> = bsp.reaching(min, max).collect();
     for mesh in &collision.meshes {
         let (low, high) = mesh.bounds();
         if (0..3).all(|k| low[k] <= max[k] && high[k] >= min[k]) {
@@ -558,7 +709,7 @@ fn start_pieces(
     mut births: ResMut<PieceBirths>,
     mut debris: ResMut<Debris>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DebrisTint>>>,
 ) {
     let setting = modern_level(settings.as_deref(), MODERN_GPU_PARTICLES);
     let blasts = match drawn.as_mut() {
@@ -578,18 +729,18 @@ fn start_pieces(
     if let Some(collision) = level.as_deref().and_then(|level| level.0.clone()).filter(|_| setting > 0) {
         // Taken when the map is first seen, not at its first break, so the break's frame is not the long one.
         if debris.bsp.as_ref().is_none_or(|(held, _)| !Arc::ptr_eq(held, &collision)) {
-            let triangles = bsp_triangles(&collision.model);
+            let triangles = TriangleGrid::new(bsp_triangles(&collision.model));
             debris.bsp = Some((collision, triangles));
-        }
-        // Before this frame's births: a blast moves what was there, not what it throws itself.
-        if let Some((collision, triangles)) = debris.bsp.as_ref() {
-            for blast in &blasts {
-                debris.loose.blast(blast, |centre| level_near(collision, triangles, centre));
-            }
         }
         let cap = piece_cap(setting);
         for birth in &born {
             debris.add(&mut commands, birth, cap, facts.origin, &mut meshes, &mut materials);
+        }
+        // After this frame's births: what a hit throws takes the hit too.
+        if let Some((collision, triangles)) = debris.bsp.as_ref() {
+            for blast in &blasts {
+                debris.loose.blast(blast, |centre| level_near(collision, triangles, centre));
+            }
         }
     }
     for entity in debris.loose.gone.drain(..) {
@@ -602,8 +753,9 @@ fn move_pieces(
     time: Res<Time>,
     facts: Res<FrameFacts>,
     mut debris: ResMut<Debris>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut placed: Query<&mut Transform, With<DebrisPiece>>,
+    mut paints: Local<Vec<(usize, [f32; 4])>>,
 ) {
     let seconds = if facts.paused { 0.0 } else { time.delta_secs().min(FRAME_MOST) };
     let debris = &mut *debris;
@@ -613,27 +765,46 @@ fn move_pieces(
         commands.entity(entity).despawn();
     }
     let eye = debris.eye;
+    paints.clear();
     for group in &mut debris.loose.groups {
+        let left = group.seconds - group.age;
         for piece in &mut group.pieces {
             let at = match group.kind {
-                PieceKind::Spark => spark_transform(piece, eye, facts.origin),
-                kind if piece.stirred || shifted => piece_transform(piece, kind, facts.origin),
-                _ => continue,
+                PieceKind::Spark => Some(spark_transform(piece, eye, facts.origin)),
+                kind if piece.stirred || shifted => Some(piece_transform(piece, kind, facts.origin)),
+                _ => None,
             };
             piece.stirred = false;
-            if let Ok(mut transform) = placed.get_mut(piece.entity) {
+            if let Some(at) = at
+                && let Ok(mut transform) = placed.get_mut(piece.entity)
+                && *transform != at
+            {
                 *transform = at;
             }
+            let paint = match group.kind {
+                PieceKind::Spark => spark_color(piece.tint, group.age / group.seconds.max(1e-3)),
+                PieceKind::Flat | PieceKind::Lump => {
+                    Color::srgb(piece.tint.x, piece.tint.y, piece.tint.z).with_alpha(if left < FADE { (left / FADE).max(0.0) } else { 1.0 })
+                }
+            }
+            .to_linear();
+            paints.push((piece.slot as usize, [paint.red, paint.green, paint.blue, paint.alpha]));
         }
-        let left = group.seconds - group.age;
-        let paint = match group.kind {
-            PieceKind::Spark => Some(spark_color(group.tint, group.age / group.seconds.max(1e-3))),
-            PieceKind::Flat | PieceKind::Lump => (left < FADE).then(|| Color::srgb(group.tint.x, group.tint.y, group.tint.z).with_alpha((left / FADE).max(0.0))),
-        };
-        if let Some(paint) = paint
-            && let Some(mut material) = materials.get_mut(&group.material)
-        {
-            material.base_color = paint;
+    }
+    let used = debris.loose.slots.used as usize;
+    let held = buffers.get(DEBRIS_TINTS.id()).and_then(|buffer| buffer.cast_slice::<[f32; 4]>());
+    let grown = held.is_some_and(|held| held.len() < used);
+    let changed = grown || held.is_some_and(|held| paints.iter().any(|&(slot, paint)| held.get(slot) != Some(&paint)));
+    if changed && let Some(mut buffer) = buffers.get_mut(DEBRIS_TINTS.id()) {
+        if grown {
+            buffer.resize((used.next_power_of_two() * size_of::<[f32; 4]>()) as u64);
+        }
+        if let Some(tints) = buffer.cast_slice_mut::<[f32; 4]>() {
+            for &(slot, paint) in paints.iter() {
+                if let Some(tint) = tints.get_mut(slot) {
+                    *tint = paint;
+                }
+            }
         }
     }
 }
@@ -655,9 +826,54 @@ mod tests {
         assert_eq!(picked, vec![inside, crossing]);
     }
 
+    #[test]
+    fn the_grid_gives_the_triangles_the_whole_list_does() {
+        let mut seed = 11;
+        let mut unit = || next_unit(&mut seed) * 2.0 - 1.0;
+        let mut soup: Vec<[[f32; 3]; 3]> = (0..400)
+            .map(|_| {
+                let corner = [unit() * 3000.0, unit() * 3000.0, unit() * 800.0];
+                let size = unit().abs() * 900.0;
+                [corner, [corner[0] + size * unit(), corner[1] + size * unit(), corner[2]], [corner[0], corner[1] + size * unit(), corner[2] + size * unit()]]
+            })
+            .collect();
+        soup.push([[-1e6, -1e6, 0.0], [1e6, -1e6, 0.0], [0.0, 1e6, 1e6]]);
+        soup.push([[REACH, 0.0, 0.0], [REACH, 10.0, 0.0], [REACH, 0.0, 10.0]]);
+        let grid = TriangleGrid::new(soup.clone());
+        assert_eq!(grid.wide.len(), 1);
+        let centres: [[f32; 3]; 6] = [[0.0; 3], [2.0 * REACH, 0.0, 0.0], [-1234.5, 777.0, 100.0], [2900.0, -2900.0, -700.0], [9000.0, 9000.0, 0.0], [10.0, -20.0, 300.0]];
+        for centre in centres {
+            let (min, max) = (centre.map(|c| c - REACH), centre.map(|c| c + REACH));
+            let linear: Vec<[[f32; 3]; 3]> = reaching(&soup, min, max).collect();
+            assert_eq!(grid.reaching(min, max).collect::<Vec<_>>(), linear, "around {centre:?}");
+        }
+    }
+
     fn lying_group(kind: PieceKind, place: Vector, seconds: f32) -> Group {
-        let piece = Piece { entity: Entity::PLACEHOLDER, body: None, place, rotation: [0.0, 0.0, 0.0, 1.0], velocity: Vector::ZERO, half: 4.0, woke: 0.0, stirred: false };
-        Group { parent: Entity::PLACEHOLDER, kind, pieces: vec![piece], material: Handle::default(), tint: Vec3::ONE, age: 0.0, seconds, ending: false }
+        let piece = Piece {
+            entity: Entity::PLACEHOLDER,
+            body: None,
+            place,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            velocity: Vector::ZERO,
+            half: 4.0,
+            tint: Vec3::ONE,
+            slot: 0,
+            woke: 0.0,
+            stirred: false,
+        };
+        Group { parent: Entity::PLACEHOLDER, kind, pieces: vec![piece], age: 0.0, seconds, ending: false }
+    }
+
+    #[test]
+    fn a_slot_given_back_is_taken_again_before_a_new_one() {
+        let mut slots = Slots::default();
+        assert_eq!(slots.take(), 0);
+        assert_eq!(slots.take(), 1);
+        slots.free.push(0);
+        assert_eq!(slots.take(), 0);
+        assert_eq!(slots.take(), 2);
+        assert_eq!(slots.used, 3);
     }
 
     #[test]
@@ -688,7 +904,7 @@ mod tests {
         let far = Vector::new(500.0, 0.0, THICKNESS);
         loose.groups.push(lying_group(PieceKind::Flat, before, 30.0));
         loose.groups.push(lying_group(PieceKind::Flat, far, 30.0));
-        let blast = Blast { at: Vector::new(-20.0, 0.0, 0.0), radius: 48.0, push: 220.0 };
+        let blast = Blast { at: Vector::new(-20.0, 0.0, 0.0), radius: 48.0, push: 220.0, way: Vector::ZERO };
         loose.blast(&blast, |_| FLOOR.to_vec());
         assert!(loose.groups[0].pieces[0].body.is_some(), "the near piece has a body again");
         assert!(loose.groups[1].pieces[0].body.is_none() && loose.groups[1].pieces[0].place == far, "the far piece stays as it lay");
@@ -708,7 +924,7 @@ mod tests {
     fn a_blast_with_nothing_near_makes_no_world() {
         let mut loose = Loose::default();
         loose.groups.push(lying_group(PieceKind::Flat, Vector::new(500.0, 0.0, THICKNESS), 30.0));
-        loose.blast(&Blast { at: Vector::ZERO, radius: 48.0, push: 220.0 }, |_| FLOOR.to_vec());
+        loose.blast(&Blast { at: Vector::ZERO, radius: 48.0, push: 220.0, way: Vector::ZERO }, |_| FLOOR.to_vec());
         assert!(loose.worlds.is_empty());
         assert!(loose.groups[0].pieces[0].body.is_none());
     }
@@ -746,6 +962,29 @@ mod tests {
         }
         assert_eq!(loose.worlds.len(), WORLDS);
         assert!(loose.worlds.iter().all(|place| place.id != first), "past the cap the oldest world goes");
+    }
+
+    #[test]
+    fn a_world_retired_in_flight_takes_its_flying_pieces_and_leaves_the_lying_ones() {
+        let mut entities = bevy::ecs::world::World::new();
+        let mut loose = Loose::default();
+        for k in 0..WORLDS {
+            let mut group = lying_group(PieceKind::Flat, Vector::new(5000.0 * k as f32, 0.0, 200.0), 30.0);
+            group.pieces[0].entity = entities.spawn_empty().id();
+            let id = loose.world_holding(group.pieces[0].place, |_| FLOOR.to_vec());
+            let place = loose.worlds.iter_mut().find(|place| place.id == id).unwrap();
+            group.pieces[0].body = Some((id, add_piece(&mut place.world, PieceKind::Flat, &group.pieces[0], Vector::ZERO, Vector::ZERO)));
+            loose.groups.push(group);
+        }
+        let lying = Piece { entity: entities.spawn_empty().id(), body: None, ..loose.groups[0].pieces[0] };
+        loose.groups[0].pieces.push(lying);
+        let flier = loose.groups[0].pieces[0].entity;
+        loose.world_holding(Vector::new(0.0, 90_000.0, 0.0), |_| Vec::new());
+        assert_eq!(loose.worlds.len(), WORLDS);
+        assert_eq!(loose.gone, vec![flier], "the oldest world's flying shard goes rather than hang");
+        assert_eq!(loose.groups[0].pieces.len(), 1);
+        assert_eq!(loose.groups[0].pieces[0].entity, lying.entity, "a lying piece of the same group stays");
+        assert!(loose.groups[1..].iter().all(|group| group.pieces[0].body.is_some()), "the other worlds keep their pieces");
     }
 
     fn thrown_by(parent: Entity, kind: PieceKind, pieces: usize, age: f32) -> Group {

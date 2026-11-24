@@ -84,6 +84,9 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.uv = vertex.uv;
     out.uv_b = vertex.uv_b;
     out.color = vertex.color;
+    @if(TAGGED_COLOR) {
+        out.color = vertex.color * vec4(sprites[get_tag(vertex.instance_index)].center, 1.0);
+    }
     out.light = vec3(-1.0);
     return out;
 }

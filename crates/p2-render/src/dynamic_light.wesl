@@ -4,7 +4,6 @@ import bevy_pbr::render::{
     clustered_forward as clustering,
 };
 import package::p2_render::relief::{Relief, highlight};
-import package::p2_render::lamp_shadow::is_lamp;
 
 const LE_NON_INCIDENCE: u32 = 13u;
 const LE_CYLINDER: u32 = 17u;
@@ -53,9 +52,6 @@ fn dynamic_light(world_position: vec4<f32>, normal: vec3<f32>, ranges: clusterin
     var light = vec3(0.0);
     for (var i = ranges.first_point_light_index_offset; i < ranges.first_rect_light_index_offset; i++) {
         let id = clustering::get_clusterable_object_id(i);
-        if is_lamp(id) {
-            continue;
-        }
         let intensity = sample_intensity(id, world_position.xyz, normal);
         if intensity > 0.0 {
             light += clustered_lights.data[id].color_inverse_square_range.rgb * 0.5 * intensity;
@@ -73,9 +69,6 @@ fn dynamic_light_relief(world_position: vec4<f32>, relief: Relief, eye: vec3<f32
     var out = ReliefLight(vec3(0.0), vec3(0.0));
     for (var i = ranges.first_point_light_index_offset; i < ranges.first_rect_light_index_offset; i++) {
         let id = clustering::get_clusterable_object_id(i);
-        if is_lamp(id) {
-            continue;
-        }
         let intensity = sample_intensity(id, world_position.xyz, relief.normal);
         if intensity > 0.0 {
             let color = clustered_lights.data[id].color_inverse_square_range.rgb * 0.5 * intensity;

@@ -74,9 +74,10 @@ pub(crate) fn light_terrain(
     lit.resize(environment.terrain.len(), false);
     let lights: Vec<(&MeshLight, [f32; 3])> =
         frame.iter().filter(|light| light.dynamic).map(|light| (light, light.color(environment.level_brightness))).collect();
+    let mut reaching: Vec<(&MeshLight, [f32; 3])> = Vec::new();
     for (sector, was_lit) in environment.terrain.iter().zip(lit.iter_mut()) {
-        let reaching: Vec<(&MeshLight, [f32; 3])> =
-            lights.iter().filter(|(light, _)| reaches_box(light, sector.min, sector.max)).copied().collect();
+        reaching.clear();
+        reaching.extend(lights.iter().filter(|(light, _)| reaches_box(light, sector.min, sector.max)).copied());
         if reaching.is_empty() && !*was_lit {
             continue;
         }

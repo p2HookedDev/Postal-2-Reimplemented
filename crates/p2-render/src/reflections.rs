@@ -6,21 +6,23 @@
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
-use bevy::camera::Camera;
+use bevy::camera::{Camera, CameraUpdateSystems};
 use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::prepass::{NORMAL_PREPASS_FORMAT, ViewPrepassTextures};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::lifetimeless::Read;
-use bevy::math::{Mat4, Vec4};
+use bevy::math::{Mat4, URect, UVec2, Vec4};
+use bevy::render::diagnostic::RecordDiagnostics;
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::{
-    AddressMode, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedRenderPipelineId, ColorTargetState, ColorWrites, FilterMode,
-    FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-    SamplerDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureSampleType, binding_types,
+    AddressMode, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BufferId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
+    FilterMode, FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
+    SamplerDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType,
+    TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
 use bevy::render::sync_component::SyncComponent;
@@ -33,16 +35,17 @@ use bevy::transform::components::GlobalTransform;
 use crate::components::SceneView;
 use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS, Settings};
 use crate::particle_frame::DrawnParticles;
-use crate::screen_pass::{PassUniformOffset, PassUniforms, modern_level, prepare_pass_uniforms};
+use crate::screen_pass::{PassUniformOffset, PassUniforms, ViewBindGroups, modern_level, prepare_pass_uniforms};
 use crate::shaders::{add_libraries, add_shaders};
 use crate::view::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
 const CLASS_PREPASS_SHADER: Handle<Shader> = uuid_handle!("e2a4f9c1-7b36-4d58-9f0e-3c81b6d27a45");
-const HALF_SIZE_LEVEL: u8 = 2;
-const FULL_SIZE_LEVEL: u8 = 3;
+/// From this level the march reaches its whole length; from the next every pixel steps one pixel at a time.
+const WHOLE_MARCH_LEVEL: u8 = 2;
+const EVERY_PIXEL_LEVEL: u8 = 3;
 const FULL_STRENGTH: f32 = 10.0;
-const FULL_SIZE_STEPS: f32 = 48.0;
+const STEPS_AT_ONE_PIXEL: f32 = 48.0;
 /// Matches the array in `reflections.wesl`.
 const MAX_PUDDLES: usize = 16;
 
@@ -57,7 +60,7 @@ impl Plugin for ReflectionsPlugin {
         add_shaders(app, [(REFLECTIONS_SHADER, Shader::from_wesl(include_str!("reflections.wesl"), "p2_render/reflections.wesl"))]);
         add_shaders(app, [(CLASS_PREPASS_SHADER, Shader::from_wesl(include_str!("reflections_prepass.wesl"), "p2_render/reflections_prepass.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<Reflections>::default())
-            .add_systems(PostUpdate, follow_reflection_settings.after(TransformSystems::Propagate));
+            .add_systems(PostUpdate, follow_reflection_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -104,14 +107,24 @@ pub struct Reflections {
     /// In view space: the centre and the radius of each puddle; `puddle_count.x` of them are set.
     puddles: [Vec4; MAX_PUDDLES],
     puddle_count: Vec4,
+    in_frame: Vec4,
+    from_frame: Vec4,
 }
 
-/// x the strength, 1 at the top level (a surface returns no more than reaches it), y the march's stride in pixels (2 at
-/// half size), z its steps, w the materials level. `None` while off. A ray that meets nothing on screen shows nothing.
+/// The viewport's corner and size as shares of its target, and the map back from a target uv (times zw plus xy). Both
+/// are exactly the identity when the viewport fills the target, so that case reads the same texels as without them.
+fn viewport_in_frame(viewport: URect, target: UVec2) -> (Vec4, Vec4) {
+    let target = target.as_vec2();
+    let (corner, size) = (viewport.min.as_vec2() / target, viewport.size().as_vec2() / target);
+    (Vec4::new(corner.x, corner.y, size.x, size.y), Vec4::new(-corner.x / size.x, -corner.y / size.y, 1.0 / size.x, 1.0 / size.y))
+}
+
+/// x the strength, 1 at the top level (a surface returns no more than reaches it), y the march's stride in pixels (2
+/// below the top level), z its steps, w the materials level. `None` while off. A ray that meets nothing on screen shows nothing.
 pub(crate) fn look(level: u8, strength: u8, materials: u8) -> Option<Vec4> {
     (level > 0 && strength > 0).then(|| {
-        let stride = if level >= FULL_SIZE_LEVEL { 1.0 } else { 2.0 };
-        let steps = FULL_SIZE_STEPS / stride / if level >= HALF_SIZE_LEVEL { 1.0 } else { 2.0 };
+        let stride = if level >= EVERY_PIXEL_LEVEL { 1.0 } else { 2.0 };
+        let steps = STEPS_AT_ONE_PIXEL / stride / if level >= WHOLE_MARCH_LEVEL { 1.0 } else { 2.0 };
         Vec4::new((f32::from(strength) / FULL_STRENGTH).min(1.0), stride, steps, f32::from(materials))
     })
 }
@@ -130,7 +143,9 @@ fn follow_reflection_settings(
     );
     for (entity, camera, place, msaa, shown) in &views {
         // The pass binds the prepass textures as single-sampled.
-        let Some(look) = wanted.filter(|_| camera.is_active && matches!(msaa, Msaa::Off)) else {
+        let viewport = camera.physical_viewport_rect().filter(|rect| rect.size().min_element() > 0);
+        let target = camera.physical_target_size().filter(|size| size.min_element() > 0);
+        let (Some(look), Some(viewport), Some(target)) = (wanted.filter(|_| camera.is_active && matches!(msaa, Msaa::Off)), viewport, target) else {
             if shown.is_some() {
                 commands.entity(entity).remove::<Reflections>();
             }
@@ -143,7 +158,8 @@ fn follow_reflection_settings(
             *puddle = view_from_world.transform_point3(disc.truncate()).extend(disc.w);
         }
         let puddle_count = Vec4::new(discs.len() as f32, 0.0, 0.0, 0.0);
-        let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world, look, puddles, puddle_count };
+        let (in_frame, from_frame) = viewport_in_frame(viewport, target);
+        let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world, look, puddles, puddle_count, in_frame, from_frame };
         if shown != Some(&reflections) {
             commands.entity(entity).insert(reflections);
         }
@@ -235,31 +251,46 @@ fn reflect(
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<ReflectionsPipeline>,
     buffer: Res<PassUniforms<Reflections>>,
+    mut groups: Local<ViewBindGroups<(TextureViewId, TextureId, TextureViewId, BufferId)>>,
     mut ctx: RenderContext,
 ) {
+    let entity = view.entity();
     let (target, prepass, id, offset) = view.into_inner();
-    let (Some(render_pipeline), Some(depth), Some(normals), Some(uniform)) =
-        (pipeline_cache.get_render_pipeline(id.0), prepass.depth_only_view(), prepass.normal_view(), buffer.0.binding())
-    else {
+    let (Some(render_pipeline), Some(depth), Some(depth_texture), Some(normals), Some(uniform), Some(uniforms)) = (
+        pipeline_cache.get_render_pipeline(id.0),
+        prepass.depth_only_view(),
+        prepass.depth.as_ref().map(|depth| depth.texture.texture.id()),
+        prepass.normal_view(),
+        buffer.0.binding(),
+        buffer.0.buffer().map(|uniforms| uniforms.id()),
+    ) else {
         return;
     };
     let post = target.post_process_write();
-    let bind_group = ctx.render_device().create_bind_group(
-        "reflections",
-        &pipeline_cache.get_bind_group_layout(&pipeline.layout),
-        &BindGroupEntries::sequential((post.source, &pipeline.sampler, depth, normals, uniform)),
-    );
-    let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-        label: Some("reflections"),
-        color_attachments: &[Some(RenderPassColorAttachment { view: post.destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
+    let bind_group = groups.get_or_make(entity, (post.source.id(), depth_texture, normals.id(), uniforms), || {
+        ctx.render_device().create_bind_group(
+            "reflections",
+            &pipeline_cache.get_bind_group_layout(&pipeline.layout),
+            &BindGroupEntries::sequential((post.source, &pipeline.sampler, depth, normals, uniform)),
+        )
     });
-    pass.set_render_pipeline(render_pipeline);
-    pass.set_bind_group(0, &bind_group, &[offset.0]);
-    pass.draw(0..3, 0..1);
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let span = diagnostics.time_span(ctx.command_encoder(), "reflections");
+    {
+        let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
+            label: Some("reflections"),
+            color_attachments: &[Some(RenderPassColorAttachment { view: post.destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_render_pipeline(render_pipeline);
+        pass.set_bind_group(0, bind_group, &[offset.0]);
+        pass.draw(0..3, 0..1);
+    }
+    span.end(ctx.command_encoder());
 }
 
 #[cfg(test)]
@@ -270,10 +301,21 @@ mod tests {
     fn levels_pick_the_march() {
         assert_eq!(look(0, 5, 5), None);
         assert_eq!(look(2, 0, 5), None);
-        let (short, half, full) = (look(1, 5, 5).expect("a short march"), look(2, 5, 5).expect("half size"), look(3, 10, 0).expect("full size"));
-        assert_eq!((half.x, half.y, half.w), (0.5, 2.0, 5.0));
+        let (short, strided, full) = (look(1, 5, 5).expect("a short march"), look(2, 5, 5).expect("a stride of two"), look(3, 10, 0).expect("every pixel"));
+        assert_eq!((strided.x, strided.y, strided.w), (0.5, 2.0, 5.0));
         assert_eq!((full.x, full.y, full.w), (1.0, 1.0, 0.0));
-        assert!(0.0 < short.z && short.z < half.z && half.z < full.z);
+        assert!(0.0 < short.z && short.z < strided.z && strided.z < full.z);
+    }
+
+    #[test]
+    fn a_whole_viewport_maps_exactly_and_a_part_maps_back() {
+        let target = UVec2::new(1921, 1080);
+        let (in_frame, from_frame) = viewport_in_frame(URect::from_corners(UVec2::ZERO, target), target);
+        assert_eq!((in_frame, from_frame), (Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::new(0.0, 0.0, 1.0, 1.0)));
+        let (in_frame, from_frame) = viewport_in_frame(URect::new(0, 90, 1920, 990), UVec2::new(1920, 1080));
+        let frame_uv = 0.3 * in_frame.w + in_frame.y;
+        assert!((frame_uv * from_frame.w + from_frame.y - 0.3).abs() < 1e-6);
+        assert!((frame_uv * 1080.0 - (90.0 + 0.3 * 900.0)).abs() < 1e-3);
     }
 
     #[test]

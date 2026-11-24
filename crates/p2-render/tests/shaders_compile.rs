@@ -11,7 +11,7 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 18] = [
+const ENTRIES: [(&str, &[&str]); 24] = [
     ("actor_light", &[]),
     ("actor_light", &["VISIBILITY_RANGE_DITHER"]),
     ("mesh_light", &["VISIBILITY_RANGE_DITHER"]),
@@ -21,6 +21,12 @@ const ENTRIES: [(&str, &[&str]); 18] = [
     ("terrain", &[]),
     ("terrain_layer", &["TERRAIN_LAYER"]),
     ("blended", &[]),
+    ("blended", &["PREMULTIPLY_ALPHA", "BLEND_PREMULTIPLIED_ALPHA"]),
+    ("lightmapped", &["PREMULTIPLY_ALPHA", "BLEND_MULTIPLY"]),
+    ("lightmapped", &["P2_SEE_THROUGH"]),
+    ("mesh_light", &["P2_SEE_THROUGH"]),
+    ("particle", &["TAGGED_COLOR"]),
+    ("debris", &[]),
     ("particle", &[]),
     ("tone", &[]),
     ("reflections", &[]),

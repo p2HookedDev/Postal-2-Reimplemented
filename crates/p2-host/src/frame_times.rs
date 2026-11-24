@@ -93,13 +93,12 @@ pub enum MeshWrite {
     Beam,
     SpriteGrid,
     Fluid,
-    Corona,
     ActorLight,
     TerrainLight,
 }
 
-pub const MESH_WRITERS: [&str; 7] = ["strips", "beams", "sprite grids", "fluids", "coronas", "actor vertex light", "terrain light"];
-pub static MESH_WRITES: [std::sync::atomic::AtomicU32; 7] = [const { std::sync::atomic::AtomicU32::new(0) }; 7];
+pub const MESH_WRITERS: [&str; 6] = ["strips", "beams", "sprite grids", "fluids", "actor vertex light", "terrain light"];
+pub static MESH_WRITES: [std::sync::atomic::AtomicU32; 6] = [const { std::sync::atomic::AtomicU32::new(0) }; 6];
 
 pub fn mesh_written(by: MeshWrite) {
     MESH_WRITES[by as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);

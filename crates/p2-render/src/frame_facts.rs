@@ -17,6 +17,8 @@ pub struct FrameFacts {
     pub eye_to_view_target: Option<f32>,
     /// Only the actors whose distance is above 0: the others cull nothing.
     pub cull_distances: FxHashMap<ObjectId, f32>,
+    /// Moves on whenever `cull_distances` changes, so a reader can tell without comparing the map.
+    pub cull_version: u32,
     pub person_hits: Vec<PersonHit>,
     /// The level's clock in game seconds: it stands while the game is paused.
     pub level_time: f32,

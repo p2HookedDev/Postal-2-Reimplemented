@@ -10,17 +10,16 @@ use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::lifetimeless::Read;
-use bevy::math::UVec2;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::{
-    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, CachedRenderPipelineId, ColorTargetState,
-    ColorWrites, Extent3d, FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
-    SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages, binding_types,
+    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, BufferId, CachedRenderPipelineId,
+    ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines,
+    TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
 use bevy::render::sync_component::SyncComponent;
@@ -32,7 +31,8 @@ use bevy::shader::Shader;
 use crate::components::SceneView;
 use p2_host::display::{MODERN_BOUNCE_LIGHT, Settings};
 use crate::MainPassExtraSystems;
-use crate::shaders::add_shaders;
+use crate::screen_pass::{HalfThenFull, ScreenStep, ViewBindGroups, half_texture, half_viewport};
+use crate::shaders::{add_libraries, add_shaders};
 
 const BOUNCE_SHADER: Handle<Shader> = uuid_handle!("4f0d2b7e-9c31-4a8e-b6d5-1e7a3c90f2d8");
 const GATHERED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -59,7 +59,8 @@ impl Plugin for BounceLightPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        add_shaders(app, [(BOUNCE_SHADER, Shader::from_wesl(include_str!("bounce.wesl"), "p2_render/bounce.wesl"))]);
+        add_libraries(app);
+        add_shaders(app, [(BOUNCE_SHADER,Shader::from_wesl(include_str!("bounce.wesl"), "p2_render/bounce.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<BounceLight>::default()).add_systems(PostUpdate, follow_bounce_settings);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -78,10 +79,6 @@ pub struct BounceLight(f32);
 
 fn strength(level: u8) -> Option<f32> {
     (level > 0).then(|| f32::from(level) * STRENGTH_PER_LEVEL)
-}
-
-pub(crate) fn half_size(full: UVec2) -> UVec2 {
-    (full + UVec2::ONE) / 2
 }
 
 fn follow_bounce_settings(mut commands: Commands, settings: Option<Res<Settings>>, views: Query<(Entity, &Camera, &Msaa, Option<&BounceLight>), With<SceneView>>) {
@@ -167,7 +164,7 @@ impl SpecializedRenderPipeline for BouncePipeline {
     }
 }
 
-/// The texture cache hands out a new texture when the view's size changes.
+/// The half-size texture covers the viewport; the texture cache hands out a new one when the viewport's size changes.
 fn prepare_bounce_views(
     mut commands: Commands,
     pipeline_cache: Res<PipelineCache>,
@@ -175,25 +172,13 @@ fn prepare_bounce_views(
     pipeline: Res<BouncePipeline>,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
-    views: Query<(Entity, &ExtractedView, &ExtractedCamera), With<BounceLight>>,
+    views: Query<(Entity, &ExtractedView), With<BounceLight>>,
 ) {
-    for (entity, view, camera) in &views {
-        let Some(size) = camera.physical_target_size.filter(|size| size.min_element() > 0).map(half_size) else {
+    for (entity, view) in &views {
+        let Some(size) = half_viewport(view) else {
             continue;
         };
-        let gathered = texture_cache.get(
-            &render_device,
-            TextureDescriptor {
-                label: Some("bounce light"),
-                size: Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: GATHERED_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            },
-        );
+        let gathered = half_texture(&mut texture_cache, &render_device, "bounce light", GATHERED_FORMAT, size);
         let gather = pipelines.specialize(&pipeline_cache, &pipeline, None);
         let composite = pipelines.specialize(&pipeline_cache, &pipeline, Some(view.target_format));
         commands.entity(entity).insert(BounceView { gather, composite, gathered });
@@ -201,56 +186,46 @@ fn prepare_bounce_views(
 }
 
 fn bounce(
-    view: ViewQuery<(&ViewTarget, &ViewPrepassTextures, &ViewUniformOffset, &BounceLight, &BounceView)>,
+    view: ViewQuery<(&ViewTarget, &ExtractedCamera, &ViewPrepassTextures, &ViewUniformOffset, &BounceLight, &BounceView)>,
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<BouncePipeline>,
     view_uniforms: Res<ViewUniforms>,
+    mut scene_groups: Local<ViewBindGroups<(TextureViewId, TextureId, TextureViewId, BufferId)>>,
+    mut gathered_groups: Local<ViewBindGroups<(TextureViewId, TextureId, TextureViewId, BufferId)>>,
     mut ctx: RenderContext,
 ) {
-    let (target, prepass, offset, light, prepared) = view.into_inner();
-    let (Some(gather), Some(composite), Some(depth), Some(normals), Some(uniform)) = (
+    let entity = view.entity();
+    let (target, camera, prepass, offset, light, prepared) = view.into_inner();
+    let (Some(gather), Some(composite), Some(depth), Some(depth_texture), Some(normals), Some(uniform), Some(uniforms)) = (
         pipeline_cache.get_render_pipeline(prepared.gather),
         pipeline_cache.get_render_pipeline(prepared.composite),
         prepass.depth_only_view(),
+        prepass.depth.as_ref().map(|depth| depth.texture.texture.id()),
         prepass.normal_view(),
         view_uniforms.uniforms.binding(),
+        view_uniforms.uniforms.buffer().map(|buffer| buffer.id()),
     ) else {
         return;
     };
     let layout = pipeline_cache.get_bind_group_layout(&pipeline.layout);
     let device = ctx.render_device();
-    let from_scene = device.create_bind_group("bounce light gather", &layout, &BindGroupEntries::sequential((target.main_texture_view(), depth, normals, uniform.clone())));
-    let from_gathered = device.create_bind_group("bounce light", &layout, &BindGroupEntries::sequential((&prepared.gathered.default_view, depth, normals, uniform)));
-    {
-        let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("bounce light gather"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &prepared.gathered.default_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations::default(),
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_render_pipeline(gather);
-        pass.set_bind_group(0, &from_scene, &[offset.offset]);
-        pass.set_blend_constant(LinearRgba::rgb(light.0, light.0, light.0));
-        pass.draw(0..3, 0..1);
-    }
-    let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-        label: Some("bounce light"),
-        color_attachments: &[Some(target.get_color_attachment())],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
+    let scene = target.main_texture_view();
+    let from_scene = scene_groups.get_or_make(entity, (scene.id(), depth_texture, normals.id(), uniforms), || {
+        device.create_bind_group("bounce light gather", &layout, &BindGroupEntries::sequential((scene, depth, normals, uniform.clone())))
     });
-    pass.set_render_pipeline(composite);
-    pass.set_bind_group(0, &from_gathered, &[offset.offset]);
-    pass.draw(0..3, 0..1);
+    let gathered = &prepared.gathered.default_view;
+    let from_gathered = gathered_groups.get_or_make(entity, (gathered.id(), depth_texture, normals.id(), uniforms), || {
+        device.create_bind_group("bounce light", &layout, &BindGroupEntries::sequential((gathered, depth, normals, uniform)))
+    });
+    HalfThenFull {
+        span: "bounce",
+        half: gathered,
+        march: ScreenStep { label: "bounce light gather", pipeline: gather, bind_group: from_scene },
+        march_blend_constant: Some(LinearRgba::rgb(light.0, light.0, light.0)),
+        composite: ScreenStep { label: "bounce light", pipeline: composite, bind_group: from_gathered },
+        offset: offset.offset,
+    }
+    .draw(&mut ctx, target, camera);
 }
 
 #[cfg(test)]
@@ -263,11 +238,5 @@ mod tests {
         let levels: Vec<f32> = (1..=10).filter_map(strength).collect();
         assert_eq!(levels.len(), 10);
         assert!(levels.windows(2).all(|pair| pair[0] < pair[1]));
-    }
-
-    #[test]
-    fn half_size_covers_odd_sides() {
-        assert_eq!(half_size(UVec2::new(1921, 1080)), UVec2::new(961, 540));
-        assert_eq!(half_size(UVec2::ONE), UVec2::ONE);
     }
 }

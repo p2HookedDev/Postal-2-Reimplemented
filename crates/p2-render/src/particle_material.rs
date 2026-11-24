@@ -30,6 +30,9 @@ const PARTICLE_SHADER: Handle<Shader> = uuid_handle!("6f0c2d6e-8a51-4c4f-9a43-2b
 /// entity has the index of its header as its `MeshTag`.
 pub(crate) const PARTICLE_SPRITES: Handle<ShaderBuffer> = uuid_handle!("3b8e5f1a-74c2-4d09-b6e1-9a0c2f7d4e53");
 
+/// One record per corona, at its entity's `MeshTag`: the corona's colour in the record's `center`.
+pub(crate) const CORONA_COLORS: Handle<ShaderBuffer> = uuid_handle!("9d41c7e2-5b3a-4f86-a0d9-6e2f18b7c304");
+
 pub(crate) const RECORD_WORDS: usize = 20;
 
 pub struct ParticlePlugin;
@@ -218,6 +221,7 @@ impl ParticleMaterial {
         let mut material = Self::sprite(texture, SpriteBlend::Translucent);
         material.params.fogged = 0;
         material.no_depth = true;
+        material.sprites = CORONA_COLORS;
         material
     }
 }
@@ -252,11 +256,12 @@ pub(crate) fn sprite_blend(blending: Option<Blending>, style: Option<ERenderStyl
 pub struct ParticleKey {
     style: DrawStyle,
     no_depth: bool,
+    tagged_color: bool,
 }
 
 impl From<&ParticleMaterial> for ParticleKey {
     fn from(material: &ParticleMaterial) -> Self {
-        Self { style: material.style, no_depth: material.no_depth }
+        Self { style: material.style, no_depth: material.no_depth, tagged_color: material.sprites.id() == CORONA_COLORS.id() }
     }
 }
 
@@ -290,6 +295,9 @@ impl Material for ParticleMaterial {
         descriptor.primitive.cull_mode = None;
         if !layout.0.contains(Mesh::ATTRIBUTE_COLOR) {
             descriptor.vertex.shader_defs.push("PARTICLE_INSTANCES".into());
+        }
+        if key.bind_group_data.tagged_color {
+            descriptor.vertex.shader_defs.push("TAGGED_COLOR".into());
         }
         // Sprites lying on surfaces are coplanar with them; with another triangulation they z-fought. Pulled towards the camera
         // (reversed Z: up) by a slope bias, which grows at grazing views where they fought.
@@ -333,6 +341,11 @@ mod tests {
         sprite_blend, takes_light,
     };
     use p2_particles::EmitterProperties;
+
+    #[test]
+    fn the_shader_tells_a_lying_sprite_by_the_same_number() {
+        assert_eq!(crate::shaders::shader_const(include_str!("particle.wesl"), "LIT_LYING"), f64::from(LIT_LYING));
+    }
 
     fn material(use_direction_as: DirectionUsage, draw_style: DrawStyle) -> ParticleMaterial {
         ParticleMaterial::new(Handle::default(), &EmitterProperties { use_direction_as, draw_style, ..EmitterProperties::default() })

@@ -4,7 +4,7 @@
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
-use bevy::camera::Camera;
+use bevy::camera::{Camera, CameraUpdateSystems};
 use bevy::camera::visibility::InheritedVisibility;
 use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::prepass::ViewPrepassTextures;
@@ -15,15 +15,15 @@ use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resourc
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::lifetimeless::Read;
-use bevy::math::{Mat4, Vec3, Vec4};
+use bevy::math::{Mat4, UVec2, UVec4, Vec3, Vec4};
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::{
-    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, CachedRenderPipelineId,
-    ColorTargetState, ColorWrites, DynamicUniformBuffer, Extent3d, FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureSampleType, TextureUsages, binding_types,
+    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, BufferId, CachedRenderPipelineId,
+    ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline,
+    SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
-use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
+use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
 use bevy::render::sync_component::SyncComponent;
 use bevy::render::texture::{CachedTexture, TextureCache};
 use bevy::render::view::{ExtractedView, Msaa, ViewTarget};
@@ -39,6 +39,7 @@ use crate::level_collision::LevelCollision;
 use crate::MainPassExtraSystems;
 use crate::lamps::{Lamp, Placed, lamp_falloff};
 use crate::modern::linear_light;
+use crate::screen_pass::{HalfThenFull, PassUniformOffset, PassUniforms, ScreenStep, ViewBindGroups, half_texture, prepare_pass_uniforms};
 use crate::shaders::{add_libraries, add_shaders};
 use crate::view::ShownScene;
 
@@ -67,16 +68,16 @@ impl Plugin for LampFogPlugin {
         add_libraries(app);
         add_shaders(app, [(LAMP_FOG_SHADER, Shader::from_wesl(include_str!("lamp_fog.wesl"), "p2_render/lamp_fog.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<LampFog>::default())
-            .add_systems(PostUpdate, follow_lamp_fog_settings.after(TransformSystems::Propagate));
+            .add_systems(PostUpdate, follow_lamp_fog_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
         render_app
-            .init_gpu_resource::<LampFogBuffer>()
+            .init_gpu_resource::<PassUniforms<LampFog>>()
             .init_gpu_resource::<SpecializedRenderPipelines<LampFogPipeline>>()
             .add_systems(RenderStartup, init_lamp_fog_pipeline)
             .add_systems(Render, prepare_pipelines.in_set(RenderSystems::Prepare))
-            .add_systems(Render, (prepare_uniforms, prepare_textures).in_set(RenderSystems::PrepareResources))
+            .add_systems(Render, (prepare_pass_uniforms::<LampFog>, prepare_textures).in_set(RenderSystems::PrepareResources))
             .add_systems(Core3d, draw_fog.in_set(MainPassExtraSystems::LampFog));
     }
 }
@@ -97,6 +98,8 @@ pub struct LampFog {
     lamps: [FogLamp; FOG_LAMPS],
     /// x the density a unit, y the lamps, z the steps, w the reach into the sky.
     look: Vec4,
+    /// The view's part of the target in pixels: corner in xy, size in zw.
+    viewport: Vec4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,7 +198,8 @@ fn follow_lamp_fog_settings(
                 along: source.spot.map_or(Vec4::ZERO, |(along, _)| view_from_world.transform_vector3(along).extend(0.0)),
             })
         });
-        let fog = LampFog { view_from_clip: camera.clip_from_view().inverse(), lamps, look: Vec4::new(density, picked.len() as f32, STEPS, VIEW_REACH) };
+        let viewport = camera.physical_viewport_rect().map_or(Vec4::ZERO, |rect| UVec4::new(rect.min.x, rect.min.y, rect.width(), rect.height()).as_vec4());
+        let fog = LampFog { view_from_clip: camera.clip_from_view().inverse(), lamps, look: Vec4::new(density, picked.len() as f32, STEPS, VIEW_REACH), viewport };
         if shown_fog != Some(&fog) {
             commands.entity(entity).insert(fog);
         }
@@ -203,7 +207,7 @@ fn follow_lamp_fog_settings(
 }
 
 impl SyncComponent<RenderApp> for LampFog {
-    type Target = (Self, LampFogPipelineIds, LampFogOffset, LampFogTexture);
+    type Target = (Self, LampFogPipelineIds, PassUniformOffset<Self>, LampFogTexture);
 }
 
 impl ExtractComponent<RenderApp> for LampFog {
@@ -235,15 +239,9 @@ pub struct LampFogPipelineIds {
     composite: CachedRenderPipelineId,
 }
 
-#[derive(Component)]
-pub struct LampFogOffset(u32);
-
-/// The half-size march. From Bevy's texture cache by size, so a resized view takes a new one.
+/// The half-size march.
 #[derive(Component)]
 pub struct LampFogTexture(CachedTexture);
-
-#[derive(Resource, Default)]
-pub struct LampFogBuffer(DynamicUniformBuffer<LampFog>);
 
 fn init_lamp_fog_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>) {
     let march = BindGroupLayoutDescriptor::new(
@@ -299,90 +297,55 @@ fn prepare_pipelines(
     }
 }
 
-fn prepare_uniforms(
-    mut commands: Commands,
-    views: Query<(Entity, &LampFog), With<ExtractedView>>,
-    mut buffer: ResMut<LampFogBuffer>,
-    render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
-) {
-    let Some(mut writer) = buffer.0.get_writer(views.iter().len(), &render_device, &render_queue) else {
-        return;
-    };
-    for (view, fog) in &views {
-        let offset = writer.write(fog);
-        commands.entity(view).insert(LampFogOffset(offset));
-    }
-}
-
 fn prepare_textures(mut commands: Commands, mut cache: ResMut<TextureCache>, render_device: Res<RenderDevice>, views: Query<(Entity, &ExtractedView), With<LampFog>>) {
     for (entity, view) in &views {
-        let size = Extent3d { width: view.viewport.z.div_ceil(2).max(1), height: view.viewport.w.div_ceil(2).max(1), depth_or_array_layers: 1 };
-        let texture = cache.get(
-            &render_device,
-            TextureDescriptor {
-                label: Some("lamp_fog_march"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: MARCH_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            },
-        );
+        let size = UVec2::new(view.viewport.z.div_ceil(2).max(1), view.viewport.w.div_ceil(2).max(1));
+        let texture = half_texture(&mut cache, &render_device, "lamp_fog_march", MARCH_FORMAT, size);
         commands.entity(entity).insert(LampFogTexture(texture));
     }
 }
 
 fn draw_fog(
-    view: ViewQuery<(&ViewTarget, &ViewPrepassTextures, &LampFogPipelineIds, &LampFogOffset, &LampFogTexture)>,
+    view: ViewQuery<(&ViewTarget, &ExtractedCamera, &ViewPrepassTextures, &LampFogPipelineIds, &PassUniformOffset<LampFog>, &LampFogTexture)>,
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<LampFogPipeline>,
-    buffer: Res<LampFogBuffer>,
+    buffer: Res<PassUniforms<LampFog>>,
+    mut march_groups: Local<ViewBindGroups<(TextureId, BufferId)>>,
+    mut composite_groups: Local<ViewBindGroups<(TextureId, BufferId, TextureViewId)>>,
     mut ctx: RenderContext,
 ) {
-    let (target, prepass, ids, offset, marched) = view.into_inner();
-    let (Some(march), Some(composite), Some(depth), Some(uniform), Some(uniform_again)) = (
+    let entity = view.entity();
+    let (target, camera, prepass, ids, offset, marched) = view.into_inner();
+    let (Some(march), Some(composite), Some(depth), Some(depth_texture), Some(uniform), Some(uniform_again), Some(fogs)) = (
         pipeline_cache.get_render_pipeline(ids.march),
         pipeline_cache.get_render_pipeline(ids.composite),
         prepass.depth_only_view(),
+        prepass.depth.as_ref().map(|depth| depth.texture.texture.id()),
         buffer.0.binding(),
         buffer.0.binding(),
+        buffer.0.buffer().map(|fogs| fogs.id()),
     ) else {
         return;
     };
-    let march_group =
-        ctx.render_device().create_bind_group("lamp_fog_march", &pipeline_cache.get_bind_group_layout(&pipeline.march), &BindGroupEntries::sequential((depth, uniform)));
-    let composite_group = ctx.render_device().create_bind_group(
-        "lamp_fog",
-        &pipeline_cache.get_bind_group_layout(&pipeline.composite),
-        &BindGroupEntries::sequential((depth, uniform_again, &marched.0.default_view)),
-    );
-    {
-        let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("lamp_fog_march"),
-            color_attachments: &[Some(RenderPassColorAttachment { view: &marched.0.default_view, depth_slice: None, resolve_target: None, ops: Operations::default() })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_render_pipeline(march);
-        pass.set_bind_group(0, &march_group, &[offset.0]);
-        pass.draw(0..3, 0..1);
-    }
-    let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-        label: Some("lamp_fog"),
-        color_attachments: &[Some(target.get_color_attachment())],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
+    let march_group = march_groups.get_or_make(entity, (depth_texture, fogs), || {
+        ctx.render_device().create_bind_group("lamp_fog_march", &pipeline_cache.get_bind_group_layout(&pipeline.march), &BindGroupEntries::sequential((depth, uniform)))
     });
-    pass.set_render_pipeline(composite);
-    pass.set_bind_group(0, &composite_group, &[offset.0]);
-    pass.draw(0..3, 0..1);
+    let composite_group = composite_groups.get_or_make(entity, (depth_texture, fogs, marched.0.default_view.id()), || {
+        ctx.render_device().create_bind_group(
+            "lamp_fog",
+            &pipeline_cache.get_bind_group_layout(&pipeline.composite),
+            &BindGroupEntries::sequential((depth, uniform_again, &marched.0.default_view)),
+        )
+    });
+    HalfThenFull {
+        span: "lamp_fog",
+        half: &marched.0.default_view,
+        march: ScreenStep { label: "lamp_fog_march", pipeline: march, bind_group: march_group },
+        march_blend_constant: None,
+        composite: ScreenStep { label: "lamp_fog", pipeline: composite, bind_group: composite_group },
+        offset: offset.0,
+    }
+    .draw(&mut ctx, target, camera);
 }
 
 #[cfg(test)]

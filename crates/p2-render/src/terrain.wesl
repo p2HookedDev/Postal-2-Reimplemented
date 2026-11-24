@@ -1,4 +1,4 @@
-// A terrain sector's layers in one opaque pass: per layer its texture at its own UV, decals at alpha 1, the baked
+// A terrain sector's layers in one opaque pass: per layer its texture at its own UV, the baked
 // lighting (display space 0..1) as `Modulate2X` clamped per layer, then mixed over the layers below in linear space. Fog
 // once on the result (fog mixes towards a constant, so once on the mix equals the mix of fogged layers).
 
@@ -9,7 +9,7 @@ import bevy_pbr::{
         mesh_view_bindings::view,
     },
 };
-import package::p2_render::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
+import package::p2_render::projector::{cluster_ranges, project, TARGET_TERRAIN};
 import package::p2_render::dynamic_light::dynamic_light;
 import package::p2_render::layer_bindings::post_lighting;
 import package::p2_render::modern::{modern_surface, with_light};
@@ -178,7 +178,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var dynamic = vec3(0.0);
     if modern {
         // Terrain has no material class and no darken case.
-        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, ranges, f32(terrain.count.y), vec4(0.0), false);
+        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false);
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
     }
     var color = vec3(0.0);
@@ -210,7 +210,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
             }
         }
         pbr_input.material.base_color = vec4(texel.rgb, 1.0);
-        apply_decals(&pbr_input, ranges);
         if modern {
             let lit = modern_surface(pbr_input.material.base_color.rgb, position, bumped, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface);
             color = mix(color, with_light(lit, pbr_input.material.base_color.rgb, dynamic), alpha);

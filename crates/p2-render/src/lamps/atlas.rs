@@ -41,10 +41,7 @@ const ATLAS_ROWS: u32 = ATLAS_UNITS * 3 / 4;
 const TOP_LEVEL: u32 = 3;
 const UNMAPPED_LEVEL: u32 = 7;
 
-/// Shaders tell a lamp from a retail dynamic light by this bit in the shadow depth bias field, which holds its tile.
-/// Under 2^24, so it stays exact as a float, and far above any real bias.
-pub(super) const LAMP_MARK: u32 = 1 << 20;
-pub(super) const UNMAPPED: u32 = LAMP_MARK | (UNMAPPED_LEVEL << 16);
+pub(super) const UNMAPPED: u32 = UNMAPPED_LEVEL << 16;
 
 pub(super) const NEAR: f32 = 8.0;
 pub(super) const GUARD_TEXELS: f32 = 3.0;
@@ -62,7 +59,7 @@ impl Tile {
     }
 
     fn packed(self) -> u32 {
-        LAMP_MARK | self.x | (self.y << 8) | (self.level << 16)
+        self.x | (self.y << 8) | (self.level << 16)
     }
 }
 
@@ -622,6 +619,15 @@ pub(super) fn draw_lamp_atlas(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaders::shader_const;
+
+    #[test]
+    fn the_shader_reads_the_atlas_as_it_is_drawn() {
+        let shader = include_str!("../lamp_shadow.wesl");
+        assert_eq!(shader_const(shader, "ATLAS_UNITS"), f64::from(ATLAS_UNITS));
+        assert_eq!(shader_const(shader, "ATLAS_GUARD") as f32, GUARD_TEXELS);
+        assert_eq!(shader_const(shader, "ATLAS_UNMAPPED"), f64::from(UNMAPPED_LEVEL));
+    }
 
     #[test]
     fn tiles_never_overlap_and_stay_in_the_atlas() {
@@ -659,11 +665,10 @@ mod tests {
     }
 
     #[test]
-    fn a_packed_tile_stays_exact_as_a_float_and_keeps_its_mark() {
+    fn a_packed_tile_stays_exact_as_a_float() {
         let tile = Tile { x: 127, y: 126, level: 3 };
         let through_float = tile.packed() as f32 as u32;
         assert_eq!(through_float, tile.packed());
-        assert!(through_float >= LAMP_MARK);
         assert_eq!((through_float & 255, (through_float >> 8) & 255, (through_float >> 16) & 15), (127, 126, 3));
     }
 

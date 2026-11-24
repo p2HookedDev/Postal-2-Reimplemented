@@ -2,7 +2,7 @@
 // offset that differs over every 4 by 4 pixels. `composite` averages one such block, each texel weighted by how near
 // its depth lies to the pixel's, and adds the light to the frame.
 
-import package::p2_render::screen_pass::view_at;
+import package::p2_render::screen_pass::{pattern, texel_at, view_at};
 
 struct FogLamp {
     // xyz the place in view space, w the fog's reach.
@@ -17,6 +17,8 @@ struct LampFog {
     lamps: array<FogLamp, 4>,
     // x density a unit, y lamps, z steps, w the reach into the sky.
     look: vec4<f32>,
+    // The view's part of the target in pixels: corner in xy, size in zw.
+    viewport: vec4<f32>,
 }
 
 @group(0) @binding(0) var depth: texture_depth_2d;
@@ -33,7 +35,7 @@ struct FullscreenOutput {
 
 fn texel_of(uv: vec2<f32>) -> vec2<i32> {
     let size = vec2<i32>(textureDimensions(depth));
-    return clamp(vec2<i32>(uv * vec2<f32>(size)), vec2(0), size - 1);
+    return clamp(texel_at(uv, fog.viewport), vec2(0), size - 1);
 }
 
 // To the surface, or the reach into the sky, which stores depth 0.
@@ -43,14 +45,6 @@ fn ray_length(uv: vec2<f32>) -> f32 {
         return fog.look.w;
     }
     return min(length(view_at(fog.view_from_clip, uv, z)), fog.look.w);
-}
-
-// 0 to 15, each once over a 4 by 4 block, in ordered dither order.
-fn dither(pixel: vec2<u32>) -> f32 {
-    let x = pixel.x & 3u;
-    let y = pixel.y & 3u;
-    let mixed = x ^ y;
-    return f32(((mixed & 1u) << 3u) | ((y & 1u) << 2u) | (mixed & 2u) | ((y & 2u) >> 1u));
 }
 
 // As `lamp_falloff` in `lamps.rs`.
@@ -92,7 +86,7 @@ fn march(in: FullscreenOutput) -> @location(0) vec4<f32> {
     if end > start {
         let steps = u32(fog.look.z);
         let stride = (end - start) / f32(steps);
-        var t = start + stride * (dither(vec2<u32>(in.position.xy)) + 0.5) / 16.0;
+        var t = start + stride * (f32(pattern(vec2<u32>(in.position.xy))) + 0.5) / 16.0;
         for (var s = 0u; s < steps; s++) {
             let p = way * t;
             for (var i = 0u; i < count; i++) {

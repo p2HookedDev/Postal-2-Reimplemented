@@ -214,7 +214,7 @@ fn a_push_from_the_left_throws_lying_droplets_to_the_right() {
     let (mut app, frame) = thrown(Under::AFloor, BLOOD);
     run_for(&mut app, 3.0);
     let lying = red_middle(&frame).expect("no droplet lies on the floor three seconds after the last was thrown");
-    let push = Blast { at: Vector::new(-150.0, -40.0, -6.0), radius: 400.0, push: 120.0 };
+    let push = Blast { at: Vector::new(-150.0, -40.0, -6.0), radius: 400.0, push: 120.0, way: Vector::ZERO };
     app.world_mut().resource_mut::<DrawnParticles>().blasts.push(push);
     run_for(&mut app, 2.0);
     let later = red_middle(&frame).expect("the push threw the droplets out of sight");

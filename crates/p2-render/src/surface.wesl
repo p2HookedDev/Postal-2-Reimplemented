@@ -3,10 +3,10 @@
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     pbr_types::PbrInput,
-    clustered_forward::ClusterableObjectIndexRanges,
 };
 import package::p2_render::color::{to_display, to_linear};
-import package::p2_render::layer_bindings::{ShaderLayers, lit_color};
+import package::p2_render::layer_bindings::lit_color;
+import package::p2_render::layer_types::ShaderLayers;
 import package::p2_render::modern::{allows_gloss, ambient_occlusion, classed_surface, modern_glass, modern_surface, with_light};
 import package::p2_render::modern_base::LampLight;
 import package::p2_render::sun_shadow::sun_seen_from;
@@ -22,12 +22,12 @@ struct ModernLight {
 }
 
 // The sun sees `normal`, the lamps light `bumped`.
-fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, ranges: ClusterableObjectIndexRanges, flag: f32, blend: vec4<f32>, darken: bool) -> ModernLight {
+fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool) -> ModernLight {
     let position = pbr_input.world_position.xyz;
     let seen = sun_seen_from(sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
     let gloss = allows_gloss(flag) && !darken;
     let surface = classed_surface(flag, blend);
-    let lamps = lamp_light(in, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, surface, flag);
+    let lamps = lamp_light(in, position, bumped, gloss, surface, flag);
     return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface);
 }
 

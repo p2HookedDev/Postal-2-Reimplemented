@@ -121,6 +121,15 @@ pub fn view_model_lighting(environment: &LightEnvironment, map: &MapLights, leve
 mod tests {
     use super::*;
     use crate::level_collision::LevelAlbedos;
+    use crate::shaders::shader_const;
+
+    #[test]
+    fn the_shader_tells_the_light_kinds_by_the_same_numbers() {
+        let shader = include_str!("../actor_light.wesl");
+        for (name, kind) in [("SUN_KIND", SUN_KIND), ("LAMP_KIND", LAMP_KIND), ("FILL_KIND", FILL_KIND)] {
+            assert_eq!(shader_const(shader, name), f64::from(kind), "{name}");
+        }
+    }
     use p2_assets::Model;
     use p2_collision::{BspHulls, MeshCollision, MeshSet};
     use p2_math::Rotator;

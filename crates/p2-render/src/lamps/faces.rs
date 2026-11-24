@@ -3,6 +3,7 @@
 //! two, split from and merged back into the largest; a face no longer wanted keeps its square until another needs it.
 
 use bevy::math::Vec3;
+use rustc_hash::FxHashMap;
 
 use super::atlas::FACE_AXES;
 
@@ -175,13 +176,15 @@ fn levels_down(place: usize) -> usize {
 pub(super) struct FaceBook {
     region: Region,
     held: Vec<Held>,
+    /// Each held face's place in `held`, by its lamp and face.
+    places: FxHashMap<(u32, u8), usize>,
     picks: u32,
     ahead: Vec<(Want, f32)>,
 }
 
 impl FaceBook {
     pub(super) fn new(atlas_side: u32) -> Self {
-        Self { region: Region::new(atlas_side), held: Vec::new(), picks: 0, ahead: Vec::new() }
+        Self { region: Region::new(atlas_side), held: Vec::new(), places: FxHashMap::default(), picks: 0, ahead: Vec::new() }
     }
 
     pub(super) fn slots(&self) -> Vec<FaceSlot> {
@@ -203,7 +206,22 @@ impl FaceBook {
     }
 
     fn held_mut(&mut self, lamp: u32, face: u8) -> Option<&mut Held> {
-        self.held.iter_mut().find(|held| held.slot.lamp == lamp && held.slot.face == face)
+        let &at = self.places.get(&(lamp, face))?;
+        self.held.get_mut(at)
+    }
+
+    fn hold(&mut self, held: Held) {
+        self.places.insert((held.slot.lamp, held.slot.face), self.held.len());
+        self.held.push(held);
+    }
+
+    fn let_go(&mut self, at: usize) -> Held {
+        let gone = self.held.swap_remove(at);
+        self.places.remove(&(gone.slot.lamp, gone.slot.face));
+        if let Some(moved) = self.held.get(at) {
+            self.places.insert((moved.slot.lamp, moved.slot.face), at);
+        }
+        gone
     }
 
     /// A square for a face. With none free it comes from the faces held only for lying ahead, then the faces longest
@@ -221,7 +239,7 @@ impl FaceBook {
                 (None, Sight::Seen) => spare().map(|(at, held)| (at, Some(Want { lamp: held.slot.lamp, face: held.slot.face, level: held.level, least: held.least })))?,
                 (None, Sight::Ahead) => return None,
             };
-            let gone = self.held.swap_remove(at).slot;
+            let gone = self.let_go(at).slot;
             self.region.give((gone.x, gone.y), usize::from(gone.level));
             waiting.extend(asks_again);
         }
@@ -275,7 +293,7 @@ impl FaceBook {
                     let smaller = std::mem::replace(&mut held.slot, slot);
                     self.region.give((smaller.x, smaller.y), usize::from(smaller.level));
                 }
-                None => self.held.push(Held { slot, wanted_at: picks, level: want.level, least: want.least, sight: Sight::Seen }),
+                None => self.hold(Held { slot, wanted_at: picks, level: want.level, least: want.least, sight: Sight::Seen }),
             }
         }
         if waiting.is_empty() {
@@ -305,7 +323,7 @@ impl FaceBook {
                 spent += side * side;
                 given += 1;
                 let slot = FaceSlot { lamp: want.lamp, face: want.face, x, y, level: level as u8 };
-                self.held.push(Held { slot, wanted_at: picks, level: want.level, least: want.least, sight: Sight::Ahead });
+                self.hold(Held { slot, wanted_at: picks, level: want.level, least: want.least, sight: Sight::Ahead });
             }
         }
         self.ahead = ahead;
@@ -315,8 +333,14 @@ impl FaceBook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaders::shader_const;
 
     const SIDE: u32 = 8192;
+
+    #[test]
+    fn the_shader_reads_a_detail_corner_in_the_same_unit() {
+        assert_eq!(shader_const(include_str!("../lamp_shadow.wesl"), "DETAIL_UNIT"), f64::from(DETAIL_UNIT));
+    }
 
     fn lamp(number: u32, at: Vec3) -> FaceLamp {
         FaceLamp { number, at, spot: None, reach: [1600.0; 6], plain_face: 64, ahead: None }
@@ -455,13 +479,29 @@ mod tests {
         let mut number = 100;
         while let Some((x, y)) = book.region.take(3) {
             let (sight, wanted_at) = if number % 2 == 0 { (Sight::Seen, 1) } else { (Sight::Ahead, 2) };
-            book.held.push(Held { slot: FaceSlot { lamp: number, face: 0, x, y, level: 3 }, wanted_at, level: 3, least: 1, sight });
+            book.hold(Held { slot: FaceSlot { lamp: number, face: 0, x, y, level: 3 }, wanted_at, level: 3, least: 1, sight });
             number += 1;
         }
         book.pick(&eye(Vec3::ZERO), [lamp(0, Vec3::new(200.0, 0.0, 0.0))].into_iter(), u32::MAX);
         let slots = book.slots();
         assert!(slots.iter().any(|slot| slot.lamp == 0));
         assert_eq!(slots.iter().filter(|slot| slot.lamp >= 100 && slot.lamp % 2 == 0).count(), 32);
+    }
+
+    #[test]
+    fn the_places_of_held_faces_agree_with_the_list_after_gains_and_losses() {
+        let agrees = |book: &FaceBook| {
+            book.places.len() == book.held.len() && book.held.iter().enumerate().all(|(at, held)| book.places.get(&(held.slot.lamp, held.slot.face)) == Some(&at))
+        };
+        let mut book = FaceBook::new(SIDE);
+        book.pick(&eye(Vec3::ZERO), [lamp(0, Vec3::new(200.0, 0.0, 0.0))].into_iter(), u32::MAX);
+        assert!(agrees(&book) && !book.held.is_empty());
+        for number in 1..=12 {
+            book.pick(&eye(Vec3::ZERO), [lamp(number, Vec3::new(0.0, 0.0, 200.0))].into_iter(), u32::MAX);
+            assert!(agrees(&book), "{number}");
+        }
+        let gone = book.let_go(0).slot;
+        assert!(agrees(&book) && book.held_mut(gone.lamp, gone.face).is_none());
     }
 
     #[test]

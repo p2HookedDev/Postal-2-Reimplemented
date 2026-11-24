@@ -1,5 +1,6 @@
 // Projector decals (tagged by `projector_tag`) are retail's projector pass over the finished surface,
-// unlit in display space; `apply_decals` handles other decals before lighting, `project` after it.
+// unlit in display space: `project`, after the lighting. Every clustered decal of the game is a projector or a wound,
+// both tagged as projectors, so no decal blends into the base colour before the lighting.
 
 import bevy_pbr::render::{
     pbr_types::{PbrInput, STANDARD_MATERIAL_FLAGS_UNLIT_BIT},
@@ -7,7 +8,6 @@ import bevy_pbr::render::{
     clustered_forward::ClusterableObjectIndexRanges,
     mesh_functions::get_tag,
     mesh_view_bindings,
-    utils::porter_duff_over,
 };
 import bevy_pbr::decal::clustered::get_view_z;
 import package::p2_render::color::{to_display, to_linear};
@@ -104,24 +104,6 @@ fn faces_projector(offset: i32, normal: vec3<f32>) -> bool {
     let m = mesh_view_bindings::clustered_decals.decals[index].local_from_world;
     let direction = -normalize(vec3(m[0].z, m[1].z, m[2].z));
     return dot(normalize(normal), direction) < -0.0001;
-}
-
-// Bevy's over-blend of the base colour (decal::clustered `apply_decals`, base colour only: no decal here has other
-// textures) for the decals that are not projectors, at alpha 1 with the surface's alpha put back: Bevy's over-blend
-// multiplies the colour by the surface's alpha, which a straight alpha blend applies again. `ranges`: `cluster_ranges`.
-fn apply_decals(pbr_input: ptr<function, PbrInput>, ranges: ClusterableObjectIndexRanges) {
-@if(CLUSTERED_DECALS_ARE_USABLE) {
-    var decal_ranges = ranges;
-    var iterator = clustered_decal_iterator_new((*pbr_input).world_position.xyz, &decal_ranges);
-    let alpha = (*pbr_input).material.base_color.a;
-    var base_color = vec4((*pbr_input).material.base_color.rgb, 1.0);
-    while clustered_decal_iterator_next(&iterator) {
-        if (iterator.tag & PROJECTOR) == 0u && iterator.base_color_texture_index >= 0 {
-            base_color = porter_duff_over(base_color, decal_texel(iterator.base_color_texture_index, iterator.uv));
-        }
-    }
-    (*pbr_input).material.base_color = vec4(base_color.rgb, alpha);
-}
 }
 
 // Over the lit linear `color`, in cluster order; `texture` is read by material blending. BSP takes a

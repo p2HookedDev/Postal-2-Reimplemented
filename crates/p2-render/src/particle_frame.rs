@@ -37,7 +37,12 @@ pub struct Blast {
     pub radius: f32,
     /// The speed it gives a piece at its middle, in Unreal units a second; none at `radius`.
     pub push: f32,
+    /// The hit's way, of length 1, in Unreal axes; zero for a push out of its middle alone.
+    pub way: Vector,
 }
+
+/// A shot's reach in Unreal units and its push in Unreal units a second.
+pub const SHOT_PUSH: (f32, f32) = (48.0, 450.0);
 
 /// A slot is a place, not an identity: `parent` says whose particles it holds this frame.
 pub struct DrawnActor {

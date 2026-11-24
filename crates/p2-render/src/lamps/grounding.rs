@@ -4,12 +4,13 @@
 
 use bevy::math::Vec3;
 
-use super::cells::BOOK_WIDTH;
+use super::cells::{BOOK_WIDTH, CAPSULES_FROM_END, TILES_FROM_END};
 
 /// Columns to a side of the grid. `lamp_shadow.wesl` holds the same number.
 const GRID_SIDE: usize = 32;
 /// A column's side in world units in each grid, the fine one first: the rows the book ends with.
 pub(super) const GRID_COLUMNS: [f32; 2] = [64.0, 256.0];
+const _: () = assert!(GRID_COLUMNS.len() == CAPSULES_FROM_END as usize && TILES_FROM_END == CAPSULES_FROM_END + 1);
 /// How far from its axis a capsule darkens, in radii. `lamp_shadow.wesl` holds the same number.
 const REACH_RADII: f32 = 3.0;
 const CAPSULES_AT: usize = 1 + GRID_SIDE * GRID_SIDE;
@@ -74,6 +75,14 @@ pub(super) fn grounding_row(eye: Vec3, capsules: impl IntoIterator<Item = Capsul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaders::shader_const;
+
+    #[test]
+    fn the_shader_reads_the_capsules_as_they_are_written() {
+        let shader = include_str!("../lamp_shadow.wesl");
+        assert_eq!(shader_const(shader, "GROUND_SIDE"), GRID_SIDE as f64);
+        assert_eq!(shader_const(shader, "GROUND_REACH") as f32, REACH_RADII);
+    }
 
     fn column_of(row: &[[f32; 4]], at: Vec3) -> [f32; 4] {
         let [x, z] = [(at.x - row[0][0]) / row[0][2], (at.z - row[0][1]) / row[0][2]].map(|column| column.floor() as usize);

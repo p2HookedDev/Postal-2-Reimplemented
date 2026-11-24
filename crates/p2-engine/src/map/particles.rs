@@ -101,7 +101,7 @@ pub struct Particles {
 }
 
 /// A hit's reach in Unreal units and its push in Unreal units a second.
-const SHOT: (f32, f32) = (48.0, 450.0);
+const SHOT: (f32, f32) = p2_render::particle_frame::SHOT_PUSH;
 const SWING: (f32, f32) = (80.0, 600.0);
 /// The effects the scripts spawn where a hit lands; a kick's or a swing's first, since a shot's name begins theirs.
 const IMPACTS: [(&str, (f32, f32)); 10] = [
@@ -124,11 +124,11 @@ const PUSH_MOST: f32 = 1500.0;
 /// The push an emitter actor stands for: an explosion's own reach and force, or a hit's by its class.
 fn blast_of(name: &str, explosion: Option<(f32, f32)>, at: Vector) -> Option<Blast> {
     if let Some((radius, force)) = explosion {
-        return Some(Blast { at, radius, push: (force / PUSHED_MASS).min(PUSH_MOST) });
+        return Some(Blast { at, radius, push: (force / PUSHED_MASS).min(PUSH_MOST), way: Vector::ZERO });
     }
     let class = name.rsplit('.').next().unwrap_or(name);
     let &(_, (radius, push)) = IMPACTS.iter().find(|(impact, _)| class.starts_with(impact))?;
-    Some(Blast { at, radius, push })
+    Some(Blast { at, radius, push, way: Vector::ZERO })
 }
 
 impl Session {

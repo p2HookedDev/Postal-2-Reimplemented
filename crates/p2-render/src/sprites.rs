@@ -3,7 +3,7 @@
 
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
-use bevy::ecs::prelude::{Add, Commands, Component, On, Query, ResMut};
+use bevy::ecs::prelude::{Add, Commands, Component, On, Query, Res, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::Local;
 use bevy::image::Image;
@@ -14,8 +14,10 @@ use bevy::transform::components::Transform;
 use p2_assets::Blending;
 use p2_math::Vector;
 use p2_vm::ERenderStyle;
+use rustc_hash::FxHashMap;
 use crate::components::{FollowActor, SceneView};
-use crate::particle_material::{ParticleMaterial, sprite_blend};
+use crate::particle_frame::DrawnParticles;
+use crate::particle_material::{ParticleMaterial, SharedParticleKey, sprite_blend};
 
 #[derive(Component, Clone)]
 pub struct SpriteLook {
@@ -30,9 +32,16 @@ pub struct SpriteSystems;
 
 pub struct SpritePlugin;
 
+/// Emptied when the map changes, so the materials of a map that was left do not stay alive.
+#[derive(Resource, Default)]
+struct SpriteMaterials {
+    level: u32,
+    materials: FxHashMap<SharedParticleKey, Handle<ParticleMaterial>>,
+}
+
 impl Plugin for SpritePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(add_sprite_quad).add_systems(Update, face_sprites.in_set(SpriteSystems));
+        app.init_resource::<SpriteMaterials>().add_observer(add_sprite_quad).add_systems(Update, (face_sprites, forget_sprite_materials).in_set(SpriteSystems));
     }
 }
 
@@ -42,13 +51,24 @@ fn add_sprite_quad(
     looks: Query<&SpriteLook>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut cache: ResMut<SpriteMaterials>,
     mut quad: Local<Option<Handle<Mesh>>>,
 ) {
     let entity = add.event().entity;
     let Ok(look) = looks.get(entity) else { return };
     let quad = quad.get_or_insert_with(|| meshes.add(sprite_quad())).clone();
     let material = ParticleMaterial::sprite(look.image.clone(), sprite_blend(look.blending, look.style));
-    commands.entity(entity).insert((Mesh3d(quad), MeshMaterial3d(materials.add(material))));
+    let material = cache.materials.entry(material.shared_key()).or_insert_with(|| materials.add(material)).clone();
+    commands.entity(entity).insert((Mesh3d(quad), MeshMaterial3d(material)));
+}
+
+fn forget_sprite_materials(drawn: Option<Res<DrawnParticles>>, mut cache: ResMut<SpriteMaterials>) {
+    if let Some(drawn) = drawn
+        && cache.level != drawn.level
+    {
+        cache.level = drawn.level;
+        cache.materials.clear();
+    }
 }
 
 /// Corners are `Location ± X ± Y` with texture coordinates 0 / 1 at their ends. Which camera axis is
@@ -97,5 +117,16 @@ mod tests {
         let transform = *app.world().entity(sprite).get::<Transform>().expect("a transform");
         assert_eq!(transform, Transform { translation: Vec3::new(1.0, 2.0, 3.0), rotation, scale: Vec3::new(128.0, 192.0, 1.0) });
         assert!(app.world().entity(sprite).contains::<MeshMaterial3d<ParticleMaterial>>());
+    }
+
+    #[test]
+    fn sprites_of_one_look_share_a_material() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>().init_resource::<Assets<ParticleMaterial>>().add_plugins(SpritePlugin);
+        let look = SpriteLook { image: Handle::default(), blending: None, style: Some(ERenderStyle::Translucent), texels: 64.0 };
+        let [one, other] = [(); 2].map(|_| app.world_mut().spawn(look.clone()).id());
+        let material = |sprite| app.world().get::<MeshMaterial3d<ParticleMaterial>>(sprite).map(|material| material.0.id());
+        assert!(material(one).is_some());
+        assert_eq!(material(one), material(other));
     }
 }

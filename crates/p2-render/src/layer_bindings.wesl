@@ -10,37 +10,15 @@ import bevy_pbr::render::{
 import package::p2_render::shader_layers::{detail, glow, specular};
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::modern::sky_mask;
+import package::p2_render::layer_types::ShaderLayers;
+@if(BINDLESS)
+import package::p2_render::layer_types::LayerIndices;
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_cube};
 @if(BINDLESS)
 import bevy_pbr::render::mesh_bindings::mesh;
 
-struct ShaderLayers {
-    detail: vec4<f32>,
-    specular: vec4<f32>,
-    specular_u: vec4<f32>,
-    specular_v: vec4<f32>,
-    blend: vec4<f32>,
-}
-
 @if(BINDLESS) {
-struct LayerIndices {
-    data: u32,
-    detail: u32,
-    detail_sampler: u32,
-    specular: u32,
-    specular_sampler: u32,
-    flat_specular: u32,
-    flat_specular_sampler: u32,
-    @if(TERRAIN_LAYER)
-    unused_107: u32,
-    @if(TERRAIN_LAYER)
-    unused_108: u32,
-    @if(TERRAIN_LAYER)
-    alpha_map: u32,
-    @if(TERRAIN_LAYER)
-    alpha_map_sampler: u32,
-}
 @group(3) @binding(108) var<storage> layer_indices: array<LayerIndices>;
 }
 @else {
@@ -66,7 +44,11 @@ fn premultiplied(flags: u32) -> bool {
 fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: pbr_types::PbrInput, layers: ShaderLayers) -> vec4<f32> {
     let emissive = glow(in, pbr_input.material.flags);
     let mode = u32(layers.specular.x + 0.5);
-    let multi_pass = premultiplied(pbr_input.material.flags);
+    // Bevy's pipeline has this def for the premultiplied, add and multiply alpha modes only: the others never blend so.
+    var multi_pass = false;
+@if(PREMULTIPLY_ALPHA) {
+    multi_pass = premultiplied(pbr_input.material.flags);
+}
     var out = color.rgb;
     if !multi_pass {
         out += emissive.rgb;
@@ -148,6 +130,7 @@ fn lit_color(layers: ShaderLayers, stored: vec3<f32>, light: vec3<f32>) -> vec3<
 // surface covers only its alpha's share of it, so the rest comes off (fog is affine in the colour; no tone mapping in
 // the shader). The specular fades with the fog as towards black (unverified).
 fn post_lighting(pbr_input: pbr_types::PbrInput, color: vec4<f32>) -> vec4<f32> {
+@if(PREMULTIPLY_ALPHA) {
     let mode = pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
     let added = mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD;
     if added || mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_MULTIPLY {
@@ -162,10 +145,12 @@ fn post_lighting(pbr_input: pbr_types::PbrInput, color: vec4<f32>) -> vec4<f32> 
         }
         return vec4(1.0 - (1.0 - color.rgb) * left, color.a);
     }
-    let out = main_pass_post_lighting_processing(pbr_input, color);
-    if !premultiplied(pbr_input.material.flags) {
-        return vec4(out.rgb, sky_mask(pbr_input.material.flags, out.a));
+    if premultiplied(pbr_input.material.flags) {
+        let out = main_pass_post_lighting_processing(pbr_input, color);
+        let fog = main_pass_post_lighting_processing(pbr_input, vec4(0.0, 0.0, 0.0, color.a)).rgb;
+        return vec4(out.rgb - (1.0 - color.a) * fog, out.a);
     }
-    let fog = main_pass_post_lighting_processing(pbr_input, vec4(0.0, 0.0, 0.0, color.a)).rgb;
-    return vec4(out.rgb - (1.0 - color.a) * fog, out.a);
+}
+    let out = main_pass_post_lighting_processing(pbr_input, color);
+    return vec4(out.rgb, sky_mask(pbr_input.material.flags, out.a));
 }

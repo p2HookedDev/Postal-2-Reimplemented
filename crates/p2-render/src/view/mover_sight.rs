@@ -151,6 +151,7 @@ fn see_movers(
     views: Query<&GlobalTransform, Or<(With<Camera>, With<ShadowLodOrigin>)>>,
     mut eyes: Local<Vec<Eye>>,
     mut cascades: Local<Vec<Cascade>>,
+    mut drawn: Local<bevy::utils::Parallel<Vec<Entity>>>,
 ) {
     seen.drawn.clear();
     if !culls.0 {
@@ -175,7 +176,8 @@ fn see_movers(
         }
     }
     let default_layers = RenderLayers::default();
-    for (entity, inherited, mut view_visibility, layers, aabb, transform, no_frustum_culling, range, not_caster) in &mut movers {
+    let (eyes, cascades) = (&*eyes, &*cascades);
+    movers.par_iter_mut().for_each(|(entity, inherited, mut view_visibility, layers, aabb, transform, no_frustum_culling, range, not_caster)| {
         let mover = MoverBounds {
             inherited: *inherited,
             layers: layers.unwrap_or(&default_layers),
@@ -185,11 +187,14 @@ fn see_movers(
             range,
             casts: !not_caster,
         };
-        let sight = sight(&mover, &eyes, &cascades);
+        let sight = sight(&mover, eyes, cascades);
         view_visibility.set_if_neq(if sight == Sight::Neither { ViewVisibility::HIDDEN } else { ViewVisibility::VISIBLE });
         if sight == Sight::Drawn {
-            seen.drawn.push(entity);
+            drawn.scope(|drawn| drawn.push(entity));
         }
+    });
+    for drawn in drawn.iter_mut() {
+        seen.drawn.append(drawn);
     }
     seen.drawn.sort_unstable();
 }

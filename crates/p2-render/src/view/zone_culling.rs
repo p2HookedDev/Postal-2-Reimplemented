@@ -32,11 +32,16 @@ pub(super) fn follower_zones(
         if culled.as_ref().is_some_and(|zone| zone.min == min && zone.max == max) {
             continue;
         }
-        let zone = ZoneCulled { zones: p2_collision::box_zones(model, min.into(), max.into()), min, max, only_from: None };
+        let zones = p2_collision::box_zones(model, min.into(), max.into());
         match culled {
-            Some(mut culled) => *culled = zone,
+            // The box is read every frame without change detection: only new zones need to wake `layers_by_zone`.
+            Some(mut culled) if culled.zones == zones && culled.only_from.is_none() => {
+                let held = culled.bypass_change_detection();
+                (held.min, held.max) = (min, max);
+            }
+            Some(mut culled) => *culled = ZoneCulled { zones, min, max, only_from: None },
             None => {
-                commands.entity(root).insert(zone);
+                commands.entity(root).insert(ZoneCulled { zones, min, max, only_from: None });
             }
         }
     }
@@ -155,21 +160,27 @@ pub(super) fn attachments_with_their_base(
     spawned: Query<(), bevy::ecs::query::Added<ActorModel>>,
 ) {
     let retry = !spawned.is_empty();
-    let mut by_actor: Option<FxHashMap<ObjectId, Entity>> = None;
+    let mut by_actor: Option<(FxHashMap<ObjectId, Entity>, FxHashMap<ObjectId, ObjectId>)> = None;
     for (entity, follow, layers, base) in &attached {
         let known = base.filter(|_| !follow.is_changed()).map(|base| base.0).filter(|found| match found {
             Some(model) => shown.contains(*model),
             None => !retry,
         });
         let model = known.unwrap_or_else(|| {
-            let by_actor = by_actor.get_or_insert_with(|| models.iter().map(|(entity, model)| (model.0, entity)).collect());
+            let (by_actor, bases) = by_actor.get_or_insert_with(|| {
+                let mut bases = FxHashMap::default();
+                for (_, other, ..) in &attached {
+                    bases.entry(other.actor).or_insert(other.base);
+                }
+                (models.iter().map(|(entity, model)| (model.0, entity)).collect(), bases)
+            });
             let mut on = follow.base;
             for _ in 0..4 {
                 if by_actor.contains_key(&on) {
                     break;
                 }
-                let Some(under) = attached.iter().find(|(_, other, ..)| other.actor == on) else { break };
-                on = under.1.base;
+                let Some(&under) = bases.get(&on) else { break };
+                on = under;
             }
             let found = by_actor.get(&on).copied();
             commands.entity(entity).insert(BaseModel(found));
@@ -177,9 +188,8 @@ pub(super) fn attachments_with_their_base(
         });
         let unseen = model.and_then(|model| shown.get(model).ok()).is_some_and(|(visibility, casts_unseen)| *visibility == Visibility::Hidden || casts_unseen);
         let (from, to) = if unseen { (0, UNSEEN_LAYER) } else { (UNSEEN_LAYER, 0) };
-        let layers = layers.cloned().unwrap_or_default();
-        if layers.intersects(&RenderLayers::layer(from)) {
-            commands.entity(entity).insert(layers.without(from).with(to));
+        if layers.map_or(from == 0, |layers| layers.intersects(&RenderLayers::layer(from))) {
+            commands.entity(entity).insert(layers.cloned().unwrap_or_default().without(from).with(to));
         }
     }
 }
@@ -208,11 +218,11 @@ pub(super) fn layers_by_zone(
     mut commands: Commands,
     shown: Res<ShownScene>,
     changed: Query<Entity, (Or<(With<ActorModel>, With<LayeredByZone>)>, Changed<ZoneCulled>)>,
-    joined: Query<Entity, bevy::ecs::query::Added<ChildOf>>,
+    joined: Query<Entity, (Or<(bevy::ecs::query::Added<ChildOf>, bevy::ecs::query::Added<Mesh3d>)>, Or<(With<Mesh3d>, With<RenderLayers>)>)>,
     parents: Query<&ChildOf>,
     roots: Query<(&ZoneCulled, Has<CastsUnseen>), Or<(With<ActorModel>, With<LayeredByZone>)>>,
     children: Query<&Children>,
-    layers: Query<Option<&RenderLayers>>,
+    layers: Query<(Option<&RenderLayers>, Has<Mesh3d>)>,
 ) {
     let joined = joined.iter().flat_map(|entity| parents.iter_ancestors(entity)).filter(|&root| roots.contains(root));
     let dirty: EntityHashSet = changed.iter().chain(joined).collect();
@@ -222,8 +232,12 @@ pub(super) fn layers_by_zone(
         let world_layer = if unseen { UNSEEN_LAYER } else { 0 };
         let (in_sky, in_world) = sky_and_world(&zone.zones, shown.sky_zone);
         for draw in children.iter_descendants(root) {
-            let Ok(now) = layers.get(draw) else { continue };
-            let now = now.cloned().unwrap_or_default();
+            // As `move_draws`: an entity without layers is a draw only if it is a mesh, so a skeleton's joints are left be.
+            let now = match layers.get(draw) {
+                Ok((Some(now), _)) => now.clone(),
+                Ok((None, true)) => RenderLayers::default(),
+                _ => continue,
+            };
             // Draws on other layers only (an overlay's) are not the level's to move.
             if !now.intersects(&scene) {
                 continue;
@@ -274,5 +288,45 @@ mod tests {
         let zone = ZoneCulled { zones: Vec::new(), min: [90.0, 0.0, 0.0], max: [110.0, 0.0, 0.0], only_from: None };
         assert!(in_reach([0.0; 3], &zone, 100.0));
         assert!(!in_reach([0.0; 3], &zone, 99.0));
+    }
+
+    #[test]
+    fn a_box_moving_within_its_zones_leaves_them_unchanged() {
+        use crate::level_collision::{LevelAlbedos, StaticCollision};
+        let mut app = App::new();
+        let model = two_zone_model();
+        let collision = StaticCollision {
+            hulls: p2_collision::BspHulls::new(&model),
+            model,
+            terrains: Vec::new(),
+            meshes: Vec::new(),
+            mesh_set: p2_collision::MeshSet::default(),
+            lamp_casters: Vec::new(),
+            lamp_masked: Vec::new(),
+            albedos: LevelAlbedos::default(),
+        };
+        app.insert_resource(LevelCollision(Some(Arc::new(collision))));
+        app.add_systems(Update, follower_zones);
+        let follow = FollowActor { actor: ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };
+        let root = app.world_mut().spawn(ActorModel(follow.actor)).id();
+        let aabb = Aabb::from_min_max(Vec3::splat(-10.0), Vec3::splat(10.0));
+        let section = app.world_mut().spawn((follow, Transform::from_xyz(0.0, 50.0, 0.0), aabb, ChildOf(root))).id();
+        let move_to = |app: &mut App, y: f32| {
+            if let Some(mut transform) = app.world_mut().get_mut::<Transform>(section) {
+                transform.translation.y = y;
+            }
+            app.update();
+        };
+        let changed = |app: &App| app.world().entity(root).get_change_ticks::<ZoneCulled>().map(|ticks| ticks.changed);
+        let held = |app: &App| app.world().get::<ZoneCulled>(root).map(|zone| (zone.zones.clone(), zone.max));
+        app.update();
+        let (first, before) = (changed(&app), held(&app));
+        move_to(&mut app, 51.0);
+        let after = held(&app);
+        assert_eq!(changed(&app), first);
+        assert_eq!(after.as_ref().map(|(zones, _)| zones), before.as_ref().map(|(zones, _)| zones));
+        assert_ne!(after.map(|(_, max)| max), before.map(|(_, max)| max), "the box follows");
+        move_to(&mut app, -50.0);
+        assert_ne!(changed(&app), first);
     }
 }

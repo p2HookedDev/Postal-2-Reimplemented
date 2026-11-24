@@ -3,10 +3,11 @@
 //! nodes. It replaces Bevy's sort by depth along the view.
 
 use bevy::app::{App, Plugin, PostUpdate};
-use bevy::camera::Camera3d;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{Camera, Camera3d};
 use bevy::core_pipeline::core_3d::{Transparent3d, TransparentSortingInfo3d};
 use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::ecs::prelude::{Component, Entity, Local, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{Changed, Component, Entity, Local, Query, RemovedComponents, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::{Vec3, Vec4};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
@@ -76,19 +77,29 @@ impl Plugin for TranslucentOrderPlugin {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn rank_sorted_nodes(
     shown: Res<ShownScene>,
     level: Res<LevelCollision>,
-    cameras: Query<(Entity, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
     sections: Query<(Entity, &SortedBspNode)>,
     draws: Query<(Entity, &TranslucentDraw)>,
+    changed_sections: Query<(), Changed<SortedBspNode>>,
+    changed_draws: Query<(), Changed<TranslucentDraw>>,
+    mut removed_sections: RemovedComponents<SortedBspNode>,
+    mut removed_draws: RemovedComponents<TranslucentDraw>,
     mut order: ResMut<TranslucentOrder>,
     mut cached: Local<Option<(usize, WantedNodes)>>,
 ) {
-    let nodes: FxHashMap<Entity, SortedBspNode> = sections.iter().map(|(entity, node)| (entity, *node)).collect();
-    let ranks = match level.model().filter(|_| !nodes.is_empty()) {
+    // Removals are read first and in full, so a despawned section or draw never lingers in the kept maps.
+    let nodes = (removed_sections.read().count() > 0 || !changed_sections.is_empty())
+        .then(|| sections.iter().map(|(entity, node)| (entity, *node)).collect::<FxHashMap<Entity, SortedBspNode>>());
+    let draws = (removed_draws.read().count() > 0 || !changed_draws.is_empty())
+        .then(|| draws.iter().map(|(entity, draw)| (entity, *draw)).collect::<FxHashMap<Entity, TranslucentDraw>>());
+    let kept = nodes.as_ref().unwrap_or(&order.nodes);
+    let ranks: FxHashMap<Entity, FxHashMap<usize, usize>> = match level.model().filter(|_| !kept.is_empty()) {
         Some(model) => {
-            let wanted: FxHashSet<usize> = nodes.values().map(|section| section.node).collect();
+            let wanted: FxHashSet<usize> = kept.values().map(|section| section.node).collect();
             let key = model.nodes.as_ptr() as usize;
             if cached.as_ref().is_none_or(|(at, known)| *at != key || known.wanted != wanted) {
                 *cached = Some((key, WantedNodes::new(model, wanted)));
@@ -98,12 +109,28 @@ fn rank_sorted_nodes(
                 let eye = to_bevy((eye - shown.origin).to_array());
                 back_to_front(model, eye, wanted).into_iter().enumerate().map(|(rank, node)| (node, rank)).collect()
             };
-            cameras.iter().map(|(camera, transform)| (camera, rank(transform.translation()))).collect()
+            cameras
+                .iter()
+                .filter(|(_, camera, _, layers)| camera.is_active && layers.is_none_or(|layers| *layers != RenderLayers::none()))
+                .map(|(entity, _, transform, _)| (entity, rank(transform.translation())))
+                .collect()
         }
         None => FxHashMap::default(),
     };
-    let draws = draws.iter().map(|(entity, draw)| (entity, *draw)).collect();
-    order.set_if_neq(TranslucentOrder { ranks, nodes, draws });
+    let held = order.bypass_change_detection();
+    let mut changed = held.ranks != ranks;
+    held.ranks = ranks;
+    if let Some(nodes) = nodes {
+        changed |= held.nodes != nodes;
+        held.nodes = nodes;
+    }
+    if let Some(draws) = draws {
+        changed |= held.draws != draws;
+        held.draws = draws;
+    }
+    if changed {
+        order.set_changed();
+    }
 }
 
 /// The wanted nodes in the order the engine's list holds them: it pushes each onto the head while walking the tree

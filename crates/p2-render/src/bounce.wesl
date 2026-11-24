@@ -1,8 +1,10 @@
 // Screen-space bounce light. `gather` runs at half size: each pixel walks a few screen directions through the depth
 // prepass, and a bitmask over the hemisphere's angles in each direction keeps a surface hidden behind a nearer one
 // from adding its light. `composite` runs at full size and blurs that along a cross, weighted by like depth and facing.
+// The half-size texture covers the viewport; the depth prepass and the lit scene cover the whole target.
 
 import bevy_render::view::View;
+import package::p2_render::screen_pass::{pattern, view_at, viewport_uv};
 
 struct FullscreenOutput {
     @builtin(position) position: vec4<f32>,
@@ -28,9 +30,12 @@ const DEPTH_LIKENESS: f32 = 0.05;
 const NORMAL_LIKENESS: f32 = 16.0;
 
 fn view_position(texel: vec2<i32>, z: f32) -> vec3<f32> {
-    let uv = (vec2<f32>(texel) + 0.5) / vec2<f32>(textureDimensions(depth));
-    let p = view.view_from_clip * vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
-    return p.xyz / p.w;
+    return view_at(view.view_from_clip, viewport_uv(vec2<f32>(texel) + 0.5, view.viewport), z);
+}
+
+// The viewport's corner in the target.
+fn corner() -> vec2<i32> {
+    return vec2<i32>(view.viewport.xy);
 }
 
 fn world_normal(texel: vec2<i32>) -> vec3<f32> {
@@ -39,14 +44,6 @@ fn world_normal(texel: vec2<i32>) -> vec3<f32> {
 
 fn view_normal(texel: vec2<i32>) -> vec3<f32> {
     return normalize((view.view_from_world * vec4(world_normal(texel), 0.0)).xyz);
-}
-
-// A 4 by 4 ordered pattern, 0 to 15, so the pixels of a block walk different directions.
-fn pattern(pixel: vec2<u32>) -> u32 {
-    let x = pixel.x & 3u;
-    let y = pixel.y & 3u;
-    let a = x ^ y;
-    return ((a & 1u) << 3u) | ((y & 1u) << 2u) | (a & 2u) | ((y & 2u) >> 1u);
 }
 
 // The sectors from `lo` to `hi`, fractions of the hemisphere's half circle around the normal.
@@ -63,7 +60,7 @@ fn sector_bits(lo: f32, hi: f32) -> u32 {
 fn gather(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<u32>(in.position.xy);
     let size = vec2<i32>(textureDimensions(depth));
-    let texel = min(vec2<i32>(pixel * 2u), size - 1);
+    let texel = min(vec2<i32>(pixel * 2u) + corner(), size - 1);
     let z = textureLoad(depth, texel, 0);
     if z <= 0.0 {
         return vec4(0.0);
@@ -71,7 +68,7 @@ fn gather(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let here = view_position(texel, z);
     let normal = view_normal(texel);
     let eye = normalize(-here);
-    let reach = min(RADIUS * view.clip_from_view[1][1] * 0.5 * f32(size.y) / -here.z, MAX_REACH_PIXELS);
+    let reach = min(RADIUS * view.clip_from_view[1][1] * 0.5 * view.viewport.w / -here.z, MAX_REACH_PIXELS);
     if reach < 2.0 {
         return vec4(0.0);
     }
@@ -125,7 +122,7 @@ fn gather(in: FullscreenOutput) -> @location(0) vec4<f32> {
 
 fn tap(centre: vec2<i32>, offset: vec2<i32>, here_z: f32, normal: vec3<f32>) -> vec4<f32> {
     let at = clamp(centre + offset, vec2(0), vec2<i32>(textureDimensions(lit)) - 1);
-    let full = min(at * 2, vec2<i32>(textureDimensions(depth)) - 1);
+    let full = min(at * 2 + corner(), vec2<i32>(textureDimensions(depth)) - 1);
     let z = textureLoad(depth, full, 0);
     if z <= 0.0 {
         return vec4(0.0);
@@ -146,7 +143,7 @@ fn composite(in: FullscreenOutput) -> @location(0) vec4<f32> {
     }
     let here_z = view_position(texel, z).z;
     let normal = world_normal(texel);
-    let centre = texel / 2;
+    let centre = (texel - corner()) / 2;
     var sum = tap(centre, vec2(0), here_z, normal);
     for (var i = 1; i <= 2; i++) {
         sum += tap(centre, vec2(i, 0), here_z, normal) + tap(centre, vec2(-i, 0), here_z, normal);

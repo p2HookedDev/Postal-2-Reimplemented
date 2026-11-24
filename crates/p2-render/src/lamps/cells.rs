@@ -372,9 +372,14 @@ pub(super) const RECORD_TEXELS: usize = 7;
 pub(super) const HEADER_TEXELS: usize = 2;
 /// The book's width in texels. `lamp_shadow.wesl` holds the same number.
 pub(super) const BOOK_WIDTH: usize = 2048;
-/// A texel's number goes through a float, exact up to 2^24; eight rows less, so the book with the movers' eight rows is no
-/// taller than the 8192 texels every GPU takes.
-const MOST_BOOK_TEXELS: usize = (1 << 24) - 8 * BOOK_WIDTH;
+/// The rows the book ends with, counted back from its end: the movers' tile grid starts this far back, then their tiles'
+/// row, then the capsules' fine and coarse rows. `lamp_shadow.wesl` holds the same numbers.
+pub(super) const TILE_GRID_FROM_END: u32 = 8;
+pub(super) const TILES_FROM_END: u32 = 3;
+pub(super) const CAPSULES_FROM_END: u32 = 2;
+/// A texel's number goes through a float, exact up to 2^24; the movers' rows less, so the whole book is no taller than
+/// the 8192 texels every GPU takes.
+const MOST_BOOK_TEXELS: usize = (1 << 24) - TILE_GRID_FROM_END as usize * BOOK_WIDTH;
 
 /// What `lamp_shadow.wesl` reads, four floats a texel: a header (the grid's corner and its cell; its sides and where the
 /// cells start), every lamp's record, a texel for each cell (where its list starts and how many lamps it holds) and
@@ -400,6 +405,23 @@ pub(super) fn book_texels(cells: &LampCells, records: &[[[f32; 4]; RECORD_TEXELS
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaders::shader_const;
+
+    #[test]
+    fn the_shader_reads_the_book_as_it_is_written() {
+        let shader = include_str!("../lamp_shadow.wesl");
+        let pairs = [
+            ("BOOK_WIDTH", BOOK_WIDTH as u32),
+            ("BOOK_HEADER", HEADER_TEXELS as u32),
+            ("BOOK_RECORD", RECORD_TEXELS as u32),
+            ("TILE_GRID_FROM_END", TILE_GRID_FROM_END),
+            ("TILES_FROM_END", TILES_FROM_END),
+            ("CAPSULES_FROM_END", CAPSULES_FROM_END),
+        ];
+        for (name, value) in pairs {
+            assert_eq!(shader_const(shader, name), f64::from(value), "{name}");
+        }
+    }
 
     fn wall(at: f32) -> Vec<[f32; 3]> {
         vec![[at, -4000.0, -4000.0], [at, 4000.0, -4000.0], [at, 4000.0, 4000.0], [at, -4000.0, -4000.0], [at, 4000.0, 4000.0], [at, -4000.0, 4000.0]]

@@ -7,7 +7,7 @@ import bevy_pbr::{
         clustered_forward as clustering,
     },
 };
-import package::p2_render::projector::{apply_decals, cluster_ranges, project, TARGET_BSP};
+import package::p2_render::projector::{cluster_ranges, project, TARGET_BSP};
 import package::p2_render::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_render::layer_bindings::{apply_layers, lit_color, post_lighting};
 import package::p2_render::material_layers::material_layers;
@@ -15,7 +15,6 @@ import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::modern::{is_modern, is_see_through, with_light};
 import package::p2_render::relief::base_relief;
 import package::p2_render::sun_shadow::{sun_found, sun_index};
-import package::p2_render::lamp_shadow::is_lamp;
 import package::p2_render::surface::{modern_light, shade_surface};
 
 const LE_NONE: u32 = 0u;
@@ -52,7 +51,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         pbr_input.material.base_color
     );
     let ranges = cluster_ranges(pbr_input);
-    apply_decals(&pbr_input, ranges);
 
     var out: FragmentOutput;
     let color = pbr_input.material.base_color;
@@ -60,27 +58,24 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let normal = normalize(pbr_input.world_normal);
     let sun = sun_index();
     let modern = is_modern(layers.detail.z) && sun_found(sun);
-    let light_map = view.exposure * pbr_input.lightmap_light;
-    var surface = lit_color(layers, color.rgb, light_map);
+    var surface: vec3<f32>;
     var alpha = color.a;
     if modern {
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
         let darken = layers.blend.x != 0.0;
-        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, ranges, layers.detail.z, layers.blend, darken);
+        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken);
         let shaded = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), vec3(0.0));
         surface = shaded.rgb;
         alpha = shaded.a;
+    } else {
+        surface = lit_color(layers, color.rgb, view.exposure * pbr_input.lightmap_light);
     }
     let layered = apply_layers(vertex_output, vec4(surface, alpha), base_alpha, pbr_input, layers);
     var lit = layered.rgb;
 
     var passes = vec3(0.0);
     for (var i = ranges.first_point_light_index_offset; i < ranges.first_spot_light_index_offset; i++) {
-        let id = clustering::get_clusterable_object_id(i);
-        if is_lamp(id) {
-            continue;
-        }
-        passes += light_pass(id, pbr_input.world_position.xyz, normal);
+        passes += light_pass(clustering::get_clusterable_object_id(i), pbr_input.world_position.xyz, normal);
     }
     if any(passes > vec3(0.0)) {
         let texture = to_display(color.rgb);

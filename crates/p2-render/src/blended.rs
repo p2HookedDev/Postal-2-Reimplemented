@@ -1,5 +1,6 @@
-//! Alpha-blended surfaces: Bevy's `apply_decals` multiplies the colour by the surface's alpha, which
-//! the blend applies again and darkens decal boxes, so [`BlendedMaterial`] runs decals at alpha 1.
+//! Alpha-blended surfaces: Bevy's own fragment blends every clustered decal, projectors too, into the colour and
+//! multiplies it by the surface's alpha, which the blend applies again; [`BlendedMaterial`] projects after the lighting
+//! as the opaque surfaces do.
 
 use bevy::app::{App, Plugin};
 use bevy::asset::{Asset, AssetApp, Handle, uuid_handle};

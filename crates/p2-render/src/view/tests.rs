@@ -142,7 +142,7 @@ fn a_moving_actor_is_in_the_zones_where_it_is() {
     let follow = FollowActor { actor: ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };
     let root = app.world_mut().spawn(ActorModel(follow.actor)).id();
     let aabb = Aabb::from_min_max(Vec3::splat(-10.0), Vec3::splat(10.0));
-    let section = app.world_mut().spawn((follow, Transform::from_xyz(0.0, 50.0, 0.0), aabb, ChildOf(root))).id();
+    let section = app.world_mut().spawn((follow, Transform::from_xyz(0.0, 50.0, 0.0), aabb, Mesh3d::default(), ChildOf(root))).id();
     let zones = |app: &App| app.world().get::<ZoneCulled>(root).map(|zone| zone.zones.clone());
     let layers = |app: &App| app.world().get::<RenderLayers>(section).cloned().unwrap_or_default();
     app.update();
@@ -174,7 +174,7 @@ fn an_unseen_caster_leaves_the_view_with_its_children_and_comes_back() {
     assert_eq!(layers(&app, plain), RenderLayers::layer(UNSEEN_LAYER));
     assert_eq!(layers(&app, overlay), RenderLayers::layer(4));
     app.world_mut().entity_mut(root).insert(CastsUnseen);
-    let later = app.world_mut().spawn(ChildOf(root)).id();
+    let later = app.world_mut().spawn((ChildOf(root), Mesh3d::default())).id();
     app.update();
     assert_eq!(layers(&app, caster), RenderLayers::layer(UNSEEN_LAYER).with(CASTER_LAYER), "its zones changing leaves it unseen");
     assert_eq!(layers(&app, later), RenderLayers::layer(UNSEEN_LAYER), "a draw that joins an unseen actor is unseen");
@@ -233,15 +233,16 @@ fn draws_under_a_zone_layered_root_follow_its_zones_also_when_they_join_later() 
     let zone = ZoneCulled { zones: vec![2], min: [0.0; 3], max: [0.0; 3], only_from: None };
     let root = app.world_mut().spawn((zone, LayeredByZone)).id();
     let middle = app.world_mut().spawn(ChildOf(root)).id();
-    let first = app.world_mut().spawn(ChildOf(middle)).id();
+    let first = app.world_mut().spawn((ChildOf(middle), Mesh3d::default())).id();
     app.update();
-    let later = app.world_mut().spawn(ChildOf(middle)).id();
+    let later = app.world_mut().spawn((ChildOf(middle), Mesh3d::default())).id();
     let overlay = app.world_mut().spawn((ChildOf(middle), RenderLayers::layer(7))).id();
     app.update();
     let layers = |app: &App, entity| app.world().get::<RenderLayers>(entity).cloned().unwrap_or_default();
     assert_eq!(layers(&app, first), RenderLayers::layer(SKY_LAYER));
     assert_eq!(layers(&app, later), RenderLayers::layer(SKY_LAYER));
     assert_eq!(layers(&app, overlay), RenderLayers::layer(7), "an overlay draw is left alone");
+    assert!(app.world().get::<RenderLayers>(middle).is_none(), "what is no mesh, such as a joint, is no draw");
 }
 
 #[test]

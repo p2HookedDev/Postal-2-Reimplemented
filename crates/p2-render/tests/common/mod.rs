@@ -25,6 +25,15 @@ pub fn compiling(app: &App) -> bool {
     app.get_sub_app(bevy::render::RenderApp).is_some_and(|render| render.world().resource::<bevy::render::render_resource::PipelineCache>().waiting_pipelines().next().is_some())
 }
 
+/// What each pipeline that is not built yet waits for or failed with.
+#[allow(dead_code, reason = "not every test file names its stuck pipelines")]
+pub fn stuck_pipelines(app: &App) -> String {
+    use bevy::render::render_resource::{CachedPipelineState, PipelineCache};
+    let Some(render) = app.get_sub_app(bevy::render::RenderApp) else { return String::new() };
+    let cache = render.world().resource::<PipelineCache>();
+    cache.pipelines().filter(|pipeline| !matches!(pipeline.state, CachedPipelineState::Ok(_))).map(|pipeline| format!("{:?}", pipeline.state)).collect::<Vec<_>>().join(" | ")
+}
+
 pub fn headless_renderer(app: &mut App) {
     app.add_plugins(
         DefaultPlugins

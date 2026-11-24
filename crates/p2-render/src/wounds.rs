@@ -1,5 +1,6 @@
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::Handle;
+use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
@@ -129,8 +130,8 @@ fn place_wounds(wounds: Res<Wounds>, joints: Query<&GlobalTransform, Without<Clu
     for wound in wounds.bodies.values().flatten() {
         let (Ok(joint), Ok((mut transform, mut global))) = (joints.get(wound.joint), decals.get_mut(wound.decal)) else { continue };
         let placed = joint.affine() * Affine3A::from_mat4(wound.local);
-        *transform = Transform::from_matrix(Mat4::from(placed));
-        *global = GlobalTransform::from(placed);
+        transform.set_if_neq(Transform::from_matrix(Mat4::from(placed)));
+        global.set_if_neq(GlobalTransform::from(placed));
     }
 }
 
@@ -246,6 +247,16 @@ fn age_decals(settings: Option<Res<Settings>>, facts: Res<FrameFacts>, mut decal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaders::shader_const;
+
+    #[test]
+    fn the_shader_reads_a_wounds_tag_as_it_is_written() {
+        let shader = include_str!("projector.wesl");
+        let bits = |name| shader_const(shader, name) as u32;
+        assert_eq!(bits("DRY_SHIFT"), DRY_SHIFT);
+        assert_eq!(bits("FADE_SHIFT"), FADE_SHIFT);
+        assert_eq!(bits("PROJECTOR") | bits("TARGET_ACTOR") | bits("WOUND"), WOUND_TAG);
+    }
 
     #[test]
     fn blood_dries_from_wet_and_levels_off() {

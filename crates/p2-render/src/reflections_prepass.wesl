@@ -18,45 +18,7 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 
 @if(BINDLESS)
 import bevy_pbr::render::pbr_bindings::material_indices;
-
-// As `layer_bindings.wesl` and `actor_light.wesl` declare them.
-struct ShaderLayers {
-    detail: vec4<f32>,
-    specular: vec4<f32>,
-    specular_u: vec4<f32>,
-    specular_v: vec4<f32>,
-    blend: vec4<f32>,
-}
-
-struct HardwareLight {
-    position: vec4<f32>,
-    direction: vec3<f32>,
-    kind: u32,
-    color: vec4<f32>,
-    attenuation: vec4<f32>,
-}
-
-struct Lighting {
-    ambient: vec3<f32>,
-    count: u32,
-    lights: array<HardwareLight, 8>,
-}
-
-struct ActorShading {
-    lighting: Lighting,
-    layers: ShaderLayers,
-    overlay: u32,
-}
-
-struct LayerIndices {
-    data: u32,
-    detail: u32,
-    detail_sampler: u32,
-    specular: u32,
-    specular_sampler: u32,
-    flat_specular: u32,
-    flat_specular_sampler: u32,
-}
+import package::p2_render::layer_types::{ActorShading, LayerIndices, ShaderLayers};
 
 @if(BINDLESS)
 @group(3) @binding(108) var<storage> layer_indices: array<LayerIndices>;

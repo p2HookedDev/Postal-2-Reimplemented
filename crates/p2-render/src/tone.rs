@@ -2,10 +2,10 @@
 //! draws it through the tone curve into the frame the HUD's actors, canvas layers and the gamma ramp then draw on. The
 //! same quad adds the sun's rays, the colour settings, the vignette and the colour fringe.
 
-use bevy::app::{App, Plugin, Startup, Update};
-use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
+use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
+use bevy::asset::{Asset, AssetEventSystems, Assets, Handle, RenderAssetUsages, uuid_handle};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use bevy::camera::{Camera, Camera2d, ClearColorConfig, Hdr};
+use bevy::camera::{Camera, Camera2d, CameraUpdateSystems, ClearColorConfig, Hdr};
 use bevy::color::Color;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::prelude::{Commands, Component, Has, Query, Res, ResMut, Resource, Single, SystemSet, With, Without};
@@ -21,6 +21,7 @@ use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::shader::{Shader, ShaderRef};
 use bevy::shape::Rectangle;
 use bevy::sprite_render::{Material2d, Material2dPlugin, MeshMaterial2d};
+use bevy::transform::TransformSystems;
 use bevy::transform::components::GlobalTransform;
 use bevy::window::{PrimaryWindow, Window};
 
@@ -51,7 +52,9 @@ impl Plugin for TonePlugin {
         add_shaders(app, [(TONE_SHADER,Shader::from_wesl(include_str!("tone.wesl"), "p2_render/tone.wesl"))]);
         app.add_plugins(Material2dPlugin::<ToneMaterial>::default())
             .add_systems(Startup, setup)
-            .add_systems(Update, (apply, follow_effects).in_set(ToneSystems::Apply));
+            .add_systems(Update, apply.in_set(ToneSystems::Apply))
+            // Before the frame's asset events go out, so the changed material reaches the renderer this frame.
+            .add_systems(PostUpdate, follow_effects.after(TransformSystems::Propagate).after(CameraUpdateSystems).before(AssetEventSystems));
     }
 }
 

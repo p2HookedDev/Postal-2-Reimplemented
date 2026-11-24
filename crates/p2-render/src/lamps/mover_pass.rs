@@ -26,7 +26,7 @@ use rustc_hash::FxHashMap;
 
 use super::LampAtlas;
 use super::atlas::{GUARD_TEXELS, NEAR, PlainTilesDrawn, bytes_of, submit_timed};
-use super::cells::{BOOK_WIDTH, HEADER_TEXELS, RECORD_TEXELS};
+use super::cells::{BOOK_WIDTH, CAPSULES_FROM_END, HEADER_TEXELS, RECORD_TEXELS, TILE_GRID_FROM_END, TILES_FROM_END};
 use super::faces::DETAIL_UNIT;
 use super::movers::{Drawn, MOST_MOVER_TILES, MoverCaster, MoverTile, MoverTiles};
 
@@ -324,16 +324,16 @@ pub(super) fn draw_mover_tiles(
         state.grounding.clear();
         state.tile_grid.clear();
     }
-    let last_row = book_image.texture_descriptor.size.height.saturating_sub(1);
+    let height = book_image.texture_descriptor.size.height;
     if !movers.grounding.is_empty() && state.grounding != movers.grounding {
         for (grid, row) in movers.grounding.chunks(BOOK_WIDTH).enumerate() {
-            write_book(&queue, book_image, 0, last_row.saturating_sub(1) + grid as u32, row);
+            write_book(&queue, book_image, 0, height.saturating_sub(CAPSULES_FROM_END) + grid as u32, row);
         }
         state.grounding.clone_from(&movers.grounding);
     }
     if !movers.tile_grid.is_empty() && state.tile_grid != movers.tile_grid {
         for (at, row) in movers.tile_grid.chunks(BOOK_WIDTH).enumerate() {
-            write_book(&queue, book_image, 0, last_row.saturating_sub(7) + at as u32, row);
+            write_book(&queue, book_image, 0, height.saturating_sub(TILE_GRID_FROM_END) + at as u32, row);
         }
         state.tile_grid.clone_from(&movers.tile_grid);
     }
@@ -418,7 +418,7 @@ pub(super) fn draw_mover_tiles(
         }
         texels
     }));
-    write_book(&queue, book_image, 0, last_row.saturating_sub(2), row);
+    write_book(&queue, book_image, 0, height.saturating_sub(TILES_FROM_END), row);
 }
 
 #[cfg(test)]

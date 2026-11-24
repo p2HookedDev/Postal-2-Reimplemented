@@ -246,10 +246,11 @@ pub fn apply(
             camera.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
         }
         let fire_volumes = settings.modern_level(p2_host::display::MODERN_FIRE_VOLUMES) > 0;
-        if fire_volumes {
+        let lamp_fog = settings.modern_level(p2_host::display::MODERN_VOLUMETRIC_FOG) > 0;
+        if fire_volumes || lamp_fog {
             camera.insert(DepthPrepass);
         }
-        if contact == 0 && ao == 0 && !culled && !screen_reflections && !fire_volumes {
+        if contact == 0 && ao == 0 && !culled && !screen_reflections && !fire_volumes && !lamp_fog {
             camera.remove::<DepthPrepass>();
         }
         // Above level 1 the world shaders use their own filter; Gaussian is for the actors.

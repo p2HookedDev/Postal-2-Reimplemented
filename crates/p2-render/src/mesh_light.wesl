@@ -5,7 +5,7 @@ import bevy_pbr::{
         forward_io::{VertexOutput, FragmentOutput},
     },
 };
-import package::p2_render::projector::{apply_decals, cluster_ranges, mesh_target, project};
+import package::p2_render::projector::{cluster_ranges, mesh_target, project};
 import package::p2_render::dynamic_light::dynamic_light;
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -26,7 +26,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     plain.color = vec4(1.0);
     var pbr_input = pbr_input_from_standard_material(plain, is_front);
     let ranges = cluster_ranges(pbr_input);
-    apply_decals(&pbr_input, ranges);
     var color = pbr_input.material.base_color;
     let texture = color.rgb;
     let layers = material_layers(in);
@@ -38,7 +37,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if is_modern(layers.detail.z) && sun_found(sun) {
         let bumped = base_relief(in, pbr_input, normal, layers.detail.z);
         let darken = layers.blend.x != 0.0;
-        let incoming = modern_light(in, pbr_input, sun, normal, bumped, ranges, layers.detail.z, layers.blend, darken);
+        let incoming = modern_light(in, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken);
         color = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), dynamic_light(pbr_input.world_position, normal, ranges));
     } else {
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);

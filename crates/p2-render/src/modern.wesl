@@ -219,8 +219,14 @@ fn sky_mask(material_flags: u32, alpha: f32) -> f32 {
     return select(alpha, 0.0, solid && lights.ambient_color.a < SKY_VIEW_MARK);
 }
 
+// Only an alpha-blend pipeline has the def, so the glass path is compiled into no other.
 fn is_see_through(material_flags: u32) -> bool {
+@if(P2_SEE_THROUGH) {
     return (material_flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS) == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_BLEND;
+}
+@else {
+    return false;
+}
 }
 
 // Moving lights that are not real-time shadowed yet: added in display space as retail's are.

@@ -30,6 +30,7 @@ const TONE_CURVE_SHADER: Handle<Shader> = uuid_handle!("2c8f6e14-d93a-4b07-8e51-
 const SCREEN_PASS_SHADER: Handle<Shader> = uuid_handle!("7a5c3e91-2d48-4f6b-9e07-b1c84d2f6a39");
 const SURFACE_SHADER: Handle<Shader> = uuid_handle!("5d2a8f47-b13c-4e69-a0d5-c8e71f39b264");
 const MATERIAL_LAYERS_SHADER: Handle<Shader> = uuid_handle!("8e41c7d2-5a9f-4b36-a1c8-6f02d3e9b574");
+const LAYER_TYPES_SHADER: Handle<Shader> = uuid_handle!("c4f2a917-6e3b-4d08-9b5a-2e71d8f04c63");
 
 pub(crate) struct ShaderLibraryPlugin;
 
@@ -54,6 +55,7 @@ impl Plugin for ShaderLibraryPlugin {
             (SCREEN_PASS_SHADER, Shader::from_wesl(include_str!("screen_pass.wesl"), "p2_render/screen_pass.wesl")),
             (SURFACE_SHADER, Shader::from_wesl(include_str!("surface.wesl"), "p2_render/surface.wesl")),
             (MATERIAL_LAYERS_SHADER, Shader::from_wesl(include_str!("material_layers.wesl"), "p2_render/material_layers.wesl")),
+            (LAYER_TYPES_SHADER, Shader::from_wesl(include_str!("layer_types.wesl"), "p2_render/layer_types.wesl")),
         ]);
     }
 }
@@ -75,6 +77,29 @@ where
     add_libraries(app);
     add_shaders(app, [(handle, Shader::from_wesl(source, path))]);
     app.add_plugins(MaterialPlugin::<M>::default());
+}
+
+/// The value of `const name` in a shader's source, for a test that holds a Rust constant to the shader's twin of it.
+#[cfg(test)]
+pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
+    let head = format!("const {name}:");
+    let line = source.lines().map(str::trim).find(|line| line.starts_with(&head)).unwrap_or_else(|| panic!("no const {name} in the shader"));
+    let value = line.split_once('=').map(|(_, value)| value.trim().trim_end_matches(';').trim()).unwrap_or_else(|| panic!("const {name} has no value"));
+    let value = value.strip_suffix(['u', 'i']).unwrap_or(value);
+    let parsed = match value.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16).map(|bits| bits as f64).ok(),
+        None => value.trim_end_matches('f').parse().ok(),
+    };
+    parsed.unwrap_or_else(|| panic!("const {name} = {value} is not a number"))
+}
+
+/// Bevy gives an alpha-blend pipeline no def of its own; the lit surfaces' see-through path is compiled into those only.
+pub(crate) fn mark_see_through(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
+    if key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA
+        && let Some(fragment) = descriptor.fragment.as_mut()
+    {
+        fragment.shader_defs.push("P2_SEE_THROUGH".into());
+    }
 }
 
 /// Bevy's shadow pass takes the material's cull mode, and a level's faces look into its empty space: from the sun's side

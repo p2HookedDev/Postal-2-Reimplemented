@@ -3,26 +3,38 @@
 
 use bevy::math::{Vec2, Vec3};
 
-use super::cells::BOOK_WIDTH;
+use super::cells::{BOOK_WIDTH, TILE_GRID_FROM_END, TILES_FROM_END};
 use super::movers::{MOST_MOVER_TILES, MoverTile};
 
 /// Columns to a side of the grid. `lamp_shadow.wesl` holds the same number.
 const GRID_SIDE: usize = 64;
 const COLUMN_UNITS: f32 = 128.0;
 const GRID_ROWS: usize = (1 + 2 * GRID_SIDE * GRID_SIDE).div_ceil(BOOK_WIDTH);
-/// How much wider than its tangent `lamp_shadow.wesl` lets a tile reach.
+const _: () = assert!(GRID_ROWS == (TILE_GRID_FROM_END - TILES_FROM_END) as usize && 2 * MOST_MOVER_TILES <= BOOK_WIDTH);
+/// How much wider than its tangent `lamp_shadow.wesl` lets a tile reach. `lamp_shadow.wesl` holds the same number.
 const REACH_WIDENING: f32 = 1.4143;
 
 /// Fills `rows` with the grid: its low corner in x and z, a column's side and 1; then two texels a column, naming up to
 /// eight tiles by their place in `tiles` from 1, or -1 first when more cross it. A column may name a tile that does
-/// not shade it, never the reverse.
-pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32; 4]>) {
+/// not shade it, never the reverse. Leaves `rows` as they are when `made_from` holds the bits of the same inputs, and
+/// says whether it built them.
+pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32; 4]>, made_from: &mut Vec<u32>) -> bool {
+    let low = Vec2::from([eye.x, eye.z].map(|at| ((at / COLUMN_UNITS).floor() - (GRID_SIDE / 2) as f32) * COLUMN_UNITS));
+    let tiles = &tiles[..tiles.len().min(MOST_MOVER_TILES)];
+    let inputs = || {
+        let read = tiles.iter().flat_map(|tile| [tile.lamp_at.x, tile.lamp_at.z, tile.axis.x, tile.axis.z, tile.tan_half, tile.near, tile.lamp_radius]);
+        low.to_array().into_iter().chain(read).map(f32::to_bits)
+    };
+    if rows.len() == GRID_ROWS * BOOK_WIDTH && made_from.iter().copied().eq(inputs()) {
+        return false;
+    }
+    made_from.clear();
+    made_from.extend(inputs());
     rows.clear();
     rows.resize(GRID_ROWS * BOOK_WIDTH, [0.0; 4]);
-    let low = Vec2::from([eye.x, eye.z].map(|at| ((at / COLUMN_UNITS).floor() - (GRID_SIDE / 2) as f32) * COLUMN_UNITS));
     rows[0] = [low.x, low.y, COLUMN_UNITS, 1.0];
     let slack = COLUMN_UNITS * std::f32::consts::FRAC_1_SQRT_2;
-    for (index, tile) in tiles.iter().take(MOST_MOVER_TILES).enumerate() {
+    for (index, tile) in tiles.iter().enumerate() {
         let name = (index + 1) as f32;
         let (from, axis) = (Vec2::new(tile.lamp_at.x, tile.lamp_at.z), Vec2::new(tile.axis.x, tile.axis.z));
         let widening = tile.tan_half * REACH_WIDENING;
@@ -60,12 +72,21 @@ pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32
             }
         }
     }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::movers::Drawn;
     use super::*;
+    use crate::shaders::shader_const;
+
+    #[test]
+    fn the_shader_reads_the_grid_as_it_is_written() {
+        let shader = include_str!("../lamp_shadow.wesl");
+        assert_eq!(shader_const(shader, "TILE_GRID_SIDE"), GRID_SIDE as f64);
+        assert_eq!(shader_const(shader, "REACH_WIDENING") as f32, REACH_WIDENING);
+    }
 
     fn crossing_tile(lamp_at: Vec3, middle: Vec3) -> MoverTile {
         let (radius, distance) = (50.0, lamp_at.distance(middle));
@@ -82,7 +103,7 @@ mod tests {
     fn a_column_names_the_tiles_whose_shadow_crosses_it_and_no_others() {
         let (lamp, middle) = (Vec3::new(-200.0, 300.0, 0.0), Vec3::new(400.0, 50.0, 0.0));
         let mut rows = Vec::new();
-        tile_grid_rows(Vec3::ZERO, &[crossing_tile(lamp, middle)], &mut rows);
+        tile_grid_rows(Vec3::ZERO, &[crossing_tile(lamp, middle)], &mut rows, &mut Vec::new());
         assert_eq!(rows.len(), 5 * BOOK_WIDTH);
         assert_eq!(rows[0], [-4096.0, -4096.0, COLUMN_UNITS, 1.0]);
         assert_eq!(named_by(&rows, middle)[0], 1.0);
@@ -95,10 +116,26 @@ mod tests {
     fn a_column_crossed_by_more_than_eight_tiles_starts_with_minus_one() {
         let tile = crossing_tile(Vec3::new(-200.0, 300.0, 0.0), Vec3::new(400.0, 50.0, 0.0));
         let mut rows = Vec::new();
-        tile_grid_rows(Vec3::ZERO, &[tile; 8], &mut rows);
+        tile_grid_rows(Vec3::ZERO, &[tile; 8], &mut rows, &mut Vec::new());
         assert_eq!(named_by(&rows, Vec3::new(400.0, 0.0, 0.0)), (1..=8u8).map(f32::from).collect::<Vec<_>>());
-        tile_grid_rows(Vec3::ZERO, &[tile; 9], &mut rows);
+        tile_grid_rows(Vec3::ZERO, &[tile; 9], &mut rows, &mut Vec::new());
         assert_eq!(named_by(&rows, Vec3::new(400.0, 0.0, 0.0))[0], -1.0);
+    }
+
+    #[test]
+    fn the_same_inputs_leave_the_grid_and_a_changed_tile_builds_it_again() {
+        let tile = crossing_tile(Vec3::new(-200.0, 300.0, 0.0), Vec3::new(400.0, 50.0, 0.0));
+        let (mut rows, mut made_from) = (Vec::new(), Vec::new());
+        assert!(tile_grid_rows(Vec3::ZERO, &[tile], &mut rows, &mut made_from));
+        rows[1] = [9.0; 4];
+        assert!(!tile_grid_rows(Vec3::new(10.0, 50.0, 10.0), &[tile], &mut rows, &mut made_from));
+        assert_eq!(rows[1], [9.0; 4]);
+        let moved = MoverTile { near: tile.near + 1.0, ..tile };
+        assert!(tile_grid_rows(Vec3::ZERO, &[moved], &mut rows, &mut made_from));
+        let mut fresh = Vec::new();
+        tile_grid_rows(Vec3::ZERO, &[moved], &mut fresh, &mut Vec::new());
+        assert_eq!(rows, fresh);
+        assert!(tile_grid_rows(Vec3::new(200.0, 0.0, 0.0), &[moved], &mut rows, &mut made_from));
     }
 
     #[test]
@@ -113,7 +150,7 @@ mod tests {
             let axis = Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5).try_normalize().unwrap_or(Vec3::NEG_Y);
             let tile = MoverTile { axis, tan_half: 0.05 + next() * 1.95, near: next() * 600.0, lamp_radius: 100.0 + next() * 2500.0, ..crossing_tile(lamp_at, lamp_at + axis * 100.0) };
             let mut rows = Vec::new();
-            tile_grid_rows(Vec3::ZERO, &[tile], &mut rows);
+            tile_grid_rows(Vec3::ZERO, &[tile], &mut rows, &mut Vec::new());
             let (low, side) = (Vec2::new(rows[0][0], rows[0][1]), GRID_SIDE as f32 * COLUMN_UNITS);
             let near = tile.near.min(tile.lamp_radius);
             for step in 0..=200 {

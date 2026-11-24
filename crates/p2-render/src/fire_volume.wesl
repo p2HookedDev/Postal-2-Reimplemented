@@ -3,6 +3,7 @@
 // of that to the frame, as retail adds its flame sprites; the fire's smoke stays sprites.
 
 import bevy_render::view::View;
+import package::p2_render::screen_pass::gradient_noise;
 
 struct FullscreenOutput {
     @builtin(position) position: vec4<f32>,
@@ -100,7 +101,8 @@ fn black_body(heat: f32) -> vec3<f32> {
 @fragment
 fn march(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let size = vec2<i32>(textureDimensions(depth));
-    let texel = min(vec2<i32>(in.position.xy) * 2, size - 1);
+    // The marched texture covers the viewport, the depth prepass the whole target.
+    let texel = min(vec2<i32>(in.position.xy) * 2 + vec2<i32>(view.viewport.xy), size - 1);
     let ndc = vec2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
     let eye = view.world_position;
     let near = view.world_from_clip * vec4(ndc, 1.0, 1.0);
@@ -112,7 +114,7 @@ fn march(in: FullscreenOutput) -> @location(0) vec4<f32> {
         scene = distance(at.xyz / at.w, eye);
     }
     let inverse = select(1.0 / toward, vec3(1e9), abs(toward) < vec3(1e-6));
-    let jitter = fract(52.9829189 * fract(dot(in.position.xy, vec2(0.06711056, 0.00583715))));
+    let jitter = gradient_noise(in.position.xy);
     var light = vec3(0.0);
     var clear = 1.0;
     for (var i = 0u; i < min(fires.count, MAX_VOLUMES); i++) {
@@ -147,7 +149,7 @@ fn march(in: FullscreenOutput) -> @location(0) vec4<f32> {
 @fragment
 fn composite(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let last = vec2<i32>(textureDimensions(marched)) - 1;
-    let at = in.position.xy * 0.5 - 0.5;
+    let at = (in.position.xy - view.viewport.xy) * 0.5 - 0.5;
     let base = vec2<i32>(floor(at));
     let f = at - floor(at);
     let a = textureLoad(marched, clamp(base, vec2(0), last), 0);
