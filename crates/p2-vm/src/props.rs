@@ -87,6 +87,7 @@ properties!(
     FluidHeightScale, FluidSpeed, FluidDamping, FluidNoiseFrequency, FluidNoiseStrength, UTiles, UOffset, VTiles, VOffset,
     AlphaCurveScale, AlphaHeightScale, AlphaMax, RippleVelocityFactor, WarmUpTime, UpdateRate, ClampBitmap, FluidInfo,
     Frequency, Phase, Strength,
+    MyType, bOnFire,
 );
 
 /// Every property the host reads to draw an actor: its frame, its look and a restyle. A write that changes one moves
@@ -98,7 +99,7 @@ pub(crate) const DRAWN: &[Prop] = &[
     Prop::Disabled, Prop::Mesh, Prop::StaticMesh, Prop::Skins, Prop::DrawType, Prop::bUnlit, Prop::AmbientGlow,
     Prop::MaxLights, Prop::StaticMeshInstance, Prop::bCollideActors, Prop::bBlockActors, Prop::ForcedVisibilityZoneTag,
     Prop::bStatic, Prop::bAcceptsProjectors, Prop::Texture, Prop::Style, Prop::Tag, Prop::bCorona,
-    Prop::CullDistance,
+    Prop::CullDistance, Prop::MyType, Prop::bOnFire,
 ];
 
 macro_rules! kinds {
@@ -113,7 +114,7 @@ macro_rules! kinds {
 kinds!(
     Actor, Pawn, Controller, PlayerController, Brush, Mover, Projectile, KConstraint, Volume, BlockingVolume,
     SceneManager, FPSPawn, NavigationPoint, AIController, Decoration, LevelInfo, KarmaParamsSkel, PhysicsVolume,
-    FluidPuddle, Emitter, Projector, Movie, CameraTitle, FireEmitter, XMuzzleFlashEmitter, MuzzleFlashAttachment,
+    FluidPuddle, FluidTrail, FluidDripTrail, FluidFeeder, FluidDripFeeder, Emitter, Projector, Movie, CameraTitle, FireEmitter, XMuzzleFlashEmitter, MuzzleFlashAttachment,
     ActionMoveCamera, SubActionOrientation, SubActionFade, SubActionFOV, SubActionSceneSpeed, SubActionGameSpeed, SubActionCameraShake, SubActionTrigger, SubActionCameraEffect, SubActionTitle, SubActionSceneProps,
 );
 

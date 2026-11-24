@@ -25,7 +25,7 @@ struct StageClocks {
     render: Arc<Mutex<StageClock>>,
     graph: Arc<Mutex<StageClock>>,
     passes: Arc<Mutex<StageClock>>,
-    draw_groups: Arc<Mutex<[usize; 9]>>,
+    draw_groups: Arc<Mutex<[usize; 13]>>,
 }
 
 #[derive(Resource, Clone, Default)]
@@ -38,7 +38,7 @@ struct RenderGraphClock(Arc<Mutex<StageClock>>);
 struct RenderPassClock(Arc<Mutex<StageClock>>);
 
 #[derive(Resource, Clone, Default)]
-struct RenderDrawGroups(Arc<Mutex<[usize; 9]>>);
+struct RenderDrawGroups(Arc<Mutex<[usize; 13]>>);
 
 fn tick(clock: &Mutex<StageClock>, stage: Option<usize>) {
     let mut clock = clock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -90,8 +90,10 @@ fn count_draw_groups(
     shadow: Res<ViewBinnedRenderPhases<Shadow>>,
     blended: Res<ViewSortedRenderPhases<Transparent3d>>,
     views: Query<(), With<ExtractedView>>,
+    (instance, mut frames): (Res<RenderInstance>, Local<u32>),
 ) {
-    groups.0.lock().unwrap_or_else(PoisonError::into_inner)[..8].copy_from_slice(&[
+    let mut groups = groups.0.lock().unwrap_or_else(PoisonError::into_inner);
+    groups[..8].copy_from_slice(&[
         binned(&opaque),
         binned(&masked),
         binned(&prepass),
@@ -101,6 +103,14 @@ fn count_draw_groups(
         views.iter().len(),
         shadow.values().filter(|phase| !phase.is_empty()).count(),
     ]);
+    // wgpu sizes every pass's and every command buffer's resource tracker by the live textures and buffers.
+    *frames = frames.wrapping_add(1);
+    if *frames % 30 == 1
+        && let Some(report) = instance.generate_report()
+    {
+        let hub = &report.hub;
+        groups[9..].copy_from_slice(&[&hub.textures, &hub.buffers, &hub.bind_groups, &hub.texture_views].map(|kind| kind.num_allocated));
+    }
 }
 
 /// wgpu encodes a pass when its encoder is finished. Bevy's submit system finishes them and submits in one step;
@@ -194,11 +204,15 @@ fn log_stage_timing(clocks: Res<StageClocks>, spans: Option<Res<SystemSpans>>, t
         *since = 0.0;
         let render_frames = frames_of(&clocks.render);
         let main_frames = frames_of(&clocks.main);
-        let [slowest, longest] = spans.map(|spans| spans.take_slowest(60, 10, main_frames)).unwrap_or_default();
-        if !slowest.is_empty() {
-            let list = |systems: &[(Arc<str>, f64)]| systems.iter().map(|(name, ms)| format!("{name} {ms:.3}")).collect::<Vec<_>>().join(", ");
-            bevy::log::info!("systems ms per frame, all threads: {}", list(&slowest));
-            bevy::log::info!("longest single run of a system this second (ms): {}", list(&longest));
+        let spans = spans.map(|spans| spans.take_second(60, 10, main_frames)).unwrap_or_default();
+        if !spans.slowest.is_empty() {
+            let list = |systems: &[(Arc<str>, f64, f64)]| systems.iter().map(|(name, ms, _)| format!("{name} {ms:.3}")).collect::<Vec<_>>().join(", ");
+            bevy::log::info!("systems ms per frame, all threads: {}", list(&spans.slowest));
+            bevy::log::info!("longest single run of a system this second (ms): {}", list(&spans.longest));
+        }
+        if !spans.wgpu.is_empty() {
+            let list: Vec<String> = spans.wgpu.iter().map(|(name, ms, runs)| format!("{} {ms:.3} ({runs:.1})", name.strip_prefix(WGPU).unwrap_or(name))).collect();
+            bevy::log::info!("wgpu ms per frame (calls a frame), all threads, nested scopes overlap: {}", list.join(", "));
         }
         let update = stage_list(&clocks.update, &UPDATE_STAGES, main_frames);
         let main = stage_list(&clocks.main, &MAIN_STAGES, main_frames);
@@ -241,12 +255,12 @@ fn log_scene_counts(
     *since = 0.0;
     let shown = |visible: &ViewVisibility| visible.get();
     let window = windows.iter().next().map_or([0, 0], |window| [window.physical_width(), window.physical_height()]);
-    let [opaque, masked, prepass, masked_prepass, shadow, blended, views, shadow_views_drawing, command_buffers] = *clocks.draw_groups.lock().unwrap_or_else(PoisonError::into_inner);
+    let [opaque, masked, prepass, masked_prepass, shadow, blended, views, shadow_views_drawing, command_buffers, textures, buffers, bind_groups, texture_views] = *clocks.draw_groups.lock().unwrap_or_else(PoisonError::into_inner);
     let movers = meshes.iter().filter(|(_, actor, bone)| *actor || *bone);
     let (tiles, most_tiles) = tiles.map_or((0, 0), |tiles| tiles.counts());
     let (movers_all, movers_shown) = movers.fold((0, 0), |(all, on), (visible, ..)| (all + 1, on + usize::from(shown(visible))));
     bevy::log::info!(
-        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; culling walks {} entities a camera, {} not hidden; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active, {command_buffers} command buffers submitted; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}; mover tiles {tiles}, {most_tiles} on the lamp with the most",
+        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; culling walks {} entities a camera, {} not hidden; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active, {command_buffers} command buffers submitted; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}; mover tiles {tiles}, {most_tiles} on the lamp with the most; live on the GPU: textures {textures}, buffers {buffers}, bind groups {bind_groups}, texture views {texture_views}",
         meshes.iter().len(),
         meshes.iter().filter(|(visible, ..)| shown(visible)).count(),
         culled.iter().len(),

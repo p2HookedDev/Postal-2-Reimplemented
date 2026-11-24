@@ -126,6 +126,7 @@ pub const QUERIES: &[&str] = &[
     MODERN_TEMPORAL_AA,
     MODERN_BOUNCE_LIGHT,
     MODERN_LIQUID_FLOW,
+    MODERN_LIQUIDS,
     MODERN_FIRE_VOLUMES,
     MODERN_VOLUMETRIC_FOG,
     MODERN_GPU_PARTICLES,
@@ -208,6 +209,8 @@ pub const MODERN_LAMP_SIZE: &str = "ini:Engine.Engine.RenderDevice ModernLampSiz
 pub const MODERN_TEMPORAL_AA: &str = "ini:Engine.Engine.RenderDevice ModernTemporalAA";
 pub const MODERN_BOUNCE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernBounceLight";
 pub const MODERN_LIQUID_FLOW: &str = "ini:Engine.Engine.RenderDevice ModernLiquidFlow";
+/// 0 draws the scripts' own streams and puddles; above 0 our liquid stream and surfaces, finer with the level.
+pub const MODERN_LIQUIDS: &str = "ini:Engine.Engine.RenderDevice ModernLiquids";
 pub const MODERN_FIRE_VOLUMES: &str = "ini:Engine.Engine.RenderDevice ModernFireVolumes";
 pub const MODERN_VOLUMETRIC_FOG: &str = "ini:Engine.Engine.RenderDevice ModernVolumetricFog";
 pub const MODERN_GPU_PARTICLES: &str = "ini:Engine.Engine.RenderDevice ModernGpuParticles";
@@ -251,7 +254,7 @@ const PHOTO_FOV_LEAST: u8 = 10;
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 51] = [
+const LEVELS: [(&str, u8, u8); 52] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
@@ -287,6 +290,7 @@ const LEVELS: [(&str, u8, u8); 51] = [
     (MODERN_TEMPORAL_AA, 0, 0),
     (MODERN_BOUNCE_LIGHT, 0, 0),
     (MODERN_LIQUID_FLOW, 1, 1),
+    (MODERN_LIQUIDS, 6, 10),
     (MODERN_FIRE_VOLUMES, 0, 0),
     (MODERN_VOLUMETRIC_FOG, 0, 0),
     (MODERN_GPU_PARTICLES, 5, 10),
@@ -533,9 +537,9 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 0, 0, 5, 1, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 6, 0, 0, 5, 1, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0]);
         let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
-        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]);
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 10, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
         assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 0);
         assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);

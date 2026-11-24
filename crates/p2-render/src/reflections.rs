@@ -40,7 +40,8 @@ use crate::shaders::{add_libraries, add_shaders};
 use crate::view::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
-const CLASS_PREPASS_SHADER: Handle<Shader> = uuid_handle!("e2a4f9c1-7b36-4d58-9f0e-3c81b6d27a45");
+/// Registered with the shared libraries: every app with the lit materials draws their prepass through it.
+pub(crate) const CLASS_PREPASS_SHADER: Handle<Shader> = uuid_handle!("e2a4f9c1-7b36-4d58-9f0e-3c81b6d27a45");
 /// From this level the march reaches its whole length; from the next every pixel steps one pixel at a time.
 const WHOLE_MARCH_LEVEL: u8 = 2;
 const EVERY_PIXEL_LEVEL: u8 = 3;
@@ -58,7 +59,6 @@ impl Plugin for ReflectionsPlugin {
         }
         add_libraries(app);
         add_shaders(app, [(REFLECTIONS_SHADER, Shader::from_wesl(include_str!("reflections.wesl"), "p2_render/reflections.wesl"))]);
-        add_shaders(app, [(CLASS_PREPASS_SHADER, Shader::from_wesl(include_str!("reflections_prepass.wesl"), "p2_render/reflections_prepass.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<Reflections>::default())
             .add_systems(PostUpdate, follow_reflection_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

@@ -127,6 +127,9 @@ fn particle_actor(actor: ObjectId, parent: Entity, simulation: Emitter, draws: V
         frames: ParticleFrames::default(),
         turn: Turn::default(),
         puddle_seed: None,
+        liquid: None,
+        fluid: None,
+        burning: false,
     }
 }
 

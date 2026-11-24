@@ -160,9 +160,16 @@ pub(super) struct LampBake {
     masked_indices: Vec<u32>,
     masked_ranges: Vec<MaskedRange>,
     masked_images: Vec<Handle<Image>>,
+    /// The book's rows that hold the lamp records, whole, as the bake wrote them.
+    records: Vec<[f32; 4]>,
 }
 
 impl LampBake {
+    pub(super) fn keep_record_rows(&mut self, book: &[[f32; 4]]) {
+        let rows = (HEADER_TEXELS + self.tiles.len() * RECORD_TEXELS).div_ceil(BOOK_WIDTH);
+        self.records = book.iter().copied().chain(std::iter::repeat([0.0; 4])).take(rows * BOOK_WIDTH).collect();
+    }
+
     pub(super) fn tile_bits(&self, lamp: usize) -> u32 {
         self.tiles.get(lamp).copied().flatten().map_or(UNMAPPED, Tile::packed)
     }
@@ -230,6 +237,7 @@ pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], la
         masked_indices,
         masked_ranges,
         masked_images: masked.iter().map(|caster| caster.image.clone()).collect(),
+        records: Vec::new(),
     }
 }
 
@@ -475,21 +483,64 @@ fn draw_tiles(encoder: &mut CommandEncoder, ready: &Ready, bake: &LampBake, load
     }
 }
 
+/// Book rows from `row` on, whole rows in one write and a short last row in a second.
+pub(super) fn write_rows(queue: &RenderQueue, book: &GpuImage, row: u32, texels: &[[f32; 4]]) {
+    let whole = texels.len() / BOOK_WIDTH;
+    let (full, rest) = texels.split_at(whole * BOOK_WIDTH);
+    for (row, texels, rows) in [(row, full, whole), (row + whole as u32, rest, 1)] {
+        if texels.is_empty() {
+            continue;
+        }
+        queue.write_texture(
+            TexelCopyTextureInfo { texture: &book.texture, mip_level: 0, origin: Origin3d { x: 0, y: row, z: 0 }, aspect: TextureAspect::All },
+            &bytes_of(texels),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some((texels.len() / rows * 16) as u32), rows_per_image: None },
+            Extent3d { width: (texels.len() / rows) as u32, height: rows as u32, depth_or_array_layers: 1 },
+        );
+    }
+}
+
+/// The book's record rows as the GPU holds them. Every write makes a staging buffer of its own, so the lamps' changed
+/// texels are set here and the rows they fall in go out in one write.
+#[derive(Resource, Default)]
+pub(super) struct BookRecords {
+    key: Option<(usize, AssetId<Image>)>,
+    texels: Vec<[f32; 4]>,
+    dirty: Option<Range<usize>>,
+}
+
+impl BookRecords {
+    pub(super) fn set(&mut self, bake: &Arc<LampBake>, book: AssetId<Image>, index: usize, texel: [f32; 4]) {
+        let key = (Arc::as_ptr(bake).addr(), book);
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.texels.clone_from(&bake.records);
+            self.dirty = None;
+        }
+        let Some(held) = self.texels.get_mut(index) else { return };
+        if held.map(f32::to_bits) == texel.map(f32::to_bits) {
+            return;
+        }
+        *held = texel;
+        self.dirty = Some(self.dirty.take().map_or(index..index + 1, |dirty| dirty.start.min(index)..dirty.end.max(index + 1)));
+    }
+
+    pub(super) fn write(&mut self, queue: &RenderQueue, book: &GpuImage) {
+        let Some(dirty) = self.dirty.take() else { return };
+        let rows = dirty.start / BOOK_WIDTH..(dirty.end - 1) / BOOK_WIDTH + 1;
+        write_rows(queue, book, rows.start as u32, &self.texels[rows.start * BOOK_WIDTH..rows.end * BOOK_WIDTH]);
+    }
+}
+
 /// The fourth and fifth texels of a lamp's record in the book: the square of each of its six faces that has one, 0 for
 /// a face that reads the plain tile.
-fn write_faces(queue: &RenderQueue, book: &GpuImage, lamp: u32, faces: &[FaceSlot]) {
+fn set_faces(records: &mut BookRecords, bake: &Arc<LampBake>, book: AssetId<Image>, lamp: u32, faces: &[FaceSlot]) {
     let mut packed = [[0.0f32; 4]; 2];
     for slot in faces.iter().filter(|slot| slot.lamp == lamp) {
         packed[usize::from(slot.face) / 4][usize::from(slot.face) % 4] = slot.packed();
     }
-    for (at, texel) in packed.iter().enumerate() {
-        let index = HEADER_TEXELS + lamp as usize * RECORD_TEXELS + 3 + at;
-        queue.write_texture(
-            TexelCopyTextureInfo { texture: &book.texture, mip_level: 0, origin: Origin3d { x: (index % BOOK_WIDTH) as u32, y: (index / BOOK_WIDTH) as u32, z: 0 }, aspect: TextureAspect::All },
-            &bytes_of(&[*texel]),
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
-            Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
+    for (at, texel) in packed.into_iter().enumerate() {
+        records.set(bake, book, HEADER_TEXELS + lamp as usize * RECORD_TEXELS + 3 + at, texel);
     }
 }
 
@@ -503,6 +554,7 @@ pub(super) fn draw_lamp_atlas(
     mut pending: ResMut<PendingCommandBuffers>,
     recorder: Option<Res<DiagnosticsRecorder>>,
     mut plain: ResMut<PlainTilesDrawn>,
+    mut records: ResMut<BookRecords>,
     mut state: Local<AtlasDraw>,
 ) {
     let state = &mut *state;
@@ -610,8 +662,11 @@ pub(super) fn draw_lamp_atlas(
         let ready = Ready { solid, masked, clear, target, buffers };
         submit_timed(&device, &mut pending, recorder.as_deref(), "lamp atlas", |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Load, &jobs));
     }
-    for lamp in changed {
-        write_faces(&queue, book, lamp, &atlas.faces);
+    if let Some(book_id) = atlas.book.as_ref().map(Handle::id) {
+        for lamp in changed {
+            set_faces(&mut records, bake, book_id, lamp, &atlas.faces);
+        }
+        records.write(&queue, book);
     }
     state.detail.clone_from(&atlas.faces);
 }

@@ -36,6 +36,9 @@ pub struct ActorFrame {
     pub glow: u8,
     /// In Unreal units; 0 culls nothing.
     pub cull_distance: f32,
+    /// A `Fluid`'s `MyType`: the scripts set it after the spawn.
+    pub fluid: Option<p2_vm::FluidType>,
+    pub burning: bool,
 }
 
 /// Channels above 0 blend over channel 0. Bone names are lower case and shared, so frames allocate
@@ -82,6 +85,8 @@ impl ActorFrame {
             look: 0,
             glow: 0,
             cull_distance: 0.0,
+            fluid: None,
+            burning: false,
         }
     }
 }

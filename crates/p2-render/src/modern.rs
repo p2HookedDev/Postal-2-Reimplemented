@@ -24,9 +24,7 @@ use bevy::material::AlphaMode;
 use bevy::math::{Quat, Vec3};
 use bevy::mesh::Mesh3d;
 use bevy::pbr::{ContactShadows, ExtendedMaterial, MaterialExtension, MeshMaterial3d, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, StandardMaterial};
-use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::render::occlusion_culling::OcclusionCulling;
-use bevy::render::render_resource::BlendState;
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_math::Vector;
@@ -45,6 +43,8 @@ use crate::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step
 use crate::blended::{OpaqueDecals, TerrainLayerMaterial};
 use crate::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::map_lights::{MapLights, follow_map_lights};
+use crate::modern_bloom::ModernBloom;
+use bevy::render::render_resource::BlendState;
 use crate::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::particle_material::ParticleMaterial;
 use crate::sun_cache::{SunCachePlugin, SunCacheStale, follow_sun};
@@ -192,7 +192,7 @@ pub fn apply(
             if hdr_wanted {
                 camera.insert(Hdr);
             } else {
-                camera.remove::<(Hdr, Bloom)>();
+                camera.remove::<(Hdr, ModernBloom)>();
             }
         }
         if !view {
@@ -214,7 +214,7 @@ pub fn apply(
         if bloom_level > 0 {
             camera.insert(bloom(bloom_level));
         } else {
-            camera.remove::<Bloom>();
+            camera.remove::<ModernBloom>();
         }
         let mut post = commands.entity(tone.single().unwrap_or(entity));
         if sharpen > 0 {
@@ -273,13 +273,14 @@ fn sky_view_mark() -> AmbientLight {
 
 /// Added over the frame through a knee that starts at black: mid tones scatter a little, which is the haze, and bright
 /// light scatters most.
-pub fn bloom(level: u8) -> Bloom {
-    Bloom {
+pub fn bloom(level: u8) -> ModernBloom {
+    ModernBloom {
         intensity: f32::from(level) * BLOOM_PER_LEVEL,
         low_frequency_boost: 0.7,
-        prefilter: BloomPrefilter { threshold: 0.35, threshold_softness: 1.0 },
-        composite_mode: BloomCompositeMode::Additive,
-        ..Bloom::NATURAL
+        low_frequency_boost_curvature: 0.95,
+        high_pass_frequency: 1.0,
+        threshold: 0.35,
+        threshold_softness: 1.0,
     }
 }
 

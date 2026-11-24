@@ -19,7 +19,7 @@ use bevy::mesh::Mesh3d;
 use bevy::pbr::Shadow;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::render::render_phase::{BinnedPhaseItem, ViewBinnedRenderPhases, ViewSortedRenderPhases};
-use bevy::render::renderer::{RenderGraph, RenderGraphSystems};
+use bevy::render::renderer::{RenderGraph, RenderGraphSystems, RenderInstance};
 use bevy::render::view::ExtractedView;
 use bevy::window::Window;
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
@@ -49,7 +49,7 @@ use crate::play::Play;
 mod system_spans;
 mod stage_timing;
 
-use system_spans::{SpanTiming, SystemSpans};
+use system_spans::{SpanTiming, SystemSpans, WGPU};
 use stage_timing::a_second_passed;
 pub use stage_timing::{FrameWindow, StageTimingPlugin, log_frame_times};
 

@@ -1,10 +1,32 @@
 use super::*;
 
+/// The scripts rewrite the first emitter's `StartVelocityRange` every frame; it reaches the simulation's properties.
+fn pour(p: &ParticleActor) -> Option<Pour> {
+    let props = p.simulation.emitters().first()?.props();
+    let RangeVector { x, y, z } = props.start_velocity_range;
+    let relative = props.coordinate_system == CoordinateSystem::Relative;
+    let axes = p.turn.owner.rotation.axes();
+    let world = |v: Vector| if relative { p2_math::rotate_by(&axes, v) } else { v };
+    Some(Pour {
+        from: p.turn.place?,
+        velocity: [world([x.min, y.min, z.min].into()), world([x.max, y.max, z.max].into())],
+        acceleration: world(props.acceleration),
+        rate: props.particles_per_second,
+        flowing: props.particles_per_second > 0.0 && !props.disabled,
+    })
+}
+
 pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, slot: &mut DrawnActor, seen: bool, view: p2_particles::View) {
     let DrawBuffers { strip_order } = buffers;
     slot.parent = p.parent;
     (slot.seen, slot.drawn, slot.overlay, slot.puddle_seed) = (seen, p.drawn, p.overlay, p.puddle_seed);
     slot.place = p.turn.place;
+    slot.liquid = p.liquid.zip(p.fluid).map(|(role, kind)| Liquid {
+        kind,
+        role,
+        burning: p.burning,
+        pour: matches!(role, LiquidRole::Stream | LiquidRole::Drip).then(|| pour(p)).flatten(),
+    });
     slot.emitters.resize_with(p.draws.len(), Default::default);
     for (index, draw) in p.draws.iter().enumerate() {
         let DrawnEmitter { sprites, strip, beams, meshes, shape } = &mut slot.emitters[index];

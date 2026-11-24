@@ -20,6 +20,7 @@ function CreateMenuContents()
 	AddBox(4, "ModernLiquidFlow");
 	AddBox(5, "ModernFireLight");
 	AddLevelSlider(6, "ModernGpuParticles", 0, 10, 5);
+	AddLevelSlider(7, "ModernLiquids", 0, 10, 6);
 	AddBack();
 	LoadRows();
 }
@@ -44,6 +45,7 @@ defaultproperties
 	Labels(4)="Puddles and streams"
 	Labels(5)="Fire and muzzle flash light"
 	Labels(6)="GPU particles"
+	Labels(7)="Liquids"
 
 	Helps(0)="Smoke and other particles are lit by the room, the sun and nearby lamps."
 	Helps(1)="Particles fade where they touch walls and floors instead of cutting into them."
@@ -52,4 +54,5 @@ defaultproperties
 	Helps(4)="Smoother streams and uneven puddle edges."
 	Helps(5)="Fire and gunshots light up nearby people, walls and smoke."
 	Helps(6)="Extra blood, sparks and debris that bounce off surfaces. Higher adds more."
+	Helps(7)="Blood, urine, gasoline and puke pour, splash and shine like real liquid. Higher is finer."
 }

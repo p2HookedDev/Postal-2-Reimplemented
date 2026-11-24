@@ -3,8 +3,6 @@
 //! blast moves it again; a spark bounces and burns out. Pieces share small physics worlds by place; nothing reads them back.
 
 use std::f32::consts::TAU;
-use std::ops::RangeInclusive;
-use std::sync::Arc;
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Asset, AssetId, Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -25,7 +23,6 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::{Shader, ShaderRef};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
-use p2_assets::{Model, Terrain, fan_triangles, poly_flags};
 use p2_bevy_assets::{to_bevy, unreal_to_bevy};
 use p2_host::display::{MODERN_GPU_PARTICLES, Settings};
 use p2_math::Vector;
@@ -34,7 +31,7 @@ use rustc_hash::FxHashMap;
 
 use crate::frame_facts::FrameFacts;
 use crate::gpu_particles::{GpuParticleSystems, next_unit};
-use crate::level_collision::{LevelCollision, StaticCollision};
+use crate::level_collision::{LevelCollision, LevelTriangles};
 use crate::particle_draw::ParticleDrawSystems;
 use crate::particle_frame::{Blast, DrawnParticles};
 use crate::screen_pass::modern_level;
@@ -74,8 +71,6 @@ const STREAK: f32 = 12.0;
 const STREAK_SPEED: f32 = 300.0;
 /// The colour a spark burns to.
 const EMBER: Vec3 = Vec3::new(1.0, 0.15, 0.05);
-/// The node flag of a BSP node that does not divide solid from empty space.
-const NOT_CSG: u8 = 0x01;
 
 pub struct DebrisPlugin;
 
@@ -93,6 +88,7 @@ impl Plugin for DebrisPlugin {
             bevy::log::error!("debris tint buffer: {error}");
         }
         app.add_plugins(MaterialPlugin::<ExtendedMaterial<StandardMaterial, DebrisTint>>::default());
+        // After the droplets' thrower: it hands over this frame's pieces, and the hits' pushes come before it.
         app.init_resource::<PieceBirths>().init_resource::<Debris>().add_systems(
             PostUpdate,
             (start_pieces, move_pieces).chain().in_set(DebrisSystems).in_set(ParticleDrawSystems).after(GpuParticleSystems),
@@ -386,8 +382,7 @@ impl Loose {
 struct Debris {
     map: u32,
     loose: Loose,
-    /// The level the BSP's triangles were taken from, kept for the map.
-    bsp: Option<(Arc<StaticCollision>, TriangleGrid)>,
+    triangles: Option<LevelTriangles>,
     meshes: FxHashMap<(PieceKind, [u32; 4]), Handle<Mesh>>,
     /// By texture and whether it adds.
     materials: FxHashMap<(AssetId<Image>, bool), Handle<ExtendedMaterial<StandardMaterial, DebrisTint>>>,
@@ -402,7 +397,7 @@ impl Debris {
             self.loose.end(group);
         }
         self.loose.worlds.clear();
-        self.bsp = None;
+        self.triangles = None;
         self.meshes.clear();
         self.materials.clear();
     }
@@ -416,13 +411,13 @@ impl Debris {
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<ExtendedMaterial<StandardMaterial, DebrisTint>>,
     ) {
-        let Self { loose, bsp, meshes: held_meshes, materials: held_materials, eye, .. } = self;
-        let Some((collision, triangles)) = bsp.as_ref() else { return };
+        let Self { loose, triangles, meshes: held_meshes, materials: held_materials, eye, .. } = self;
+        let Some(triangles) = triangles.as_ref() else { return };
         if !loose.make_room(birth.parent, birth.kind, cap) {
             return;
         }
         let slot = loose.slots.take();
-        let world = loose.world_holding(birth.place, |centre| level_near(collision, triangles, centre));
+        let world = loose.world_holding(birth.place, |centre| triangles.near(centre, REACH));
         let at = match loose.joined(birth.parent, birth.kind) {
             Some(at) => at,
             None => {
@@ -503,110 +498,6 @@ fn groups_to_drop(sizes: &[usize], joins: Option<usize>, cap: usize) -> Option<u
         dropped += 1;
     }
     Some(dropped)
-}
-
-/// As the game's own physics takes the level: zone portals and the sky's backdrop do not stop a piece.
-fn bsp_triangles(model: &Model) -> Vec<[[f32; 3]; 3]> {
-    let skip = poly_flags::PORTAL | poly_flags::FAKE_BACKDROP;
-    model
-        .polygons()
-        .into_iter()
-        .filter(|polygon| polygon.poly_flags & skip == 0 && model.nodes.get(polygon.node).is_some_and(|node| node.node_flags & NOT_CSG == 0))
-        .flat_map(|polygon| fan_triangles(polygon.positions.len()).map(move |triangle| triangle.map(|i| polygon.positions[i])))
-        .collect()
-}
-
-fn reaching(triangles: &[[[f32; 3]; 3]], min: [f32; 3], max: [f32; 3]) -> impl Iterator<Item = [[f32; 3]; 3]> {
-    triangles.iter().copied().filter(move |triangle| p2_collision::triangle_reaches(min.into(), max.into(), triangle))
-}
-
-/// A triangle whose bounds cover more cells than this is tested for every world instead of listed in each cell.
-const CELLS_MOST: i64 = 4096;
-
-fn cells_of(min: [f32; 3], max: [f32; 3]) -> [RangeInclusive<i32>; 3] {
-    let cell = |value: f32| (value / REACH).floor() as i32;
-    std::array::from_fn(|k| cell(min[k])..=cell(max[k]))
-}
-
-fn each_cell([xs, ys, zs]: [RangeInclusive<i32>; 3]) -> impl Iterator<Item = [i32; 3]> {
-    xs.flat_map(move |x| {
-        let zs = zs.clone();
-        ys.clone().flat_map(move |y| zs.clone().map(move |z| [x, y, z]))
-    })
-}
-
-/// The map's BSP triangles, sorted once into a grid so a world tests only those near its box.
-#[derive(Default)]
-struct TriangleGrid {
-    triangles: Vec<[[f32; 3]; 3]>,
-    cells: FxHashMap<[i32; 3], Vec<u32>>,
-    wide: Vec<u32>,
-}
-
-impl TriangleGrid {
-    fn new(triangles: Vec<[[f32; 3]; 3]>) -> Self {
-        let mut grid = Self::default();
-        for (at, triangle) in triangles.iter().enumerate() {
-            let min = std::array::from_fn(|k| triangle.iter().map(|point| point[k]).fold(f32::INFINITY, f32::min));
-            let max = std::array::from_fn(|k| triangle.iter().map(|point| point[k]).fold(f32::NEG_INFINITY, f32::max));
-            let span = cells_of(min, max);
-            let count: i64 = span.iter().map(|range| (i64::from(*range.end()) - i64::from(*range.start()) + 1).max(0)).product();
-            if count > CELLS_MOST {
-                grid.wide.push(at as u32);
-                continue;
-            }
-            for cell in each_cell(span) {
-                grid.cells.entry(cell).or_default().push(at as u32);
-            }
-        }
-        grid.triangles = triangles;
-        grid
-    }
-
-    /// The same triangles in the same order as `reaching` over the whole list.
-    fn reaching(&self, min: [f32; 3], max: [f32; 3]) -> impl Iterator<Item = [[f32; 3]; 3]> {
-        let mut listed = self.wide.clone();
-        for cell in each_cell(cells_of(min, max)) {
-            listed.extend(self.cells.get(&cell).into_iter().flatten());
-        }
-        listed.sort_unstable();
-        listed.dedup();
-        listed
-            .into_iter()
-            .filter_map(move |at| self.triangles.get(at as usize).copied())
-            .filter(move |triangle| p2_collision::triangle_reaches(min.into(), max.into(), triangle))
-    }
-}
-
-fn terrain_near(terrain: &Terrain, min: [f32; 3], max: [f32; 3]) -> Vec<[[f32; 3]; 3]> {
-    if terrain.vertices.len() != terrain.width * terrain.height {
-        return Vec::new();
-    }
-    let span = |k: usize, size: usize| {
-        let cell = |value: f32| (value - terrain.location[k]) / terrain.scale[k] + (size / 2) as f32;
-        let (a, b, last) = (cell(min[k]), cell(max[k]), size.saturating_sub(2) as f32);
-        (a.min(b).floor().clamp(0.0, last) as usize)..=(a.max(b).floor().clamp(0.0, last) as usize)
-    };
-    let (xs, ys) = (span(0, terrain.width), span(1, terrain.height));
-    let triangles: Vec<[[f32; 3]; 3]> =
-        ys.flat_map(|y| xs.clone().map(move |x| (x, y))).flat_map(|(x, y)| terrain.quad_triangles(x, y)).map(|triangle| triangle.map(|i| terrain.vertices[i])).collect();
-    reaching(&triangles, min, max).collect()
-}
-
-fn level_near(collision: &StaticCollision, bsp: &TriangleGrid, centre: Vector) -> Vec<[[f32; 3]; 3]> {
-    let centre: [f32; 3] = centre.into();
-    let (min, max) = (centre.map(|c| c - REACH), centre.map(|c| c + REACH));
-    let mut near: Vec<[[f32; 3]; 3]> = bsp.reaching(min, max).collect();
-    for mesh in &collision.meshes {
-        let (low, high) = mesh.bounds();
-        if (0..3).all(|k| low[k] <= max[k] && high[k] >= min[k]) {
-            near.extend(reaching(mesh.triangles(), min, max));
-        }
-    }
-    for terrain in &collision.terrains {
-        near.extend(terrain_near(terrain, min, max));
-    }
-    near
 }
 
 /// The level is two-sided here: the BSP's triangles are not wound toward the open side.
@@ -703,7 +594,7 @@ fn spark_color(tint: Vec3, age: f32) -> Color {
 fn start_pieces(
     mut commands: Commands,
     settings: Option<Res<Settings>>,
-    mut drawn: Option<ResMut<DrawnParticles>>,
+    drawn: Option<Res<DrawnParticles>>,
     level: Option<Res<LevelCollision>>,
     facts: Res<FrameFacts>,
     mut births: ResMut<PieceBirths>,
@@ -712,10 +603,6 @@ fn start_pieces(
     mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DebrisTint>>>,
 ) {
     let setting = modern_level(settings.as_deref(), MODERN_GPU_PARTICLES);
-    let blasts = match drawn.as_mut() {
-        Some(drawn) if !drawn.blasts.is_empty() => std::mem::take(&mut drawn.blasts),
-        _ => Vec::new(),
-    };
     let map = drawn.as_deref().map_or(0, |drawn| drawn.level);
     let debris = &mut *debris;
     if setting == 0 || map != debris.map {
@@ -728,18 +615,17 @@ fn start_pieces(
     }
     if let Some(collision) = level.as_deref().and_then(|level| level.0.clone()).filter(|_| setting > 0) {
         // Taken when the map is first seen, not at its first break, so the break's frame is not the long one.
-        if debris.bsp.as_ref().is_none_or(|(held, _)| !Arc::ptr_eq(held, &collision)) {
-            let triangles = TriangleGrid::new(bsp_triangles(&collision.model));
-            debris.bsp = Some((collision, triangles));
+        if debris.triangles.as_ref().is_none_or(|held| !held.holds(&collision)) {
+            debris.triangles = Some(LevelTriangles::new(collision));
         }
         let cap = piece_cap(setting);
         for birth in &born {
             debris.add(&mut commands, birth, cap, facts.origin, &mut meshes, &mut materials);
         }
         // After this frame's births: what a hit throws takes the hit too.
-        if let Some((collision, triangles)) = debris.bsp.as_ref() {
-            for blast in &blasts {
-                debris.loose.blast(blast, |centre| level_near(collision, triangles, centre));
+        if let Some(triangles) = debris.triangles.as_ref() {
+            for blast in drawn.as_deref().map_or(&[][..], |drawn| &drawn.blasts) {
+                debris.loose.blast(blast, |centre| triangles.near(centre, REACH));
             }
         }
     }
@@ -815,39 +701,6 @@ mod tests {
 
     const FLOOR: [[[f32; 3]; 3]; 2] =
         [[[-1000.0, -1000.0, 0.0], [1000.0, -1000.0, 0.0], [1000.0, 1000.0, 0.0]], [[-1000.0, -1000.0, 0.0], [-1000.0, 1000.0, 0.0], [1000.0, 1000.0, 0.0]]];
-
-    #[test]
-    fn a_box_of_level_triangles_picks_those_reaching_into_it() {
-        let inside = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]];
-        let crossing = [[400.0, 0.0, 0.0], [5000.0, 0.0, 0.0], [400.0, 10.0, 0.0]];
-        let far = [[9000.0, 9000.0, 0.0], [9010.0, 9000.0, 0.0], [9000.0, 9010.0, 0.0]];
-        let above = [[0.0, 0.0, 2000.0], [10.0, 0.0, 2000.0], [0.0, 10.0, 2000.0]];
-        let picked: Vec<[[f32; 3]; 3]> = reaching(&[inside, crossing, far, above], [-REACH; 3], [REACH; 3]).collect();
-        assert_eq!(picked, vec![inside, crossing]);
-    }
-
-    #[test]
-    fn the_grid_gives_the_triangles_the_whole_list_does() {
-        let mut seed = 11;
-        let mut unit = || next_unit(&mut seed) * 2.0 - 1.0;
-        let mut soup: Vec<[[f32; 3]; 3]> = (0..400)
-            .map(|_| {
-                let corner = [unit() * 3000.0, unit() * 3000.0, unit() * 800.0];
-                let size = unit().abs() * 900.0;
-                [corner, [corner[0] + size * unit(), corner[1] + size * unit(), corner[2]], [corner[0], corner[1] + size * unit(), corner[2] + size * unit()]]
-            })
-            .collect();
-        soup.push([[-1e6, -1e6, 0.0], [1e6, -1e6, 0.0], [0.0, 1e6, 1e6]]);
-        soup.push([[REACH, 0.0, 0.0], [REACH, 10.0, 0.0], [REACH, 0.0, 10.0]]);
-        let grid = TriangleGrid::new(soup.clone());
-        assert_eq!(grid.wide.len(), 1);
-        let centres: [[f32; 3]; 6] = [[0.0; 3], [2.0 * REACH, 0.0, 0.0], [-1234.5, 777.0, 100.0], [2900.0, -2900.0, -700.0], [9000.0, 9000.0, 0.0], [10.0, -20.0, 300.0]];
-        for centre in centres {
-            let (min, max) = (centre.map(|c| c - REACH), centre.map(|c| c + REACH));
-            let linear: Vec<[[f32; 3]; 3]> = reaching(&soup, min, max).collect();
-            assert_eq!(grid.reaching(min, max).collect::<Vec<_>>(), linear, "around {centre:?}");
-        }
-    }
 
     fn lying_group(kind: PieceKind, place: Vector, seconds: f32) -> Group {
         let piece = Piece {

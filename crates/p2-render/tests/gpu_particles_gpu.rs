@@ -216,6 +216,8 @@ fn a_push_from_the_left_throws_lying_droplets_to_the_right() {
     let lying = red_middle(&frame).expect("no droplet lies on the floor three seconds after the last was thrown");
     let push = Blast { at: Vector::new(-150.0, -40.0, -6.0), radius: 400.0, push: 120.0, way: Vector::ZERO };
     app.world_mut().resource_mut::<DrawnParticles>().blasts.push(push);
+    app.update();
+    app.world_mut().resource_mut::<DrawnParticles>().blasts.clear();
     run_for(&mut app, 2.0);
     let later = red_middle(&frame).expect("the push threw the droplets out of sight");
     assert!(later > lying + 4.0, "the droplets lay at column {lying} and lie at {later} after a push from their left");

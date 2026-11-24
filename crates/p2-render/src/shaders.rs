@@ -31,6 +31,7 @@ const SCREEN_PASS_SHADER: Handle<Shader> = uuid_handle!("7a5c3e91-2d48-4f6b-9e07
 const SURFACE_SHADER: Handle<Shader> = uuid_handle!("5d2a8f47-b13c-4e69-a0d5-c8e71f39b264");
 const MATERIAL_LAYERS_SHADER: Handle<Shader> = uuid_handle!("8e41c7d2-5a9f-4b36-a1c8-6f02d3e9b574");
 const LAYER_TYPES_SHADER: Handle<Shader> = uuid_handle!("c4f2a917-6e3b-4d08-9b5a-2e71d8f04c63");
+const DEPTH_SURFACE_SHADER: Handle<Shader> = uuid_handle!("f05b9d36-2c7e-4a81-b4e9-7d13a6c0e258");
 
 pub(crate) struct ShaderLibraryPlugin;
 
@@ -48,6 +49,7 @@ impl Plugin for ShaderLibraryPlugin {
             (RELIEF_SHADER, Shader::from_wesl(include_str!("relief.wesl"), "p2_render/relief.wesl")),
             (SUN_SHADOW_SHADER, Shader::from_wesl(include_str!("sun_shadow.wesl"), "p2_render/sun_shadow.wesl")),
             (LAMP_SHADOW_SHADER, Shader::from_wesl(include_str!("lamp_shadow.wesl"), "p2_render/lamp_shadow.wesl")),
+            (crate::reflections::CLASS_PREPASS_SHADER, Shader::from_wesl(include_str!("reflections_prepass.wesl"), "p2_render/reflections_prepass.wesl")),
             (PROBES_SHADER, Shader::from_wesl(include_str!("probes.wesl"), "p2_render/probes.wesl")),
             (COLOR_SHADER, Shader::from_wesl(include_str!("color.wesl"), "p2_render/color.wesl")),
             (PROJECTOR_SHADER, Shader::from_wesl(include_str!("projector.wesl"), "p2_render/projector.wesl")),
@@ -56,6 +58,7 @@ impl Plugin for ShaderLibraryPlugin {
             (SURFACE_SHADER, Shader::from_wesl(include_str!("surface.wesl"), "p2_render/surface.wesl")),
             (MATERIAL_LAYERS_SHADER, Shader::from_wesl(include_str!("material_layers.wesl"), "p2_render/material_layers.wesl")),
             (LAYER_TYPES_SHADER, Shader::from_wesl(include_str!("layer_types.wesl"), "p2_render/layer_types.wesl")),
+            (DEPTH_SURFACE_SHADER, Shader::from_wesl(include_str!("depth_surface.wesl"), "p2_render/depth_surface.wesl")),
         ]);
     }
 }

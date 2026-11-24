@@ -70,7 +70,7 @@ fn settings(modern: &'static str) -> Settings {
 fn shown_after(modern: &'static str, bloom_level: u8, modern_on_at: Option<u32>, sun: Sun) -> Shown {
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins(GammaPlugin);
+    app.add_plugins((GammaPlugin, p2_render::modern_bloom::ModernBloomPlugin));
     app.insert_resource(settings(modern));
     app.finish();
     app.cleanup();

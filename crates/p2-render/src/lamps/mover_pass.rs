@@ -12,12 +12,13 @@ use bevy::render::diagnostic::DiagnosticsRecorder;
 use bevy::render::mesh::allocator::{MeshAllocator, MeshBufferSlice};
 use bevy::render::mesh::{RenderMesh, RenderMeshBufferInfo};
 use bevy::render::render_asset::RenderAssets;
+use bevy::render::render_phase::TrackedRenderPass;
 use bevy::render::render_resource::binding_types::{storage_buffer_read_only_sized, uniform_buffer_sized};
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferBinding,
-    BufferDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, CommandEncoder, Extent3d, FragmentState, IndexFormat, LoadOp,
-    MultisampleState, Operations, Origin3d, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    ShaderStages, StoreOp, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect, TextureFormat, VertexState,
+    BufferDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, CommandEncoder, FragmentState, IndexFormat, LoadOp,
+    MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    ShaderStages, StoreOp, TextureFormat, VertexState,
 };
 use bevy::render::renderer::{PendingCommandBuffers, RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
@@ -25,8 +26,8 @@ use bevy::shader::Shader;
 use rustc_hash::FxHashMap;
 
 use super::LampAtlas;
-use super::atlas::{GUARD_TEXELS, NEAR, PlainTilesDrawn, bytes_of, submit_timed};
-use super::cells::{BOOK_WIDTH, CAPSULES_FROM_END, HEADER_TEXELS, RECORD_TEXELS, TILE_GRID_FROM_END, TILES_FROM_END};
+use super::atlas::{GUARD_TEXELS, NEAR, BookRecords, PlainTilesDrawn, submit_timed, write_rows};
+use super::cells::{CAPSULES_FROM_END, HEADER_TEXELS, RECORD_TEXELS, TILE_GRID_FROM_END, TILES_FROM_END};
 use super::faces::DETAIL_UNIT;
 use super::movers::{Drawn, MOST_MOVER_TILES, MoverCaster, MoverTile, MoverTiles};
 
@@ -252,44 +253,44 @@ fn caster_draw<'a>(
     Ready::Draw(CasterDraw { pipeline, skin, uniform: 0, vertices, indices })
 }
 
-fn draw_squares(encoder: &mut CommandEncoder, target: &GpuImage, clear: &RenderPipeline, draws: &[(&MoverTile, Range<usize>)], casts: &[CasterDraw], casters: &BindGroup, joints: Option<&BindGroup>) {
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("mover tiles"),
-            color_attachments: &[Some(RenderPassColorAttachment { view: &target.texture_view, depth_slice: None, resolve_target: None, ops: Operations { load: LoadOp::Load, store: StoreOp::Store } })],
-            ..Default::default()
-        });
-        for (tile, tile_draws) in draws {
-            pass.set_viewport(tile.x as f32, tile.y as f32, tile.size as f32, tile.size as f32, 0.0, 1.0);
-            pass.set_scissor_rect(tile.x, tile.y, tile.size, tile.size);
-            pass.set_pipeline(clear);
-            pass.draw(0..3, 0..1);
-            for draw in &casts[tile_draws.clone()] {
-                pass.set_pipeline(draw.pipeline);
-                pass.set_bind_group(0, casters, &[draw.uniform]);
-                if let (Skin::Skinned, Some(joints)) = (draw.skin, joints) {
-                    pass.set_bind_group(1, joints, &[]);
+#[expect(clippy::too_many_arguments, reason = "one render pass, its target and everything it binds")]
+fn draw_squares(
+    encoder: &mut CommandEncoder,
+    device: &RenderDevice,
+    target: &GpuImage,
+    clear: &RenderPipeline,
+    draws: &[(&MoverTile, Range<usize>)],
+    casts: &[CasterDraw],
+    casters: &BindGroup,
+    joints: Option<&BindGroup>,
+) {
+    let pass = encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("mover tiles"),
+        color_attachments: &[Some(RenderPassColorAttachment { view: &target.texture_view, depth_slice: None, resolve_target: None, ops: Operations { load: LoadOp::Load, store: StoreOp::Store } })],
+        ..Default::default()
+    });
+    let mut pass = TrackedRenderPass::new(device, pass);
+    for (tile, tile_draws) in draws {
+        pass.set_viewport(tile.x as f32, tile.y as f32, tile.size as f32, tile.size as f32, 0.0, 1.0);
+        pass.set_scissor_rect(tile.x, tile.y, tile.size, tile.size);
+        pass.set_render_pipeline(clear);
+        pass.draw(0..3, 0..1);
+        for draw in &casts[tile_draws.clone()] {
+            pass.set_render_pipeline(draw.pipeline);
+            pass.set_bind_group(0, casters, &[draw.uniform]);
+            if let (Skin::Skinned, Some(joints)) = (draw.skin, joints) {
+                pass.set_bind_group(1, joints, &[]);
+            }
+            pass.set_vertex_buffer(0, draw.vertices.buffer.slice(..));
+            match &draw.indices {
+                Some((indices, format, count)) => {
+                    pass.set_index_buffer(indices.buffer.slice(..), *format);
+                    pass.draw_indexed(indices.range.start..indices.range.start + count, draw.vertices.range.start as i32, 0..1);
                 }
-                pass.set_vertex_buffer(0, *draw.vertices.buffer.slice(..));
-                match &draw.indices {
-                    Some((indices, format, count)) => {
-                        pass.set_index_buffer(*indices.buffer.slice(..), *format);
-                        pass.draw_indexed(indices.range.start..indices.range.start + count, draw.vertices.range.start as i32, 0..1);
-                    }
-                    None => pass.draw(draw.vertices.range.clone(), 0..1),
-                }
+                None => pass.draw(draw.vertices.range.clone(), 0..1),
             }
         }
     }
-}
-
-fn write_book(queue: &RenderQueue, book: &GpuImage, x: u32, y: u32, texels: &[[f32; 4]]) {
-    queue.write_texture(
-        TexelCopyTextureInfo { texture: &book.texture, mip_level: 0, origin: Origin3d { x, y, z: 0 }, aspect: TextureAspect::All },
-        &bytes_of(texels),
-        TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
-        Extent3d { width: texels.len() as u32, height: 1, depth_or_array_layers: 1 },
-    );
 }
 
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
@@ -305,6 +306,7 @@ pub(super) fn draw_mover_tiles(
     mut pending: ResMut<PendingCommandBuffers>,
     recorder: Option<Res<DiagnosticsRecorder>>,
     plain: Res<PlainTilesDrawn>,
+    mut records: ResMut<BookRecords>,
     mut state: Local<MoverDraw>,
 ) {
     let (Some(bake), Some(image), Some(book)) = (&atlas.bake, &atlas.image, &atlas.book) else {
@@ -326,24 +328,20 @@ pub(super) fn draw_mover_tiles(
     }
     let height = book_image.texture_descriptor.size.height;
     if !movers.grounding.is_empty() && state.grounding != movers.grounding {
-        for (grid, row) in movers.grounding.chunks(BOOK_WIDTH).enumerate() {
-            write_book(&queue, book_image, 0, height.saturating_sub(CAPSULES_FROM_END) + grid as u32, row);
-        }
+        write_rows(&queue, book_image, height.saturating_sub(CAPSULES_FROM_END), &movers.grounding);
         state.grounding.clone_from(&movers.grounding);
     }
     if !movers.tile_grid.is_empty() && state.tile_grid != movers.tile_grid {
-        for (at, row) in movers.tile_grid.chunks(BOOK_WIDTH).enumerate() {
-            write_book(&queue, book_image, 0, height.saturating_sub(TILE_GRID_FROM_END) + at as u32, row);
-        }
+        write_rows(&queue, book_image, height.saturating_sub(TILE_GRID_FROM_END), &movers.tile_grid);
         state.tile_grid.clone_from(&movers.tile_grid);
     }
     let tiles = &movers.tiles[..movers.tiles.len().min(MOST_MOVER_TILES)];
     state.next_ranges.clear();
     state.next_ranges.extend(lamp_ranges(tiles));
     for (lamp, texel) in changed_ranges(&state.ranges, &state.next_ranges) {
-        let index = HEADER_TEXELS + lamp as usize * RECORD_TEXELS + 5;
-        write_book(&queue, book_image, (index % BOOK_WIDTH) as u32, (index / BOOK_WIDTH) as u32, &[texel]);
+        records.set(bake, book.id(), HEADER_TEXELS + lamp as usize * RECORD_TEXELS + 5, texel);
     }
+    records.write(&queue, book_image);
     std::mem::swap(&mut state.ranges, &mut state.next_ranges);
     if tiles.is_empty() {
         return;
@@ -358,8 +356,8 @@ pub(super) fn draw_mover_tiles(
         let sources = Sources { meshes: &meshes, allocator: &allocator, cache: &cache };
         bytes.clear();
         by_mover.clear();
-        let mut casts = Vec::new();
-        let mut draws = Vec::new();
+        let mut casts: Vec<CasterDraw> = Vec::new();
+        let mut draws: Vec<(&MoverTile, Range<usize>)> = Vec::new();
         'tiles: for tile in tiles {
             if tile.drawn == Drawn::Kept && held.get(&(tile.x, tile.y)) == Some(&Held::of(tile)) {
                 continue;
@@ -382,6 +380,8 @@ pub(super) fn draw_mover_tiles(
                     Ready::Waiting => continue 'tiles,
                 }
             }
+            // Blend is MIN, so the order inside a tile does not change a texel; sorted, the pass skips repeated binds.
+            casts[start..].sort_unstable_by_key(|draw| (draw.pipeline.id(), draw.vertices.buffer.id(), draw.indices.as_ref().map(|(indices, ..)| indices.buffer.id())));
             draws.push((tile, start..casts.len()));
         }
         if !draws.is_empty() {
@@ -402,7 +402,7 @@ pub(super) fn draw_mover_tiles(
             } else {
                 None
             };
-            submit_timed(&device, &mut pending, recorder.as_deref(), "mover tiles", |encoder| draw_squares(encoder, target, clear, &draws, &casts, uniform_group, joint_group));
+            submit_timed(&device, &mut pending, recorder.as_deref(), "mover tiles", |encoder| draw_squares(encoder, &device, target, clear, &draws, &casts, uniform_group, joint_group));
             for (tile, _) in &draws {
                 let drawn = Held::of(tile);
                 forget_under(held, &drawn);
@@ -418,7 +418,7 @@ pub(super) fn draw_mover_tiles(
         }
         texels
     }));
-    write_book(&queue, book_image, 0, height.saturating_sub(TILES_FROM_END), row);
+    write_rows(&queue, book_image, height.saturating_sub(TILES_FROM_END), row);
 }
 
 #[cfg(test)]

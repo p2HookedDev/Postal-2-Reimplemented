@@ -4,7 +4,7 @@
 import package::p2_render::color::to_display;
 import package::p2_render::sun_shadow::{has_sun, sun_index, sun_map_visibility, sun_seen};
 import package::p2_render::modern::{SKY_VIEW_MARK, ambient_occlusion, modern_surface, surface_of};
-import package::p2_render::modern_base::LampLight;
+import package::p2_render::modern_base::{LampLight, fresnel_five, ggx, to_eye};
 import bevy_pbr::render::{
     mesh_functions::{get_world_from_local, get_tag},
     view_transformations::{depth_ndc_to_view_z, position_world_to_clip},
@@ -64,6 +64,9 @@ struct VertexOutput {
     // For a sprite lying on a surface: its emitter's lamps alone (display light) and the sprite's normal.
     @location(8) lamps: vec3<f32>,
     @location(9) normal: vec3<f32>,
+    // A liquid sprite: its record word above the seed (`FluidType`, burning, trail), and the wrapped seconds.
+    @location(10) @interpolate(flat) liquid: u32,
+    @location(11) @interpolate(flat) seconds: f32,
 }
 
 @if(!PARTICLE_INSTANCES)
@@ -121,9 +124,91 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.lamps = sprites[first].up;
     out.normal = normalize((get_world_from_local(vertex.instance_index) * vec4(cross(sprite.up, sprite.right), 0.0)).xyz);
     if sprite.unused != 0u {
-        out.puddle = vec3(select(-1.0, 1.0, along_right), select(-1.0, 1.0, along_up), f32(sprite.unused));
+        out.puddle = vec3(select(-1.0, 1.0, along_right), select(-1.0, 1.0, along_up), f32(sprite.unused & SEED_BITS));
+        out.liquid = sprite.unused >> KIND_SHIFT;
+        out.seconds = bitcast<f32>(sprites[first].unused);
     }
     return out;
+}
+
+// Matches `particle_draw/sprites.rs` `liquid_word`.
+const SEED_BITS: u32 = 1023u;
+const KIND_SHIFT: u32 = 10u;
+const LIQUID_KIND: u32 = 15u;
+const LIQUID_BURNING: u32 = 16u;
+const LIQUID_TRAIL: u32 = 32u;
+
+struct LiquidLook {
+    // Display colour the liquid takes over the texture's shading.
+    tint: vec3<f32>,
+    roughness: f32,
+    sheen: f32,
+    flammable: f32,
+}
+
+// By `FluidType`: none, gas, urine, blood, puke, bloody puke, gonorrhea, bloody urine, napalm.
+const LIQUID_LOOKS = array<LiquidLook, 9>(
+    LiquidLook(vec3(1.0), 0.3, 0.0, 0.0),
+    LiquidLook(vec3(0.92, 0.88, 0.7), 0.05, 1.0, 1.0),
+    LiquidLook(vec3(1.0, 0.86, 0.3), 0.07, 0.0, 0.0),
+    LiquidLook(vec3(0.42, 0.02, 0.02), 0.1, 0.0, 0.0),
+    LiquidLook(vec3(0.72, 0.66, 0.26), 0.35, 0.0, 0.0),
+    LiquidLook(vec3(0.6, 0.28, 0.1), 0.3, 0.0, 0.0),
+    LiquidLook(vec3(0.82, 0.9, 0.5), 0.2, 0.0, 0.0),
+    LiquidLook(vec3(0.85, 0.42, 0.14), 0.09, 0.0, 0.0),
+    LiquidLook(vec3(0.5, 0.26, 0.08), 0.18, 0.4, 1.0),
+);
+// Ripple phase per world unit, and how far ripples tilt the surface.
+const RIPPLE_SCALE: f32 = 0.22;
+const RIPPLE_TILT: f32 = 0.08;
+const CHAR: f32 = 0.35;
+const FIRE_GLOW: vec3<f32> = vec3(1.9, 0.8, 0.22);
+
+// A puddle or trail sprite shaded as a wet surface over its own shading: the texture's alpha stays its shape.
+fn liquid_surface(color: vec3<f32>, in: VertexOutput) -> vec3<f32> {
+    var looks = LIQUID_LOOKS;
+    let look = looks[min(in.liquid & LIQUID_KIND, 8u)];
+    let position = in.world_position.xyz;
+    let eye = to_eye(position);
+    let normal = select(-in.normal, in.normal, dot(in.normal, eye) >= 0.0);
+    let across = normalize(cross(normal, select(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), abs(normal.x) > 0.9)));
+    let along = cross(normal, across);
+    let flat_at = vec2(dot(position, across), dot(position, along)) * RIPPLE_SCALE;
+    // Thick liquids ripple slower.
+    let t = in.seconds * (1.2 - look.roughness * 2.0);
+    let slope = vec2(
+        sin(flat_at.x + t) + 0.6 * sin(1.7 * flat_at.y - 0.8 * t + 0.5 * flat_at.x),
+        cos(1.1 * flat_at.y + 0.9 * t) + 0.6 * cos(1.3 * flat_at.x - 1.2 * t),
+    ) * RIPPLE_TILT;
+    let n = normalize(normal + across * slope.x + along * slope.y);
+    let trail = (in.liquid & LIQUID_TRAIL) != 0u;
+    let rim = select(smoothstep(0.5, 0.85, length(in.puddle.xy)), 0.0, trail);
+    let shade = dot(color, vec3(0.299, 0.587, 0.114));
+    var base = mix(color, look.tint * (shade * 1.5), 0.7) * (1.0 - 0.45 * rim);
+    let nv = max(dot(n, eye), 1e-4);
+    let a = look.roughness * look.roughness;
+    let f0 = vec3(0.02);
+    let env = select(in.light, vec3(1.0), in.light.x < 0.0);
+    var spec = env * fresnel_five(nv) * (1.0 - look.roughness) * 0.5;
+    spec += ggx(n, vec3(0.0, 1.0, 0.0), eye, saturate(n.y), max(a, 0.002), f0) * max(in.lamps, vec3(0.0)) * 0.25;
+    let sun = sun_index();
+    if sun < lights.n_directional_lights {
+        let to_sun = lights.directional_lights[sun].direction_to_light;
+        let seen = sun_map_visibility(sun, vec4(position, 1.0), to_sun, in.position.xy);
+        spec += ggx(n, to_sun, eye, saturate(dot(n, to_sun)), max(a, 0.002), f0) * to_display(lights.directional_lights[sun].color.rgb) * seen;
+    }
+    if look.sheen > 0.0 {
+        let film = 2.0 * nv + 0.5 * sin(0.3 * flat_at.x + 0.2 * flat_at.y + 0.15 * in.seconds);
+        let hue = vec3(0.5) + 0.5 * cos(6.2831853 * (vec3(film) + vec3(0.0, 0.33, 0.67)));
+        base += hue * env * (look.sheen * 0.18 * (1.0 - rim));
+    }
+    var glow = vec3(0.0);
+    if (in.liquid & LIQUID_BURNING) != 0u && look.flammable > 0.0 {
+        let flicker = 0.65 + 0.35 * sin(13.0 * in.seconds + 0.9 * flat_at.x) * sin(7.3 * in.seconds + 1.3 * flat_at.y);
+        base *= CHAR;
+        glow = FIRE_GLOW * (flicker * look.flammable * (1.0 - 0.5 * rim));
+    }
+    return min(base + spec, vec3(LIGHT_LIMIT)) + glow;
 }
 
 // Display brightness of the background the gamma-space sums are fitted for (the framebuffer blends in linear light).
@@ -259,6 +344,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         color *= lying_light(in.world_position.xyz, in.position, in.light, in.lamps, in.normal);
     } else if params.lit != 0u {
         color *= particle_light(in.world_position.xyz, in.position, in.light);
+    }
+    if in.liquid != 0u && style != 2u && style != 5u {
+        color = liquid_surface(color, in);
     }
     // D3D fog mixes the colour towards a per-style fog colour: the scene's for regular and alpha blend,
     // grey 127 for modulated (neutral under 2x), black for the others (they add or darken nothing).

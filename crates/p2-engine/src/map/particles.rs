@@ -1,12 +1,13 @@
 use bevy::camera::primitives::MeshAabb;
 use p2_math::Vector;
-use p2_particles::{CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner};
+use p2_particles::{CollisionHit, CoordinateSystem, DirectionUsage, EmitterKind, MeshParticle, Owner, RangeVector};
+use p2_vm::FluidType;
 
 use super::*;
 use super::fluids::camera_view;
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
 use crate::emitter_changes::apply_command;
-use p2_render::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook, OCCLUSION_MARGIN};
+use p2_render::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, Liquid, LiquidRole, MeshEmitterLook, OCCLUSION_MARGIN, Pour};
 use p2_render::level_collision::StaticCollision;
 mod mesh_particles;
 mod sprites;
@@ -43,6 +44,9 @@ pub(super) struct ParticleActor {
     frames: ParticleFrames,
     turn: Turn,
     puddle_seed: Option<u32>,
+    liquid: Option<LiquidRole>,
+    fluid: Option<FluidType>,
+    burning: bool,
 }
 
 /// What one frame's update hands from its part on the main thread to the part worked on several threads and back.
@@ -185,7 +189,7 @@ impl Session {
             t.times.add("spawned: emitters: log", started);
             let started = std::time::Instant::now();
             let seed = t.particles.actors.len() as u32 + 1;
-            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), puddle_seed: emitter.puddle.then(|| liquid_flow::puddle_seed(seed)) });
+            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), puddle_seed: (emitter.liquid == Some(LiquidRole::Puddle)).then(|| liquid_flow::puddle_seed(seed)), liquid: emitter.liquid, fluid: None, burning: false });
             t.times.add("spawned: emitters: simulation", started);
             let started = std::time::Instant::now();
             if let Some(world) = t.play.world_mut() {
@@ -320,6 +324,8 @@ pub(super) fn present_particles(mut t: ParticleParams) {
 
 fn update_particles(t: &mut ParticleParams) {
     t.drawn.born.append(&mut t.particles.born);
+    // Last frame's pushes go here, not in their readers: the droplets and the pieces both read them.
+    t.drawn.blasts.clear();
     t.drawn.blasts.append(&mut t.particles.blasts);
     t.drawn.born_meshes.append(&mut t.particles.born_meshes);
     let step = t.play.world_mut().map_or(0.0, PlayWorld::take_step);
@@ -358,6 +364,7 @@ fn update_particles(t: &mut ParticleParams) {
         let live: usize = p.simulation.emitters().iter().map(|e| e.live_particles()).sum();
         p.peak = p.peak.max(live);
         sync_disabled(p, &actor.emitters_disabled);
+        (p.fluid, p.burning) = (actor.fluid, actor.burning);
         // Off screen longer than `SecondsBeforeInactive`, emitters pause. An emitter without particles counts
         // as drawn, or it would never spawn; what retail does with an empty emitter's bounds is (unverified).
         p.overlay = actor.attachment.as_ref().and_then(|attachment| overlay_slot(world, canvas, attachment.base));

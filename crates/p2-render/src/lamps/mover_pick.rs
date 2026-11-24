@@ -139,6 +139,7 @@ struct LampGrid {
     down: usize,
     starts: Vec<u32>,
     listed: Vec<u32>,
+    next_slot: Vec<u32>,
 }
 
 impl LampGrid {
@@ -174,12 +175,12 @@ impl LampGrid {
         }
         self.listed.clear();
         self.listed.resize(self.starts.last().map_or(0, |&total| total as usize), 0);
-        let mut next = self.starts.clone();
+        self.next_slot.clone_from(&self.starts);
         for (index, lamp) in lamps.iter().enumerate() {
             let (xs, zs) = self.reach(lamp);
             for z in zs {
                 for x in xs.clone() {
-                    let slot = &mut next[z * self.across + x];
+                    let slot = &mut self.next_slot[z * self.across + x];
                     self.listed[*slot as usize] = index as u32;
                     *slot += 1;
                 }
@@ -657,7 +658,8 @@ pub(super) fn pick_mover_tiles(
         grounding_row(eye.at, capsules.clone(), column_units, &mut next.grounding);
     }
     for &(entity, root) in &state.casting {
-        let (Some(&mover), Ok((_, _, mesh, _, placed, .., skinned, _))) = (state.numbers.get(&root), meshes.get(entity)) else { continue };
+        let Some(&mover) = state.numbers.get(&root) else { continue };
+        let Ok((_, _, mesh, _, placed, .., skinned, _)) = meshes.get(entity) else { continue };
         let posed = match skinned {
             Some(skin) => match skin_joints(entity, skin, &bindposes, &joints, &mut state.skins, &mut next.joints) {
                 Some(range) => Some(range),
@@ -711,6 +713,14 @@ mod tests {
             for (index, _) in lamps.iter().enumerate().filter(|(_, lamp)| lamp_score(lamp, point) > 0.0) {
                 assert!(near.contains(&(index as u32)), "lamp {index} reaches {point} but is not listed");
             }
+        }
+        let fewer = &lamps[..lamps.len() / 3];
+        let (low, high) = (low * 0.5, high * 0.5);
+        let mut new_grid = LampGrid::default();
+        new_grid.build(fewer, low, high);
+        grid.build(fewer, low, high);
+        for &point in &points {
+            assert_eq!(grid.near(point), new_grid.near(point), "{point}");
         }
     }
 

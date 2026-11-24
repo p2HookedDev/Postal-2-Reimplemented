@@ -184,6 +184,8 @@ fn actor_frame(vm: &Vm<Arc<Loader>>, actor: ObjectId, view: Option<&p2_vm::Playe
         look: actor_look(vm, actor),
         glow: vm.store.byte_of(actor, Prop::AmbientGlow),
         cull_distance: vm.store.float_of(actor, Prop::CullDistance),
+        fluid: p2_vm::FluidType::from_byte(vm.store.byte_of(actor, Prop::MyType)),
+        burning: vm.store.flag_of(actor, Prop::bOnFire),
     }
 }
 

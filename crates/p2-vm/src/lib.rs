@@ -62,7 +62,7 @@ use p2_package::{Loader, Package, PackageId};
 use rustc_hash::{FxHashMap, FxHashSet};
 pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidPling, MovieState, NEAR_CLIPPING_PLANE, PersonHit};
 pub use canvas::{CanvasItem, call_slots};
-pub use enums::ERenderStyle;
+pub use enums::{ERenderStyle, FluidType};
 pub use input::PlayerView;
 pub use config::{RENDER_DEVICE, VIEWPORT_MANAGER, WindowRequest, ini_truthy};
 use p2_script::{Layouts, StructLayout, Type};

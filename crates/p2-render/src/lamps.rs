@@ -50,7 +50,7 @@ use crate::modern::linear_light;
 use crate::shaders::add_shaders;
 use crate::terrain_material::TerrainLayers;
 use crate::view::ShownScene;
-use atlas::{ATLAS_SHADER, ATLAS_UNITS, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
+use atlas::{ATLAS_SHADER, ATLAS_UNITS, BookRecords, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
 use cells::{BOOK_WIDTH, CellLamp, RECORD_TEXELS, TILE_GRID_FROM_END, book_texels, lamp_cells};
 use faces::{Eye, FaceBook, FaceLamp, FaceSlot};
 use mover_pass::{MOVER_CASTER_SHADER, draw_mover_tiles};
@@ -405,7 +405,10 @@ fn follow_lamps(
     book.image = Some(images.add(book_image(&texels)));
     atlas.book.clone_from(&book.image);
     book.lamps = map.len();
-    atlas.bake = bake.map(Arc::new);
+    atlas.bake = bake.map(|mut bake| {
+        bake.keep_record_rows(&texels);
+        Arc::new(bake)
+    });
 }
 
 /// One spawned as another goes leaves the count the same, so a count alone misses it.
@@ -599,6 +602,7 @@ impl Plugin for LampsPlugin {
         ]);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.init_resource::<PlainTilesDrawn>();
+            render.init_resource::<BookRecords>();
             render.add_systems(Render, (draw_lamp_atlas, draw_mover_tiles).chain().in_set(RenderSystems::PrepareResources));
         }
     }

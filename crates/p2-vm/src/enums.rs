@@ -47,6 +47,36 @@ impl EPhysics {
     }
 }
 
+/// The scripts' `Fluid.FluidTypeEnum`; `FLUID_TYPE_None` reads as `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FluidType {
+    Gas = 1,
+    Urine = 2,
+    Blood = 3,
+    Puke = 4,
+    BloodyPuke = 5,
+    Gonorrhea = 6,
+    BloodyUrine = 7,
+    Napalm = 8,
+}
+
+impl FluidType {
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            1 => Self::Gas,
+            2 => Self::Urine,
+            3 => Self::Blood,
+            4 => Self::Puke,
+            5 => Self::BloodyPuke,
+            6 => Self::Gonorrhea,
+            7 => Self::BloodyUrine,
+            8 => Self::Napalm,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ERenderStyle {

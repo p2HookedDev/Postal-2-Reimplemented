@@ -1,11 +1,13 @@
 use bevy::asset::Handle;
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::Resource;
+use bevy::ecs::prelude::{Local, Res, ResMut, Resource};
 use bevy::image::Image;
 use bevy::math::{Vec3, Vec4};
 use p2_bevy_assets::to_bevy;
 use p2_math::Vector;
 use p2_particles::{Beam, EmitterKind, EmitterProperties, MeshParticle, SpriteParticle, StripPoint};
+use p2_vm::FluidType;
+use crate::frame_facts::FrameFacts;
 use crate::scene::SectionView;
 
 /// How far the occlusion-culling `Aabb` reaches past the particle bounds (Unreal units). Flat sprites on a surface
@@ -44,6 +46,63 @@ pub struct Blast {
 /// A shot's reach in Unreal units and its push in Unreal units a second.
 pub const SHOT_PUSH: (f32, f32) = (48.0, 450.0);
 
+/// A shot or a kick that hits a person throws what lies about and what it throws itself along its way: the push of an
+/// effect spawned where it hit takes that way, else the hit pushes as a shot. A hit stays readable for a game tick, so
+/// one already pushed is skipped.
+pub(crate) fn push_from_person_hits(facts: Res<FrameFacts>, drawn: Option<ResMut<DrawnParticles>>, mut pushed: Local<Vec<[u32; 3]>>) {
+    let Some(mut drawn) = drawn else { return };
+    let hits: Vec<_> = facts.person_hits.iter().filter(|hit| hit.damage > 0.0).collect();
+    let fresh: Vec<_> = hits.iter().filter(|hit| !pushed.contains(&<[f32; 3]>::from(hit.at).map(f32::to_bits))).collect();
+    if !fresh.is_empty() {
+        let drawn = &mut *drawn;
+        for hit in fresh {
+            let way = if hit.momentum.size() > 1e-3 { hit.momentum / hit.momentum.size() } else { Vector::ZERO };
+            let (radius, push) = SHOT_PUSH;
+            match drawn.blasts.iter_mut().find(|blast| (blast.at - hit.at).size() < blast.radius.max(radius)) {
+                Some(blast) => blast.way = way,
+                None => drawn.blasts.push(Blast { at: hit.at, radius, push, way }),
+            }
+        }
+    }
+    pushed.clear();
+    pushed.extend(hits.iter().map(|hit| <[f32; 3]>::from(hit.at).map(f32::to_bits)));
+}
+
+/// What a liquid actor of the scripts shows with its emitters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiquidRole {
+    /// A feeder pouring or spurting: its strip and droplets are the stream.
+    Stream,
+    /// A feeder dripping from a ledge or a wound.
+    Drip,
+    Puddle,
+    Trail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Liquid {
+    pub kind: FluidType,
+    pub role: LiquidRole,
+    /// The scripts' `bOnFire`, read every frame.
+    pub burning: bool,
+    /// A stream's or drip's aim this frame; `None` for puddles and trails.
+    pub pour: Option<Pour>,
+}
+
+/// How the scripts aim a feeder this frame, from its first emitter, world axes and Unreal units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pour {
+    /// Where its particles start: the feeder's place.
+    pub from: Vector,
+    /// `StartVelocityRange`'s low and high ends, in Unreal units a second.
+    pub velocity: [Vector; 2],
+    pub acceleration: Vector,
+    /// Particles a second the emitter spawns while it flows.
+    pub rate: f32,
+    /// False once the scripts stopped the flow (`ToggleFlow` off, `bStoppedFlow`).
+    pub flowing: bool,
+}
+
 /// A slot is a place, not an identity: `parent` says whose particles it holds this frame.
 pub struct DrawnActor {
     pub parent: Entity,
@@ -51,6 +110,7 @@ pub struct DrawnActor {
     pub drawn: bool,
     pub overlay: Option<usize>,
     pub puddle_seed: Option<u32>,
+    pub liquid: Option<Liquid>,
     /// Where the actor stands this frame; `None` before it is placed.
     pub place: Option<Vector>,
     /// The box of the actor's mesh particles, which its sprites' bounds start from.
@@ -66,6 +126,7 @@ impl Default for DrawnActor {
             drawn: false,
             overlay: None,
             puddle_seed: None,
+            liquid: None,
             place: None,
             mesh_reach: None,
             emitters: Vec::new(),

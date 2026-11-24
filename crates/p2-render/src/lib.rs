@@ -13,6 +13,7 @@ pub mod lightmapped;
 pub mod map_lights;
 pub mod mesh_light;
 pub mod modern;
+pub mod modern_bloom;
 pub mod material_class;
 pub(crate) mod lamp_size;
 pub mod particle_draw;
@@ -38,6 +39,7 @@ pub mod coronas;
 pub mod debris;
 pub mod fire_volume;
 pub mod gpu_particles;
+pub mod liquids;
 pub mod fluids;
 pub(crate) mod temporal_aa;
 pub(crate) mod fade_in;
@@ -54,6 +56,7 @@ pub enum MainPassExtraSystems {
     FireVolume,
     LampFog,
     GpuParticles,
+    Liquids,
 }
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -78,7 +81,7 @@ impl bevy::app::Plugin for RetailRenderPlugin {
             modern_view::ModernViewPlugin,
             reflections::ReflectionsPlugin,
             lamp_fog::LampFogPlugin,
-            bounce::BounceLightPlugin,
+            (bounce::BounceLightPlugin, modern_bloom::ModernBloomPlugin),
             fire_volume::FireVolumePlugin,
             temporal_aa::TemporalAaPlugin,
             particle_material::ParticlePlugin,
@@ -91,7 +94,7 @@ impl bevy::app::Plugin for RetailRenderPlugin {
             world_pass::WorldPassPlugin,
             sampler_refresh::SamplerRefreshPlugin,
         ));
-        app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin, gpu_particles::GpuParticlesPlugin, debris::DebrisPlugin));
+        app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin, gpu_particles::GpuParticlesPlugin, debris::DebrisPlugin, liquids::LiquidsPlugin));
         app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin, wet::WetPlugin));
     }
 }

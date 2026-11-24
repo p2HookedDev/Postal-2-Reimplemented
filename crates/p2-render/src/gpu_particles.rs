@@ -47,9 +47,9 @@ use crate::level_collision::LevelCollision;
 use crate::map_lights::MapLights;
 use crate::particle_draw::sprites::lamps_shown;
 use crate::particle_draw::{ParticleDrawSystems, ParticleDraws, draw_particles};
-use crate::particle_frame::{Blast, DrawnParticles, SHOT_PUSH};
+use crate::particle_frame::{Blast, DrawnParticles, push_from_person_hits};
 use crate::screen_pass::{ViewBindGroups, modern_level};
-use crate::shaders::add_shaders;
+use crate::shaders::{add_libraries, add_shaders};
 
 const DROPLET_SHADER: Handle<Shader> = uuid_handle!("7c4e2a91-5b38-4d6f-a0e7-3f9b1c82d465");
 /// Matches `Droplet` in `gpu_particles.wesl`: place and age, velocity and lifetime, colour and half size, the
@@ -78,7 +78,7 @@ const LIFE_SPREAD: f32 = 0.6;
 const LIFE_MARGIN: f64 = 1.0;
 
 /// Premultiplied colour over the frame; the frame's alpha, the sun rays' mask, is kept.
-const OVER: BlendState = BlendState {
+pub(crate) const OVER: BlendState = BlendState {
     color: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add },
     alpha: BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
 };
@@ -93,6 +93,7 @@ impl Plugin for GpuParticlesPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
+        add_libraries(app);
         add_shaders(app, [(DROPLET_SHADER, Shader::from_wesl(include_str!("gpu_particles.wesl"), "p2_render/gpu_particles.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<GpuDroplets>::default()).init_resource::<Spawner>().init_resource::<PieceBirths>().add_systems(
             PostUpdate,
@@ -449,15 +450,15 @@ impl ExtractComponent<RenderApp> for GpuDroplets {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct RingWrite {
-    slot: u32,
-    from: usize,
-    len: usize,
+pub(crate) struct RingWrite {
+    pub(crate) slot: u32,
+    pub(crate) from: usize,
+    pub(crate) len: usize,
 }
 
 /// Where `count` newborn droplets go in a ring of `size` slots from `cursor`, and the next cursor; when more are born
 /// than the ring holds, the newest are kept.
-fn ring_writes(cursor: u32, size: u32, count: usize) -> (Vec<RingWrite>, u32) {
+pub(crate) fn ring_writes(cursor: u32, size: u32, count: usize) -> (Vec<RingWrite>, u32) {
     let size = size as usize;
     if size == 0 {
         return (Vec::new(), 0);
@@ -479,28 +480,6 @@ fn push_words(blast: &Blast, origin: Vec3) -> [f32; 8] {
     let [x, y, z] = (Vec3::from(to_bevy(blast.at)) + origin).to_array();
     let [wx, wy, wz] = to_bevy(blast.way);
     [x, y, z, blast.radius, blast.push, wx, wy, wz]
-}
-
-/// A shot or a kick that hits a person throws what lies about and what it throws itself along its way: the push of an
-/// effect spawned where it hit takes that way, else the hit pushes as a shot. A hit stays readable for a game tick, so
-/// one already pushed is skipped.
-fn push_from_person_hits(facts: Res<FrameFacts>, drawn: Option<ResMut<DrawnParticles>>, mut pushed: Local<Vec<[u32; 3]>>) {
-    let Some(mut drawn) = drawn else { return };
-    let hits: Vec<_> = facts.person_hits.iter().filter(|hit| hit.damage > 0.0).collect();
-    let fresh: Vec<_> = hits.iter().filter(|hit| !pushed.contains(&<[f32; 3]>::from(hit.at).map(f32::to_bits))).collect();
-    if !fresh.is_empty() {
-        let drawn = &mut *drawn;
-        for hit in fresh {
-            let way = if hit.momentum.size() > 1e-3 { hit.momentum / hit.momentum.size() } else { Vector::ZERO };
-            let (radius, push) = SHOT_PUSH;
-            match drawn.blasts.iter_mut().find(|blast| (blast.at - hit.at).size() < blast.radius.max(radius)) {
-                Some(blast) => blast.way = way,
-                None => drawn.blasts.push(Blast { at: hit.at, radius, push, way }),
-            }
-        }
-    }
-    pushed.clear();
-    pushed.extend(hits.iter().map(|hit| <[f32; 3]>::from(hit.at).map(f32::to_bits)));
 }
 
 /// `Frame` in `gpu_particles.wesl`.

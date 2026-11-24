@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::Context;
 use bevy::DefaultPlugins;
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{Backends, WgpuSettings};
+use bevy::render::settings::{Backends, WgpuFeatures, WgpuSettings};
 use bevy::app::{App, AppExit, Plugin, PluginGroup, Update};
 use bevy::ecs::error::Result;
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -59,15 +59,23 @@ fn run() {
     display::apply_window(&mut window, &start.window, None, start.display);
 
     p2_engine::play::init_script_stacks();
+    let log = LogPlugin { custom_layer: capture_layer, fmt_layer: console_layer, ..Default::default() };
+    // wgpu's scopes are spans at its info level, which the default filter keeps out; wgpu_core logs nothing there.
+    #[cfg(feature = "profile")]
+    let log = LogPlugin { filter: format!("{}wgpu_core=info", bevy::log::DEFAULT_FILTER), ..log };
     let mut app = App::new();
     // Never the timed, event-woken updates Bevy runs a window without focus on: every mouse event then makes a frame
     // of its own between the timed ones, and what moves on screen jitters.
     app.insert_resource(bevy::winit::WinitSettings { focused_mode: bevy::winit::UpdateMode::Continuous, unfocused_mode: bevy::winit::UpdateMode::Continuous });
     app.add_plugins((
         DefaultPlugins
-            // Without DX12 among the backends Bevy turns off wgpu's validation of every indirect draw.
-            .set(RenderPlugin { render_creation: WgpuSettings { backends: Some(Backends::VULKAN), ..Default::default() }.into(), ..Default::default() })
-            .set(WindowPlugin { primary_window: Some(window), ..Default::default() }).set(LogPlugin { custom_layer: capture_layer, fmt_layer: console_layer, ..Default::default() }),
+            // Without DX12 among the backends Bevy turns off wgpu's validation of every indirect draw. Bevy's pass timing
+            // also counts a pass's shader runs when the device can; nothing reads those counts, so they are not made.
+            .set(RenderPlugin {
+                render_creation: WgpuSettings { backends: Some(Backends::VULKAN), disabled_features: Some(WgpuFeatures::PIPELINE_STATISTICS_QUERY), ..Default::default() }.into(),
+                ..Default::default()
+            })
+            .set(WindowPlugin { primary_window: Some(window), ..Default::default() }).set(log),
         EguiPlugin::default(),
         P2EnginePlugins,
         DiagnosticsPlugin,

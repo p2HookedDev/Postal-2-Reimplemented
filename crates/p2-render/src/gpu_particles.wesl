@@ -3,6 +3,7 @@
 // surface it lands on.
 
 import bevy_render::view::View;
+import package::p2_render::depth_surface::{eye_distance, normal_at, on_surface, world_at};
 
 struct Droplet {
     // Age in seconds in `w`.
@@ -67,17 +68,6 @@ const LIFT: f32 = 0.4;
 // The most a chunk spins in the air, in radians a second.
 const SPIN: f32 = 10.0;
 
-fn world_at(pixel: vec2<i32>, size: vec2<f32>) -> vec3<f32> {
-    let uv = (vec2<f32>(pixel) + 0.5) / size;
-    let clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, textureLoad(depth, pixel, 0), 1.0);
-    let world = view.world_from_clip * clip;
-    return world.xyz / world.w;
-}
-
-fn eye_distance(p: vec3<f32>) -> f32 {
-    return -(view.view_from_world * vec4(p, 1.0)).z;
-}
-
 fn alive(d: Droplet) -> bool {
     return d.velocity.w > 0.0 && d.place.w < d.velocity.w;
 }
@@ -88,20 +78,6 @@ fn lying(d: Droplet) -> bool {
 
 fn spin_of(slot: u32) -> f32 {
     return (fract(sin(f32(slot) * 12.9898) * 43758.5453) * 2.0 - 1.0) * SPIN;
-}
-
-fn normal_at(pixel: vec2<i32>, size: vec2<f32>, surface: vec3<f32>) -> vec3<f32> {
-    let across = world_at(pixel + vec2(1, 0), size) - world_at(pixel - vec2(1, 0), size);
-    let down = world_at(pixel + vec2(0, 1), size) - world_at(pixel - vec2(0, 1), size);
-    let facing = cross(across, down);
-    let to_eye = normalize(view.world_position - surface);
-    let n = select(to_eye, normalize(facing), dot(facing, facing) > 1e-8);
-    return select(n, -n, dot(n, to_eye) < 0.0);
-}
-
-// The point of the eye's line through `p` that is held over the surface.
-fn on_surface(p: vec3<f32>, surface: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    return view.world_position + (p - view.world_position) * (eye_distance(surface) / eye_distance(p)) + n * LIFT;
 }
 
 @compute @workgroup_size(64)
@@ -146,8 +122,8 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         let pixel = clamp(vec2<i32>((ndc * vec2(0.5, -0.5) + 0.5) * size), vec2(1), vec2<i32>(size) - 2);
         // Depth 0 is the sky.
         let solid = textureLoad(depth, pixel, 0) > 0.0;
-        let surface = world_at(pixel, size);
-        let behind = eye_distance(p) - eye_distance(surface);
+        let surface = world_at(depth, view.world_from_clip, pixel, size);
+        let behind = eye_distance(view.view_from_world, p) - eye_distance(view.view_from_world, surface);
         if was_lying {
             // What it lay on is gone: a door opened, a body moved away.
             if !solid || behind < -UNSUPPORTED {
@@ -155,13 +131,13 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
             }
         } else if solid {
             if behind > 0.0 && behind < THICKNESS {
-                let n = normal_at(pixel, size, surface);
+                let n = normal_at(depth, view.world_from_clip, view.world_position, pixel, size, surface);
                 let into = dot(v, n);
                 if into < 0.0 {
                     let along = (v - into * n) * KEEP;
                     let hop = -into * RESTITUTION;
                     v = along + hop * n;
-                    p = on_surface(p, surface, n);
+                    p = on_surface(view.view_from_world, view.world_position, p, surface, n, LIFT);
                     if length(v) < REST_SPEED {
                         v = vec3(0.0);
                         rest = vec4(n, 0.0);

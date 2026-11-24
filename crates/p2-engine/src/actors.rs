@@ -6,6 +6,7 @@ use p2_render_cpu::{MeshLight, MeshPlacement, hsv_color};
 use rustc_hash::FxHashMap;
 
 use p2_render::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
+use p2_render::particle_frame::LiquidRole;
 use p2_render::scene::ZoneFog;
 use p2_particles::{EmitterKind, EmitterProperties, EmitterSettings, PropertyValue};
 use p2_vm::{ERenderStyle, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
@@ -353,7 +354,7 @@ pub struct EmitterActor {
     pub objects: Vec<ObjectId>,
     pub meshes: Vec<Option<String>>,
     pub name: String,
-    pub puddle: bool,
+    pub liquid: Option<LiquidRole>,
     /// An explosion's `ExplosionRadius` and `ExplosionMag`, when the scripts gave it both.
     pub blast: Option<(f32, f32)>,
 }
@@ -386,7 +387,22 @@ pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Emitter
     });
     let (radius, force) = (vm.store.float_of(actor, "ExplosionRadius"), vm.store.float_of(actor, "ExplosionMag"));
     let blast = (radius > 0.0 && force > 0.0).then_some((radius, force));
-    Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone(), puddle: vm.store.is_a(actor, Kind::FluidPuddle), blast })
+    Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone(), liquid: liquid_role(|kind| vm.store.is_a(actor, kind)), blast })
+}
+
+/// A drip feeder is a feeder too, and a flow trail a trail: the narrower class is tested first.
+fn liquid_role(is_a: impl Fn(Kind) -> bool) -> Option<LiquidRole> {
+    Some(if is_a(Kind::FluidPuddle) {
+        LiquidRole::Puddle
+    } else if is_a(Kind::FluidTrail) || is_a(Kind::FluidDripTrail) {
+        LiquidRole::Trail
+    } else if is_a(Kind::FluidDripFeeder) {
+        LiquidRole::Drip
+    } else if is_a(Kind::FluidFeeder) {
+        LiquidRole::Stream
+    } else {
+        return None;
+    })
 }
 
 pub fn emitter_properties(vm: &Vm<impl LoaderRef>, emitter: ObjectId) -> EmitterProperties {
@@ -526,7 +542,18 @@ pub fn projector_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Proje
 
 #[cfg(test)]
 mod tests {
-    use super::look_key;
+    use super::{Kind, LiquidRole, liquid_role, look_key};
+
+    #[test]
+    fn each_fluid_class_draws_as_its_role() {
+        let role = |ancestors: &[Kind]| liquid_role(|kind| ancestors.contains(&kind));
+        assert_eq!(role(&[Kind::FluidPuddle]), Some(LiquidRole::Puddle));
+        assert_eq!(role(&[Kind::FluidTrail]), Some(LiquidRole::Trail));
+        assert_eq!(role(&[Kind::FluidDripTrail]), Some(LiquidRole::Trail));
+        assert_eq!(role(&[Kind::FluidDripFeeder, Kind::FluidFeeder]), Some(LiquidRole::Drip));
+        assert_eq!(role(&[Kind::FluidFeeder]), Some(LiquidRole::Stream));
+        assert_eq!(role(&[Kind::Emitter]), None);
+    }
 
     #[test]
     fn look_key_changes_with_what_the_model_is_built_from() {

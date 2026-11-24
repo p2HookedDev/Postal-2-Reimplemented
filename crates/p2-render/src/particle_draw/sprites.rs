@@ -12,7 +12,7 @@ use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT, MeshLight};
 
 use super::bounds::occlusion_aabb;
 use super::{ActorDraw, EmitterMesh, MeshWrites};
-use crate::particle_frame::{DrawnActor, DrawnEmitter};
+use crate::particle_frame::{DrawnActor, DrawnEmitter, Liquid, LiquidRole};
 use bevy::mesh::MeshTag;
 use crate::particle_material::{PARTICLE_SPRITES, RECORD_WORDS};
 
@@ -31,22 +31,37 @@ pub(super) fn write_sprite_records(writes: &mut MeshWrites, actor: &mut ActorDra
     let grid_at = drawn.map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
     let [light, lamps_alone] = actor.light.header();
     let lamps = if slot.overlay.is_some() { UNLIT } else { light };
-    let puddle_seed = slot.puddle_seed.filter(|_| writes.liquid_flow);
+    let word = liquid_word(slot.puddle_seed.filter(|_| writes.liquid_flow), slot.liquid.filter(|_| writes.liquids));
     for (draw, DrawnEmitter { sprites, .. }) in actor.emitters.iter_mut().zip(&slot.emitters) {
         let (Some(EmitterMesh { entity, shown: true, .. }), Some(grid)) = (&draw.mesh, &mut draw.grid) else { continue };
         let first = u32::try_from(writes.records.len()).unwrap_or(u32::MAX);
-        writes.records.push(header_record(sprites.len(), lamps, lamps_alone));
+        let mut header = header_record(sprites.len(), lamps, lamps_alone);
+        header[11] = writes.seconds.to_bits();
+        writes.records.push(header);
         let sprites_at = writes.records.len();
         writes.records.extend(sprites.iter().map(|sprite| sprite_record(sprite, grid_at)));
-        if let Some(seed) = puddle_seed {
-            // The record's spare word: a modern puddle's edge seed, 0 for every other sprite.
-            writes.records[sprites_at..].iter_mut().for_each(|record| record[11] = seed);
+        if word != 0 {
+            writes.records[sprites_at..].iter_mut().for_each(|record| record[11] = word);
         }
         if grid.first != Some(first) {
             grid.first = Some(first);
             writes.commands.entity(*entity).insert(MeshTag::new(first));
         }
     }
+}
+
+const SEED_BITS: u32 = 0x3ff;
+const KIND_SHIFT: u32 = 10;
+const BURNING_SHIFT: u32 = 14;
+const TRAIL_SHIFT: u32 = 15;
+
+/// A sprite record's spare word, as `particle.wesl` decodes it: a puddle's edge seed, its liquid's `FluidType`, burning
+/// and trail; 0 for every other sprite.
+fn liquid_word(seed: Option<u32>, liquid: Option<Liquid>) -> u32 {
+    let seed = seed.unwrap_or(0) & SEED_BITS;
+    let Some(liquid) = liquid.filter(|liquid| matches!(liquid.role, LiquidRole::Puddle | LiquidRole::Trail)) else { return seed };
+    let trail = liquid.role == LiquidRole::Trail;
+    seed | u32::from(liquid.kind as u8) << KIND_SHIFT | u32::from(liquid.burning) << BURNING_SHIFT | u32::from(trail) << TRAIL_SHIFT
 }
 
 #[cfg(test)]
@@ -381,6 +396,17 @@ mod tests {
         let record = sprite_record(&sprite, grid_at);
         let centre = Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));
         assert_eq!(centre + grid_at, Vec3::from(to_bevy(location)));
+    }
+
+    #[test]
+    fn liquid_words_unpack_as_the_shader_reads_them() {
+        use p2_vm::FluidType;
+        let unpack = |word: u32| (word & SEED_BITS, (word >> KIND_SHIFT) & 15, (word >> BURNING_SHIFT) & 1 == 1, (word >> TRAIL_SHIFT) & 1 == 1);
+        let liquid = |kind, role, burning| Some(Liquid { kind, role, burning, pour: None });
+        assert_eq!(unpack(liquid_word(Some(1023), liquid(FluidType::Napalm, LiquidRole::Puddle, true))), (1023, 8, true, false));
+        assert_eq!(unpack(liquid_word(None, liquid(FluidType::Blood, LiquidRole::Trail, false))), (0, 3, false, true));
+        assert_eq!(liquid_word(Some(7), None), 7);
+        assert_eq!(liquid_word(None, liquid(FluidType::Gas, LiquidRole::Stream, true)), 0);
     }
 
     #[test]
