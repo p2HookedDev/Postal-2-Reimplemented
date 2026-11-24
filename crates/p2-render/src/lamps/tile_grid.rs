@@ -9,15 +9,18 @@ use super::movers::{MOST_MOVER_TILES, MoverTile};
 /// Columns to a side of the grid. `lamp_shadow.wesl` holds the same number.
 const GRID_SIDE: usize = 64;
 const COLUMN_UNITS: f32 = 128.0;
-const GRID_ROWS: usize = (1 + 2 * GRID_SIDE * GRID_SIDE).div_ceil(BOOK_WIDTH);
+/// Texels a column, four tile names each: in a fight the busiest columns are crossed by twenty tiles and more.
+/// `lamp_shadow.wesl` holds the same number.
+const COLUMN_TEXELS: usize = 8;
+const GRID_ROWS: usize = (1 + COLUMN_TEXELS * GRID_SIDE * GRID_SIDE).div_ceil(BOOK_WIDTH);
 const _: () = assert!(GRID_ROWS == (TILE_GRID_FROM_END - TILES_FROM_END) as usize && 2 * MOST_MOVER_TILES <= BOOK_WIDTH);
 /// How much wider than its tangent `lamp_shadow.wesl` lets a tile reach. `lamp_shadow.wesl` holds the same number.
 const REACH_WIDENING: f32 = 1.4143;
 
-/// Fills `rows` with the grid: its low corner in x and z, a column's side and 1; then two texels a column, naming up to
-/// eight tiles by their place in `tiles` from 1, or -1 first when more cross it. A column may name a tile that does
-/// not shade it, never the reverse. Leaves `rows` as they are when `made_from` holds the bits of the same inputs, and
-/// says whether it built them.
+/// Fills `rows` with the grid: its low corner in x and z, a column's side and 1; then `COLUMN_TEXELS` a column, naming
+/// up to four times as many tiles by their place in `tiles` from 1, or -1 first when more cross it. A column may name a
+/// tile that does not shade it, never the reverse. Leaves `rows` as they are when `made_from` holds the bits of the same
+/// inputs, and says whether it built them.
 pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32; 4]>, made_from: &mut Vec<u32>) -> bool {
     let low = Vec2::from([eye.x, eye.z].map(|at| ((at / COLUMN_UNITS).floor() - (GRID_SIDE / 2) as f32) * COLUMN_UNITS));
     let tiles = &tiles[..tiles.len().min(MOST_MOVER_TILES)];
@@ -61,7 +64,7 @@ pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32
                 if (to - axis * along).length() > along * widening + slack {
                     continue;
                 }
-                let column = rows[1 + 2 * (z * GRID_SIDE + x)..][..2].as_flattened_mut();
+                let column = rows[1 + COLUMN_TEXELS * (z * GRID_SIDE + x)..][..COLUMN_TEXELS].as_flattened_mut();
                 if column[0] < 0.0 {
                     continue;
                 }
@@ -85,6 +88,7 @@ mod tests {
     fn the_shader_reads_the_grid_as_it_is_written() {
         let shader = include_str!("../lamp_shadow.wesl");
         assert_eq!(shader_const(shader, "TILE_GRID_SIDE"), GRID_SIDE as f64);
+        assert_eq!(shader_const(shader, "TILE_GRID_COLUMN_TEXELS"), COLUMN_TEXELS as f64);
         assert_eq!(shader_const(shader, "REACH_WIDENING") as f32, REACH_WIDENING);
     }
 
@@ -96,7 +100,7 @@ mod tests {
 
     fn named_by(rows: &[[f32; 4]], at: Vec3) -> Vec<f32> {
         let [x, z] = [(at.x - rows[0][0]) / rows[0][2], (at.z - rows[0][1]) / rows[0][2]].map(|column| column.floor() as usize);
-        rows[1 + 2 * (z * GRID_SIDE + x)..][..2].as_flattened().to_vec()
+        rows[1 + COLUMN_TEXELS * (z * GRID_SIDE + x)..][..COLUMN_TEXELS].as_flattened().to_vec()
     }
 
     #[test]
@@ -104,7 +108,7 @@ mod tests {
         let (lamp, middle) = (Vec3::new(-200.0, 300.0, 0.0), Vec3::new(400.0, 50.0, 0.0));
         let mut rows = Vec::new();
         tile_grid_rows(Vec3::ZERO, &[crossing_tile(lamp, middle)], &mut rows, &mut Vec::new());
-        assert_eq!(rows.len(), 5 * BOOK_WIDTH);
+        assert_eq!(rows.len(), GRID_ROWS * BOOK_WIDTH);
         assert_eq!(rows[0], [-4096.0, -4096.0, COLUMN_UNITS, 1.0]);
         assert_eq!(named_by(&rows, middle)[0], 1.0);
         assert_eq!(named_by(&rows, Vec3::new(1400.0, 0.0, 0.0))[0], 1.0);
@@ -113,12 +117,13 @@ mod tests {
     }
 
     #[test]
-    fn a_column_crossed_by_more_than_eight_tiles_starts_with_minus_one() {
+    fn a_column_crossed_by_more_tiles_than_it_names_starts_with_minus_one() {
         let tile = crossing_tile(Vec3::new(-200.0, 300.0, 0.0), Vec3::new(400.0, 50.0, 0.0));
+        let names = 4 * COLUMN_TEXELS;
         let mut rows = Vec::new();
-        tile_grid_rows(Vec3::ZERO, &[tile; 8], &mut rows, &mut Vec::new());
-        assert_eq!(named_by(&rows, Vec3::new(400.0, 0.0, 0.0)), (1..=8u8).map(f32::from).collect::<Vec<_>>());
-        tile_grid_rows(Vec3::ZERO, &[tile; 9], &mut rows, &mut Vec::new());
+        tile_grid_rows(Vec3::ZERO, &vec![tile; names], &mut rows, &mut Vec::new());
+        assert_eq!(named_by(&rows, Vec3::new(400.0, 0.0, 0.0)), (1..=names).map(|name| name as f32).collect::<Vec<_>>());
+        tile_grid_rows(Vec3::ZERO, &vec![tile; names + 1], &mut rows, &mut Vec::new());
         assert_eq!(named_by(&rows, Vec3::new(400.0, 0.0, 0.0))[0], -1.0);
     }
 

@@ -6,7 +6,7 @@ import bevy_pbr::{
         pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
     },
 };
-import package::p2_render::projector::{cluster_ranges, mesh_target, project};
+import package::p2_render::projector::{cluster_ranges, decal_list, mesh_target, project};
 import package::p2_render::layer_bindings::{apply_layers, post_lighting};
 import package::p2_render::material_layers::material_layers;
 
@@ -21,6 +21,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     );
 
     let ranges = cluster_ranges(pbr_input);
+    let decals = decal_list(vertex_output, pbr_input, ranges, false);
 
     var color = pbr_input.material.base_color;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
@@ -31,6 +32,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let layers = material_layers(vertex_output);
     var out: FragmentOutput;
     let layered = apply_layers(vertex_output, color, base_alpha, pbr_input, layers);
-    out.color = post_lighting(pbr_input, project(pbr_input, ranges, pbr_input.material.base_color.rgb, layered, mesh_target(vertex_output.instance_index), false));
+    out.color = post_lighting(pbr_input, project(pbr_input, decals, pbr_input.material.base_color.rgb, layered, mesh_target(vertex_output.instance_index), false));
     return out;
 }

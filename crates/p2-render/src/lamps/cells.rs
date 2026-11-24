@@ -374,12 +374,15 @@ pub(super) const HEADER_TEXELS: usize = 2;
 pub(super) const BOOK_WIDTH: usize = 2048;
 /// The rows the book ends with, counted back from its end: the movers' tile grid starts this far back, then their tiles'
 /// row, then the capsules' fine and coarse rows. `lamp_shadow.wesl` holds the same numbers.
-pub(super) const TILE_GRID_FROM_END: u32 = 8;
+pub(super) const TILE_GRID_FROM_END: u32 = 20;
 pub(super) const TILES_FROM_END: u32 = 3;
 pub(super) const CAPSULES_FROM_END: u32 = 2;
-/// A texel's number goes through a float, exact up to 2^24; the movers' rows less, so the whole book is no taller than
-/// the 8192 texels every GPU takes.
-const MOST_BOOK_TEXELS: usize = (1 << 24) - TILE_GRID_FROM_END as usize * BOOK_WIDTH;
+/// The decals' screen tile lists (`decal_bins.rs`) take these rows before the movers' ones.
+pub(super) const DECAL_BIN_ROWS: u32 = 257;
+pub(super) const DECAL_BINS_FROM_END: u32 = TILE_GRID_FROM_END + DECAL_BIN_ROWS;
+/// A texel's number goes through a float, exact up to 2^24; the rows at the end less, so the whole book is no taller
+/// than the 8192 texels every GPU takes.
+const MOST_BOOK_TEXELS: usize = (1 << 24) - DECAL_BINS_FROM_END as usize * BOOK_WIDTH;
 
 /// What `lamp_shadow.wesl` reads, four floats a texel: a header (the grid's corner and its cell; its sides and where the
 /// cells start), every lamp's record, a texel for each cell (where its list starts and how many lamps it holds) and
@@ -417,6 +420,7 @@ mod tests {
             ("TILE_GRID_FROM_END", TILE_GRID_FROM_END),
             ("TILES_FROM_END", TILES_FROM_END),
             ("CAPSULES_FROM_END", CAPSULES_FROM_END),
+            ("DECAL_BINS_FROM_END", DECAL_BINS_FROM_END),
         ];
         for (name, value) in pairs {
             assert_eq!(shader_const(shader, name), f64::from(value), "{name}");

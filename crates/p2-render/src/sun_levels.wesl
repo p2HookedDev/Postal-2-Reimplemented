@@ -10,6 +10,10 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 @group(3) @binding(5) var particle_levels: texture_2d<f32>;
 @if(P2_PARTICLE_LEVELS)
 @group(3) @binding(6) var particle_levels_sampler: sampler;
+@if(LAMP_MASK_PASS)
+@group(1) @binding(8) var pass_levels: texture_2d<f32>;
+@if(LAMP_MASK_PASS)
+@group(1) @binding(9) var pass_levels_sampler: sampler;
 
 const HEADER_TEXELS: u32 = 1u;
 const RECORD_TEXELS: u32 = 24u;
@@ -39,7 +43,10 @@ struct LevelRecord {
 }
 
 fn source_size(source: LevelSource) -> vec2<u32> {
-@if(P2_PARTICLE_LEVELS) {
+@if(LAMP_MASK_PASS) {
+    return textureDimensions(pass_levels);
+}
+@elif(P2_PARTICLE_LEVELS) {
     return textureDimensions(particle_levels);
 }
 @elif(BINDLESS) {
@@ -51,7 +58,10 @@ fn source_size(source: LevelSource) -> vec2<u32> {
 }
 
 fn source_load(source: LevelSource, at: vec2<u32>) -> vec4<f32> {
-@if(P2_PARTICLE_LEVELS) {
+@if(LAMP_MASK_PASS) {
+    return textureLoad(pass_levels, at, 0);
+}
+@elif(P2_PARTICLE_LEVELS) {
     return textureLoad(particle_levels, at, 0);
 }
 @elif(BINDLESS) {
@@ -63,7 +73,10 @@ fn source_load(source: LevelSource, at: vec2<u32>) -> vec4<f32> {
 }
 
 fn source_gather(source: LevelSource, uv: vec2<f32>) -> vec4<f32> {
-@if(P2_PARTICLE_LEVELS) {
+@if(LAMP_MASK_PASS) {
+    return textureGather(0, pass_levels, pass_levels_sampler, uv);
+}
+@elif(P2_PARTICLE_LEVELS) {
     return textureGather(0, particle_levels, particle_levels_sampler, uv);
 }
 @elif(BINDLESS) {
@@ -76,7 +89,15 @@ fn source_gather(source: LevelSource, uv: vec2<f32>) -> vec4<f32> {
 
 // Columns r, g, b and a of the four texels.
 fn source_gather_bytes(source: LevelSource, uv: vec2<f32>) -> mat4x4<f32> {
-@if(P2_PARTICLE_LEVELS) {
+@if(LAMP_MASK_PASS) {
+    return mat4x4<f32>(
+        textureGather(0, pass_levels, pass_levels_sampler, uv),
+        textureGather(1, pass_levels, pass_levels_sampler, uv),
+        textureGather(2, pass_levels, pass_levels_sampler, uv),
+        textureGather(3, pass_levels, pass_levels_sampler, uv),
+    );
+}
+@elif(P2_PARTICLE_LEVELS) {
     return mat4x4<f32>(
         textureGather(0, particle_levels, particle_levels_sampler, uv),
         textureGather(1, particle_levels, particle_levels_sampler, uv),

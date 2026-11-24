@@ -9,7 +9,7 @@ import bevy_pbr::{
         mesh_view_bindings::view,
     },
 };
-import package::p2_render::projector::{cluster_ranges, pool_at, pool_mirror, project, wet_color, wet_normal, POOL_EVEN_TONE, TARGET_TERRAIN};
+import package::p2_render::projector::{cluster_ranges, decal_list, pool_at, pool_mirror, project, wet_color, wet_normal, POOL_EVEN_TONE, TARGET_TERRAIN};
 import package::p2_render::dynamic_light::dynamic_light;
 import package::p2_render::layer_bindings::post_lighting;
 import package::p2_render::modern::with_light;
@@ -180,7 +180,8 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let modern = (terrain.count.y & MODERN_ON) != 0u && sun_found(sun);
     let normal = normalize(pbr_input.world_normal);
     let ranges = cluster_ranges(pbr_input);
-    let pool = pool_at(pbr_input, ranges, normal, TARGET_TERRAIN, POOL_EVEN_TONE);
+    let decals = decal_list(vertex_output, pbr_input, ranges, true);
+    let pool = pool_at(pbr_input, decals, normal, TARGET_TERRAIN, POOL_EVEN_TONE);
     var incoming: ModernLight;
     var dynamic = vec3(0.0);
     if modern {
@@ -226,7 +227,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         }
         texture = mix(texture, pbr_input.material.base_color.rgb, alpha);
     }
-    let projected = project(pbr_input, ranges, texture, vec4(color, 1.0), TARGET_TERRAIN, true);
+    let projected = project(pbr_input, decals, texture, vec4(color, 1.0), TARGET_TERRAIN, true);
     pbr_input.material.base_color = projected;
 
     var out: FragmentOutput;

@@ -20,13 +20,14 @@ use bevy::render::render_resource::{
     MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
     ShaderStages, StoreOp, TextureFormat, VertexState,
 };
-use bevy::render::renderer::{PendingCommandBuffers, RenderDevice, RenderQueue};
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::shader::Shader;
 use rustc_hash::FxHashMap;
 
 use super::LampAtlas;
-use super::atlas::{GUARD_TEXELS, NEAR, BookRecords, PlainTilesDrawn, submit_timed, write_rows};
+use crate::stage_encoder::{Prepared, StageEncoder};
+use super::atlas::{GUARD_TEXELS, NEAR, BookRecords, PlainTilesDrawn, record_timed, write_rows};
 use super::cells::{CAPSULES_FROM_END, HEADER_TEXELS, RECORD_TEXELS, TILE_GRID_FROM_END, TILES_FROM_END};
 use super::faces::DETAIL_UNIT;
 use super::movers::{Drawn, MOST_MOVER_TILES, MoverCaster, MoverTile, MoverTiles};
@@ -303,7 +304,7 @@ pub(super) fn draw_mover_tiles(
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
-    mut pending: ResMut<PendingCommandBuffers>,
+    mut stage: ResMut<StageEncoder<Prepared>>,
     recorder: Option<Res<DiagnosticsRecorder>>,
     plain: Res<PlainTilesDrawn>,
     mut records: ResMut<BookRecords>,
@@ -402,7 +403,7 @@ pub(super) fn draw_mover_tiles(
             } else {
                 None
             };
-            submit_timed(&device, &mut pending, recorder.as_deref(), "mover tiles", |encoder| draw_squares(encoder, &device, target, clear, &draws, &casts, uniform_group, joint_group));
+            record_timed(&device, &mut stage, recorder.as_deref(), |encoder| draw_squares(encoder, &device, target, clear, &draws, &casts, uniform_group, joint_group));
             for (tile, _) in &draws {
                 let drawn = Held::of(tile);
                 forget_under(held, &drawn);

@@ -5,7 +5,7 @@ import bevy_pbr::{
         forward_io::{VertexOutput, FragmentOutput},
     },
 };
-import package::p2_render::projector::{cluster_ranges, mesh_target, pool_at, pool_mirror, project, wet_color, wet_normal, NO_PROJECTORS};
+import package::p2_render::projector::{cluster_ranges, decal_list, mesh_target, pool_at, pool_mirror, project, wet_color, wet_normal, NO_PROJECTORS};
 import package::p2_render::dynamic_light::dynamic_light;
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -26,6 +26,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     plain.color = vec4(1.0);
     var pbr_input = pbr_input_from_standard_material(plain, is_front);
     let ranges = cluster_ranges(pbr_input);
+    let decals = decal_list(in, pbr_input, ranges, true);
     var color = pbr_input.material.base_color;
     let texture = color.rgb;
     let tone = base_tone(in, pbr_input, texture);
@@ -41,7 +42,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Modern glass drops the pool, so the game's blood splats are pasted on it after the light instead.
     let glass = is_modern(layers.detail.z) && sun_found(sun) && is_see_through(pbr_input.material.flags);
     pooled = pooled && !glass;
-    let pool = pool_at(pbr_input, ranges, normal, select(mesh_target(in.instance_index), NO_PROJECTORS, glass), tone);
+    let pool = pool_at(pbr_input, decals, normal, select(mesh_target(in.instance_index), NO_PROJECTORS, glass), tone);
 @if(POOL_MIRROR)
     mirror = select(0.0, pool_mirror(pool), pooled);
     if is_modern(layers.detail.z) && sun_found(sun) {
@@ -60,7 +61,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 @else {
     if pooled {
         let normal = normalize(pbr_input.world_normal);
-        let pool = pool_at(pbr_input, ranges, normal, mesh_target(in.instance_index), tone);
+        let pool = pool_at(pbr_input, decals, normal, mesh_target(in.instance_index), tone);
         color = vec4(wet_color(color.rgb, pool), color.a);
 @if(POOL_MIRROR)
         mirror = pool_mirror(pool);
@@ -74,7 +75,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     color = apply_layers(in, color, color.a, pbr_input, layers);
     pbr_input.material.base_color = alpha_discard(pbr_input.material.flags, pbr_input.material.alpha_cutoff, color);
     var out: FragmentOutput;
-    out.color = post_lighting(pbr_input, project(pbr_input, ranges, texture, pbr_input.material.base_color, mesh_target(in.instance_index), pooled));
+    out.color = post_lighting(pbr_input, project(pbr_input, decals, texture, pbr_input.material.base_color, mesh_target(in.instance_index), pooled));
 @if(POOL_MIRROR)
     out.color.a = 1.0 + mirror;
     return out;

@@ -36,6 +36,7 @@ impl MaterialExtension for OpaqueDecals {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        crate::shaders::unmark_normal_map(descriptor);
         crate::shaders::mark_sky(descriptor, key.bind_group_data);
         Ok(())
     }
@@ -116,6 +117,7 @@ impl MaterialExtension for TerrainLayer {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        crate::shaders::unmark_normal_map(descriptor);
         if let Some(fragment) = descriptor.fragment.as_mut() {
             fragment.shader_defs.push("TERRAIN_LAYER".into());
         }

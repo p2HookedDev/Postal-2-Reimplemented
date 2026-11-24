@@ -37,6 +37,7 @@ pub mod wounds;
 pub mod modern_view;
 pub(crate) mod reflections;
 pub(crate) mod screen_pass;
+pub(crate) mod stage_encoder;
 pub(crate) mod bounce;
 pub mod coronas;
 pub mod debris;

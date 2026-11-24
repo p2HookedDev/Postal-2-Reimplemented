@@ -16,11 +16,11 @@ use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::binding_types::{sampler, texture_2d, uniform_buffer_sized};
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer, BufferBinding, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
-    CommandEncoder, CommandEncoderDescriptor, Extent3d, IndexFormat, LoadOp, Operations, Origin3d, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    CommandEncoder, Extent3d, IndexFormat, LoadOp, Operations, Origin3d, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
     SamplerBindingType, ShaderStages, StoreOp, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     VertexAttribute, VertexFormat, VertexStepMode,
 };
-use bevy::render::renderer::{PendingCommandBuffers, RenderDevice, RenderQueue};
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::shader::Shader;
 use p2_assets::{Terrain, fan_triangles, poly_flags};
@@ -31,6 +31,7 @@ use super::{LAMP_SHADOW_SPAN, LampAtlas};
 use super::cells::{BOOK_WIDTH, HEADER_TEXELS, RECORD_TEXELS};
 use super::faces::{DETAIL_UNIT, FaceSlot};
 use super::mover_pass::{NEAREST, pipeline, view_rows};
+use crate::stage_encoder::{Prepared, StageEncoder};
 use crate::level_collision::{GREY_ALBEDO, MaskedCaster, StaticCollision};
 
 pub(super) const ATLAS_SHADER: Handle<Shader> = uuid_handle!("6d2f91c4-3e7a-4b58-9a10-c7e45f28d316");
@@ -428,12 +429,11 @@ struct Ready<'a> {
 
 /// The lamp shadow passes run outside the cameras' graph, so they time themselves, all under one name.
 /// The pass goes out with the frame's one submit, ahead of the cameras' passes that read what it drew.
-pub(super) fn submit_timed(device: &RenderDevice, pending: &mut PendingCommandBuffers, recorder: Option<&DiagnosticsRecorder>, label: &'static str, encode: impl FnOnce(&mut CommandEncoder)) {
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some(label) });
-    let span = recorder.time_span(&mut encoder, LAMP_SHADOW_SPAN);
-    encode(&mut encoder);
-    span.end(&mut encoder);
-    pending.push_encoder(encoder, label);
+pub(super) fn record_timed(device: &RenderDevice, stage: &mut StageEncoder<Prepared>, recorder: Option<&DiagnosticsRecorder>, encode: impl FnOnce(&mut CommandEncoder)) {
+    let encoder = stage.encoder(device);
+    let span = recorder.time_span(encoder, LAMP_SHADOW_SPAN);
+    encode(encoder);
+    span.end(encoder);
 }
 
 fn draw_tiles(encoder: &mut CommandEncoder, ready: &Ready, bake: &LampBake, load: LoadOp<wgpu_types::Color>, jobs: &[TileJob]) {
@@ -546,7 +546,7 @@ pub(super) fn draw_lamp_atlas(
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
-    mut pending: ResMut<PendingCommandBuffers>,
+    mut stage: ResMut<StageEncoder<Prepared>>,
     recorder: Option<Res<DiagnosticsRecorder>>,
     mut plain: ResMut<PlainTilesDrawn>,
     mut records: ResMut<BookRecords>,
@@ -609,7 +609,7 @@ pub(super) fn draw_lamp_atlas(
             })
             .collect();
         let ready = Ready { solid, masked, clear, target, buffers };
-        submit_timed(&device, &mut pending, recorder.as_deref(), "lamp atlas", |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Clear(wgpu_types::Color::WHITE), &jobs));
+        record_timed(&device, &mut stage, recorder.as_deref(), |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Clear(wgpu_types::Color::WHITE), &jobs));
         state.drawn = Some(key);
         plain.0 = Some(key.0);
         state.detail.clear();
@@ -655,7 +655,7 @@ pub(super) fn draw_lamp_atlas(
             *made = image_group(image);
         }
         let ready = Ready { solid, masked, clear, target, buffers };
-        submit_timed(&device, &mut pending, recorder.as_deref(), "lamp atlas", |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Load, &jobs));
+        record_timed(&device, &mut stage, recorder.as_deref(), |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Load, &jobs));
     }
     if let Some(book_id) = atlas.book.as_ref().map(Handle::id) {
         for lamp in changed {

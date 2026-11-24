@@ -392,6 +392,158 @@ mod monday {
         (frame.len() == (size.x * size.y * 4) as usize).then_some(frame)
     }
 
+    /// Suburbs-3 at the player's settings and `size`, looking at the floor ahead, then a fight's leftovers put in view:
+    /// the game's machine-gun splats and puddles, bystanders cut up and killed, a burning car's fire. `pile`: the
+    /// splats heaped on one spot at the player's feet, as a machine gun leaves them on a body, and no one killed.
+    /// The app after the fight settled, the opaque pass's GPU milliseconds before it, and the image it draws into.
+    fn fight_scene(size: UVec2, pile: bool) -> Option<(App, f64, bevy::asset::Handle<Image>)> {
+        use bevy::ecs::query::With;
+        use p2_math::{Rotator, Vector};
+        use p2_render::frame_facts::FrameFacts;
+        use p2_render::level_collision::LevelCollision;
+        use p2_vm::Value;
+        let (mut app, target) = host(size, player_settings(&[])?, p2_render::modern::ModernGraphicsPlugin)?;
+        app.world_mut().resource_mut::<MeshView>().occlusion_culling = true;
+        first_frame(&mut app, &target);
+        for frame in 0..660 {
+            app.world_mut().resource_mut::<PlayerInput>().mouse = if frame >= if pile { 560 } else { 630 } { [0.0, -2.0] } else { [0.0; 2] };
+            app.update();
+        }
+        app.world_mut().resource_mut::<PlayerInput>().mouse = [0.0; 2];
+        let calm = opaque_cost(&mut app);
+        let world = app.world_mut();
+        let camera = world.query_filtered::<&Transform, With<SceneView>>().iter(world).next().copied()?;
+        let origin = world.resource::<FrameFacts>().origin;
+        let collision = world.resource::<LevelCollision>().0.clone()?;
+        let forward = camera.rotation * bevy::math::Vec3::NEG_Z;
+        let flat = bevy::math::Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+        let side = bevy::math::Vec3::new(-flat.z, 0.0, flat.x);
+        let mut spots = Vec::new();
+        for i in 0..20 {
+            for j in 0..15 {
+                let (along, across) = if pile { (50.0 + 8.0 * i as f32, -56.0 + 8.0 * j as f32) } else { (80.0 + 36.0 * i as f32, -350.0 + 50.0 * j as f32) };
+                let above = Vector::from(p2_bevy_assets::to_bevy(camera.translation + flat * along + side * across - origin));
+                spots.extend(collision.first_hit(above, above - Vector::new(0.0, 0.0, 400.0)).map(|hit| hit.location));
+            }
+        }
+        let mut play = world.resource_mut::<Play>();
+        play.world_mut()?.with_vm(|vm| {
+            let up = Rotator { pitch: 16384, yaw: 0, roll: 0 };
+            let splat = vm.find_class("Postal2Game", "BloodMachinegunSplatMaker").expect("the splat maker");
+            let puddle = vm.find_class("FX", "BloodPuddle").expect("the puddle");
+            for (i, &at) in spots.iter().enumerate() {
+                let _ = vm.spawn(splat, None, [Some(Value::Vector(at + Vector::new(0.0, 0.0, 10.0))), Some(Value::Rotator(up))]);
+                if i % 37 == 0 {
+                    let _ = vm.spawn(puddle, None, [Some(Value::Vector(at + Vector::new(0.0, 0.0, 1.0))), Some(Value::Rotator(Rotator::ZERO))]);
+                }
+            }
+            if pile {
+                return;
+            }
+            vm.find_class("BaseFX", "ShotgunDamage").expect("the shotgun's damage");
+            let shot = Value::Object(Some(vm.stub("BaseFX.ShotgunDamage", "Class")));
+            let me = vm.player().and_then(|controller| vm.store.object_of(controller, "Pawn"));
+            let person = vm.find_class("BasePeople", "Bystanders").expect("the bystanders");
+            for (i, &floor) in spots.iter().step_by(25).enumerate() {
+                let Ok(Some(body)) = vm.spawn(person, None, [Some(Value::Vector(floor + Vector::new(0.0, 0.0, 80.0))), Some(Value::Rotator(Rotator::ZERO))]) else { continue };
+                let _ = vm.event(body, "SetupController", Vec::new());
+                let push = Value::Vector(Vector::new(0.0, 0.0, 20_000.0));
+                let _ = match i % 3 {
+                    0 => vm.event(body, "ExplodeHead", [Value::Vector(Vector::ZERO), push.clone()]),
+                    1 => vm.event(body, "BlowOffHeadAndLimbs", [Value::Object(me), push.clone(), Value::Int(0)]),
+                    _ => Ok(()),
+                };
+                let at = vm.store.vector(body, "Location");
+                let _ = vm.event(body, "TakeDamage", [Value::Int(1000), Value::Object(me), Value::Vector(at), push, shot.clone()]);
+            }
+            let fire_at = spots[spots.len() / 2] + Vector::new(0.0, 0.0, 10.0);
+            for name in ["SizeableWoof", "FireSizeableEmitter", "TrailingFireEmitter"] {
+                let class = vm.find_class("FX", name).unwrap_or_else(|error| panic!("FX.{name}: {error}"));
+                let made = vm.spawn(class, None, [Some(Value::Vector(fire_at)), Some(Value::Rotator(Rotator::ZERO))]).ok().flatten();
+                if let (Some(made), "SizeableWoof") = (made, name) {
+                    let _ = vm.event(made, "SetSize", [Value::Float(400.0)]);
+                }
+            }
+        })?;
+        for _ in 0..360 {
+            app.update();
+        }
+        Some((app, calm, target))
+    }
+
+    /// The opaque pass's GPU milliseconds, printed with the frame's, SSAO's and the movers' lamp tiles. Drawn at 3840 x
+    /// 2160 the GPU is always busy: one that waits on the CPU lowers its clock and draws the same work slower.
+    fn opaque_cost(app: &mut App) -> f64 {
+        let start = std::time::Instant::now();
+        let costs = pass_costs(app, 90, 60);
+        let frame = start.elapsed().as_secs_f64() * 1000.0 / 150.0;
+        let tiles = app.world().get_resource::<p2_render::lamps::MoverTiles>().map(p2_render::lamps::MoverTiles::counts);
+        let opaque = costs.get("main_opaque_pass_3d").copied().unwrap_or(0.0);
+        eprintln!("COST frame {frame:.2}, opaque {opaque:.2}, ssao {:.2}, shadow mask {:.2}; mover tiles and the most on a lamp {tiles:?}", costs.get("ssao").copied().unwrap_or(0.0), costs.get("lamp_shadow_mask").copied().unwrap_or(0.0));
+        opaque
+    }
+
+    /// The opaque pass before the fight and over the half minute after it.
+    pub fn fight_opaque_cost(pile: bool) -> Option<()> {
+        let (mut app, calm, _) = fight_scene(UVec2::new(3840, 2160), pile)?;
+        let fought: f64 = (0..16).map(|_| opaque_cost(&mut app)).sum::<f64>() / 16.0;
+        eprintln!("FIGHT opaque calm {calm:.2} ms, after the fight {fought:.2} ms");
+        let mut spans: Vec<_> = pass_costs(&mut app, 30, 60).into_iter().collect();
+        spans.sort_by(|a, b| b.1.total_cmp(&a.1));
+        eprintln!("FIGHT every GPU span, {:.2} ms in all: {}", spans.iter().map(|(_, ms)| ms).sum::<f64>(), spans.iter().map(|(name, ms)| format!("{name} {ms:.2}")).collect::<Vec<_>>().join(", "));
+        Some(())
+    }
+
+    /// A frame of the staged fight at `size`, after it settled.
+    pub fn fight_picture(size: UVec2) -> Option<Vec<u8>> {
+        let (mut app, _, target) = fight_scene(size, false)?;
+        let latest = Arc::new(Mutex::new(Vec::new()));
+        let store = latest.clone();
+        app.world_mut().spawn(Readback::texture(target)).observe(move |event: On<ReadbackComplete>| {
+            store.lock().expect("lock").clone_from(&event.data);
+        });
+        for _ in 0..240 {
+            app.update();
+            if !latest.lock().expect("lock").is_empty() {
+                break;
+            }
+        }
+        let frame = latest.lock().expect("lock").clone();
+        assert_eq!(frame.len(), (size.x * size.y * 4) as usize, "the frame read back");
+        Some(frame)
+    }
+
+    /// The fight's opaque pass against each modern row taken down.
+    pub fn fight_cost_by_row() -> Option<()> {
+        const ROWS: [(&str, &str); 8] = [
+            ("ModernSunShadows", "0"),
+            ("ModernBounceLight", "0"),
+            ("ModernAO", "0"),
+            ("ModernContactShadows", "0"),
+            ("ModernReflections", "0"),
+            ("ModernLampShadows", "0"),
+            ("ModernLiquids", "0"),
+            ("ModernGraphics", "False"),
+        ];
+        let (mut app, _, _) = fight_scene(UVec2::new(3840, 2160), false)?;
+        let cost = |app: &mut App, changes: &[(&str, &str)]| {
+            app.insert_resource(player_settings(changes).expect("the settings file"));
+            opaque_cost(app)
+        };
+        for row in ROWS {
+            cost(&mut app, &[row]);
+        }
+        for round in 0..2 {
+            for (row, off) in ROWS {
+                let before = cost(&mut app, &[]);
+                let with = cost(&mut app, &[(row, off)]);
+                let after = cost(&mut app, &[]);
+                eprintln!("ROW {round} {:26} opaque {:+.2} ms | as set {before:.2} and {after:.2}, row {with:.2}", format!("{row}={off}"), with - (before + after) / 2.0);
+            }
+        }
+        Some(())
+    }
+
     pub fn differs(a: &[u8], b: &[u8], i: usize, threshold: u8) -> bool {
         (0..3).any(|c| a[i * 4 + c].abs_diff(b[i * 4 + c]) > threshold)
     }
@@ -433,6 +585,34 @@ fn monday_occlusion_culling_hides_only_hidden_things() {
 #[ignore = "benchmark: prints only; needs a GPU, the game and the player's settings file"]
 fn monday_opaque_pass_cost_by_row() {
     monday::opaque_cost_by_row();
+}
+
+#[test]
+#[ignore = "benchmark: prints only; needs a GPU, the game and the player's settings file"]
+fn monday_fight_opaque_cost() {
+    monday::fight_opaque_cost(false);
+}
+
+#[test]
+#[ignore = "benchmark: prints only; needs a GPU, the game and the player's settings file"]
+fn monday_pile_opaque_cost() {
+    monday::fight_opaque_cost(true);
+}
+
+#[test]
+#[ignore = "needs a GPU, the game and the player's settings file; writes a picture to look at"]
+fn monday_fight_picture() {
+    let size = bevy::math::UVec2::new(3840, 2160);
+    let Some(frame) = monday::fight_picture(size) else { return };
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("monday_fight.rgba");
+    std::fs::write(&path, &frame).expect("the picture written");
+    eprintln!("PICTURE {} {}x{}", path.display(), size.x, size.y);
+}
+
+#[test]
+#[ignore = "benchmark: prints only; needs a GPU, the game and the player's settings file"]
+fn monday_fight_cost_by_row() {
+    monday::fight_cost_by_row();
 }
 
 #[test]

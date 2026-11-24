@@ -3,6 +3,8 @@ use bevy::asset::{AssetApp, Assets, Handle, uuid_handle};
 use bevy::pbr::{Material, MaterialPlugin, MeshPipelineKey};
 use bevy::render::RenderApp;
 use bevy::render::render_resource::RenderPipelineDescriptor;
+use bevy::render::renderer::RenderDevice;
+use bevy::render::settings::WgpuFeatures;
 use bevy::shader::{Shader, ShaderDefVal};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -90,6 +92,16 @@ impl Plugin for ShaderLibraryPlugin {
             (LIQUID_LOOK_SHADER, shader_file("liquid_look.wesl")),
         ]);
     }
+
+    fn finish(&self, app: &mut App) {
+        if app.get_sub_app(RenderApp).is_none() {
+            return;
+        }
+        let half_floats = app.world().get_resource::<RenderDevice>().is_some_and(|device| device.features().contains(WgpuFeatures::SHADER_F16));
+        if let Some(mut projector) = app.world_mut().resource_mut::<Assets<Shader>>().get_mut(PROJECTOR_SHADER.id()) {
+            projector.shader_defs.push(ShaderDefVal::Bool("HALF_FLOATS".into(), half_floats));
+        }
+    }
 }
 
 pub(crate) fn add_libraries(app: &mut App) {
@@ -155,6 +167,14 @@ pub(crate) fn sky_view_defs(descriptor: &mut RenderPipelineDescriptor) {
     }
 }
 
+/// A lit material's normal map slot holds the lamps' screen shadows (`lamps/shadow_mask.rs`), not a normal map; Bevy's
+/// def for one would stop the back face of a two-sided surface turning its normal around.
+pub(crate) fn unmark_normal_map(descriptor: &mut RenderPipelineDescriptor) {
+    if let Some(fragment) = descriptor.fragment.as_mut() {
+        fragment.shader_defs.retain(|def| !matches!(def, ShaderDefVal::Bool(name, _) if name.starts_with("STANDARD_MATERIAL_NORMAL_MAP")));
+    }
+}
+
 /// Bevy gives an alpha-blend pipeline no def of its own; the lit surfaces' see-through path is compiled into those only.
 pub(crate) fn mark_see_through(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
     if key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA
@@ -178,6 +198,38 @@ pub(crate) fn mark_pool_mirror(descriptor: &mut RenderPipelineDescriptor, mesh_k
     }
 }
 
+/// A main pipeline of an opaque or masked world surface, drawn over a depth prepass and not sky.
+fn over_prepass(descriptor: &RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) -> bool {
+    let main = !descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
+    let opaque = mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_OPAQUE;
+    main && opaque && !key.sky && mesh_key.contains(MeshPipelineKey::DEPTH_PREPASS)
+}
+
+/// With a depth prepass the depth already holds every opaque and masked surface of the world, and each lit main pass
+/// discards at least what its prepass did; so a main pipeline that may discard writes no depth, and the GPU can drop
+/// its hidden fragments before the shader instead of after it. Sky surfaces draw nothing in a prepass.
+pub(crate) fn test_depth_early(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
+    let discards = mesh_key.intersects(MeshPipelineKey::MAY_DISCARD | MeshPipelineKey::VISIBILITY_RANGE_DITHER);
+    if discards && over_prepass(descriptor, mesh_key, key)
+        && let Some(depth) = descriptor.depth_stencil.as_mut()
+    {
+        depth.depth_write_enabled = Some(false);
+    }
+}
+
+/// Only the world camera has both prepasses, and with them and no MSAA the lamps' screen pass casts for each of its
+/// pixels: its lit surfaces then carry no shadow code of their own, which held up the rest of their work.
+pub(crate) fn mark_screen_shadows_only(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
+    let screen = mesh_key.contains(MeshPipelineKey::NORMAL_PREPASS) && mesh_key.msaa_samples() == 1;
+    if screen
+        && over_prepass(descriptor, mesh_key, key)
+        && let Some(fragment) = descriptor.fragment.as_mut()
+        && fragment.shader_defs.contains(&ShaderDefVal::from("BINDLESS"))
+    {
+        fragment.shader_defs.push("SCREEN_SHADOWS_ONLY".into());
+    }
+}
+
 /// Bevy's shadow pass takes the material's cull mode, and a level's faces look into its empty space: from the sun's side
 /// a sealed room's roof is a back face. Only directional shadow views have this key.
 pub(crate) fn cast_both_sides(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
@@ -190,6 +242,14 @@ pub(crate) fn cast_both_sides(descriptor: &mut RenderPipelineDescriptor, key: Me
 mod tests {
     use super::*;
     use bevy::render::render_resource::FragmentState;
+
+    #[test]
+    fn a_lit_pipeline_keeps_no_normal_map_def() {
+        let defs = ["STANDARD_MATERIAL_NORMAL_MAP", "STANDARD_MATERIAL_NORMAL_MAP_UV_B", "VERTEX_UVS"].map(ShaderDefVal::from).to_vec();
+        let mut descriptor = RenderPipelineDescriptor { fragment: Some(FragmentState { shader_defs: defs, ..Default::default() }), ..Default::default() };
+        unmark_normal_map(&mut descriptor);
+        assert_eq!(descriptor.fragment.expect("a fragment stage").shader_defs, [ShaderDefVal::from("VERTEX_UVS")]);
+    }
 
     #[test]
     fn only_an_unblended_world_pipeline_with_the_flag_writes_the_pool_record() {
@@ -214,5 +274,59 @@ mod tests {
         let mut depth_only = RenderPipelineDescriptor::default();
         mark_pool_mirror(&mut depth_only, MeshPipelineKey::BLEND_OPAQUE, world);
         assert!(depth_only.fragment.is_none());
+    }
+
+    #[test]
+    fn only_a_main_pipeline_that_may_discard_over_a_depth_prepass_leaves_the_depth_alone() {
+        use bevy::render::render_resource::{CompareFunction, DepthStencilState, TextureFormat, VertexState};
+        let writes = |mesh_key: MeshPipelineKey, key: SkyKey, defs: &[&'static str]| {
+            let mut descriptor = RenderPipelineDescriptor {
+                vertex: VertexState { shader_defs: defs.iter().map(|&def| ShaderDefVal::from(def)).collect(), ..Default::default() },
+                depth_stencil: Some(DepthStencilState {
+                    format: TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                ..Default::default()
+            };
+            test_depth_early(&mut descriptor, mesh_key, key);
+            descriptor.depth_stencil.and_then(|depth| depth.depth_write_enabled) == Some(true)
+        };
+        let world = SkyKey { sky: false, mirror: false };
+        let prepass = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_OPAQUE;
+        assert!(!writes(prepass | MeshPipelineKey::MAY_DISCARD, world, &[]));
+        assert!(!writes(prepass | MeshPipelineKey::VISIBILITY_RANGE_DITHER, world, &[]));
+        assert!(writes(prepass, world, &[]));
+        assert!(writes(MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::MAY_DISCARD, world, &[]));
+        assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, world, &["PREPASS_PIPELINE"]));
+        assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, SkyKey { sky: true, mirror: false }, &[]));
+        assert!(writes(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE | MeshPipelineKey::MAY_DISCARD, world, &[]));
+    }
+
+    #[test]
+    fn only_the_world_cameras_opaque_and_masked_surfaces_read_the_screen_shadows_alone() {
+        use bevy::render::render_resource::VertexState;
+        let marked = |mesh_key: MeshPipelineKey, key: SkyKey, vertex: &[&'static str], fragment: &[&'static str]| {
+            let mut descriptor = RenderPipelineDescriptor {
+                vertex: VertexState { shader_defs: vertex.iter().map(|&def| ShaderDefVal::from(def)).collect(), ..Default::default() },
+                fragment: Some(FragmentState { shader_defs: fragment.iter().map(|&def| ShaderDefVal::from(def)).collect(), ..Default::default() }),
+                ..Default::default()
+            };
+            mark_screen_shadows_only(&mut descriptor, mesh_key, key);
+            descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("SCREEN_SHADOWS_ONLY"))
+        };
+        let world = SkyKey { sky: false, mirror: false };
+        let both = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::BLEND_OPAQUE;
+        let bindless: &[&str] = &["BINDLESS"];
+        assert!(marked(both, world, &[], bindless));
+        assert!(marked(both | MeshPipelineKey::MAY_DISCARD, world, &[], bindless));
+        assert!(!marked(both, world, &[], &[]));
+        assert!(!marked(both, world, &["PREPASS_PIPELINE"], bindless));
+        assert!(!marked(both, SkyKey { sky: true, mirror: false }, &[], bindless));
+        assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_OPAQUE, world, &[], bindless));
+        assert!(!marked(both | MeshPipelineKey::from_msaa_samples(4), world, &[], bindless));
+        assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::BLEND_ALPHA, world, &[], bindless));
     }
 }

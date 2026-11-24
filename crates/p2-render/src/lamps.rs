@@ -4,11 +4,13 @@
 
 pub(crate) mod atlas;
 mod cells;
+mod decal_bins;
 mod faces;
 mod grounding;
 mod mover_pass;
 mod mover_pick;
 mod movers;
+mod shadow_mask;
 mod tile_grid;
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -21,11 +23,11 @@ use bevy::camera::{Camera, Projection};
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, Resource, With};
-use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::{IntoScheduleConfigs, SystemSet};
 use bevy::image::Image;
 use bevy::math::Vec3;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial};
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp, RenderSystems};
@@ -50,7 +52,7 @@ use crate::shaders::{add_shaders, shader_file};
 use crate::terrain_material::TerrainLayers;
 use crate::view::ShownScene;
 use atlas::{ATLAS_SHADER, ATLAS_UNITS, BookRecords, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
-use cells::{BOOK_WIDTH, CellLamp, RECORD_TEXELS, TILE_GRID_FROM_END, book_texels, lamp_cells};
+use cells::{BOOK_WIDTH, CellLamp, DECAL_BINS_FROM_END, RECORD_TEXELS, book_texels, lamp_cells};
 use faces::{Eye, FaceBook, FaceLamp, FaceSlot};
 use mover_pass::{MOVER_CASTER_SHADER, draw_mover_tiles};
 use mover_pick::pick_mover_tiles;
@@ -271,12 +273,15 @@ fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangl
 }
 
 /// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them, and Bevy asks for all a GPU offers.
-/// More rows after the texels hold the movers' tile grid, their tiles and their capsules in two grids.
+/// More rows after the texels hold the decals' screen tile lists, which a compute pass writes, the movers' tile grid,
+/// their tiles and their capsules in two grids.
 fn book_image(texels: &[[f32; 4]]) -> Image {
-    let rows = texels.len().div_ceil(BOOK_WIDTH).max(1) + TILE_GRID_FROM_END as usize;
+    let rows = texels.len().div_ceil(BOOK_WIDTH).max(1) + DECAL_BINS_FROM_END as usize;
     let mut bytes = bytes_of(texels);
     bytes.resize(rows * BOOK_WIDTH * 16, 0);
-    Image::new(Extent3d { width: BOOK_WIDTH as u32, height: rows as u32, depth_or_array_layers: 1 }, TextureDimension::D2, bytes, TextureFormat::Rgba32Float, RenderAssetUsages::RENDER_WORLD)
+    let mut image = Image::new(Extent3d { width: BOOK_WIDTH as u32, height: rows as u32, depth_or_array_layers: 1 }, TextureDimension::D2, bytes, TextureFormat::Rgba32Float, RenderAssetUsages::RENDER_WORLD);
+    image.texture_descriptor.usage |= TextureUsages::STORAGE_BINDING;
+    image
 }
 
 /// The modern switch, the lamp shadow level and the indirect light level in force, for the loading thread.
@@ -424,6 +429,9 @@ pub(crate) enum MaterialSlot {
     /// Bevy reads it only for parallax, compiled out without vertex tangents: a mesh that gains tangents would shift its
     /// UVs by this image as a height map.
     DepthMap,
+    /// Bevy reads it only for normal mapping, compiled out without vertex tangents: a mesh that gains tangents would
+    /// bend its normals by this image.
+    NormalMap,
 }
 
 impl MaterialSlot {
@@ -433,6 +441,7 @@ impl MaterialSlot {
             Self::MetallicRoughness => &material.metallic_roughness_texture,
             Self::Anisotropy => &material.anisotropy_texture,
             Self::DepthMap => &material.depth_map,
+            Self::NormalMap => &material.normal_map_texture,
         }
     }
 
@@ -442,6 +451,7 @@ impl MaterialSlot {
             Self::MetallicRoughness => &mut material.metallic_roughness_texture,
             Self::Anisotropy => &mut material.anisotropy_texture,
             Self::DepthMap => &mut material.depth_map,
+            Self::NormalMap => &mut material.normal_map_texture,
         }
     }
 }
@@ -493,6 +503,10 @@ fn follow_atlas_binding<A: MaterialAtlas, E: MaterialExtension>(
     *bound = wanted;
 }
 
+/// An atlas made anew in `PostUpdate`, which the materials take up in the same frame.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct AtlasSizeSystems;
+
 /// Before the frame's asset events go out, so a new material reaches the GPU once, already bound.
 pub(crate) fn follow_atlas<A: MaterialAtlas>(app: &mut App) {
     app.add_systems(
@@ -505,6 +519,7 @@ pub(crate) fn follow_atlas<A: MaterialAtlas>(app: &mut App) {
             follow_atlas_binding::<A, TerrainLayer>,
             follow_atlas_binding::<A, OpaqueDecals>,
         )
+            .after(AtlasSizeSystems)
             .before(AssetEventSystems),
     );
 }
@@ -604,6 +619,8 @@ impl Plugin for LampsPlugin {
             (ATLAS_SHADER, shader_file("lamp_atlas.wesl")),
             (MOVER_CASTER_SHADER, shader_file("mover_caster.wesl")),
         ]);
+        decal_bins::build(app);
+        shadow_mask::build(app);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.init_resource::<PlainTilesDrawn>();
             render.init_resource::<BookRecords>();
@@ -684,8 +701,9 @@ mod tests {
     #[test]
     fn a_book_is_whole_rows_of_float_texels() {
         let image = book_image(&[[1.0, 2.0, 3.0, 4.0]]);
-        assert_eq!((image.width() as usize, image.height()), (BOOK_WIDTH, 9));
-        assert_eq!(image.data.as_ref().map(|data| (data.len(), data[..8].to_vec())), Some((9 * BOOK_WIDTH * 16, [1.0f32.to_le_bytes(), 2.0f32.to_le_bytes()].concat())));
+        let rows = 1 + DECAL_BINS_FROM_END as usize;
+        assert_eq!((image.width() as usize, image.height() as usize), (BOOK_WIDTH, rows));
+        assert_eq!(image.data.as_ref().map(|data| (data.len(), data[..8].to_vec())), Some((rows * BOOK_WIDTH * 16, [1.0f32.to_le_bytes(), 2.0f32.to_le_bytes()].concat())));
     }
 
     #[test]

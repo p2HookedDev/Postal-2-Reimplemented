@@ -9,9 +9,11 @@ import package::p2_render::layer_bindings::lit_color;
 import package::p2_render::layer_types::ShaderLayers;
 import package::p2_render::modern::{Lit, allows_gloss, ambient_occlusion, classed_surface, modern_glass, surface_light, view_around, with_light};
 import package::p2_render::modern_base::LampLight;
-import package::p2_render::sun_shadow::{sun_seen_from, sun_visibility};
+import package::p2_render::sun_shadow::{sun_faced, sun_seen_from, sun_visibility};
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::lamp_shadow::lamp_light;
+@if(SCREEN_SHADOWS_ONLY)
+import package::p2_render::lamp_shadow::screen_sun;
 import package::p2_render::projector::{Pool, no_pool, wet_color, wet_normal};
 @if(BINDLESS)
 import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
@@ -57,9 +59,13 @@ fn pooled_surface(surface: vec3<f32>, pool: Pool) -> vec3<f32> {
     return vec3(mix(surface.x, max(pool.roughness, POOL_LEAST_ROUGHNESS), wet), surface.y * (1.0 - wet), -mix(abs(surface.z), POOL_REFLECTANCE, wet));
 }
 
-// The sun sees `normal`, the lamps light `bumped`, or the liquid's surface where `pool` stands.
+// The sun sees `normal`, the lamps light `bumped`, or the liquid's surface where `pool` stands. The lamps' shadows read
+// `normal`, the one the prepass holds for the screen pass that casts them.
 fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool) -> ModernLight {
     let position = pbr_input.world_position.xyz;
+@if(SCREEN_SHADOWS_ONLY)
+    let seen = sun_faced(sun, normal, screen_sun(in, pbr_input.frag_coord.xy));
+@else
     let seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
     var standing = pool;
     if darken {
@@ -67,7 +73,7 @@ fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f3
     }
     let gloss = (allows_gloss(flag) || standing.wet > 0.0) && !darken;
     let surface = pooled_surface(classed_surface(flag, blend), standing);
-    let lamps = lamp_light(in, position, wet_normal(bumped, standing), bumped, gloss, surface, flag);
+    let lamps = lamp_light(in, position, wet_normal(bumped, standing), normal, gloss, surface, flag);
     return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface, standing);
 }
 

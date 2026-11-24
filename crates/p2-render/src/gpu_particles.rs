@@ -25,6 +25,7 @@ use bevy::render::render_resource::{
 };
 use bevy::render::render_resource::ShaderType;
 use bevy::render::render_resource::encase::ShaderSize;
+use bevy::render::render_phase::TrackedRenderPass;
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::texture::{FallbackImage, GpuImage};
 use bevy::render::view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
@@ -36,6 +37,7 @@ use p2_host::display::{MODERN_GPU_PARTICLES, MODERN_PARTICLE_LIGHT, Settings, mo
 use p2_math::Vector;
 
 use crate::MainPassExtraSystems;
+use crate::stage_encoder::{AfterOpaque, StageEncoder};
 use crate::components::SceneView;
 use crate::debris::PieceBirths;
 use crate::frame_facts::FrameFacts;
@@ -86,6 +88,7 @@ pub struct GpuParticleSystems;
 
 impl Plugin for GpuParticlesPlugin {
     fn build(&self, app: &mut App) {
+        crate::stage_encoder::build(app);
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
@@ -436,7 +439,8 @@ fn gpu_particles(
     fallback: Res<FallbackImage>,
     mut stepped_groups: Local<ViewBindGroups<(BufferId, TextureId, BufferId, BufferId)>>,
     mut shown_groups: Local<ViewBindGroups<(TextureId, BufferId, BufferId, [TextureViewId; TEXTURE_SLOTS])>>,
-    mut ctx: RenderContext,
+    mut stage: ResMut<StageEncoder<AfterOpaque>>,
+    ctx: RenderContext,
 ) {
     let entity = view.entity();
     let (target, prepass, offset, pool, droplets) = view.into_inner();
@@ -483,20 +487,21 @@ fn gpu_particles(
             )),
         )
     });
+    let encoder = stage.encoder(device);
     {
-        let mut pass = ctx.command_encoder().begin_compute_pass(&ComputePassDescriptor { label: Some("gpu particles step"), timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor { label: Some("gpu particles step"), timestamp_writes: None });
         pass.set_pipeline(simulate);
         pass.set_bind_group(0, stepped, &[offset.offset]);
         pass.dispatch_workgroups(live.div_ceil(WORKGROUP), 1, 1);
     }
-    let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
+    let mut pass = TrackedRenderPass::new(device, encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("gpu particles"),
         color_attachments: &[Some(target.get_color_attachment())],
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
-    });
+    }));
     pass.set_render_pipeline(draw);
     pass.set_bind_group(0, shown, &[offset.offset]);
     // In the slots' order, as the whole pool was drawn, so overlapping droplets blend as before.

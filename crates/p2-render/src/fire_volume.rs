@@ -30,6 +30,7 @@ use rustc_hash::FxHashSet;
 use crate::components::SceneView;
 use p2_host::display::{MODERN_FIRE_VOLUMES, Settings};
 use crate::MainPassExtraSystems;
+use crate::stage_encoder::{AfterOpaque, StageEncoder};
 use crate::frame_facts::FrameFacts;
 use crate::particle_draw::ParticleDraws;
 use crate::particle_frame::DrawnParticles;
@@ -59,6 +60,7 @@ pub struct FireVolumeSystems;
 
 impl Plugin for FireVolumePlugin {
     fn build(&self, app: &mut App) {
+        crate::stage_encoder::build(app);
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
@@ -269,6 +271,7 @@ fn prepare_fire_views(
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn fire_volume(
     view: ViewQuery<(&ViewTarget, &ExtractedCamera, &ViewPrepassTextures, &ViewUniformOffset, &FireVolumes, &FireView)>,
     pipeline_cache: Res<PipelineCache>,
@@ -276,7 +279,8 @@ fn fire_volume(
     view_uniforms: Res<ViewUniforms>,
     mut scene_groups: Local<ViewBindGroups<(TextureViewId, TextureId, BufferId, BufferId)>>,
     mut marched_groups: Local<ViewBindGroups<(TextureViewId, TextureId, BufferId, BufferId)>>,
-    mut ctx: RenderContext,
+    mut stage: ResMut<StageEncoder<AfterOpaque>>,
+    ctx: RenderContext,
 ) {
     let entity = view.entity();
     let (target, camera, prepass, offset, fires, prepared) = view.into_inner();
@@ -311,7 +315,7 @@ fn fire_volume(
         composite: ScreenStep { label: "fire volume", pipeline: composite, bind_group: from_marched },
         offset: offset.offset,
     }
-    .draw(&mut ctx, target, camera);
+    .draw(&ctx, stage.encoder(ctx.render_device()), target, camera);
 }
 
 #[cfg(test)]

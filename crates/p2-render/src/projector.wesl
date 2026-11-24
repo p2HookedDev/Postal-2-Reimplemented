@@ -7,13 +7,18 @@ import bevy_pbr::render::{
     pbr_types::{PbrInput, STANDARD_MATERIAL_FLAGS_UNLIT_BIT},
     clustered_forward,
     clustered_forward::ClusterableObjectIndexRanges,
+    forward_io::VertexOutput,
     mesh_functions::get_tag,
     mesh_view_bindings,
 };
 import bevy_pbr::decal::clustered::get_view_z;
 import package::p2_render::color::{BLOOD_BODY, BLOOD_SIGMA, to_display, to_linear};
-@if(CLUSTERED_DECALS_ARE_USABLE)
-import bevy_pbr::decal::clustered::{ClusteredDecalIterator, clustered_decal_iterator_new, clustered_decal_iterator_next};
+import package::p2_render::lamp_shadow::{BOOK_WIDTH, Book, DECAL_BINS_FROM_END, book_of, book_texel};
+
+// `pool_at`'s tap sums in half floats on a card that has them (`shaders.rs` sets the flag).
+@if(HALF_FLOATS) enable f16;
+@if(HALF_FLOATS) alias half = f16;
+@else alias half = f32;
 
 const PROJECTOR: u32 = 0x80000000u;
 // `EProjectorBlending` (the material stage, tag bits 8..16).
@@ -98,6 +103,104 @@ fn cluster_ranges(pbr_input: PbrInput) -> ClusterableObjectIndexRanges {
 }
 }
 
+// Where a pixel finds the decals over it: its screen tile's list in the lamp book (`decal_bins.wesl`), entries `start`
+// to `end` from texel `binned`, or with `binned` below 0 Bevy's cluster list between those offsets.
+struct DecalList {
+    book: Book,
+    binned: i32,
+    start: i32,
+    end: i32,
+}
+
+// Matches `decal_bins.wesl`.
+const BIN_HEAD_TEXELS: u32 = 4u;
+const BIN_LIST_TEXELS: u32 = 16u;
+
+fn cluster_decals(book: Book, ranges: ClusterableObjectIndexRanges) -> DecalList {
+@if(SKY_VIEW) {
+    return DecalList(book, -1, 0, 0);
+}
+@if(!SKY_VIEW) {
+    return DecalList(book, -1, i32(ranges.first_decal_offset), i32(ranges.last_clusterable_object_index_offset));
+}
+}
+
+// The pixel's tile list where the book holds one written this frame for this view, else Bevy's cluster list. A surface
+// drawn after the opaque pass (`binned` false) is not in the depth the lists were cut by.
+fn decal_list(in: VertexOutput, pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, binned: bool) -> DecalList {
+    let book = book_of(in);
+    let clusters = cluster_decals(book, ranges);
+    if !binned || clusters.end == clusters.start || book.size.x != BOOK_WIDTH || book.size.y < DECAL_BINS_FROM_END {
+        return clusters;
+    }
+    let head = (book.size.y - DECAL_BINS_FROM_END) * BOOK_WIDTH;
+    let grid = book_texel(book, head);
+    if grid.w != 1.0 || any(book_texel(book, head + 1u) != mesh_view_bindings::view.clip_from_world[0]) || any(book_texel(book, head + 2u) != mesh_view_bindings::view.clip_from_world[3]) {
+        return clusters;
+    }
+    let tile = vec2<u32>(pbr_input.frag_coord.xy / grid.y);
+    let start = head + BIN_HEAD_TEXELS + (tile.y * u32(grid.x) + tile.x) * BIN_LIST_TEXELS;
+    let count = book_texel(book, start).x;
+    if count < 0.0 {
+        return clusters;
+    }
+    return DecalList(book, i32(start), 0, i32(count));
+}
+
+// The index in Bevy's decal buffer of the `at`th decal of `list`.
+fn listed_decal(list: DecalList, at: i32) -> i32 {
+    if list.binned < 0 {
+        return i32(clustered_forward::get_clusterable_object_id(u32(at)));
+    }
+    let entry = u32(at) + 1u;
+    return i32(book_texel(list.book, u32(list.binned) + entry / 4u)[entry % 4u]);
+}
+
+// A walk along a `DecalList`; `decal` is the index in Bevy's decal buffer of the one last found.
+struct DecalWalk {
+    at: i32,
+    decal: i32,
+    base_color_texture_index: i32,
+    normal_map_texture_index: i32,
+    metallic_roughness_texture_index: i32,
+    uv: vec2<f32>,
+    tag: u32,
+    world_position: vec3<f32>,
+}
+
+fn decal_walk(list: DecalList, world: vec3<f32>) -> DecalWalk {
+    return DecalWalk(list.start - 1, -1, -1, -1, -1, vec2(0.0), 0u, world);
+}
+
+// Whether the box of `decal` holds the walk's place, the walk taking its fields when it does.
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn decal_holds(walk: ptr<function, DecalWalk>, decal: i32) -> bool {
+    let local = (mesh_view_bindings::clustered_decals.decals[decal].local_from_world * vec4((*walk).world_position, 1.0)).xyz;
+    if any(local < vec3(-0.5)) || any(local > vec3(0.5)) {
+        return false;
+    }
+    (*walk).decal = decal;
+    (*walk).base_color_texture_index = i32(mesh_view_bindings::clustered_decals.decals[decal].base_color_texture_index);
+    (*walk).normal_map_texture_index = i32(mesh_view_bindings::clustered_decals.decals[decal].normal_map_texture_index);
+    (*walk).metallic_roughness_texture_index = i32(mesh_view_bindings::clustered_decals.decals[decal].metallic_roughness_texture_index);
+    (*walk).uv = local.xy * vec2(1.0, -1.0) + vec2(0.5);
+    (*walk).tag = mesh_view_bindings::clustered_decals.decals[decal].tag;
+    return true;
+}
+
+// The next decal of `list` over the walk's place.
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn next_decal(walk: ptr<function, DecalWalk>, list: DecalList) -> bool {
+    (*walk).at += 1;
+    while (*walk).at < list.end {
+        if decal_holds(walk, listed_decal(list, (*walk).at)) {
+            return true;
+        }
+        (*walk).at += 1;
+    }
+    return false;
+}
+
 @if(CLUSTERED_DECALS_ARE_USABLE)
 fn decal_texel(index: i32, uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(
@@ -114,9 +217,8 @@ fn decal_alpha_soft(index: i32, uv: vec2<f32>) -> f32 {
 }
 
 @if(CLUSTERED_DECALS_ARE_USABLE)
-fn faces_projector(offset: i32, normal: vec3<f32>) -> bool {
-    let index = clustered_forward::get_clusterable_object_id(u32(offset));
-    let m = mesh_view_bindings::clustered_decals.decals[index].local_from_world;
+fn faces_projector(decal: i32, normal: vec3<f32>) -> bool {
+    let m = mesh_view_bindings::clustered_decals.decals[decal].local_from_world;
     let direction = -normalize(vec3(m[0].z, m[1].z, m[2].z));
     return dot(normalize(normal), direction) < -0.0001;
 }
@@ -124,7 +226,7 @@ fn faces_projector(offset: i32, normal: vec3<f32>) -> bool {
 // The texel a game projector or wound leaves on `surface` at the fragment, or a negative alpha where it draws none.
 // BSP takes a projector only where it faces it; a `bUnlit` static mesh still takes projectors (unverified gap).
 @if(CLUSTERED_DECALS_ARE_USABLE)
-fn projector_texel(pbr_input: PbrInput, tag: u32, index: i32, offset: i32, uv: vec2<f32>, surface: u32) -> vec4<f32> {
+fn projector_texel(pbr_input: PbrInput, tag: u32, index: i32, decal: i32, uv: vec2<f32>, surface: u32) -> vec4<f32> {
     let refused = vec4(-1.0);
     let wound = (tag & WOUND) != 0u && surface == 0u;
     if (tag & (PROJECTOR | 0x7u)) == (PROJECTOR | FB_LIQUID) {
@@ -145,7 +247,7 @@ fn projector_texel(pbr_input: PbrInput, tag: u32, index: i32, offset: i32, uv: v
     if surface == TARGET_BSP && (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) != 0u && (tag & ON_UNLIT) == 0u {
         return refused;
     }
-    if (surface == TARGET_BSP || (tag & WOUND) != 0u) && !faces_projector(offset, pbr_input.world_normal) {
+    if (surface == TARGET_BSP || (tag & WOUND) != 0u) && !faces_projector(decal, pbr_input.world_normal) {
         return refused;
     }
     let texel = decal_texel(index, uv);
@@ -470,12 +572,11 @@ const PUKE_UNSOUGHT: i32 = -2;
 
 // The puke splat decal's texture index among the decals at `world`, or -1.
 @if(CLUSTERED_DECALS_ARE_USABLE)
-fn puke_splat_index(world: vec3<f32>, ranges: ClusterableObjectIndexRanges) -> i32 {
-    var decal_ranges = ranges;
-    var iterator = clustered_decal_iterator_new(world, &decal_ranges);
-    while clustered_decal_iterator_next(&iterator) {
-        if (iterator.tag & (PROJECTOR | 0x7u | PUKE_SPLAT)) == (PROJECTOR | FB_LIQUID | PUKE_SPLAT) {
-            return iterator.metallic_roughness_texture_index;
+fn puke_splat_index(world: vec3<f32>, list: DecalList) -> i32 {
+    var walk = decal_walk(list, world);
+    while next_decal(&walk, list) {
+        if (walk.tag & (PROJECTOR | 0x7u | PUKE_SPLAT)) == (PROJECTOR | FB_LIQUID | PUKE_SPLAT) {
+            return walk.metallic_roughness_texture_index;
         }
     }
     return -1;
@@ -505,7 +606,7 @@ fn puke_texture(index: i32, ground: vec2<f32>, pixel: f32) -> vec4<f32> {
 // The game's blood splat as blood standing on the surface, `wet` the share its texture covers there: as deep as it
 // covers, so its edge bends the surface as a pool's rim does; drying dulls it.
 @if(CLUSTERED_DECALS_ARE_USABLE)
-fn splat_tilt(tag: u32, index: i32, offset: i32, uv: vec2<f32>) -> vec3<f32> {
+fn splat_tilt(tag: u32, index: i32, decal: i32, uv: vec2<f32>) -> vec3<f32> {
     // Read two texels apart on the half-size mip: one texel apart, the 4-bit alpha's steps facet the highlight in squares.
     let pitch = 2.0 / vec2<f32>(textureDimensions(mesh_view_bindings::clustered_decal_textures[index]));
     let slope = vec2(
@@ -513,7 +614,7 @@ fn splat_tilt(tag: u32, index: i32, offset: i32, uv: vec2<f32>) -> vec3<f32> {
         decal_alpha_soft(index, uv + vec2(0.0, pitch.y)) - decal_alpha_soft(index, uv - vec2(0.0, pitch.y))
     ) / (2.0 * pitch) * unfaded(tag);
     // The texture spans the decal: u along its local x, v against its local y.
-    let m = mesh_view_bindings::clustered_decals.decals[clustered_forward::get_clusterable_object_id(u32(offset))].local_from_world;
+    let m = mesh_view_bindings::clustered_decals.decals[decal].local_from_world;
     return (vec3(m[0].x, m[1].x, m[2].x) * slope.x - vec3(m[0].y, m[1].y, m[2].y) * slope.y) * (POOL_FILM * POOL_RISE);
 }
 
@@ -526,13 +627,13 @@ struct SplatSum {
 }
 
 @if(CLUSTERED_DECALS_ARE_USABLE)
-fn add_blood_splat(sum: ptr<function, SplatSum>, pbr_input: PbrInput, tag: u32, index: i32, offset: i32, uv: vec2<f32>, receiver: u32) {
-    let wet = projector_texel(pbr_input, tag, index, offset, uv, receiver).a * unfaded(tag);
+fn add_blood_splat(sum: ptr<function, SplatSum>, pbr_input: PbrInput, tag: u32, index: i32, decal: i32, uv: vec2<f32>, receiver: u32) {
+    let wet = projector_texel(pbr_input, tag, index, decal, uv, receiver).a * unfaded(tag);
     if wet > 0.0 {
         let dry = (tag >> DRY_SHIFT) & DRY_MASK;
         // A dry splat is too dull for its rim's bend to show.
         if dry < DRY_MASK {
-            (*sum).tilt += splat_tilt(tag, index, offset, uv);
+            (*sum).tilt += splat_tilt(tag, index, decal, uv);
         }
         (*sum).dry += f32(dry) / 15.0 * wet;
         (*sum).weight += wet;
@@ -552,16 +653,13 @@ fn blood_splat(normal: vec3<f32>, tilt: vec3<f32>, alpha: f32, dryness: f32) -> 
 }
 
 // The game's blood splats on `receiver` alone, never our liquids: a body's wounds, where a floor pool must not lie.
-fn splat_pool(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: vec3<f32>, receiver: u32) -> Pool {
+fn splat_pool(pbr_input: PbrInput, list: DecalList, normal: vec3<f32>, receiver: u32) -> Pool {
     var pool = no_pool(normal);
 @if(CLUSTERED_DECALS_ARE_USABLE) {
     var sum = SplatSum(0.0, 0.0, 0.0, vec3(0.0));
-    var decal_ranges = ranges;
-    var iterator = clustered_decal_iterator_new(pbr_input.world_position.xyz, &decal_ranges);
-    while clustered_decal_iterator_next(&iterator) {
-        if (iterator.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && iterator.normal_map_texture_index >= 0 {
-            add_blood_splat(&sum, pbr_input, iterator.tag, iterator.base_color_texture_index, iterator.decal_index_offset, iterator.uv, receiver);
-        }
+    var walk = decal_walk(list, pbr_input.world_position.xyz);
+    while next_pool_decal(&walk, list, false, false) {
+        add_blood_splat(&sum, pbr_input, walk.tag, walk.base_color_texture_index, walk.decal, walk.uv, receiver);
     }
     if sum.wet > 0.0 {
         pool = blood_splat(normal, sum.tilt, sum.wet, sum.dry / sum.weight);
@@ -574,7 +672,7 @@ fn splat_pool(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal:
 // The atlas is read as a cubic B-spline, smooth in its value and its slope, so no texel and no tile shows; the edge is
 // the depth's contour, soft and moved by broad world noise, with a soaked ring past it. The game's blood splats that
 // draw on `receiver` (the projector targets `project` takes) stand on it too. `tone` is the floor texel's luma over the texture's around it.
-fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: vec3<f32>, receiver: u32, tone: f32) -> Pool {
+fn pool_at(pbr_input: PbrInput, list: DecalList, normal: vec3<f32>, receiver: u32, tone: f32) -> Pool {
     var pool = no_pool(normal);
 @if(CLUSTERED_DECALS_ARE_USABLE) {
     let on_floor = normal.y > 0.5;
@@ -582,32 +680,22 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
     // Sought only once puke is found here, as few places hold any.
     var puke = PUKE_UNSOUGHT;
     var splats = SplatSum(0.0, 0.0, 0.0, vec3(0.0));
-    var decal_ranges = ranges;
-    var iterator = clustered_decal_iterator_new(world, &decal_ranges);
-    while clustered_decal_iterator_next(&iterator) {
-        // The game's blood splats carry a normal map of their own while our liquids are on.
-        if (iterator.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && iterator.normal_map_texture_index >= 0 {
-            add_blood_splat(&splats, pbr_input, iterator.tag, iterator.base_color_texture_index, iterator.decal_index_offset, iterator.uv, receiver);
+    var walk = decal_walk(list, world);
+    while next_pool_decal(&walk, list, true, on_floor) {
+        if (walk.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) {
+            add_blood_splat(&splats, pbr_input, walk.tag, walk.base_color_texture_index, walk.decal, walk.uv, receiver);
             continue;
         }
-        // The liquid's texture rides as the decal's metallic-roughness map, which Bevy's own decal pass reads only under a
-        // base colour, so a standard material lying in a pool does not take its data as colour.
-        if (iterator.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) || iterator.metallic_roughness_texture_index < 0 {
-            continue;
-        }
-        let wall_tile = (iterator.tag & POOL_WALL_TILE) != 0u;
-        if (iterator.tag & PUKE_SPLAT) != 0u || (!wall_tile && !on_floor) {
-            continue;
-        }
-        let index = iterator.metallic_roughness_texture_index;
-        let slot = (iterator.tag >> 8u) & 0xffu;
+        let wall_tile = (walk.tag & POOL_WALL_TILE) != 0u;
+        let index = walk.metallic_roughness_texture_index;
+        let slot = (walk.tag >> 8u) & 0xffu;
         let corner = vec2<i32>(i32(slot % POOL_SLOTS_SIDE), i32(slot / POOL_SLOTS_SIDE)) * POOL_SLOT_SIDE + POOL_APRON;
-        let p = clamp(iterator.uv, vec2(0.0), vec2(1.0)) * POOL_SIDE - 0.5;
+        let p = clamp(walk.uv, vec2(0.0), vec2(1.0)) * POOL_SIDE - 0.5;
         let nearest = textureLoad(mesh_view_bindings::clustered_decal_textures[index], corner + vec2<i32>(round(p)), 0);
         if nearest.w < 0.0 {
             continue;
         }
-        let m = mesh_view_bindings::clustered_decals.decals[clustered_forward::get_clusterable_object_id(u32(iterator.decal_index_offset))].local_from_world;
+        let m = mesh_view_bindings::clustered_decals.decals[walk.decal].local_from_world;
         // Texture u runs along the decal's local x and v against its local y: one texel is `POOL_TEXEL_UU` units. It
         // projects along its local z, up on a floor and the plane's normal on a plane tile.
         let along_u = normalize(vec3(m[0].x, m[1].x, m[2].x));
@@ -624,21 +712,23 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
         let wy = spline_weights(p.y - base.y);
         let sx = spline_slopes(p.x - base.x);
         let sy = spline_slopes(p.y - base.y);
-        var weight = 0.0;
-        var weight_slope = vec2(0.0);
-        var depth = 0.0;
+        var weight_h: half = 0.0;
+        var weight_slope_h = vec2<half>(0.0);
+        var depth_h: half = 0.0;
+        // The liquid surface's height over the fragment's place, in 32 bit: the world's heights times the half float
+        // weight slope would put noise into the flow.
         var height = 0.0;
-        var speed = 0.0;
+        var speed_h: half = 0.0;
         // Heat and scorch, in steps.
-        var fire = vec2(0.0);
+        var fire_h = vec2<half>(0.0);
         // The kind and blood share of the wettest texel around: at a rim the nearest may be dry.
-        var wettest = vec2(0.0);
+        var wettest_h = vec2<half>(0.0);
         // The blood share by depth over the taps, a blood texel all blood: a volume fraction, so mixed kinds blend.
-        var share = 0.0;
+        var share_h: half = 0.0;
         // The depth and kind of the deepest tap that is not blood.
-        var other = vec2(0.0);
+        var other_h = vec2<half>(0.0);
         // In texels: the depth's slope and the liquid surface's, which runs downhill.
-        var depth_slope = vec2(0.0);
+        var depth_slope_h = vec2<half>(0.0);
         var height_slope = vec2(0.0);
         for (var j = 0; j < 4; j++) {
             for (var i = 0; i < 4; i++) {
@@ -648,28 +738,40 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
                 }
                 let w = wx[i] * wy[j];
                 let s = vec2(sx[i] * wy[j], wx[i] * sy[j]);
-                weight += w;
-                weight_slope += s;
-                depth += t.x * w;
-                height += (t.z + t.x) * w;
-                share += t.x * w * select(fract(t.y) / 0.98, 1.0, u32(t.y) == POOL_BLOOD);
-                if t.x > wettest.x {
-                    wettest = t.xy;
+                let wh = half(w);
+                let sh = vec2<half>(s);
+                let xh = half(t.x);
+                weight_h += wh;
+                weight_slope_h += sh;
+                depth_h += xh * wh;
+                height += (t.z - standing + t.x) * w;
+                share_h += xh * wh * half(select(fract(t.y) / 0.98, 1.0, u32(t.y) == POOL_BLOOD));
+                if xh > wettest_h.x {
+                    wettest_h = vec2<half>(t.xy);
                 }
-                if u32(t.y) != POOL_BLOOD && t.x > other.x {
-                    other = vec2(t.x, floor(t.y));
+                if u32(t.y) != POOL_BLOOD && xh > other_h.x {
+                    other_h = vec2<half>(xh, half(floor(t.y)));
                 }
                 if t.w >= POOL_FIRE_BASE {
                     let code = t.w - POOL_FIRE_BASE;
                     let heat = floor(code / 32.0);
-                    fire += vec2(heat, code - heat * 32.0) * w;
+                    fire_h += vec2<half>(vec2(heat, code - heat * 32.0)) * wh;
                 } else {
-                    speed += max(t.w, 0.0) * w;
+                    speed_h += half(max(t.w, 0.0)) * wh;
                 }
-                depth_slope += t.x * s;
-                height_slope += (t.z + t.x) * s;
+                depth_slope_h += xh * sh;
+                height_slope += (t.z - standing + t.x) * s;
             }
         }
+        let weight = f32(weight_h);
+        let weight_slope = vec2<f32>(weight_slope_h);
+        var depth = f32(depth_h);
+        var speed = f32(speed_h);
+        var fire = vec2<f32>(fire_h);
+        let wettest = vec2<f32>(wettest_h);
+        let share = f32(share_h);
+        let other = vec2<f32>(other_h);
+        var depth_slope = vec2<f32>(depth_slope_h);
         if weight < 0.05 {
             continue;
         }
@@ -717,7 +819,7 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
         var splat = vec4(0.0);
         if paste {
             if puke == PUKE_UNSOUGHT {
-                puke = puke_splat_index(world, ranges);
+                puke = puke_splat_index(world, list);
             }
             splat = puke_texture(puke, ground, pixel);
         }
@@ -795,47 +897,59 @@ fn wet_normal(bumped: vec3<f32>, pool: Pool) -> vec3<f32> {
     return normalize(mix(bumped, pool.normal, pool.wet));
 }
 
-// Bevy's step to the next decal over the fragment, but passing over the decals `project` never draws here by their tag
-// before their box is tested: our liquid's data, and the game's blood once `pool_at` drew it. In a fight most of a
-// pixel's list is blood, and the box test is the walk's cost.
+// The next decal of `list` over the walk's place, passing over by their tag, before their box is tested, the decals
+// `pool_at` and `splat_pool` never read: all but the game's blood splats, which carry a normal map of their own while
+// our liquids are on, and with `liquids` our liquid's tiles that may lie here (a floor tile only on a floor, no puke
+// splat's child). The liquid's texture rides as the decal's metallic-roughness map, which Bevy's own decal pass reads
+// only under a base colour, so a standard material lying in a pool does not take its data as colour.
 @if(CLUSTERED_DECALS_ARE_USABLE)
-fn next_pasted_decal(iterator: ptr<function, ClusteredDecalIterator>, pooled: bool) -> bool {
-    if (*iterator).decal_index_offset == (*iterator).end_offset {
-        return false;
-    }
-    (*iterator).decal_index_offset += 1;
-    while (*iterator).decal_index_offset < (*iterator).end_offset {
-        let decal_index = i32(clustered_forward::get_clusterable_object_id(u32((*iterator).decal_index_offset)));
-        let tag = mesh_view_bindings::clustered_decals.decals[decal_index].tag;
-        let marked = i32(mesh_view_bindings::clustered_decals.decals[decal_index].normal_map_texture_index) >= 0;
-        if (tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && !(pooled && marked) {
-            let local = (mesh_view_bindings::clustered_decals.decals[decal_index].local_from_world * vec4((*iterator).world_position, 1.0)).xyz;
-            if all(local >= vec3(-0.5)) && all(local <= vec3(0.5)) {
-                (*iterator).base_color_texture_index = i32(mesh_view_bindings::clustered_decals.decals[decal_index].base_color_texture_index);
-                (*iterator).normal_map_texture_index = select(-1, 0, marked);
-                (*iterator).uv = local.xy * vec2(1.0, -1.0) + vec2(0.5);
-                (*iterator).tag = tag;
-                return true;
-            }
+fn next_pool_decal(walk: ptr<function, DecalWalk>, list: DecalList, liquids: bool, on_floor: bool) -> bool {
+    (*walk).at += 1;
+    while (*walk).at < list.end {
+        let decal = listed_decal(list, (*walk).at);
+        let tag = mesh_view_bindings::clustered_decals.decals[decal].tag;
+        var wanted = i32(mesh_view_bindings::clustered_decals.decals[decal].normal_map_texture_index) >= 0;
+        if (tag & (PROJECTOR | 0x7u)) == (PROJECTOR | FB_LIQUID) {
+            wanted = liquids && (tag & PUKE_SPLAT) == 0u && ((tag & POOL_WALL_TILE) != 0u || on_floor)
+                && i32(mesh_view_bindings::clustered_decals.decals[decal].metallic_roughness_texture_index) >= 0;
         }
-        (*iterator).decal_index_offset += 1;
+        if wanted && decal_holds(walk, decal) {
+            return true;
+        }
+        (*walk).at += 1;
+    }
+    return false;
+}
+
+// The next decal of `list` over the walk's place, passing over by their tag, before their box is tested, the decals
+// `project` never draws here: our liquid's data, and the game's blood once `pool_at` drew it.
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn next_pasted_decal(walk: ptr<function, DecalWalk>, list: DecalList, pooled: bool) -> bool {
+    (*walk).at += 1;
+    while (*walk).at < list.end {
+        let decal = listed_decal(list, (*walk).at);
+        let tag = mesh_view_bindings::clustered_decals.decals[decal].tag;
+        let marked = i32(mesh_view_bindings::clustered_decals.decals[decal].normal_map_texture_index) >= 0;
+        if (tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && !(pooled && marked) && decal_holds(walk, decal) {
+            return true;
+        }
+        (*walk).at += 1;
     }
     return false;
 }
 
 // Over the lit linear `color`, in cluster order; `texture` is read by material blending. `pooled`: the surface took
 // `pool_at` with these targets, which drew the game's blood splats already.
-fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: vec3<f32>, color: vec4<f32>, surface: u32, pooled: bool) -> vec4<f32> {
+fn project(pbr_input: PbrInput, list: DecalList, texture: vec3<f32>, color: vec4<f32>, surface: u32, pooled: bool) -> vec4<f32> {
     var out = color;
 @if(CLUSTERED_DECALS_ARE_USABLE) {
-    var decal_ranges = ranges;
-    var iterator = clustered_decal_iterator_new(pbr_input.world_position.xyz, &decal_ranges);
+    var walk = decal_walk(list, pbr_input.world_position.xyz);
     var base = vec3(0.0);
     var frame = vec3(0.0);
     var shine = 1.0;
     var drawn = false;
-    while next_pasted_decal(&iterator, pooled) {
-        let texel = projector_texel(pbr_input, iterator.tag, iterator.base_color_texture_index, iterator.decal_index_offset, iterator.uv, surface);
+    while next_pasted_decal(&walk, list, pooled) {
+        let texel = projector_texel(pbr_input, walk.tag, walk.base_color_texture_index, walk.decal, walk.uv, surface);
         if texel.a < 0.0 {
             continue;
         }
@@ -847,7 +961,7 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
             drawn = true;
         }
         let projected = to_display(texel.rgb);
-        let material = (iterator.tag >> 8u) & 0x3u;
+        let material = (walk.tag >> 8u) & 0x3u;
         var src = projected;
         if material == PB_MODULATE {
             src = projected * base;
@@ -860,10 +974,10 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
         // With our liquids on, the game's blood pictures (marked by a normal map of their own) lie where no pool is
         // drawn (bodies, blended meshes, darken and see-through surfaces) as our fresh blood, lit as the surface under
         // them, whatever their blend.
-        if iterator.normal_map_texture_index >= 0 {
+        if walk.normal_map_texture_index >= 0 {
             frame = mix(frame, to_display(BLOOD_BODY) * shine, texel.a);
         } else {
-            switch iterator.tag & 0x7u {
+            switch walk.tag & 0x7u {
                 case FB_OVERWRITE: { frame = src; }
                 case FB_MODULATE: { frame = 2.0 * src * frame; }
                 case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }
@@ -875,11 +989,11 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
             }
         }
         // Drying darkens what the splat changed, whatever its blend; fading takes the frame back to what lay under it.
-        let dry = (iterator.tag >> DRY_SHIFT) & DRY_MASK;
+        let dry = (walk.tag >> DRY_SHIFT) & DRY_MASK;
         if dry != 0u {
             frame = mix(frame, frame * DRY_TINT, f32(dry) / 15.0 * saturate(distance(frame, under) * 2.0));
         }
-        let fade = (iterator.tag >> FADE_SHIFT) & FADE_MASK;
+        let fade = (walk.tag >> FADE_SHIFT) & FADE_MASK;
         if fade != 0u {
             frame = mix(frame, under, f32(fade) / 31.0);
         }

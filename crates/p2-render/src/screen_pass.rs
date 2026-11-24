@@ -18,9 +18,10 @@ use bevy::render::render_resource::encase::internal::WriteInto;
 use bevy::render::render_resource::binding_types;
 use bevy::render::render_resource::{BindGroupLayoutEntryBuilder, SamplerBindingType, TextureSampleType};
 use bevy::render::render_resource::{
-    BindGroup, DynamicUniformBuffer, Extent3d, Operations, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, ShaderType, TextureDescriptor,
+    BindGroup, CommandEncoder, DynamicUniformBuffer, Extent3d, Operations, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, ShaderType, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView,
 };
+use bevy::render::render_phase::TrackedRenderPass;
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
 use bevy::render::texture::{CachedTexture, TextureCache};
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
@@ -177,19 +178,19 @@ pub struct HalfThenFull<'a> {
 }
 
 impl HalfThenFull<'_> {
-    pub fn draw(self, ctx: &mut RenderContext<'_, '_>, target: &ViewTarget, camera: &ExtractedCamera) {
+    pub fn draw(self, ctx: &RenderContext<'_, '_>, encoder: &mut CommandEncoder, target: &ViewTarget, camera: &ExtractedCamera) {
         let diagnostics = ctx.diagnostic_recorder();
         let diagnostics = diagnostics.as_deref();
-        let span = diagnostics.time_span(ctx.command_encoder(), self.span);
+        let span = diagnostics.time_span(encoder, self.span);
         {
-            let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
+            let mut pass = TrackedRenderPass::new(ctx.render_device(), encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some(self.march.label),
                 color_attachments: &[Some(RenderPassColorAttachment { view: self.half, depth_slice: None, resolve_target: None, ops: Operations::default() })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
-            });
+            }));
             pass.set_render_pipeline(self.march.pipeline);
             pass.set_bind_group(0, self.march.bind_group, &[self.offset]);
             if let Some(constant) = self.march_blend_constant {
@@ -198,14 +199,14 @@ impl HalfThenFull<'_> {
             pass.draw(0..3, 0..1);
         }
         {
-            let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
+            let mut pass = TrackedRenderPass::new(ctx.render_device(), encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some(self.composite.label),
                 color_attachments: &[Some(target.get_color_attachment())],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
-            });
+            }));
             if let Some(viewport) = camera.viewport.as_ref() {
                 pass.set_camera_viewport(viewport);
             }
@@ -213,7 +214,7 @@ impl HalfThenFull<'_> {
             pass.set_bind_group(0, self.composite.bind_group, &[self.offset]);
             pass.draw(0..3, 0..1);
         }
-        span.end(ctx.command_encoder());
+        span.end(encoder);
     }
 }
 

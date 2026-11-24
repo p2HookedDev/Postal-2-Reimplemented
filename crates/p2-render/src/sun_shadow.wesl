@@ -342,22 +342,38 @@ fn sun_seen(source: LevelSource, position: vec4<f32>, normal: vec3<f32>, frag_co
 }
 
 fn sun_seen_from(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
+    return sun_faced(sun, normal, sun_held(source, sun, position, normal, frag_coord));
+}
+
+// `sun_seen_from` before its fades by how squarely the point faces the sun: what the screen pass holds for a pixel.
+fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
     let open = mix(ROOFED_SKY, 1.0, sky_open(source, sun, position.xyz, normal));
     if sun >= lights.n_directional_lights {
         return vec3(0.0, 1.0, open);
     }
     let to_sun = lights.directional_lights[sun].direction_to_light;
-    let facing = dot(normal, to_sun);
-    if facing <= 0.0 {
+    if dot(normal, to_sun) <= 0.0 {
         return vec3(0.0, 1.0, open);
     }
     let map = sun_map(source, sun, position, normal);
-    var direct = map * saturate(facing / SUN_FACING_FADE);
+    var direct = map;
     let contact = 1.0 - smoothstep(CONTACT_NEAR, CONTACT_FAR, distance(view.world_position.xyz, position.xyz));
     if direct > 0.0 && contact > 0.0 {
         direct *= mix(1.0, contact_clear(position.xyz, frag_coord, to_sun), contact);
     }
-    return vec3(direct, mix(1.0, map, saturate(facing / SKY_FACING_FADE)), open);
+    return vec3(direct, map, open);
+}
+
+// `held` faded by how squarely the point faces the sun; facing away, or with no sun, only its sky is left.
+fn sun_faced(sun: u32, normal: vec3<f32>, held: vec3<f32>) -> vec3<f32> {
+    if sun >= lights.n_directional_lights {
+        return vec3(0.0, 1.0, held.z);
+    }
+    let facing = dot(normal, lights.directional_lights[sun].direction_to_light);
+    if facing <= 0.0 {
+        return vec3(0.0, 1.0, held.z);
+    }
+    return vec3(held.x * saturate(facing / SUN_FACING_FADE), mix(1.0, held.y, saturate(facing / SKY_FACING_FADE)), held.z);
 }
 
 // From the sun's cascaded map alone; 1 without a shadowed sun in this view.

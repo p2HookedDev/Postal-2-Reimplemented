@@ -11,13 +11,14 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 47] = [
+const ENTRIES: [(&str, &[&str]); 51] = [
     ("particle", &["P2_PARTICLE_LEVELS", "SKY_VIEW"]),
     ("actor_light", &["SKY_VIEW"]),
     ("sun_levels", &[]),
     ("sky_view", &[]),
     ("sky_vertex", &["SKY_VIEW"]),
     ("lightmapped", &["LIGHTMAP", "SKY_VIEW"]),
+    ("lightmapped", &["LIGHTMAP", "VISIBILITY_RANGE_DITHER"]),
     ("mesh_light", &["SKY_VIEW"]),
     ("terrain", &["SKY_VIEW"]),
     ("terrain_layer", &["TERRAIN_LAYER", "SKY_VIEW"]),
@@ -57,6 +58,9 @@ const ENTRIES: [(&str, &[&str]); 47] = [
     ("liquid_drops", &["P2_PARTICLE_LEVELS", "DEPTH_PREPASS"]),
     ("modern_bloom", &[]),
     ("liquid_layer", &[]),
+    ("decal_bins", &[]),
+    ("lamp_mask", &["LAMP_MASK_PASS", "DEPTH_PREPASS", "SHADOW_FILTER_METHOD_HARDWARE_2X2"]),
+    ("lamp_mask", &["LAMP_MASK_PASS", "DEPTH_PREPASS", "SHADOW_FILTER_METHOD_GAUSSIAN", "CONTACT_SHADOWS"]),
     ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS"]),
     ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS", "ACTOR_SHADING"]),
 ];
@@ -144,14 +148,16 @@ fn engine_shaders_compose_and_validate() {
         return;
     };
     let sources = Sources { registry, ours: Path::new(env!("CARGO_MANIFEST_DIR")).join("src") };
-    let feature_sets: [&[&str]; 7] = [
+    let feature_sets: [&[&str]; 9] = [
         &[],
         &["BINDLESS"],
         &["LIGHTMAP"],
         &["BINDLESS", "LIGHTMAP", "MULTIPLE_LIGHTMAPS_IN_ARRAY"],
         &["DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS"],
         &["BINDLESS", "DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS"],
+        &["BINDLESS", "DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS", "SCREEN_SHADOWS_ONLY"],
         &["CLUSTERED_DECALS_ARE_USABLE"],
+        &["CLUSTERED_DECALS_ARE_USABLE", "HALF_FLOATS"],
     ];
     let mut failures = Vec::new();
     for (entry, defs) in ENTRIES {

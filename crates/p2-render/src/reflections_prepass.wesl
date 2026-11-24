@@ -1,5 +1,7 @@
-// Bevy's material prepass, unchanged but for the normal's alpha: it holds the surface's reflecting class for the
-// screen-space reflections, 0 tile or glass, 1/3 metal, 2/3 wood, 1 nothing. Matches `reflections.wesl`.
+// Bevy's material prepass, changed in two things: the normal's alpha holds the surface's reflecting class for the
+// screen-space reflections, 0 tile or glass, 1/3 metal, 2/3 wood, 1 nothing (matches `reflections.wesl`); and an unlit
+// static surface's back face turns its normal round too, as the vertex-lit shader that draws it does (an actor's
+// shading lights by the vertex normal as it is).
 
 import bevy_pbr::{
     render::{
@@ -90,11 +92,11 @@ fn fragment(in: prepass_io::VertexOutput, @builtin(front_facing) is_front: bool)
     out.frag_depth = in.unclipped_depth;
 
 @if(NORMAL_PREPASS)
+    let double_sided = (flags & pbr_types::STANDARD_MATERIAL_FLAGS_DOUBLE_SIDED_BIT) != 0u;
+    let mesh_flags = mesh[in.instance_index].flags;
+    let is_logically_front = pbr_functions::winding_corrected_front_facing(mesh_flags, is_front);
+    let world_normal = pbr_functions::prepare_world_normal(in.world_normal, double_sided, is_logically_front);
     if (flags & pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
-        let double_sided = (flags & pbr_types::STANDARD_MATERIAL_FLAGS_DOUBLE_SIDED_BIT) != 0u;
-        let mesh_flags = mesh[in.instance_index].flags;
-        let is_logically_front = pbr_functions::winding_corrected_front_facing(mesh_flags, is_front);
-        let world_normal = pbr_functions::prepare_world_normal(in.world_normal, double_sided, is_logically_front);
         var normal = world_normal;
 
 @if(VERTEX_UVS) {
@@ -123,7 +125,10 @@ fn fragment(in: prepass_io::VertexOutput, @builtin(front_facing) is_front: bool)
 
         out.normal = vec4(normal * 0.5 + vec3(0.5), class_code(blend_of(in)));
     } else {
+@if(ACTOR_SHADING)
         out.normal = vec4(in.world_normal * 0.5 + vec3(0.5), 1.0);
+@else
+        out.normal = vec4(world_normal * 0.5 + vec3(0.5), 1.0);
     }
 
 @if(MOTION_VECTOR_PREPASS)

@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn a_body_stands_its_wounds_as_blood_and_skips_the_paste() {
         let shader = include_str!("actor_light.wesl");
-        assert!(shader.contains("splat_pool(pbr_input, ranges, normal, actor_target(in.instance_index))"));
+        assert!(shader.contains("splat_pool(pbr_input, decals, normal, actor_target(in.instance_index))"));
         assert!(shader.contains("actor_target(in.instance_index), pooled)"));
     }
 

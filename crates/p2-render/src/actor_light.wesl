@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 import package::p2_render::dynamic_light::dynamic_light;
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
-import package::p2_render::projector::{actor_target, cluster_ranges, pool_mirror, project, splat_pool};
+import package::p2_render::projector::{actor_target, cluster_ranges, decal_list, pool_mirror, project, splat_pool};
 import package::p2_render::color::to_linear;
 import package::p2_render::modern::{
     Around, actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, lit_surface, sky_from_ambient, surface_of,
@@ -124,6 +124,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let flag = (*shading).layers.detail.z;
     let modern = is_modern(flag);
     let ranges = cluster_ranges(pbr_input);
+    let decals = decal_list(in, pbr_input, ranges, true);
     var out: FragmentOutput;
     var lit = vec3(0.0);
     let overlay = (*shading).overlay != 0u;
@@ -136,7 +137,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let darken = (*shading).layers.blend.x != 0.0;
         if sun_on {
             pooled = !darken;
-            let wounds = splat_pool(pbr_input, ranges, normal, actor_target(in.instance_index));
+            let wounds = splat_pool(pbr_input, decals, normal, actor_target(in.instance_index));
 @if(POOL_MIRROR)
             mirror = select(0.0, pool_mirror(wounds), pooled);
             let incoming = modern_light(in, pbr_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken, wounds);
@@ -183,7 +184,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         }
     }
     let layered = apply_layers(in, vec4(lit, base.a), base_alpha, pbr_input, (*shading).layers);
-    out.color = post_lighting(pbr_input, project(pbr_input, ranges, base.rgb, layered, actor_target(in.instance_index), pooled));
+    out.color = post_lighting(pbr_input, project(pbr_input, decals, base.rgb, layered, actor_target(in.instance_index), pooled));
     // The overlay camera has no reflection pass to read the record back.
 @if(POOL_MIRROR) {
     if !overlay {

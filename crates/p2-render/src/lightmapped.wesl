@@ -7,7 +7,7 @@ import bevy_pbr::{
         clustered_forward as clustering,
     },
 };
-import package::p2_render::projector::{cluster_ranges, pool_at, pool_mirror, project, wet_color, NO_PROJECTORS, TARGET_BSP};
+import package::p2_render::projector::{cluster_ranges, decal_list, pool_at, pool_mirror, project, wet_color, NO_PROJECTORS, TARGET_BSP};
 import package::p2_render::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_render::layer_bindings::{apply_layers, base_tone, lit_color, post_lighting};
 import package::p2_render::material_layers::material_layers;
@@ -16,6 +16,8 @@ import package::p2_render::modern::{is_modern, is_see_through, with_light};
 import package::p2_render::relief::base_relief;
 import package::p2_render::sun_shadow::{sun_found, sun_index};
 import package::p2_render::surface::{modern_light, shade_surface};
+@if(VISIBILITY_RANGE_DITHER)
+import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 const LE_NONE: u32 = 0u;
 
@@ -43,6 +45,8 @@ fn light_pass(light_id: u32, position: vec3<f32>, normal: vec3<f32>) -> vec3<f32
 
 @fragment
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+@if(VISIBILITY_RANGE_DITHER)
+    visibility_range_dither(vertex_output.position, vertex_output.visibility_range_dither);
     var pbr_input = pbr_input_from_standard_material(vertex_output, is_front);
     let base_alpha = pbr_input.material.base_color.a;
     pbr_input.material.base_color = alpha_discard(
@@ -51,6 +55,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         pbr_input.material.base_color
     );
     let ranges = cluster_ranges(pbr_input);
+    let decals = decal_list(vertex_output, pbr_input, ranges, true);
 
     var out: FragmentOutput;
     let color = pbr_input.material.base_color;
@@ -62,7 +67,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     // Modern glass drops the pool, so the game's blood splats are pasted on it after the light instead.
     let glass = modern && is_see_through(pbr_input.material.flags);
     let pooled = !darken && !glass;
-    let pool = pool_at(pbr_input, ranges, normal, select(TARGET_BSP, NO_PROJECTORS, glass), base_tone(vertex_output, pbr_input, color.rgb));
+    let pool = pool_at(pbr_input, decals, normal, select(TARGET_BSP, NO_PROJECTORS, glass), base_tone(vertex_output, pbr_input, color.rgb));
     var surface: vec3<f32>;
     var alpha = color.a;
     if modern {
@@ -94,7 +99,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
             lit = to_linear(min(to_display(lit) + texture * passes, vec3(1.0)));
         }
     }
-    out.color = post_lighting(pbr_input, project(pbr_input, ranges, color.rgb, vec4(lit, layered.a), TARGET_BSP, pooled));
+    out.color = post_lighting(pbr_input, project(pbr_input, decals, color.rgb, vec4(lit, layered.a), TARGET_BSP, pooled));
 @if(POOL_MIRROR)
     out.color.a = 1.0 + select(0.0, pool_mirror(pool), pooled);
     return out;

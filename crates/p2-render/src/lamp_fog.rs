@@ -34,6 +34,7 @@ use crate::components::SceneView;
 use p2_host::display::{MODERN_VOLUMETRIC_FOG, Settings};
 use crate::level_collision::LevelCollision;
 use crate::MainPassExtraSystems;
+use crate::stage_encoder::{AfterOpaque, StageEncoder};
 use crate::lamps::{Lamp, Placed, lamp_falloff};
 use crate::modern::linear_light;
 use crate::screen_pass::{
@@ -62,6 +63,7 @@ pub struct LampFogPlugin;
 
 impl Plugin for LampFogPlugin {
     fn build(&self, app: &mut App) {
+        crate::stage_encoder::build(app);
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
@@ -289,6 +291,7 @@ fn prepare_textures(mut commands: Commands, mut cache: ResMut<TextureCache>, ren
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn draw_fog(
     view: ViewQuery<(&ViewTarget, &ExtractedCamera, &ViewPrepassTextures, &LampFogPipelineIds, &PassUniformOffset<LampFog>, &LampFogTexture)>,
     pipeline_cache: Res<PipelineCache>,
@@ -296,7 +299,8 @@ fn draw_fog(
     buffer: Res<PassUniforms<LampFog>>,
     mut march_groups: Local<ViewBindGroups<(TextureId, BufferId)>>,
     mut composite_groups: Local<ViewBindGroups<(TextureId, BufferId, TextureViewId)>>,
-    mut ctx: RenderContext,
+    mut stage: ResMut<StageEncoder<AfterOpaque>>,
+    ctx: RenderContext,
 ) {
     let entity = view.entity();
     let (target, camera, prepass, ids, offset, marched) = view.into_inner();
@@ -329,7 +333,7 @@ fn draw_fog(
         composite: ScreenStep { label: "lamp_fog", pipeline: composite, bind_group: composite_group },
         offset: offset.0,
     }
-    .draw(&mut ctx, target, camera);
+    .draw(&ctx, stage.encoder(ctx.render_device()), target, camera);
 }
 
 #[cfg(test)]

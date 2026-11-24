@@ -27,6 +27,7 @@ use bevy::shader::Shader;
 use crate::components::SceneView;
 use p2_host::display::{MODERN_BOUNCE_LIGHT, Settings};
 use crate::MainPassExtraSystems;
+use crate::stage_encoder::{AfterOpaque, StageEncoder};
 use crate::screen_pass::{HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders, shader_file};
 
@@ -52,6 +53,7 @@ pub struct BounceLightPlugin;
 
 impl Plugin for BounceLightPlugin {
     fn build(&self, app: &mut App) {
+        crate::stage_encoder::build(app);
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
@@ -161,6 +163,7 @@ fn prepare_bounce_views(
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn bounce(
     view: ViewQuery<(&ViewTarget, &ExtractedCamera, &ViewPrepassTextures, &ViewUniformOffset, &BounceLight, &BounceView)>,
     pipeline_cache: Res<PipelineCache>,
@@ -168,7 +171,8 @@ fn bounce(
     view_uniforms: Res<ViewUniforms>,
     mut scene_groups: Local<ViewBindGroups<(TextureViewId, TextureId, TextureViewId, BufferId)>>,
     mut gathered_groups: Local<ViewBindGroups<(TextureViewId, TextureId, TextureViewId, BufferId)>>,
-    mut ctx: RenderContext,
+    mut stage: ResMut<StageEncoder<AfterOpaque>>,
+    ctx: RenderContext,
 ) {
     let entity = view.entity();
     let (target, camera, prepass, offset, light, prepared) = view.into_inner();
@@ -201,7 +205,7 @@ fn bounce(
         composite: ScreenStep { label: "bounce light", pipeline: composite, bind_group: from_gathered },
         offset: offset.offset,
     }
-    .draw(&mut ctx, target, camera);
+    .draw(&ctx, stage.encoder(ctx.render_device()), target, camera);
 }
 
 #[cfg(test)]

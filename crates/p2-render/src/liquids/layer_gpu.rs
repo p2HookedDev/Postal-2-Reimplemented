@@ -9,10 +9,10 @@ use bevy::math::Vec2;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer, BufferDescriptor, BufferId, BufferUsages, CachedComputePipelineId,
-    CommandEncoderDescriptor, ComputePassDescriptor, ComputePipelineDescriptor, PipelineCache, ShaderStages, ShaderType, StorageTextureAccess,
+    ComputePassDescriptor, ComputePipelineDescriptor, PipelineCache, ShaderStages, ShaderType, StorageTextureAccess,
     TextureFormat, TextureViewId, binding_types,
 };
-use bevy::render::renderer::{PendingCommandBuffers, RenderDevice, RenderQueue};
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
@@ -20,6 +20,7 @@ use bevy::shader::Shader;
 use super::layer::{FILM, LayerFrame, SIDE, SLOT_SIDE, STEP, TEXEL, TEXELS, WALL};
 use crate::screen_pass::shader_bytes;
 use crate::shaders::{add_shaders, shader_file};
+use crate::stage_encoder::{Prepared, StageEncoder};
 
 const LAYER_SHADER: Handle<Shader> = uuid_handle!("3f6b2d84-9a1c-4e57-b0d3-8c2e5f71a946");
 /// Matches `@workgroup_size` in `liquid_layer.wesl`.
@@ -50,6 +51,7 @@ impl Plugin for LayerGpuPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
+        crate::stage_encoder::build(app);
         add_shaders(app, [(LAYER_SHADER, shader_file("liquid_layer.wesl"))]);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -150,7 +152,7 @@ fn step_layer(
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
     images: Res<RenderAssets<GpuImage>>,
-    mut pending: ResMut<PendingCommandBuffers>,
+    mut stage: ResMut<StageEncoder<Prepared>>,
 ) {
     let Some(frame) = frame.filter(|frame| frame.capacity > 0 && !frame.active.is_empty()) else { return };
     if pipelines.entries.is_none() {
@@ -169,7 +171,7 @@ fn step_layer(
         Some(buffers) if buffers.capacity == frame.capacity && buffers.level == frame.level => buffers,
         stale => stale.insert(new_buffers(&device, frame.capacity, frame.level)),
     };
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("liquid layer") });
+    let encoder = stage.encoder(&device);
     if !frame.cleared.is_empty() {
         let walls = floor_bytes(&vec![WALL; TEXELS]);
         for &slot in &frame.cleared {
@@ -197,7 +199,6 @@ fn step_layer(
         Some([hold?, pipes?, level?, publish?])
     });
     let (Some(atlas), Some([hold, pipes, level, publish])) = (frame.atlas.and_then(|id| images.get(id)), ready) else {
-        pending.push_encoder(encoder, "liquid layer");
         return;
     };
     let made_with = [buffers.slots.id(), buffers.active.id(), buffers.sources.id()];
@@ -247,5 +248,4 @@ fn step_layer(
         pass.dispatch_workgroups(apron, apron, tiles);
     }
     buffers.current = current;
-    pending.push_encoder(encoder, "liquid layer");
 }

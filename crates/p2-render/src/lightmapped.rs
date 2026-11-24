@@ -27,9 +27,12 @@ impl MaterialExtension for BakedLight {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        crate::shaders::unmark_normal_map(descriptor);
         crate::shaders::cast_both_sides(descriptor, key.mesh_key);
         crate::shaders::mark_see_through(descriptor, key.mesh_key);
         crate::shaders::mark_pool_mirror(descriptor, key.mesh_key, key.bind_group_data);
+        crate::shaders::test_depth_early(descriptor, key.mesh_key, key.bind_group_data);
+        crate::shaders::mark_screen_shadows_only(descriptor, key.mesh_key, key.bind_group_data);
         crate::reflections::write_class_in_prepass(descriptor, crate::reflections::LayersHeld::Alone);
         crate::shaders::mark_sky(descriptor, key.bind_group_data);
         Ok(())
