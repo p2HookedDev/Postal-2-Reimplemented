@@ -5,7 +5,13 @@ use bevy::image::Image;
 use bevy::math::{Vec3, Vec4};
 use p2_bevy_assets::to_bevy;
 use p2_math::Vector;
-use p2_particles::{Beam, EmitterKind, EmitterProperties, SpriteParticle, StripPoint};
+use p2_particles::{Beam, EmitterKind, EmitterProperties, MeshParticle, SpriteParticle, StripPoint};
+use crate::scene::SectionView;
+
+/// How far the occlusion-culling `Aabb` reaches past the particle bounds (Unreal units). Flat sprites on a surface
+/// (puddles, splats) lie in it or a hair under it, and the culling shader compares the box's nearest depth with the
+/// surface's own: from steep angles the floor is in front of the box and the puddle vanishes.
+pub const OCCLUSION_MARGIN: f32 = 8.0;
 
 /// What the particle simulation shows this frame, one slot per emitter actor; the slots and their vectors are refilled
 /// in place every frame.
@@ -14,6 +20,8 @@ pub struct DrawnParticles {
     pub actors: Vec<DrawnActor>,
     /// The emitters spawned since the last frame drawn, once each.
     pub born: Vec<EmitterLook>,
+    /// The mesh emitters whose model was built since the last frame drawn, once each.
+    pub born_meshes: Vec<MeshEmitterLook>,
     /// Bevy coordinates relative to the world's origin, as the particles.
     pub eye: Vec3,
     /// Changed when a map is left: the drawing side drops what it keeps.
@@ -54,6 +62,7 @@ pub struct DrawnEmitter {
     pub sprites: Vec<SpriteParticle>,
     pub strip: Vec<StripPoint>,
     pub beams: Vec<Beam>,
+    pub meshes: Vec<MeshParticle>,
     pub shape: EmitterShape,
 }
 
@@ -73,6 +82,14 @@ pub struct EmitterLook {
     pub props: EmitterProperties,
     pub name: String,
     pub fogless: bool,
+}
+
+/// What a mesh emitter is drawn with, handed over once when its model is built.
+pub struct MeshEmitterLook {
+    pub parent: Entity,
+    pub order: u32,
+    pub sections: Vec<SectionView>,
+    pub props: EmitterProperties,
 }
 
 /// A sprite lying on the ground as a disc: its centre in the world and the smaller of its half sides.

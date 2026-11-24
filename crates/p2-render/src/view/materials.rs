@@ -44,13 +44,19 @@ struct ActorMaterialKey {
     vertex_lit: bool,
 }
 
-#[derive(Default)]
-pub struct ActorMaterialCache(FxHashMap<ActorMaterialKey, SectionMaterial>);
+/// Sections of one look share a material: of the actors spawned while a map plays until the map is left, of the scene's
+/// own actors and attachments until the scene changes.
+#[derive(Resource, Default)]
+pub struct ActorMaterialCache {
+    spawned: FxHashMap<ActorMaterialKey, SectionMaterial>,
+    followers: FxHashMap<ActorMaterialKey, SectionMaterial>,
+}
 
-pub enum ActorLook<'a> {
-    Spawned(&'a mut ActorMaterialCache),
+#[derive(Clone, Copy)]
+pub enum ActorLook {
+    Spawned,
     Canvas,
-    Follower(&'a mut ActorMaterialCache),
+    Follower,
     Fluid,
 }
 
@@ -58,19 +64,29 @@ pub enum ActorLook<'a> {
 pub struct ActorMaterials<'w> {
     pub materials: ResMut<'w, Assets<StandardMaterial>>,
     pub(crate) mesh_lit: ResMut<'w, Assets<MeshLitMaterial>>,
+    cache: ResMut<'w, ActorMaterialCache>,
 }
 
 impl ActorMaterials<'_> {
-    pub fn material(&mut self, look: &mut ActorLook, section: &SectionView) -> SectionMaterial {
+    pub fn material(&mut self, look: ActorLook, section: &SectionView) -> SectionMaterial {
         match look {
-            ActorLook::Spawned(cache) => self.cached(cache, section, || actor_standard(section, SceneLights::Ignored)),
+            ActorLook::Spawned => self.cached(look, section, || actor_standard(section, SceneLights::Ignored)),
             ActorLook::Canvas => SectionMaterial::Standard(self.materials.add(actor_standard(section, SceneLights::Ignored))),
-            ActorLook::Follower(cache) => self.cached(cache, section, || StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, if section.no_scene_lights { SceneLights::Ignored } else { SceneLights::Used }) }),
+            ActorLook::Follower => self.cached(look, section, || StandardMaterial { perceptual_roughness: 0.8, ..actor_standard(section, if section.no_scene_lights { SceneLights::Ignored } else { SceneLights::Used }) }),
             ActorLook::Fluid => section_material(section, actor_standard(section, SceneLights::Ignored), &mut self.materials, &mut self.mesh_lit),
         }
     }
 
-    fn cached(&mut self, cache: &mut ActorMaterialCache, section: &SectionView, standard: impl FnOnce() -> StandardMaterial) -> SectionMaterial {
+    /// At a map change: the actors spawned while the map played are gone.
+    pub fn forget_spawned(&mut self) {
+        self.cache.spawned.clear();
+    }
+
+    pub(super) fn forget_followers(&mut self) {
+        self.cache.followers.clear();
+    }
+
+    fn cached(&mut self, look: ActorLook, section: &SectionView, standard: impl FnOnce() -> StandardMaterial) -> SectionMaterial {
         let key = ActorMaterialKey {
             texture: section.texture.as_ref().map(Handle::id),
             layers: section.layers.key(),
@@ -80,10 +96,12 @@ impl ActorMaterials<'_> {
             tint: section.tint.map(f32::to_bits),
             vertex_lit: vertex_lit(section),
         };
-        cache.0.entry(key).or_insert_with(|| section_material(section, standard(), &mut self.materials, &mut self.mesh_lit)).clone()
+        let Self { materials, mesh_lit, cache } = self;
+        let shared = if matches!(look, ActorLook::Follower) { &mut cache.followers } else { &mut cache.spawned };
+        shared.entry(key).or_insert_with(|| section_material(section, standard(), materials, mesh_lit)).clone()
     }
 
-    pub fn set_uv(&mut self, material: &SectionMaterial, transform: Affine2) {
+    pub(crate) fn set_uv(&mut self, material: &SectionMaterial, transform: Affine2) {
         match material {
             SectionMaterial::MeshLit(handle) => set_uv_transform(&mut self.mesh_lit, handle, transform, |m| &m.base, |m| &mut m.base),
             SectionMaterial::Standard(handle) => set_uv_transform(&mut self.materials, handle, transform, |m| m, |m| m),

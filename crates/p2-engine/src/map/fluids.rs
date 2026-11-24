@@ -1,55 +1,12 @@
 use super::*;
 use p2_math::Vector;
-use p2_particles::{FluidOscillator, FluidSettings, FluidSurface, FluidVertex, View};
-use p2_assets::{UvModifier, uv_matrix};
-use p2_render::view::SectionMaterial;
-use p2_render::scene::{MaterialImages, SectionView};
+use p2_particles::{FluidOscillator, FluidSettings, FluidSurface, View};
+use p2_render::fluids::FluidDrawn;
+use p2_render::scene::MaterialImages;
 
 pub(super) fn camera_view(camera: &Transform, origin: Vec3) -> View {
     let unreal = |v: Vec3| Vector::from(to_bevy(v.to_array()));
     View { location: unreal(camera.translation - origin), right: unreal(camera.rotation * Vec3::X), up: unreal(camera.rotation * Vec3::Y) }
-}
-
-/// The vertex colour is the light, 1 being neutral. No water skin reads the simulation's height alpha; retail's use of it is
-/// (unverified).
-pub(super) fn fill_fluid(mesh: &mut Mesh, surface: &mut FluidSurface) {
-    let vertices = surface.vertices();
-    let mut indices = surface.indices();
-    let (positions, normals, colors, uvs): (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>, Vec<[f32; 2]>) = if vertices.is_empty() || indices.is_empty() {
-        indices = vec![0, 0, 0];
-        (vec![[0.0; 3]], vec![[0.0, 1.0, 0.0]], vec![[0.0; 4]], vec![[0.0; 2]])
-    } else {
-        (
-            vertices.iter().map(|v| to_bevy(v.position)).collect(),
-            vertices.iter().map(|v| Vec3::from(to_bevy(v.normal)).normalize_or_zero().to_array()).collect(),
-            vec![[1.0; 4]; vertices.len()],
-            vertices.iter().map(|v| v.uv).collect(),
-        )
-    };
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uvs.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-}
-
-fn refill_fluid(mesh: &mut Mesh, surface: &mut FluidSurface, vertices: &mut Vec<FluidVertex>) {
-    use bevy::mesh::VertexAttributeValues::Float32x3;
-    surface.vertices_into(vertices);
-    if vertices.is_empty() || mesh.count_vertices() != vertices.len() {
-        return;
-    }
-    if let Some(Float32x3(positions)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
-        for (position, v) in positions.iter_mut().zip(vertices.iter()) {
-            *position = to_bevy(v.position);
-        }
-    }
-    if let Some(Float32x3(normals)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
-        for (normal, v) in normals.iter_mut().zip(vertices.iter()) {
-            *normal = Vec3::from(to_bevy(v.normal)).normalize_or_zero().to_array();
-        }
-    }
 }
 
 pub(super) struct FluidActor {
@@ -139,15 +96,10 @@ pub(super) fn fluid_actor(vm: &Vm<Arc<Loader>>, actor: ObjectId, seed: u32) -> O
 pub(super) struct FluidShown {
     object: ObjectId,
     surface: FluidSurface,
-    vertices: Vec<FluidVertex>,
-    mesh: Handle<Mesh>,
     entity: Entity,
     bounds: (Vector, Vector),
     shown: bool,
     since_drawn: f32,
-    material: SectionMaterial,
-    uv: Vec<UvModifier>,
-    uv_size: [f32; 2],
     seconds: f32,
 }
 
@@ -166,52 +118,20 @@ impl Session {
                 bevy::log::warn!("fluid surface not drawn, no material from skin {:?}", fluid.skin);
                 continue;
             };
-            let uv_size = texture.image.size().as_vec2().to_array();
-            let found = MaterialImages {
+            let images = MaterialImages {
                 image: t.assets.images.add(texture.image),
                 glow: texture.glow.map(|glow| t.assets.images.add(glow)),
                 detail: texture.detail.map(|detail| t.assets.images.add(detail)),
                 specular: texture.specular.map(|(cube, params)| (t.assets.images.add(cube), params)),
                 state: texture.state,
             };
-            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-            fill_fluid(&mut mesh, &mut fluid.surface);
-            let mesh = t.assets.meshes.add(mesh);
-            let mut section = SectionView::textured(mesh.clone(), Some(found));
-            section.no_scene_lights = true;
-            section.two_sided = true;
-            let material = t.assets.actor_materials.material(&mut ActorLook::Fluid, &section);
             let shown = if fluid.hidden { Visibility::Hidden } else { Visibility::Inherited };
             let parent = t.commands.spawn((MapScoped, ActorModel(fluid.object), Transform::from_translation(origin), Visibility::default())).id();
-            let mut spawned = t.commands.spawn((Mesh3d(mesh.clone()), Transform::default(), shown, NoFrustumCulling, ChildOf(parent)));
-            material.insert(&mut spawned);
-            let entity = spawned.id();
-            t.fluids.0.push(FluidShown {
-                object: fluid.object,
-                surface: fluid.surface,
-                vertices: Vec::new(),
-                mesh,
-                entity,
-                bounds: fluid.bounds,
-                shown: !fluid.hidden,
-                since_drawn: 0.0,
-                material,
-                uv: section.uv,
-                uv_size,
-                seconds: 0.0,
-            });
+            let drawn = FluidDrawn { images, vertices: fluid.surface.vertices(), indices: fluid.surface.indices(), seconds: 0.0 };
+            let entity = t.commands.spawn((drawn, Transform::default(), shown, ChildOf(parent))).id();
+            t.fluids.0.push(FluidShown { object: fluid.object, surface: fluid.surface, entity, bounds: fluid.bounds, shown: !fluid.hidden, since_drawn: 0.0, seconds: 0.0 });
         }
     }
-}
-
-pub(super) struct FluidTargets<'a, 'w, 's> {
-    pub(super) fluids: &'a mut Fluids,
-    pub(super) play: &'a mut Play,
-    pub(super) cameras: &'a Query<'w, 's, &'static Transform, With<SceneView>>,
-    pub(super) projections: &'a Query<'w, 's, &'static Projection, With<SceneView>>,
-    pub(super) commands: &'a mut Commands<'w, 's>,
-    pub(super) meshes: &'a mut Assets<Mesh>,
-    pub(super) materials: &'a mut ActorMaterials<'w>,
 }
 
 #[derive(SystemParam)]
@@ -221,28 +141,19 @@ pub(super) struct FluidParams<'w, 's> {
     cameras: Query<'w, 's, &'static Transform, With<SceneView>>,
     projections: Query<'w, 's, &'static Projection, With<SceneView>>,
     commands: Commands<'w, 's>,
-    meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ActorMaterials<'w>,
+    drawn: Query<'w, 's, &'static mut FluidDrawn>,
     times: ResMut<'w, FrameTimes>,
 }
 
 pub(super) fn present_fluids(mut t: FluidParams) {
     let started = std::time::Instant::now();
-    update_fluids(&mut FluidTargets {
-        fluids: &mut t.fluids,
-        play: &mut t.play,
-        cameras: &t.cameras,
-        projections: &t.projections,
-        commands: &mut t.commands,
-        meshes: &mut t.meshes,
-        materials: &mut t.materials,
-    });
+    update_fluids(&mut t);
     t.times.add("fluids", started);
 }
 
-/// A surface steps only while in view within the last second (`drawn_lately`); only surfaces in view get their
-/// vertices rebuilt.
-pub(super) fn update_fluids(t: &mut FluidTargets) {
+/// A surface steps only while in view within the last second (`drawn_lately`); only surfaces in view hand their
+/// vertices over.
+fn update_fluids(t: &mut FluidParams) {
     let Some(world) = t.play.world_mut() else { return };
     let plings = world.take_plings();
     if t.fluids.0.is_empty() {
@@ -252,7 +163,7 @@ pub(super) fn update_fluids(t: &mut FluidTargets) {
     if t.cameras.iter().next().is_none() {
         return;
     }
-    let in_frustum = frustum_test(t.cameras, t.projections, world.origin());
+    let in_frustum = frustum_test(&t.cameras, &t.projections, world.origin());
     for fluid in &mut t.fluids.0 {
         for pling in plings.iter().filter(|pling| pling.surface == fluid.object) {
             fluid.surface.pling(pling.position, pling.strength, pling.radius);
@@ -273,15 +184,10 @@ pub(super) fn update_fluids(t: &mut FluidTargets) {
         }
         let touchers = world.fluid_touchers(fluid.object);
         fluid.surface.tick(step, fluid.since_drawn <= 1.0, touchers);
-        if drawn && let Some(mut mesh) = t.meshes.get_mut(&fluid.mesh) {
-            p2_host::frame_times::mesh_written(p2_host::frame_times::MeshWrite::Fluid);
-            refill_fluid(&mut mesh, &mut fluid.surface, &mut fluid.vertices);
-        }
         fluid.seconds += step;
-        if drawn && !fluid.uv.is_empty() {
-            let [[a, b, c], [d, e, f]] = uv_matrix(&fluid.uv, fluid.seconds, fluid.uv_size);
-            let transform = bevy::math::Affine2::from_cols(Vec2::new(a, d), Vec2::new(b, e), Vec2::new(c, f));
-            t.materials.set_uv(&fluid.material, transform);
+        if drawn && let Ok(mut handed) = t.drawn.get_mut(fluid.entity) {
+            fluid.surface.vertices_into(&mut handed.vertices);
+            handed.seconds = fluid.seconds;
         }
     }
 }

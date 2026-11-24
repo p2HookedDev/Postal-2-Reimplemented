@@ -1,22 +1,9 @@
-//! Retail draws a quad of `Skins[0]` at each `bCorona` light the eye sees, after the scene:
-//! additive, unlit, unfogged, with no Z test or write.
+//! A `bCorona` light is told to the renderer once, and its place and whether the eye's line to it is blocked every
+//! frame.
 
 use super::*;
-use super::sprites::sprite_quad;
-use crate::play::Play;
-use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::math::{Mat3, Quat};
-use bevy::time::{Real, Time};
-use p2_math::Vector;
-use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_square_scale, size_factor, within_light_radius};
-use crate::actors::{CORONA_SIZE, CoronaActor};
-
-#[derive(bevy::ecs::component::Component)]
-pub struct CoronaQuad {
-    corona: CoronaActor,
-    origin: Vec3,
-    color: [f32; 3],
-}
+use crate::actors::CORONA_SIZE;
+use p2_render::coronas::{CoronaLook, CoronaPlace};
 
 impl Session {
     pub(super) fn add_coronas(&mut self, coronas: Vec<CoronaActor>, origin: Vec3, t: &mut SpawnTargets) {
@@ -25,105 +12,36 @@ impl Session {
         }
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         for corona in coronas {
-            let (images, particle_materials) = (&mut t.assets.images, &mut t.assets.particle_materials);
-            let textures = &mut t.spawned.actor_textures;
-            let material = t.spawned.corona_materials.entry(corona.texture.clone()).or_insert_with_key(|path| {
-                let texture = textures.entry(path.clone()).or_insert_with(|| ActorTexture::read(game, path, |image| images.add(image))).as_ref()?;
-                let material = ParticleMaterial::corona(texture.image.clone());
-                Some(particle_materials.add(material))
-            });
-            let Some(material) = material.clone() else {
+            let found = t.spawned.actor_textures.entry(corona.texture.clone()).or_insert_with_key(|path| ActorTexture::read(game, path, |image| t.assets.images.add(image)));
+            let Some(ActorTexture { image, .. }) = found.clone() else {
                 bevy::log::warn!("corona {:?}: texture {} not loaded, no quad", corona.object, corona.texture);
                 continue;
             };
+            let CoronaActor { location, rotation, .. } = corona;
+            let look = CoronaLook {
+                image,
+                origin,
+                location,
+                rotation,
+                size: CORONA_SIZE * corona.draw_scale,
+                draw_scale3d: corona.draw_scale3d,
+                hue: corona.hue,
+                saturation: corona.saturation,
+                sizes: corona.sizes,
+                light_radius: corona.light_radius,
+            };
             let parent = t.commands.spawn((MapScoped, ActorModel(corona.object), Transform::from_translation(origin), Visibility::default())).id();
-            t.commands.spawn((
-                Mesh3d(t.assets.meshes.add(sprite_quad())),
-                MeshMaterial3d(material),
-                Transform::default(),
-                Visibility::Hidden,
-                NoFrustumCulling,
-                CoronaQuad { corona, origin, color: [1.0; 3] },
-                TranslucentDraw::AfterScene,
-                ChildOf(parent),
-            ));
+            t.commands.spawn((look, CoronaPlace { gone: false, location, rotation, blocked: false }, Transform::default(), Visibility::Hidden, ChildOf(parent)));
         }
     }
 }
 
-/// The fade steps by 3 × the real seconds since the last frame. The VM's trace hits level geometry
-/// and movers, not pawns. Lit ones face the view, or lie on the light's axes when `DrawScale3D` X ≠ Y.
-#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
-pub fn draw_coronas(
-    mut commands: Commands,
-    collision: Res<LevelCollision>,
-    time: Res<Time<Real>>,
-    play: Res<Play>,
-    views: Query<&SceneView>,
-    mut quads: Query<(Entity, &mut CoronaQuad, &Mesh3d, &mut Transform, &mut Visibility, &ChildOf)>,
-    zones: Query<&Visibility, (With<ZoneCulled>, Without<CoronaQuad>)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut coronas: bevy::ecs::system::Local<Coronas<Entity>>,
-    mut lit: bevy::ecs::system::Local<bevy::ecs::entity::EntityHashMap<f32>>,
-) {
-    let Some(view) = views.iter().next() else { return };
+/// The VM's trace hits level geometry and movers, not pawns.
+pub fn place_coronas(play: Res<Play>, lights: Query<&ActorModel>, mut coronas: Query<(&CoronaLook, &mut CoronaPlace, &ChildOf)>) {
     let world = play.world();
-    let placed = |quad: &CoronaQuad| match world.and_then(|world| Some((world.is_gone(quad.corona.object), world.tick_place(quad.corona.object)?))) {
-        Some((gone, (location, rotation))) => (gone, location, rotation),
-        None => (false, quad.corona.location, quad.corona.rotation),
-    };
-    let blocked = |quad: &CoronaQuad| world.is_some_and(|world| world.corona_blocked(quad.corona.object));
-    let model = collision.model();
-    let model = model.filter(|model| !model.leaves.is_empty());
-    for (_, quad, .., parent) in &quads {
-        if let Some(model) = model
-            && zones.get(parent.parent()).is_err()
-        {
-            let at: [f32; 3] = quad.corona.location.into();
-            commands.entity(parent.parent()).insert((ZoneCulled { zones: p2_collision::box_zones(model, at.into(), at.into()), min: at, max: at, only_from: None }, LayeredByZone));
-        }
-    }
-    let in_reach = |quad: &CoronaQuad| {
-        let eye = view.position - quad.origin;
-        within_light_radius(eye.distance(Vec3::from(to_bevy(placed(quad).1))), quad.corona.light_radius)
-    };
-    let zone_seen = |parent: &ChildOf| zones.get(parent.parent()).is_ok_and(|shown| *shown != Visibility::Hidden);
-    let seen = quads.iter().filter(|(_, quad, .., parent)| !placed(quad).0 && !blocked(quad) && in_reach(quad) && zone_seen(parent)).map(|(entity, ..)| entity);
-    coronas.step(fade_delta(time.delta_secs()), seen, |_| true);
-    lit.clear();
-    lit.extend(coronas.lit());
-    for (entity, mut quad, mesh, mut transform, mut shown, _) in &mut quads {
-        let Some(&bright) = lit.get(&entity) else {
-            shown.set_if_neq(Visibility::Hidden);
-            continue;
-        };
-        let (_, location, rotation) = placed(&quad);
-        let corona = &quad.corona;
-        let translation = Vec3::from(to_bevy(location));
-        let factor = size_factor((view.position - quad.origin).distance(translation), corona.sizes);
-        // The quad's +X is retail's right, its +Y retail's −up (where the texture's top is, as for sprites).
-        let (facing, scale) = if non_square(corona.draw_scale3d) {
-            let axes = unreal_transform(location, rotation, Vector::from([1.0; 3]), Vector::from([0.0; 3])).rotation;
-            let (x, y) = (axes * Vec3::X, -(axes * Vec3::Z));
-            let front = view.rotation * Vec3::NEG_Z;
-            (Quat::from_mat3(&Mat3::from_cols(x, y, x.cross(y))), non_square_scale(front.to_array().into(), x.to_array().into(), y.to_array().into()))
-        } else {
-            (view.rotation, 1.0)
-        };
-        let size = CORONA_SIZE * corona.draw_scale * factor;
-        let faced = Transform { translation, rotation: facing, scale: Vec3::new(size * corona.draw_scale3d[0], size * corona.draw_scale3d[1], 1.0) };
-        let color = corona_color(corona.hue, corona.saturation, bright).map(|c| c * scale);
-        if *transform != faced {
-            *transform = faced;
-        }
-        if quad.color != color
-            && let Some(mut mesh) = meshes.get_mut(&mesh.0)
-        {
-            p2_host::frame_times::mesh_written(p2_host::frame_times::MeshWrite::Corona);
-            let [r, g, b] = color;
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[r, g, b, 1.0]; 4]);
-            quad.color = color;
-        }
-        shown.set_if_neq(Visibility::Inherited);
+    for (look, mut place, parent) in &mut coronas {
+        let Ok(&ActorModel(light)) = lights.get(parent.parent()) else { continue };
+        let (gone, (location, rotation)) = world.and_then(|world| Some((world.is_gone(light), world.tick_place(light)?))).unwrap_or((false, (look.location, look.rotation)));
+        *place = CoronaPlace { gone, location, rotation, blocked: world.is_some_and(|world| world.corona_blocked(light)) };
     }
 }

@@ -7,7 +7,7 @@ use bevy::image::Image;
 use bevy::prelude::Transform;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::EguiPlugin;
 use p2_engine::P2EnginePlugins;
 use p2_host::display::DisplayPlugin;
 use p2_render::gamma::GammaPlugin;
@@ -18,8 +18,6 @@ fn run_frames(engine: PluginGroupBuilder) {
     let mut app = App::new();
     common::headless_renderer(&mut app);
     app.add_plugins((EguiPlugin::default(), engine));
-    // The hosts put their own interface in this schedule; the engine's plugin group adds nothing to it.
-    app.init_schedule(EguiPrimaryContextPass);
     app.finish();
     app.cleanup();
     // Startup first: the interface camera of the engine claims the primary egui context there.

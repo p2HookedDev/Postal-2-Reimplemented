@@ -3,23 +3,23 @@ use std::time::Instant;
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::camera::primitives::MeshAabb;
-use bevy::camera::visibility::{NoFrustumCulling, RenderLayers, Visibility};
+use bevy::camera::visibility::{NoFrustumCulling, Visibility};
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{ChildOf, Commands, Query, Res, ResMut, Resource, With};
+use bevy::ecs::prelude::{ChildOf, Commands, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::schedule::{IntoScheduleConfigs, SystemSet};
 use bevy::ecs::system::SystemParam;
 use bevy::math::Vec3;
 use bevy::mesh::{Mesh, Mesh3d, PrimitiveTopology};
-use bevy::pbr::MeshMaterial3d;
+use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::render::storage::ShaderBuffer;
 use bevy::transform::components::Transform;
 use p2_particles::{EmitterKind, StripPoint};
 use rustc_hash::FxHashMap;
 
-use super::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape};
+use super::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook};
 use super::particle_material::{ParticleMaterial, RECORD_WORDS, SharedParticleKey, sprite_light};
 use super::translucent_order::TranslucentDraw;
-use crate::components::OVERLAY_LAYERS;
+use crate::components::OverlaySlot;
 use super::bsp_light::FrameLights;
 use super::frame_facts::FrameFacts;
 use super::glow_lights::GlowLights;
@@ -28,12 +28,14 @@ use p2_host::display::{MODERN_LIQUID_FLOW, Settings};
 use bounds::apply_bounds;
 use fire::is_fire;
 use light::{ActorLight, ParticleLights};
+use mesh_particles::{MeshPool, PoolMaterialKey, PoolSlot};
 use sprites::{MIN_QUADS, SpriteGrid, grid_capacity, sprite_box, sprite_grid, upload_sprites, write_sprite_records};
 use strips::{empty_quads, fill_beams, fill_smooth_strip, fill_strip};
 
 pub mod bounds;
 pub(crate) mod fire;
 mod light;
+mod mesh_particles;
 pub mod sprites;
 pub(crate) mod strips;
 
@@ -56,6 +58,7 @@ pub struct ParticleDraws {
     /// This frame's sprite records, uploaded to `PARTICLE_SPRITES`.
     pub records: Vec<[u32; RECORD_WORDS]>,
     materials: FxHashMap<SharedParticleKey, Handle<ParticleMaterial>>,
+    pool_materials: FxHashMap<PoolMaterialKey, Handle<StandardMaterial>>,
     level: u32,
 }
 
@@ -71,6 +74,7 @@ pub(crate) struct ActorDraw {
 pub struct ParticleAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<ParticleMaterial>>,
+    standard_materials: ResMut<'w, Assets<StandardMaterial>>,
     sprite_buffers: Option<ResMut<'w, Assets<ShaderBuffer>>>,
 }
 
@@ -81,6 +85,7 @@ pub fn draw_particles(
     mut assets: ParticleAssets,
     mut commands: Commands,
     parents: Query<(), With<Transform>>,
+    mut pool_slots: Query<&mut Transform, (With<PoolSlot>, Without<crate::lamps::Lamp>)>,
     settings: Option<Res<Settings>>,
     lights: ParticleLights,
     mut times: ResMut<FrameTimes>,
@@ -91,9 +96,13 @@ pub fn draw_particles(
         draws.level = drawn.level;
         draws.actors.clear();
         draws.materials.clear();
+        draws.pool_materials.clear();
     }
     for look in drawn.born.drain(..) {
         draws.add_emitter(look, &mut assets, &mut commands);
+    }
+    for look in drawn.born_meshes.drain(..) {
+        draws.add_mesh_emitter(look, &mut assets);
     }
     draws.actors.retain(|parent, _| parents.contains(*parent));
     let flow = settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_LIQUID_FLOW) > 0);
@@ -105,9 +114,16 @@ pub fn draw_particles(
         lights.follow(&mut actor.light, slot, lit_by);
         if actor.overlay != slot.overlay {
             actor.overlay = slot.overlay;
-            let layer = slot.overlay.map_or_else(RenderLayers::default, |at| RenderLayers::layer(OVERLAY_LAYERS[at]));
-            for mesh in actor.emitters.iter().filter_map(|draw| draw.mesh.as_ref()) {
-                commands.entity(mesh.entity).insert(layer.clone());
+            let layer = OverlaySlot(slot.overlay);
+            let meshes = actor.emitters.iter().filter_map(|draw| draw.mesh.as_ref()).map(|mesh| mesh.entity);
+            let slots = actor.emitters.iter().filter_map(|draw| draw.pool.as_ref()).flat_map(MeshPool::slots);
+            for entity in meshes.chain(slots) {
+                commands.entity(entity).insert(layer);
+            }
+        }
+        for (order, (draw, emitter)) in actor.emitters.iter_mut().zip(&slot.emitters).enumerate() {
+            if let Some(pool) = &mut draw.pool {
+                pool.place(&mut commands, &mut pool_slots, slot, order as u32, &emitter.meshes);
             }
         }
         let mut writes = MeshWrites { commands: &mut commands, meshes: &mut assets.meshes, records: &mut records, liquid_flow: flow };
@@ -147,17 +163,28 @@ impl ParticleDraws {
         let part = TranslucentDraw::Part { actor: parent, order };
         let material = self.materials.entry(material.shared_key()).or_insert_with(|| assets.materials.add(material)).clone();
         let entity = commands.spawn((model, MeshMaterial3d(material), part)).id();
+        *self.emitter(parent, order) = EmitterDraw {
+            mesh: Some(EmitterMesh { entity, mesh, shown: false, strip_key: None, written: false }),
+            grid,
+            fire: is_fire(&name, props.draw_style),
+            volume: false,
+            pool: None,
+        };
+    }
+
+    fn add_mesh_emitter(&mut self, look: MeshEmitterLook, assets: &mut ParticleAssets) {
+        let MeshEmitterLook { parent, order, sections, props } = look;
+        let pool = MeshPool::new(&sections, &props, &mut assets.standard_materials, &mut self.pool_materials);
+        self.emitter(parent, order).pool = Some(pool);
+    }
+
+    fn emitter(&mut self, parent: Entity, order: u32) -> &mut EmitterDraw {
         let emitters = &mut self.actors.entry(parent).or_default().emitters;
         let at = order as usize;
         if emitters.len() <= at {
             emitters.resize_with(at + 1, Default::default);
         }
-        emitters[at] = EmitterDraw {
-            mesh: Some(EmitterMesh { entity, mesh, shown: false, strip_key: None, written: false }),
-            grid,
-            fire: is_fire(&name, props.draw_style),
-            volume: false,
-        };
+        &mut emitters[at]
     }
 }
 
@@ -168,6 +195,7 @@ struct EmitterDraw {
     fire: bool,
     /// Drawn as a fire volume under modern graphics: its sprites are hidden.
     volume: bool,
+    pool: Option<MeshPool>,
 }
 
 struct EmitterMesh {
@@ -200,7 +228,7 @@ struct MeshWrites<'a, 'w, 's> {
 fn fill_emitter_meshes(writes: &mut MeshWrites, actor: &mut ActorDraw, slot: &DrawnActor, eye: Vec3) -> (Option<(Vec3, Vec3)>, bool) {
     let (mut bounds, mut newly_shown) = (slot.mesh_reach, false);
     let flow = writes.liquid_flow;
-    for (draw, DrawnEmitter { sprites, strip, beams, shape }) in actor.emitters.iter_mut().zip(&slot.emitters) {
+    for (draw, DrawnEmitter { sprites, strip, beams, shape, .. }) in actor.emitters.iter_mut().zip(&slot.emitters) {
         let EmitterDraw { mesh: Some(EmitterMesh { entity, mesh, shown, strip_key: drawn_key, written }), grid, volume, .. } = draw else { continue };
         let EmitterShape { kind, facing, beam_scale, sheets } = *shape;
         let visible = slot.seen && !*volume && (strip.len() > 1 || !sprites.is_empty() || !beams.is_empty());
@@ -253,7 +281,7 @@ fn fill_emitter_meshes(writes: &mut MeshWrites, actor: &mut ActorDraw, slot: &Dr
 pub fn init_drawing_resources(app: &mut App) {
     app.init_resource::<DrawnParticles>().init_resource::<ParticleDraws>().init_resource::<FrameTimes>();
     app.init_resource::<FrameFacts>().init_resource::<FrameLights>().init_resource::<GlowLights>();
-    app.init_resource::<Assets<Mesh>>().init_resource::<Assets<ParticleMaterial>>();
+    app.init_resource::<Assets<Mesh>>().init_resource::<Assets<ParticleMaterial>>().init_resource::<Assets<StandardMaterial>>();
 }
 
 #[cfg(test)]
@@ -283,5 +311,26 @@ mod tests {
         app.world_mut().resource_mut::<DrawnParticles>().actors.clear();
         app.update();
         assert!(app.world().resource::<ParticleDraws>().actors.is_empty());
+    }
+
+    #[test]
+    fn mesh_particles_show_a_pool_slot_each_and_the_spare_slots_hide() {
+        let mut app = App::new();
+        init_drawing_resources(&mut app);
+        app.add_systems(Update, draw_particles);
+        let parent = app.world_mut().spawn(Transform::default()).id();
+        let sections = vec![crate::scene::SectionView::textured(Handle::default(), None)];
+        app.world_mut().resource_mut::<DrawnParticles>().born_meshes.push(MeshEmitterLook { parent, order: 0, sections, props: Default::default() });
+        let particle = p2_particles::MeshParticle { location: [0.0; 3].into(), spin: [0; 3].into(), frame: [0; 3].into(), size: [1.0; 3].into(), color: [255; 4] };
+        let mut shown_and_hidden = |count: usize| {
+            let meshes = vec![particle; count];
+            app.world_mut().resource_mut::<DrawnParticles>().actors = vec![DrawnActor { parent, emitters: vec![DrawnEmitter { meshes, ..Default::default() }], ..Default::default() }];
+            app.update();
+            let world = app.world_mut();
+            let shown = world.query_filtered::<&Visibility, With<PoolSlot>>().iter(world).filter(|&&slot| slot == Visibility::Inherited).count();
+            (shown, world.query_filtered::<(), With<PoolSlot>>().iter(world).count() - shown)
+        };
+        assert_eq!(shown_and_hidden(3), (3, 0));
+        assert_eq!(shown_and_hidden(1), (1, 2));
     }
 }

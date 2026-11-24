@@ -3,6 +3,7 @@ use bevy::math::Vec3;
 use bevy::mesh::Mesh;
 
 use super::sprites::grid_place;
+use crate::particle_frame::OCCLUSION_MARGIN;
 use super::{ActorDraw, EmitterMesh, MeshWrites};
 
 /// Two vertices no triangle uses: the mesh's bounds, and the centre it is sorted by, become the actor's bounds.
@@ -25,12 +26,7 @@ pub fn pad_bounds(mesh: &mut Mesh, min: Vec3, max: Vec3) {
     }
 }
 
-/// How far the occlusion-culling `Aabb` reaches past the particle bounds (Unreal units). Flat sprites on a surface
-/// (puddles, splats) lie in it or a hair under it, and the culling shader compares the box's nearest depth with the
-/// surface's own: from steep angles the floor is in front of the box and the puddle vanishes.
-pub const OCCLUSION_MARGIN: f32 = 8.0;
-
-pub fn occlusion_aabb(min: Vec3, max: Vec3) -> Aabb {
+pub(crate) fn occlusion_aabb(min: Vec3, max: Vec3) -> Aabb {
     Aabb::from_min_max(min - Vec3::splat(OCCLUSION_MARGIN), max + Vec3::splat(OCCLUSION_MARGIN))
 }
 

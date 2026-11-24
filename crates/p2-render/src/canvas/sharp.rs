@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 /// Copies of the HUD's images that sample the nearest texel, made the first time one is drawn magnified; an image egui
 /// has no source for (a movie) is drawn as it is.
 #[derive(Default)]
-pub(in crate::map) struct NearestImages(FxHashMap<egui::TextureId, (egui::TextureId, Option<Handle<Image>>)>, super::distance::DistancePages);
+pub(super) struct NearestImages(FxHashMap<egui::TextureId, (egui::TextureId, Option<Handle<Image>>)>, super::distance::DistancePages);
 
 impl NearestImages {
     pub(super) fn texture(&mut self, id: egui::TextureId, sources: &[Handle<Image>], contexts: &mut EguiContexts, images: &mut Assets<Image>) -> egui::TextureId {

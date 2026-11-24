@@ -18,7 +18,7 @@ const INSIDE_FROM: u8 = 128;
 const FAR: f32 = 1e20;
 
 #[derive(Default)]
-pub(in crate::map) struct DistancePages {
+pub(super) struct DistancePages {
     fields: FxHashMap<egui::TextureId, Vec<f32>>,
     sized: FxHashMap<(egui::TextureId, u32), (Option<egui::TextureId>, Option<Handle<Image>>)>,
 }

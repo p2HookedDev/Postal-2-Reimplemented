@@ -6,42 +6,30 @@ use std::path::Path;
 use bevy::app::{App, PostUpdate};
 use bevy::asset::Assets;
 use bevy::camera::visibility::RenderLayers;
-use bevy::ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
+use bevy::ecs::prelude::{IntoScheduleConfigs, Local, ResMut};
 use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
 use p2_render::actor_light::{ActorLightCache, ActorLit, ActorLitMaterial, Shading};
-use p2_engine::map::{SceneTargets, Session};
+use p2_engine::map::{MapSystems, SceneTargets, Session};
 use p2_render::view::{MeshView, SKY_LAYER};
 use p2_engine::play::PlaySystems;
 
-#[derive(Resource)]
-struct Holder {
-    session: Session,
-    map: String,
-    frame: u32,
-}
-
 fn played(root: &Path, map: &str) -> App {
     let mut app = common::played_app();
-    app.init_resource::<MeshView>()
-        .insert_resource(Holder { session: Session::new(root.to_path_buf()), map: map.to_owned(), frame: 0 })
-        .add_systems(
-            PostUpdate,
-            (|mut holder: ResMut<Holder>, mut t: SceneTargets| {
-                if holder.frame == 0 {
-                    let map = Path::new("Maps").join(format!("{}.fuk", holder.map)).display().to_string();
-                    if let Err(error) = holder.session.load_map(&map, &mut t) {
-                        panic!("{error}");
-                    }
-                } else {
-                    let items = t.play.world().map(|world| world.hud_items().to_vec()).unwrap_or_default();
-                    t.play.set_canvas_size([1024.0, 768.0]);
-                    holder.session.present(&items, &mut t);
-                }
-                holder.frame += 1;
-            })
-            .in_set(PlaySystems::Present),
-        );
+    let map = Path::new("Maps").join(format!("{map}.fuk")).display().to_string();
+    app.init_resource::<MeshView>().insert_resource(Session::new(root.to_path_buf())).add_systems(
+        PostUpdate,
+        (move |mut session: ResMut<Session>, mut t: SceneTargets, mut loaded: Local<bool>| {
+            t.play.set_canvas_size([1024.0, 768.0]);
+            if !std::mem::replace(&mut *loaded, true)
+                && let Err(error) = session.load_map(&map, &mut t)
+            {
+                panic!("{error}");
+            }
+        })
+        .in_set(PlaySystems::Present)
+        .after(MapSystems::Present),
+    );
     app
 }
 

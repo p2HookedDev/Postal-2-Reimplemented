@@ -144,7 +144,7 @@ fn sprite_emitter_app() -> bevy::app::App {
     app.insert_resource(play);
     let parent = app.world_mut().spawn(Transform::default()).id();
     app.world_mut().spawn((Transform::default(), SceneView::default()));
-    let draw = EmitterDraw { disabled: false, pool: None, pending_model: None, name: String::new() };
+    let draw = EmitterDraw { disabled: false, mesh_reach: None, pending_model: None, name: String::new() };
     let props = EmitterProperties {
         max_particles: 4,
         automatic_initial_spawning: false,

@@ -12,7 +12,7 @@ use bevy::asset::{AssetApp, AssetPlugin};
 use bevy::audio::AudioSource;
 use bevy::camera::Camera;
 use bevy::camera::visibility::{Visibility, VisibleEntities};
-use bevy::ecs::prelude::{Entity, IntoScheduleConfigs, Local, Query, ResMut, Resource, With, Without};
+use bevy::ecs::prelude::{Entity, IntoScheduleConfigs, Local, Query, Res, ResMut, Resource, With, Without};
 use bevy::image::Image;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
@@ -20,8 +20,7 @@ use bevy::pbr::StandardMaterial;
 use bevy::time::TimeUpdateStrategy;
 use bevy::transform::components::Transform;
 use p2_engine::animation::AnimationPlugin;
-use p2_engine::map::{Fluids, Hud, Particles, Projectors, SceneTargets, Session, SpawnedActors};
-use p2_render::level::MaterialSwitches;
+use p2_engine::map::{MapPresentPlugin, MapSystems, SceneTargets, Session, SpawnedActors};
 use p2_render::view::{CanvasDrawn, FollowActor, MeshView, SceneView};
 use p2_host::frame_times::FrameTimes;
 use p2_engine::play::{Play, PlayPlugin, PlaySystems, PlayerInput};
@@ -29,7 +28,6 @@ use p2_vm::ObjectId;
 
 #[derive(Resource)]
 struct Holder {
-    session: Session,
     frame: u32,
     url: Option<String>,
     loading: bool,
@@ -55,22 +53,25 @@ fn input_at(frame: u32) -> (Vec<&'static str>, [f32; 2]) {
 
 fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f32; 2])) -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin))
+    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, MapPresentPlugin, p2_render::wounds::WoundsPlugin))
         .init_asset::<Mesh>()
         .init_asset::<Image>()
         .init_asset::<StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
         .init_resource::<MeshView>()
-        .init_resource::<Fluids>()
-        .init_resource::<MaterialSwitches>()
-        .init_resource::<Projectors>()
-        .init_resource::<Particles>()
-        .init_resource::<SpawnedActors>()
-        .init_resource::<Hud>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
-        .insert_resource(Holder { session: Session::new(root.to_path_buf()), frame: 0, url: None, loading: false })
+        .insert_resource(Session::new(root.to_path_buf()))
+        .insert_resource(Holder { frame: 0, url: None, loading: false })
         .insert_resource(OtherWork(0.0))
+        // The game waits for neither: without both, which frame a tick or a built model lands on depends on the machine.
+        .add_systems(Update, (|mut play: ResMut<Play>| play.wait_for_tick()).before(PlaySystems::Tick))
+        .add_systems(PostUpdate, (|spawned: Res<SpawnedActors>| {
+            while spawned.building() {
+                std::thread::yield_now();
+            }
+        })
+        .before(MapSystems::Present))
         .register_required_components::<Mesh3d, Visibility>()
         .add_systems(PostUpdate, |mut cameras: Query<&mut VisibleEntities, With<Camera>>, models: Query<Entity, With<FollowActor>>| {
             for mut seen in &mut cameras {
@@ -82,9 +83,10 @@ fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f
         })
         .add_systems(
             PostUpdate,
-            (|mut holder: ResMut<Holder>, mut t: SceneTargets| {
+            (|mut holder: ResMut<Holder>, mut session: ResMut<Session>, mut t: SceneTargets| {
+                t.play.set_canvas_size([1024.0, 768.0]);
                 if holder.loading {
-                    if let Some(result) = holder.session.finish_load(&mut t) {
+                    if let Some(result) = session.finish_load(&mut t) {
                         result.unwrap_or_else(|error| panic!("{error}"));
                         holder.loading = false;
                         holder.frame += 1;
@@ -94,23 +96,20 @@ fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f
                 if holder.frame == 0 {
                     let map = Path::new("Maps").join("Suburbs-3.fuk").display().to_string();
                     if let Some(url) = holder.url.take() {
-                        holder.session.begin_load(&map, Some(url), &mut t).unwrap_or_else(|error| panic!("{error}"));
+                        session.begin_load(&map, Some(url), &mut t).unwrap_or_else(|error| panic!("{error}"));
                         holder.loading = true;
                         return;
                     }
-                    if let Err(error) = holder.session.load_map(&map, &mut t) {
+                    if let Err(error) = session.load_map(&map, &mut t) {
                         panic!("{error}");
                     }
-                } else {
-                    let items = t.play.world().map(|world| world.hud_items().to_vec()).unwrap_or_default();
-                    t.play.set_canvas_size([1024.0, 768.0]);
-                    holder.session.present(&items, &mut t);
                 }
                 holder.frame += 1;
             })
-            .in_set(PlaySystems::Present),
+            .in_set(PlaySystems::Present)
+            .after(MapSystems::Present),
         )
-        .add_systems(PostUpdate, (|work: bevy::ecs::prelude::Res<OtherWork>| {
+        .add_systems(PostUpdate, (|work: Res<OtherWork>| {
             let started = Instant::now();
             while started.elapsed().as_secs_f64() * 1000.0 < work.0 {
                 std::hint::spin_loop();
@@ -119,7 +118,7 @@ fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f
         .after(PlaySystems::Present))
         .add_systems(
             Update,
-            (move |mut input: ResMut<PlayerInput>, mut frame: Local<u32>, steer: Option<bevy::ecs::prelude::Res<Steer>>| {
+            (move |mut input: ResMut<PlayerInput>, mut frame: Local<u32>, steer: Option<Res<Steer>>| {
                 (input.held, input.mouse) = match steer {
                     Some(steer) => (steer.0.clone(), steer.1),
                     None => script(*frame),
@@ -187,7 +186,8 @@ fn run(app: &mut App, frames: usize) -> Vec<Shown> {
 }
 
 fn differences(a: &State, b: &State) -> HashSet<(String, usize)> {
-    assert_eq!(a.len(), b.len(), "object counts");
+    let paths = |state: &State| state.iter().map(|(path, _)| path.clone()).collect::<HashSet<_>>();
+    assert_eq!(a.len(), b.len(), "object counts; in one run only: {:?}", paths(a).symmetric_difference(&paths(b)).take(8).collect::<Vec<_>>());
     let mut found = HashSet::new();
     for ((path, x), (_, y)) in a.iter().zip(b) {
         assert_eq!(x.len(), y.len(), "{path}");
@@ -212,22 +212,33 @@ fn threaded_frames_match_inline_frames_one_frame_later() {
     assert!(threaded_only.is_empty(), "threaded run differs: {threaded_only:?}");
     let weapon_frames = shown_inline.iter().filter(|s| !s.weapons.is_empty()).count();
     assert!(weapon_frames > frames / 2, "the HUD draws the player's weapon");
-    assert_eq!(shown_threaded[0], shown_inline[0]);
-    assert_eq!(shown_threaded[1].view, shown_inline[0].view);
-    for k in 2..frames {
-        assert_eq!(shown_threaded[k], shown_inline[k - 1], "frame {k}");
+    let apart = |a: &Shown, b: &Shown| {
+        let moved = (0..3).map(|i| (a.view[i] - b.view[i]).abs()).fold(0.0, f32::max);
+        (a.weapons != b.weapons, a.models.0 != b.models.0, (a.models.1 - b.models.1).abs(), moved)
+    };
+    for k in frames - 60..frames {
+        let (late, same) = (apart(&shown_threaded[k], &shown_inline[k - 1]), apart(&shown_threaded[k], &shown_inline[k]));
+        assert!(late.3 < 0.5 && late.2 < 5.0 && !late.0 && !late.1, "frame {k}: not the inline run's frame before, once the shown clocks have met: {late:?}");
+        assert!(same.0, "frame {k}: the weapon of the inline run's same frame");
     }
     assert_ne!(shown_inline[10].view, shown_inline[frames - 1].view);
 }
 
 #[test]
-fn input_reaches_the_view_one_frame_later_threaded() {
+fn the_mouse_turns_the_view_in_its_own_frame_once_the_look_ahead_has_learned_its_scale() {
     let Some(root) = game_dir() else { return };
-    for (threaded, delay) in [(false, 0), (true, 1)] {
-        let mut app = monday(&root, threaded, |frame| (Vec::new(), if frame == 200 { [200.0, 0.0] } else { [0.0; 2] }));
+    for threaded in [false, true] {
+        let mut app = monday(&root, threaded, |frame| {
+            let counts = match frame {
+                100..150 => 5.0,
+                200 => 200.0,
+                _ => 0.0,
+            };
+            (Vec::new(), [counts, 0.0])
+        });
         let shown = run(&mut app, 260);
-        let turned = shown.windows(2).position(|pair| pair[0].view[3] != pair[1].view[3]).map(|i| i + 1);
-        assert_eq!(turned, Some(199 + delay), "threaded: {threaded}");
+        let turned = shown[170..].windows(2).position(|pair| pair[0].view[3] != pair[1].view[3]).map(|i| i + 171);
+        assert_eq!(turned, Some(199), "threaded: {threaded}");
     }
 }
 
@@ -284,7 +295,8 @@ fn mismatch(path: &[(f32, bevy::math::Vec3)], range: std::ops::Range<usize>, lag
 }
 
 /// Which frame time a picture stays up for is not known when its step is taken. With each frame's own time as its step,
-/// the view advances by the time of the frame before it; averaged (`StepClock`) it advances evenly, whatever the lag.
+/// the view advances by that time, wrong for a picture shown a frame later; averaged (`StepClock`) it advances evenly,
+/// whatever the lag.
 #[test]
 fn walking_moves_evenly_over_uneven_frame_times() {
     let Some(root) = game_dir() else { return };
@@ -306,7 +318,7 @@ fn walking_moves_evenly_over_uneven_frame_times() {
                     assert!(off < deviation + 0.03, "{name}: lag {lag}: {off:.3} of a frame (frame times {deviation:.3})");
                 }
             } else if name == "vsync" {
-                assert!(by_lag[0].0 > 1.8 * deviation && by_lag[2].0 > 1.8 * deviation, "{name}: {offs:?} (frame times {deviation:.3})");
+                assert!(by_lag[1].0 > 1.8 * deviation && by_lag[3].0 > 1.8 * deviation, "{name}: {offs:?} (frame times {deviation:.3})");
             }
         }
     }

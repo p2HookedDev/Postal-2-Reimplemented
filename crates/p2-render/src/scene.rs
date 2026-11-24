@@ -92,6 +92,11 @@ pub enum SceneChange {
     Clear,
 }
 
+/// A fog for each zone of the shown scene, in the zones' order. Written before the view's fog is blended, it shows in
+/// that frame.
+#[derive(Message)]
+pub struct ZoneFogs(pub Vec<Option<ZoneFog>>);
+
 #[derive(Clone)]
 pub struct MaterialImages {
     pub image: Handle<Image>,

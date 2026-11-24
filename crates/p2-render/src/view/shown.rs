@@ -12,7 +12,6 @@ use crate::actor_light::LightEnvironment;
 #[derive(Resource, Default)]
 pub struct ShownScene {
     pub fogs: Vec<Option<ZoneFog>>,
-    pub volume_fog: Option<ZoneFog>,
     pub origin: Vec3,
     pub portals: Option<Arc<ZonePortals>>,
     pub lighting: Option<Arc<LightEnvironment>>,

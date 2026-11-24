@@ -1,5 +1,4 @@
 use super::*;
-use p2_render::view::ActorMaterialCache;
 use super::scene::VmAnimations;
 use bevy::math::Affine3A;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
@@ -24,12 +23,17 @@ pub(super) fn static_model_key(path: &str, skins: &[Option<String>]) -> ModelKey
 #[derive(Resource, Default)]
 pub struct SpawnedActors {
     pub(super) spawn_models: HashMap<ModelKey, Option<SpawnModel>>,
-    spawn_materials: ActorMaterialCache,
     pub(super) spawn_builds: Vec<ModelBuild>,
     pub(super) texture_builds: Vec<TextureBuild>,
     spawn_waiting: Vec<SpawnedActor>,
     pub(super) actor_textures: FxHashMap<String, Option<ActorTexture>>,
-    pub(super) corona_materials: FxHashMap<String, Option<Handle<ParticleMaterial>>>,
+}
+
+impl SpawnedActors {
+    /// A model or a texture is still being built on another thread; which frame takes it depends on the machine.
+    pub fn building(&self) -> bool {
+        self.spawn_builds.iter().any(|build| !build.task.is_finished()) || self.texture_builds.iter().any(|build| !build.task.is_finished())
+    }
 }
 
 pub(super) struct TextureBuild {
@@ -230,8 +234,7 @@ fn static_actor_sections(meshes: &mut Assets<Mesh>, mesh: &Arc<StaticMesh>, sect
 }
 
 fn spawn_actor_model(spawned: SpawnedActor, origin: Vec3, t: &mut SpawnTargets) {
-    let SpawnedActors { spawn_models, spawn_materials: shared, .. } = &mut *t.spawned;
-    let Some(Some(model)) = spawn_models.get(&spawned.key) else { return };
+    let Some(Some(model)) = t.spawned.spawn_models.get(&spawned.key) else { return };
     let SpawnedActor { actor, draw, .. } = spawned;
     let (sections, follow, lit) = match (model, draw) {
         (SpawnModel::Static { mesh, sections }, SpawnedDraw::Static(a)) => {
@@ -260,7 +263,7 @@ fn spawn_actor_model(spawned: SpawnedActor, origin: Vec3, t: &mut SpawnTargets) 
         None => (Transform::default(), Visibility::Inherited),
     };
     let parent = t.commands.spawn((MapScoped, ActorModel(actor), Transform::from_translation(origin), Visibility::default())).id();
-    spawn_actor_sections(t.commands, parent, sections, placed, (actor, follow), (&mut t.assets.actor_materials, ActorLook::Spawned(shared)), lit, shown);
+    spawn_actor_sections(t.commands, parent, sections, placed, (actor, follow), (&mut t.assets.actor_materials, ActorLook::Spawned), lit, shown);
 }
 
 impl Session {
@@ -349,7 +352,7 @@ impl Session {
                 }
             };
             keep_static_meshes(&mut t.assets.meshes, model.as_ref());
-            t.particles.attach_late_pools(model.as_ref(), &key, t.assets);
+            t.particles.attach_late_meshes(model.as_ref(), &key, &t.assets.meshes);
             t.spawned.spawn_models.insert(key, model);
         }
         t.times.add("spawned: a built model taken in", started);
@@ -397,7 +400,6 @@ pub(super) struct SpawnTargets<'a, 'w, 's> {
 
 #[derive(SystemParam)]
 pub(super) struct SpawnParams<'w, 's> {
-    session: ResMut<'w, Session>,
     assets: AssetStores<'w>,
     spawned: ResMut<'w, SpawnedActors>,
     particles: ResMut<'w, Particles>,
@@ -410,9 +412,9 @@ pub(super) struct SpawnParams<'w, 's> {
     times: ResMut<'w, FrameTimes>,
 }
 
-pub(super) fn present_spawned(mut t: SpawnParams) {
+pub(super) fn present_spawned(mut session: ResMut<Session>, mut t: SpawnParams) {
     let started = std::time::Instant::now();
-    t.session.update_spawned(&mut SpawnTargets {
+    session.update_spawned(&mut SpawnTargets {
         assets: &mut t.assets,
         spawned: &mut t.spawned,
         particles: &mut t.particles,
@@ -427,20 +429,8 @@ pub(super) fn present_spawned(mut t: SpawnParams) {
     t.times.add("spawned", started);
 }
 
-pub(super) struct ProjectionTargets<'a, 'w, 's> {
-    pub(super) library: &'a mut Library,
-    pub(super) map_system: Option<&'a Path>,
-    pub(super) projectors: &'a mut Projectors,
-    pub(super) play: &'a mut Play,
-    pub(super) followers: &'a Query<'w, 's, (Entity, AnyOf<(&'static FollowActor, &'static FollowBone)>, Option<&'static ChildOf>), Without<CanvasDrawn>>,
-    pub(super) untagged: &'a Query<'w, 's, (Entity, AnyOf<(&'static FollowActor, &'static FollowBone)>), (Without<CanvasDrawn>, Without<MeshTag>)>,
-    pub(super) images: &'a mut ResMut<'w, Assets<Image>>,
-    pub(super) commands: &'a mut Commands<'w, 's>,
-}
-
 #[derive(SystemParam)]
 pub(super) struct ProjectionParams<'w, 's> {
-    session: ResMut<'w, Session>,
     projectors: ResMut<'w, Projectors>,
     play: ResMut<'w, Play>,
     followers: Query<'w, 's, (Entity, AnyOf<(&'static FollowActor, &'static FollowBone)>, Option<&'static ChildOf>), Without<CanvasDrawn>>,
@@ -450,25 +440,15 @@ pub(super) struct ProjectionParams<'w, 's> {
     times: ResMut<'w, FrameTimes>,
 }
 
-pub(super) fn present_projections(mut t: ProjectionParams) {
+pub(super) fn present_projections(mut session: ResMut<Session>, mut t: ProjectionParams) {
     let started = std::time::Instant::now();
-    let session = &mut *t.session;
-    update_projections(&mut ProjectionTargets {
-        library: &mut session.library,
-        map_system: session.map_system.as_deref(),
-        projectors: &mut t.projectors,
-        play: &mut t.play,
-        followers: &t.followers,
-        untagged: &t.untagged,
-        images: &mut t.images,
-        commands: &mut t.commands,
-    });
+    update_projections(&mut session, &mut t);
     t.times.add("projections", started);
 }
 
 /// Splats abandon their projection for the time they live (`AbandonProjector(UseLife)`, which ends the projection in the
 /// engine) and destroy themselves then. Sections following an actor are tagged by whether it is in a projector's list.
-pub(super) fn update_projections(t: &mut ProjectionTargets) {
+fn update_projections(session: &mut Session, t: &mut ProjectionParams) {
     let Some(world) = t.play.world_mut() else { return };
     let projectors = &mut *t.projectors;
     projectors.dynamic_decals.retain(|&actor, &mut entity| {
@@ -506,20 +486,20 @@ pub(super) fn update_projections(t: &mut ProjectionTargets) {
     changed.extend(movers.symmetric_difference(&projectors.decal_movers));
     projectors.decal_movers = movers;
     if !changed.is_empty() {
-        for (entity, follow, _) in t.followers {
+        for (entity, follow, _) in &t.followers {
             if follow.0.map(|f| f.actor).or(follow.1.map(|b| b.actor)).is_some_and(|actor| changed.contains(&actor)) {
                 t.commands.entity(entity).try_insert(MeshTag::new(projector_mesh_tag(follow, &projectors.projector_actors, &projectors.decal_movers)));
             }
         }
     }
-    for (entity, follow) in t.untagged {
+    for (entity, follow) in &t.untagged {
         t.commands.entity(entity).try_insert(MeshTag::new(projector_mesh_tag(follow, &projectors.projector_actors, &projectors.decal_movers)));
     }
     let events = world.take_projections();
     if events.is_empty() {
         return;
     }
-    let Some(game) = open_game(t.library, t.map_system) else { return };
+    let Some(game) = open_game(&mut session.library, session.map_system.as_deref()) else { return };
     for (event, projector) in events {
         match event {
             ProjectorEvent::Attach(actor) => {
@@ -574,10 +554,9 @@ pub(super) fn update_projections(t: &mut ProjectionTargets) {
 }
 
 impl Session {
-    pub(super) fn spawn_canvas_static(&mut self, a: &MeshActor, origin: Vec3, call: usize, slot: usize, placed: impl Fn(FollowActor) -> Transform, t: &mut HudTargets) -> Option<Entity> {
+    pub(super) fn spawn_canvas_static(&mut self, a: &MeshActor, origin: Vec3, call: usize, slot: usize, placed: impl Fn(FollowActor) -> Transform, t: &mut HudParams) -> Option<Entity> {
         let game = open_game(&mut self.library, self.map_system.as_deref())?;
-        let SpawnedActors { spawn_models, spawn_materials, .. } = &mut *t.spawned;
-        let model = spawn_models.entry(static_model_key(&a.static_mesh, &a.skins)).or_insert_with(|| static_model(game, t.assets, &a.static_mesh, &a.skins));
+        let model = t.spawned.spawn_models.entry(static_model_key(&a.static_mesh, &a.skins)).or_insert_with(|| static_model(game, &mut t.assets, &a.static_mesh, &a.skins));
         let Some(SpawnModel::Static { mesh, sections }) = model else {
             bevy::log::warn_once!("HUD actor {:?}: static mesh {} not built", a.object, a.static_mesh);
             return None;
@@ -585,10 +564,8 @@ impl Session {
         let (sections, lit) = static_actor_sections(&mut t.assets.meshes, mesh, sections, a);
         bevy::log::debug!("HUD actor {:?}: {}, skins {:?}, {} sections, overlay slot {slot}", a.object, a.static_mesh, a.skins, sections.len());
         let follow = FollowActor { actor: a.object, scale: a.scale, pre_pivot: a.pre_pivot, skeletal: None };
-        let layer = RenderLayers::layer(OVERLAY_LAYERS[slot]);
         let parent = t.commands.spawn((MapScoped, Transform::from_translation(origin), Visibility::default())).id();
-        let look = ActorLook::Spawned(spawn_materials);
-        spawn_actor_sections(t.commands, parent, sections, placed(follow), (a.object, follow), (&mut t.assets.actor_materials, look), lit, (layer, CanvasDrawn(call)));
+        spawn_actor_sections(&mut t.commands, parent, sections, placed(follow), (a.object, follow), (&mut t.assets.actor_materials, ActorLook::Spawned), lit, (OverlaySlot(Some(slot)), CanvasDrawn(call)));
         Some(parent)
     }
 }

@@ -4,6 +4,7 @@ pub mod level_collision;
 pub mod actor_light;
 pub mod asset_churn;
 pub mod blended;
+pub mod canvas;
 pub mod bsp_light;
 pub mod gamma;
 pub mod lamps;
@@ -33,13 +34,16 @@ pub mod modern_view;
 pub(crate) mod reflections;
 pub(crate) mod screen_pass;
 pub(crate) mod bounce;
+pub mod coronas;
 pub mod fire_volume;
+pub mod fluids;
 pub(crate) mod temporal_aa;
 pub(crate) mod fade_in;
 pub mod frame_facts;
 pub(crate) mod glow_lights;
 pub mod photo;
 pub mod scene;
+pub mod sprites;
 pub mod view;
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -84,6 +88,7 @@ impl bevy::app::Plugin for RetailRenderPlugin {
             world_pass::WorldPassPlugin,
             sampler_refresh::SamplerRefreshPlugin,
         ));
+        app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin));
         app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin, wet::WetPlugin));
     }
 }

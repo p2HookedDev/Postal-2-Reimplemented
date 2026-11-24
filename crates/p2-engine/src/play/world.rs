@@ -57,25 +57,6 @@ pub struct Spawned {
     pub restyled: bool,
 }
 
-#[derive(Clone, PartialEq)]
-pub struct Overlay {
-    /// How much of the scene shows (1 = all, 0 = only the fog colour).
-    pub flash_scale: f32,
-    pub flash_fog: [f32; 3],
-    pub titles: Vec<OverlayTitle>,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct OverlayTitle {
-    pub material: String,
-    pub color: [u8; 4],
-    /// Width relative to the screen width.
-    pub size: f32,
-    /// Centre as fractions of the screen width and height.
-    pub at: [f32; 2],
-    pub alpha: f32,
-}
-
 #[cfg(test)]
 impl ActorFrame {
     /// One the game keeps at `location`, hung on a bone of `on`.
@@ -335,7 +316,7 @@ impl PlayWorld {
     pub(super) fn present(&mut self) -> bool {
         self.changed.clear();
         let Some(mut frame) = self.ready.take() else { return false };
-        self.shown.tick(&self.frame, &frame, &self.actors);
+        self.shown.tick(&self.frame, &frame, &self.actors, &mut self.changed);
         let mut old = std::mem::take(&mut self.frame);
         if frame.travel.is_none() {
             frame.travel = old.travel.take();

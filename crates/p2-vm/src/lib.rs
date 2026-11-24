@@ -61,7 +61,7 @@ use p2_package::flags::{RF_LOAD_FOR_ANY, RF_LOAD_FOR_GAME};
 use p2_package::{Loader, Package, PackageId};
 use rustc_hash::{FxHashMap, FxHashSet};
 pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidPling, MovieState, NEAR_CLIPPING_PLANE, PersonHit};
-pub use canvas::CanvasItem;
+pub use canvas::{CanvasItem, call_slots};
 pub use enums::ERenderStyle;
 pub use input::PlayerView;
 pub use config::{RENDER_DEVICE, VIEWPORT_MANAGER, WindowRequest, ini_truthy};

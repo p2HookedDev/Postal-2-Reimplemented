@@ -25,7 +25,7 @@ use p2_engine::animation::{Animated, AnimationSystems};
 use p2_host::game_dir_form::GameDirForm;
 use p2_bevy_assets::library::Library;
 use p2_engine::map::{
-    MapSystems, SceneTargets, Session, animate_mesh_with, travel_package,
+    CanvasArea, MapSystems, SceneTargets, Session, animate_mesh_with, travel_package,
 };
 use p2_render::level::{SectionChunks, material_images, sections_of_static_mesh, skeletal_mesh_sections};
 use p2_render::scene::{ModelView, Scene, SectionView};
@@ -63,7 +63,7 @@ impl Plugin for AssetBrowserPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             EguiPrimaryContextPass,
-            ui.in_set(AssetBrowserSystems::Ui).run_if(in_state(ViewerState::Browse)),
+            ui.in_set(AssetBrowserSystems::Ui).before(MapSystems::Paint).run_if(in_state(ViewerState::Browse)),
         )
         .add_systems(Update, play_sound.run_if(in_state(ViewerState::Browse)))
         .add_systems(Update, loop_browsed_meshes.in_set(AnimationSystems::Pose))
@@ -156,6 +156,8 @@ enum Action {
 struct Targets<'w, 's> {
     contexts: EguiContexts<'w, 's>,
     scene: SceneTargets<'w, 's>,
+    view: ResMut<'w, p2_render::view::MeshView>,
+    area: ResMut<'w, CanvasArea>,
     input: ResMut<'w, ViewerInput>,
 }
 
@@ -512,7 +514,8 @@ fn ui(
 
     match browser.kind {
         Kind::Texture | Kind::Sound => {
-            targets.scene.view.viewport = None;
+            targets.view.viewport = None;
+            targets.area.0 = None;
             targets.input.hovered = false;
             targets.input.keyboard = false;
             egui::CentralPanel::default().show(&mut root, |ui| {
@@ -529,7 +532,8 @@ fn ui(
             let scale = ctx.pixels_per_point();
             let position = UVec2::new((rect.min.x * scale) as u32, (rect.min.y * scale) as u32);
             let size = UVec2::new((rect.width() * scale) as u32, (rect.height() * scale) as u32);
-            targets.scene.view.viewport = (size.x > 0 && size.y > 0).then_some((position, size));
+            targets.view.viewport = (size.x > 0 && size.y > 0).then_some((position, size));
+            targets.area.0 = Some(rect);
             targets.input.hovered = ctx.pointer_hover_pos().is_some_and(|p| rect.contains(p))
                 && ctx.dragged_id().is_none();
             targets.input.keyboard = !ctx.egui_wants_keyboard_input();
@@ -537,7 +541,6 @@ fn ui(
                 Kind::Level => "Right-drag: look   W/A/S/D: move   Q/E: down/up   Shift: faster   Wheel: speed   G: walk / fly   Space: jump",
                 _ => "Left-drag: orbit   Wheel: zoom",
             };
-            session.frame(&ctx, rect, &mut targets.contexts, &mut targets.scene);
             egui::Area::new("mesh_status".into()).fixed_pos(rect.min + egui::vec2(8.0, 8.0)).show(&ctx, |ui| {
                 egui::Frame::NONE.fill(egui::Color32::from_black_alpha(170)).inner_margin(6.0).show(ui, |ui| {
                     ui.label(&browser.status);
@@ -556,7 +559,8 @@ fn ui(
     if change_game_dir {
         browser.clear_preview(&mut targets);
         session.clear(&mut targets.scene);
-        targets.scene.view.viewport = None;
+        targets.view.viewport = None;
+        targets.area.0 = None;
         form.input = browser.root.display().to_string();
         form.error = None;
         next.set(ViewerState::Setup);

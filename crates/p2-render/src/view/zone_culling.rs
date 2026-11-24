@@ -13,7 +13,7 @@ pub(super) fn follower_zones(
     collision: Res<LevelCollision>,
     moved: Query<&ChildOf, (With<FollowActor>, Or<(Changed<Transform>, Changed<Aabb>)>)>,
     mut roots: Query<(&Children, Option<&mut ZoneCulled>), With<ActorModel>>,
-    sections: Query<(&Transform, &Aabb, Has<crate::components::SpriteQuad>), With<FollowActor>>,
+    sections: Query<(&Transform, &Aabb, Has<crate::sprites::SpriteLook>), With<FollowActor>>,
 ) {
     let model = collision.model();
     let Some(model) = model.filter(|model| !model.leaves.is_empty()) else { return };

@@ -246,12 +246,7 @@ fn draws_under_a_zone_layered_root_follow_its_zones_also_when_they_join_later() 
 
 #[test]
 fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
-    use bevy::asset::AssetApp;
-    let mut app = App::new();
-    app.add_plugins((bevy::MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::transform::TransformPlugin, crate::P2RenderPlugins))
-        .init_asset::<Mesh>()
-        .init_asset::<Image>()
-        .init_asset::<StandardMaterial>();
+    let mut app = view_app();
     let model = ModelView {
         sections: vec![SectionView::textured(Handle::default(), None)],
         instances: vec![Transform::default(), Transform::from_xyz(1.0, 0.0, 0.0)],
@@ -289,4 +284,86 @@ fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
     app.update();
     assert_eq!(counts(&mut app), (0, 0));
     assert_eq!(app.world().resource::<ShownScene>().radius, 0.0);
+}
+
+fn view_app() -> App {
+    use bevy::asset::AssetApp;
+    let mut app = App::new();
+    app.add_plugins((bevy::MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::transform::TransformPlugin, crate::P2RenderPlugins))
+        .init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<StandardMaterial>();
+    app
+}
+
+#[test]
+fn the_main_view_and_an_overlay_camera_take_their_fov_in_the_frame_it_is_written() {
+    let mut app = view_app();
+    app.add_systems(Update, (|mut facts: ResMut<FrameFacts>| facts.fov = 45.0).before(MeshViewSystems::Camera));
+    app.add_systems(PostUpdate, (|mut hud: ResMut<HudView>| hud.overlays = vec![30.0]).before(SceneViewSystems::Overlays));
+    app.world_mut().resource_mut::<MeshView>().viewport = Some((UVec2::ZERO, UVec2::new(800, 600)));
+    let fovs = |app: &mut App| {
+        let world = app.world_mut();
+        let fov = |projection: &Projection| match projection {
+            Projection::Perspective(perspective) => perspective.fov,
+            _ => 0.0,
+        };
+        let main = world.query_filtered::<&Projection, With<crate::world_pass::WorldCamera>>().iter(world).next().map(fov);
+        let overlay = world.query::<(&Projection, &OverlayCamera)>().iter(world).find(|(_, camera)| camera.0 == 0).map(|(projection, _)| fov(projection));
+        (main, overlay)
+    };
+    let vertical = |degrees: f32| Some(crate::modern_view::vertical_fov(degrees, 800.0 / 600.0, false));
+    app.update();
+    assert_eq!(fovs(&mut app), (vertical(45.0), vertical(30.0)));
+}
+
+#[test]
+fn fog_written_before_the_camera_is_placed_starts_to_show_in_that_frame() {
+    use crate::scene::{ZoneFog, ZoneFogs};
+    let zones = vec![None, Some(ZoneFog { color: [1, 2, 3], start: 10.0, end: 20.0 })];
+    let volume = ZoneFog { color: [200, 0, 0], start: 30.0, end: 40.0 };
+    let mut app = view_app();
+    let written = zones.clone();
+    app.add_systems(Update, (move |mut facts: ResMut<FrameFacts>, mut fogs: bevy::ecs::message::MessageWriter<ZoneFogs>| {
+        facts.volume_fog = Some(volume);
+        fogs.write(ZoneFogs(written.clone()));
+    })
+    .before(MeshViewSystems::Camera));
+    app.update();
+    assert_eq!(app.world().resource::<ShownScene>().fogs, zones);
+    let world = app.world_mut();
+    let shown = world.query::<&DistanceFog>().iter(world).next().map(|fog| match fog.falloff {
+        FogFalloff::Linear { start, end } => (fog.color.to_linear().with_alpha(1.0), start, end),
+        _ => (LinearRgba::NONE, 0.0, 0.0),
+    });
+    assert_eq!(shown, Some((Color::srgb_u8(200, 0, 0).to_linear(), 30.0, 40.0)), "fog from none starts at its colour and distances");
+}
+
+#[test]
+fn spawned_sections_of_one_look_share_a_material_until_the_map_is_left() {
+    let mut world = bevy::ecs::world::World::new();
+    world.init_resource::<Assets<StandardMaterial>>();
+    world.init_resource::<Assets<MeshLitMaterial>>();
+    world.init_resource::<ActorMaterialCache>();
+    let mut state = bevy::ecs::system::SystemState::<ActorMaterials>::new(&mut world);
+    let mut materials = state.get_mut(&mut world).expect("the material stores");
+    let section = SectionView::textured(Handle::default(), None);
+    let first = materials.material(ActorLook::Spawned, &section);
+    assert!(first == materials.material(ActorLook::Spawned, &section));
+    assert!(first != materials.material(ActorLook::Follower, &section));
+    assert!(first != materials.material(ActorLook::Canvas, &section));
+    materials.forget_spawned();
+    assert!(first != materials.material(ActorLook::Spawned, &section));
+}
+
+#[test]
+fn a_draws_layers_follow_its_overlay_slot() {
+    let mut world = bevy::ecs::world::World::new();
+    let draw = world.spawn(OverlaySlot(Some(2))).id();
+    assert_eq!(world.get::<RenderLayers>(draw), Some(&RenderLayers::layer(OVERLAY_LAYERS[2])));
+    world.entity_mut(draw).insert(OverlaySlot(None));
+    assert_eq!(world.get::<RenderLayers>(draw), Some(&RenderLayers::default()));
+    let attached = world.spawn(RenderLayers::layer(CASTER_LAYER)).id();
+    world.entity_mut(attached).insert(OverlaySlot(Some(0)));
+    assert_eq!(world.get::<RenderLayers>(attached), Some(&RenderLayers::layer(OVERLAY_LAYERS[0])));
 }

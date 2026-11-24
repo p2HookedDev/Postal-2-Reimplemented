@@ -1,5 +1,6 @@
-pub use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, SKY_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SunShadow, UNSEEN_LAYER};
+pub use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, MOVER_LAYER, OVERLAY_LAYERS, OverlaySlot, RESTING_PROP_LAYER, SKY_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SunShadow, UNSEEN_LAYER};
 pub use shown::ShownScene;
+use crate::frame_facts::{FrameFacts, HudView};
 use crate::level_collision::LevelCollision;
 pub use crate::components::{ActorModel, BaseModel, SceneView};
 pub(crate) use crate::components::CanvasLayer;
@@ -71,7 +72,7 @@ mod shown;
 pub use sections::spawn_actor_sections;
 use materials::{SectionMaterials, scene_section_material};
 pub use materials::{ActorLook, ActorMaterialCache, ActorMaterials, SectionMaterial, vertex_lit};
-pub use materials::{alpha_key, cull_for};
+pub(crate) use materials::{alpha_key, cull_for};
 pub(crate) use materials::image_size;
 use camera::{SceneCameras, plain_output};
 pub use camera::view_rotation;
@@ -107,11 +108,15 @@ pub enum SceneViewSystems {
 impl Plugin for MeshViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MeshView>()
+            .init_resource::<HudView>()
+            .init_resource::<FrameFacts>()
             .add_message::<SceneChange>()
             .init_resource::<crate::components::OverlayLook>()
             .init_resource::<ShownScene>()
             .init_resource::<LevelCollision>()
             .init_resource::<AnimatedMaterials>()
+            .init_resource::<ActorMaterialCache>()
+            .init_resource::<crate::canvas::CanvasPainter>()
             .configure_sets(Update, (MeshViewSystems::Apply, MeshViewSystems::Control, MeshViewSystems::Camera).chain())
             .add_systems(Startup, (setup, steady_decal_order))
             .add_systems(Update, (apply_change, animate_materials, animate_actor_speculars, follow_msaa).chain().in_set(MeshViewSystems::Apply))
@@ -126,13 +131,9 @@ impl Plugin for MeshViewPlugin {
 #[derive(Resource)]
 pub struct MeshView {
     pub viewport: Option<(UVec2, UVec2)>,
-    /// Horizontal fields of view in degrees, as Unreal gives them: the view's (0: 90), and one per actor the HUD drew
-    /// this frame (`DrawActor`), in call order (0: the view's); each is drawn by the overlay camera of its slot.
-    pub fov: f32,
-    pub overlays: Vec<f32>,
     pub occlusion_culling: bool,
-    pub canvas_layers: Vec<Entity>,
-    pub canvas_below: [bool; OVERLAY_LAYERS.len()],
+    pub(crate) canvas_layers: Vec<Entity>,
+    pub(crate) canvas_below: [bool; OVERLAY_LAYERS.len()],
     pub modern: crate::modern_view::ModernView,
 }
 
@@ -140,8 +141,6 @@ impl Default for MeshView {
     fn default() -> Self {
         Self {
             viewport: None,
-            fov: 0.0,
-            overlays: Vec::new(),
             occlusion_culling: false,
             canvas_layers: Vec::new(),
             canvas_below: [false; OVERLAY_LAYERS.len()],
@@ -184,10 +183,15 @@ impl ShownScene {
 }
 
 impl MeshView {
-    fn view_fov(&self) -> f32 {
+    /// Before a frame's canvas is painted: a layer shows only in a frame that paints into it.
+    pub fn hide_canvas_layers(&mut self) {
+        self.canvas_below = [false; OVERLAY_LAYERS.len()];
+    }
+
+    fn view_fov(&self, facts: &FrameFacts) -> f32 {
         match self.modern.photo_fov {
             Some(degrees) => f32::from(degrees),
-            None if self.fov > 0.0 => self.fov,
+            None if facts.fov > 0.0 => facts.fov,
             None => 90.0,
         }
     }
@@ -319,6 +323,7 @@ fn apply_change(
     world.clear();
     section_materials.animated.textures.clear();
     section_materials.animated.speculars.clear();
+    section_materials.actors.forget_followers();
     *shown = ShownScene::default();
     *level = LevelCollision::default();
     for entity in &map_models {
@@ -339,7 +344,7 @@ fn apply_change(
     let portals = collision.as_ref().map(|collision| Arc::new(ZonePortals::new(&collision.model, antiportals)));
     let start = start.map(|(position, yaw)| (position - center, yaw));
     *level = LevelCollision(collision.map(Arc::new));
-    *shown = ShownScene { fogs, volume_fog: None, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone };
+    *shown = ShownScene { fogs, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone };
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }
@@ -348,15 +353,12 @@ fn apply_change(
     // whose transforms changed, so the static scene costs nothing while actors move.
     let root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
     let attachments_root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
-    let mut followers = ActorMaterialCache::default();
     for MovingModel { sections, transform, follow, lit } in attachments {
-        let look = ActorLook::Follower(&mut followers);
-        spawn_actor_sections(&mut commands, attachments_root, sections, transform, (follow.actor, follow), (&mut section_materials.actors, look), lit, ());
+        spawn_actor_sections(&mut commands, attachments_root, sections, transform, (follow.actor, follow), (&mut section_materials.actors, ActorLook::Follower), lit, ());
     }
     for MovingModel { sections, transform, follow, lit } in actors {
         let parent = commands.spawn((MapModel, ActorModel(follow.actor), Transform::from_translation(-center), Visibility::default())).id();
-        let look = ActorLook::Follower(&mut followers);
-        spawn_actor_sections(&mut commands, parent, sections, transform, (follow.actor, follow), (&mut section_materials.actors, look), lit, ());
+        spawn_actor_sections(&mut commands, parent, sections, transform, (follow.actor, follow), (&mut section_materials.actors, ActorLook::Follower), lit, ());
     }
     let world_supported = world.supported();
     commands.entity(root).with_children(|parent| {

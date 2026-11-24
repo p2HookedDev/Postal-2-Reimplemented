@@ -35,7 +35,9 @@ impl bevy::app::Plugin for FrameOrderPlugin {
         use p2_render::view::MeshViewSystems;
         app.configure_sets(Update, play::PlaySystems::Input.after(MeshViewSystems::Apply))
             .configure_sets(Update, play::PlaySystems::Tick.before(MeshViewSystems::Camera))
-            .configure_sets(Update, map::MapSystems::Sprites.in_set(play::PlaySystems::Placed))
+            .configure_sets(Update, p2_render::sprites::SpriteSystems.in_set(play::PlaySystems::Placed))
+            .configure_sets(Update, map::MapSystems::CoronaPlaces.in_set(play::PlaySystems::Placed).before(p2_render::coronas::CoronaSystems))
+            .configure_sets(Update, p2_render::coronas::CoronaSystems.in_set(play::PlaySystems::Placed))
             .configure_sets(Update, p2_render::modern::ModernGraphicsSystems::Apply.after(MeshViewSystems::Camera))
             // After the actors' models took their actors' places (`play::follow_actors`), so attachments land on this
             // frame's bones.
@@ -49,7 +51,8 @@ impl bevy::app::Plugin for FrameOrderPlugin {
                 PostUpdate,
                 p2_render::particle_draw::ParticleDrawSystems.in_set(play::PlaySystems::Present).after(map::MapSystems::Present).run_if(map::map_shown),
             )
-            .configure_sets(PostUpdate, p2_render::fire_volume::FireVolumeSystems.after(p2_render::particle_draw::ParticleDrawSystems));
+            .configure_sets(PostUpdate, p2_render::fire_volume::FireVolumeSystems.after(p2_render::particle_draw::ParticleDrawSystems))
+            .configure_sets(PostUpdate, p2_render::fluids::FluidSystems.in_set(play::PlaySystems::Present).after(map::MapSystems::Present));
         if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
             use bevy::core_pipeline::core_3d::{main_opaque_pass_3d, main_transparent_pass_3d};
             use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};

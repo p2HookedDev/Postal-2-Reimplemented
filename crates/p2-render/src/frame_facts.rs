@@ -4,6 +4,7 @@ use p2_math::{Rotator, Vector};
 use p2_render_cpu::LightEffect;
 use p2_vm::{ObjectId, PersonHit};
 use rustc_hash::FxHashMap;
+use crate::scene::ZoneFog;
 
 /// What the game told the view for this frame; the default is no game in play.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
@@ -20,6 +21,18 @@ pub struct FrameFacts {
     /// The level's clock in game seconds: it stands while the game is paused.
     pub level_time: f32,
     pub glows: Vec<GlowSource>,
+    /// The view's horizontal field of view in degrees, as Unreal gives it (0: 90).
+    pub fov: f32,
+    /// The fog of the volume the eye is in; it comes before the zone's.
+    pub volume_fog: Option<ZoneFog>,
+}
+
+/// What the HUD's frame told the view; the overlay cameras take it in the frame it is written.
+#[derive(Resource, Default, Debug, Clone, PartialEq)]
+pub struct HudView {
+    /// A horizontal field of view in degrees, as Unreal gives it, per actor the HUD drew this frame (`DrawActor`), in
+    /// call order (0: the view's); each is drawn by the overlay camera of its slot.
+    pub overlays: Vec<f32>,
 }
 
 /// A fire or a gun's flash the game shows, whose light its scripts leave off.

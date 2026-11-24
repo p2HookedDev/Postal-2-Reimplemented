@@ -7,14 +7,14 @@ pub fn spawn_actor_sections(
     sections: Vec<SectionView>,
     transform: Transform,
     (actor, follow): (ObjectId, impl Component + Clone),
-    (materials, mut look): (&mut ActorMaterials, ActorLook),
+    (materials, look): (&mut ActorMaterials, ActorLook),
     lit: Option<ActorLit>,
     extra: impl Bundle + Clone,
 ) {
     let mut skin: Option<SkinnedMesh> = None;
     for section in sections {
         let mut spawned = commands.spawn((Mesh3d(section.mesh.clone()), transform, follow.clone(), extra.clone(), ChildOf(parent)));
-        materials.material(&mut look, &section).insert(&mut spawned);
+        materials.material(look, &section).insert(&mut spawned);
         let entity = spawned.id();
         if let Some(lit) = &lit {
             commands.entity(entity).insert(lit.clone().with_layers(section.layers.clone()));

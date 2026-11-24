@@ -202,7 +202,7 @@ impl ParticleMaterial {
 
     /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene (unverified
     /// for sprites).
-    pub fn sprite(texture: Handle<Image>, blend: SpriteBlend) -> Self {
+    pub(crate) fn sprite(texture: Handle<Image>, blend: SpriteBlend) -> Self {
         let (style, alpha_ref, alpha_test) = match blend {
             SpriteBlend::Opaque => (DrawStyle::Regular, 0.0, 0),
             SpriteBlend::Masked => (DrawStyle::Regular, 127.0 / 255.0, 1),
@@ -224,7 +224,7 @@ impl ParticleMaterial {
 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SpriteBlend {
+pub(crate) enum SpriteBlend {
     Opaque,
     Masked,
     Alpha,
@@ -234,7 +234,7 @@ pub enum SpriteBlend {
 
 /// Retail's order. Any other style keeps the previous sprite's shared `FinalBlend` in retail (depends
 /// on draw order); here it keeps the start state, `FB_Overwrite` without alpha test.
-pub fn sprite_blend(blending: Option<Blending>, style: Option<ERenderStyle>) -> SpriteBlend {
+pub(crate) fn sprite_blend(blending: Option<Blending>, style: Option<ERenderStyle>) -> SpriteBlend {
     if blending == Some(Blending::Masked) || style == Some(ERenderStyle::Masked) {
         SpriteBlend::Masked
     } else if blending == Some(Blending::Alpha) {

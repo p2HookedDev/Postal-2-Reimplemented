@@ -1,46 +1,17 @@
 use super::*;
-
-pub(super) struct HudTargets<'a, 'w, 's> {
-    pub(super) assets: &'a mut AssetStores<'w>,
-    pub(super) spawned: &'a mut SpawnedActors,
-    pub(super) hud: &'a mut Hud,
-    pub(super) animated: &'a mut Animated,
-    pub(super) play: &'a mut Play,
-    pub(super) view: &'a mut MeshView,
-    pub(super) shown: &'a mut ResMut<'w, p2_render::view::ShownScene>,
-    pub(super) canvas: &'a mut CanvasModels<'w, 's>,
-    pub(super) commands: &'a mut Commands<'w, 's>,
-}
+use p2_render::frame_facts::HudView;
 
 #[derive(SystemParam)]
 pub(super) struct HudParams<'w, 's> {
-    session: ResMut<'w, Session>,
-    assets: AssetStores<'w>,
-    spawned: ResMut<'w, SpawnedActors>,
-    hud: ResMut<'w, Hud>,
+    pub(super) assets: AssetStores<'w>,
+    pub(super) spawned: ResMut<'w, SpawnedActors>,
+    pub(super) hud: ResMut<'w, Hud>,
     animated: ResMut<'w, Animated>,
     play: ResMut<'w, Play>,
-    view: ResMut<'w, MeshView>,
-    shown: ResMut<'w, p2_render::view::ShownScene>,
+    hud_view: ResMut<'w, HudView>,
     canvas: CanvasModels<'w, 's>,
-    commands: Commands<'w, 's>,
+    pub(super) commands: Commands<'w, 's>,
     times: ResMut<'w, FrameTimes>,
-}
-
-impl<'w, 's> SceneTargets<'w, 's> {
-    pub(super) fn hud_targets(&mut self) -> HudTargets<'_, 'w, 's> {
-        HudTargets {
-            assets: &mut self.assets,
-            spawned: &mut self.spawned,
-            hud: &mut self.hud,
-            animated: &mut self.animated,
-            play: &mut self.play,
-            view: &mut self.view,
-            shown: &mut self.shown,
-            canvas: &mut self.canvas,
-            commands: &mut self.commands,
-        }
-    }
 }
 
 pub(super) fn drop_left_canvas_actors_when_presented(play: Res<Play>, left: Query<Entity, With<LeftCanvasActor>>, mut commands: Commands) {
@@ -51,42 +22,24 @@ pub(super) fn drop_left_canvas_actors_when_presented(play: Res<Play>, left: Quer
     }
 }
 
-pub(super) fn present_canvas_actors(mut t: HudParams) {
+pub(super) fn present_canvas_actors(mut session: ResMut<Session>, mut t: HudParams) {
     let items = t.play.world().filter(|world| world.presented()).map(PlayWorld::hud_items).unwrap_or_default();
     let started = std::time::Instant::now();
-    t.session.show_hud_actors(&items, &mut HudTargets {
-        assets: &mut t.assets,
-        spawned: &mut t.spawned,
-        hud: &mut t.hud,
-        animated: &mut t.animated,
-        play: &mut t.play,
-        view: &mut t.view,
-        shown: &mut t.shown,
-        canvas: &mut t.canvas,
-        commands: &mut t.commands,
-    });
+    session.show_hud_actors(&items, &mut t);
     t.times.add("canvas actors", started);
 }
 
 impl Session {
-    pub(super) fn show_hud_actors(&mut self, items: &[CanvasItem], t: &mut HudTargets) {
+    pub(super) fn show_hud_actors(&mut self, items: &[CanvasItem], t: &mut HudParams) {
         let calls = items.iter().filter(|item| matches!(item, CanvasItem::Actor { .. }));
-        let drawn: Vec<(&CanvasItem, usize)> = calls.zip(hud::call_slots(items)).filter(|&(_, slot)| slot < OVERLAY_LAYERS.len()).collect();
-        t.view.fov = t.play.world().and_then(PlayWorld::fov).unwrap_or(0.0);
-        if let Some(fogs) = t.play.world_mut().and_then(PlayWorld::take_zone_fogs) {
-            t.shown.fogs = fogs;
-        }
-        let volume_fog = t.play.world().and_then(PlayWorld::volume_fog);
-        if t.shown.volume_fog != volume_fog {
-            t.shown.volume_fog = volume_fog;
-        }
+        let drawn: Vec<(&CanvasItem, usize)> = calls.zip(p2_vm::call_slots(items)).filter(|&(_, slot)| slot < OVERLAY_LAYERS.len()).collect();
         if t.canvas.left.is_empty() || t.play.world().is_some_and(PlayWorld::presented) {
-            t.view.overlays.clear();
+            t.hud_view.overlays.clear();
             for &(item, slot) in &drawn {
                 if let CanvasItem::Actor { fov, .. } = *item
-                    && slot == t.view.overlays.len()
+                    && slot == t.hud_view.overlays.len()
                 {
-                    t.view.overlays.push(fov);
+                    t.hud_view.overlays.push(fov);
                 }
             }
         }
@@ -95,7 +48,7 @@ impl Session {
 
     /// The models are placed where the HUD's scripts put their actors at the call (`RenderOverlays` moves the weapon to the
     /// view, `MapScreen` moves its trail marker from point to point), not where they were before the HUD.
-    pub(super) fn show_canvas_actors(&mut self, drawn: &[(&CanvasItem, usize)], t: &mut HudTargets) {
+    pub(super) fn show_canvas_actors(&mut self, drawn: &[(&CanvasItem, usize)], t: &mut HudParams) {
         let Some(world) = t.play.world() else { return };
         t.hud.canvas_actors.retain(|shown| {
             let keep = !world.is_gone(shown.actor);
@@ -133,9 +86,8 @@ impl Session {
                 Some(now) => {
                     t.commands.entity(*entity).insert(Visibility::Inherited);
                     if slot.is_none_or(|before| before != now) {
-                        let layer = RenderLayers::layer(OVERLAY_LAYERS[now]);
                         for (section, _) in t.canvas.canvas_sections.iter().filter(|(_, parent)| parent.parent() == *entity) {
-                            t.commands.entity(section).insert(layer.clone());
+                            t.commands.entity(section).insert(OverlaySlot(Some(now)));
                         }
                     }
                 }
@@ -164,9 +116,8 @@ impl Session {
                 Some((follow.actor, FollowActor { scale, ..*follow }.mesh_matrix(location, rotation)? * left.inverse()))
             })
             .collect();
-        let overlays = RenderLayers::from_layers(&OVERLAY_LAYERS);
-        for (entity, follow, mut transform, mut shown, layers) in &mut t.canvas.attached {
-            let on_overlay = layers.is_some_and(|layers| layers.intersects(&overlays));
+        for (entity, follow, mut transform, mut shown, at) in &mut t.canvas.attached {
+            let on_overlay = at.is_some_and(|at| at.0.is_some());
             if !on_overlay && !world.attached(follow.actor) {
                 continue;
             }
@@ -174,7 +125,7 @@ impl Session {
             let base = actor.attachment.as_ref().and_then(|attachment| t.hud.canvas_actors.iter().find(|drawn| drawn.actor == attachment.base && drawn.call == 0));
             let Some(base) = base else {
                 if on_overlay {
-                    t.commands.entity(entity).try_insert(RenderLayers::default());
+                    t.commands.entity(entity).try_insert(OverlaySlot(None));
                 }
                 continue;
             };
@@ -183,9 +134,9 @@ impl Session {
                 *shown = visibility;
             }
             let Some(slot) = base.slot else { continue };
-            let layer = RenderLayers::layer(OVERLAY_LAYERS[slot]);
-            if layers != Some(&layer) {
-                t.commands.entity(entity).try_insert(layer);
+            let wanted = OverlaySlot(Some(slot));
+            if at != Some(&wanted) {
+                t.commands.entity(entity).try_insert(wanted);
             }
             if let (Some(&moved), Some(frame)) = (moves.get(&base.actor), world.shown.places.bone_frame(follow.actor)) {
                 let placed = crate::animation::attached_transform(follow, moved * frame.matrix());
@@ -196,7 +147,7 @@ impl Session {
         }
     }
 
-    pub(super) fn spawn_canvas_actor(&mut self, actor: ObjectId, call: usize, slot: usize, item: &CanvasItem, t: &mut HudTargets) -> Option<Entity> {
+    pub(super) fn spawn_canvas_actor(&mut self, actor: ObjectId, call: usize, slot: usize, item: &CanvasItem, t: &mut HudParams) -> Option<Entity> {
         let placed = |follow: FollowActor| match *item {
             CanvasItem::Actor { location, rotation, scale, .. } => FollowActor { scale, ..follow }.transform(location, rotation),
             _ => Transform::default(),
@@ -214,7 +165,7 @@ impl Session {
             return None;
         }
         let game = open_game(&mut self.library, self.map_system.as_deref())?;
-        let Some((mesh, mesh_id, mut sections, handles)) = skeletal_sections(game, t.assets, &mut material_images::<AssetStores>, &path, &skins) else {
+        let Some((mesh, mesh_id, mut sections, handles)) = skeletal_sections(game, &mut t.assets, &mut material_images::<AssetStores>, &path, &skins) else {
             bevy::log::warn!("HUD actor {actor:?}: skeletal mesh {path} not built");
             t.hud.failed_canvas_meshes.insert(path);
             return None;
@@ -236,11 +187,10 @@ impl Session {
             }
             t.animated.0.push(item);
         }
-        let layer = RenderLayers::layer(OVERLAY_LAYERS[slot]);
         let parent = t.commands.spawn((MapScoped, Transform::from_translation(origin), Visibility::default())).id();
         let lighting = ActorLighting { unlit: false, glow: 0, max_lights: DEFAULT_MAX_LIGHTS };
         let lit = ActorLit::skeletal(actor, &mesh, follow.scale, &lighting);
-        spawn_actor_sections(t.commands, parent, sections, placed(follow), (follow.actor, follow), (&mut t.assets.actor_materials, ActorLook::Canvas), lit, (layer, CanvasDrawn(call)));
+        spawn_actor_sections(&mut t.commands, parent, sections, placed(follow), (follow.actor, follow), (&mut t.assets.actor_materials, ActorLook::Canvas), lit, (OverlaySlot(Some(slot)), CanvasDrawn(call)));
         Some(parent)
     }
 }

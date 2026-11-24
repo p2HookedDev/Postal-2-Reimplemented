@@ -279,8 +279,8 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
     let spawned = shape.pawns + if layout == Layout::Old { shape.gone } else { 0 };
     world.init_resource::<Assets<StandardMaterial>>();
     world.init_resource::<Assets<MeshLitMaterial>>();
+    world.init_resource::<ActorMaterialCache>();
     let mut actor_state = SystemState::<(Commands, ActorMaterials)>::new(world);
-    let mut actor_cache = ActorMaterialCache::default();
     let mut items = Vec::new();
     for index in 0..spawned {
         let actor = ObjectId::from_index(index as u32);
@@ -292,7 +292,7 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
         let views = sections.iter().map(|mesh| SectionView { skin: Some(skin.clone()), ..SectionView::textured(mesh.clone(), None) }).collect();
         let placed = Transform::from_xyz(index as f32 * 50.0, 0.0, 0.0);
         let (mut commands, mut materials) = actor_state.get_mut(world).expect("actor material stores");
-        spawn_actor_sections(&mut commands, parent, views, placed, (follow.actor, follow), (&mut materials, ActorLook::Spawned(&mut actor_cache)), None, ());
+        spawn_actor_sections(&mut commands, parent, views, placed, (follow.actor, follow), (&mut materials, ActorLook::Spawned), None, ());
         actor_state.apply(world);
         world.spawn((Mesh3d(small.clone()), material.clone(), placed, ChildOf(heads)));
         if index < shape.posed {

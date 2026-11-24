@@ -85,7 +85,7 @@ pub fn end_frame(mut times: ResMut<FrameTimes>) {
     times.end_frame();
 }
 
-/// A changed asset is a queued write, which `finish encoders and submit` pays for.
+/// A changed asset is a queued write, which `submit` pays for.
 /// What rewrote a mesh, for the profile log: each rewrite is uploaded again.
 #[derive(Clone, Copy)]
 pub enum MeshWrite {

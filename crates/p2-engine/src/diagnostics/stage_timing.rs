@@ -7,7 +7,7 @@ const MAIN_STAGES: [&str; 6] = ["transforms", "bounds and frusta", "camera culli
 const UPDATE_STAGES: [&str; 2] = ["whole update", "wait for render thread and extract"];
 /// The window's next frame is taken in the view stage, which waits there while the GPU is behind.
 const RENDER_STAGES: [&str; 8] = ["wait for main and extract", "assets and views", "specialize", "views and the wait for a frame", "queue", "sort and prepare", "bind groups", "render"];
-const GRAPH_STAGES: [&str; 4] = ["all cameras", "finish encoders and submit", "gpu timers", "last submit and present"];
+const GRAPH_STAGES: [&str; 5] = ["all cameras", "finish encoders", "submit", "gpu timers", "last submit and present"];
 const PASS_STAGES: [&str; 3] = ["shadows and prepass", "main", "post"];
 
 #[derive(Default)]
@@ -24,7 +24,7 @@ struct StageClocks {
     render: Arc<Mutex<StageClock>>,
     graph: Arc<Mutex<StageClock>>,
     passes: Arc<Mutex<StageClock>>,
-    draw_groups: Arc<Mutex<[usize; 8]>>,
+    draw_groups: Arc<Mutex<[usize; 9]>>,
 }
 
 #[derive(Resource, Clone, Default)]
@@ -37,7 +37,7 @@ struct RenderGraphClock(Arc<Mutex<StageClock>>);
 struct RenderPassClock(Arc<Mutex<StageClock>>);
 
 #[derive(Resource, Clone, Default)]
-struct RenderDrawGroups(Arc<Mutex<[usize; 8]>>);
+struct RenderDrawGroups(Arc<Mutex<[usize; 9]>>);
 
 fn tick(clock: &Mutex<StageClock>, stage: Option<usize>) {
     let mut clock = clock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -90,7 +90,7 @@ fn count_draw_groups(
     blended: Res<ViewSortedRenderPhases<Transparent3d>>,
     views: Query<(), With<ExtractedView>>,
 ) {
-    *groups.0.lock().unwrap_or_else(PoisonError::into_inner) = [
+    groups.0.lock().unwrap_or_else(PoisonError::into_inner)[..8].copy_from_slice(&[
         binned(&opaque),
         binned(&masked),
         binned(&prepass),
@@ -99,7 +99,15 @@ fn count_draw_groups(
         blended.values().map(|phase| phase.items.len()).sum(),
         views.iter().len(),
         shadow.values().filter(|phase| !phase.is_empty()).count(),
-    ];
+    ]);
+}
+
+/// wgpu encodes a pass when its encoder is finished. Bevy's submit system finishes them and submits in one step;
+/// finished here, the same way, the two are timed apart, and Bevy's step then only submits.
+fn finish_encoders(groups: Res<RenderDrawGroups>, mut pending: ResMut<bevy::render::renderer::PendingCommandBuffers>) {
+    groups.0.lock().unwrap_or_else(PoisonError::into_inner)[8] = pending.len();
+    let finished: Vec<_> = pending.finish().collect();
+    pending.push(finished);
 }
 
 fn stage_list(clock: &Mutex<StageClock>, names: &[&str], frames: u32) -> String {
@@ -232,12 +240,12 @@ fn log_scene_counts(
     *since = 0.0;
     let shown = |visible: &ViewVisibility| visible.get();
     let window = windows.iter().next().map_or([0, 0], |window| [window.physical_width(), window.physical_height()]);
-    let [opaque, masked, prepass, masked_prepass, shadow, blended, views, shadow_views_drawing] = *clocks.draw_groups.lock().unwrap_or_else(PoisonError::into_inner);
+    let [opaque, masked, prepass, masked_prepass, shadow, blended, views, shadow_views_drawing, command_buffers] = *clocks.draw_groups.lock().unwrap_or_else(PoisonError::into_inner);
     let movers = meshes.iter().filter(|(_, actor, bone)| *actor || *bone);
     let (tiles, most_tiles) = tiles.map_or((0, 0), |tiles| tiles.counts());
     let (movers_all, movers_shown) = movers.fold((0, 0), |(all, on), (visible, ..)| (all + 1, on + usize::from(shown(visible))));
     bevy::log::info!(
-        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; culling walks {} entities a camera, {} not hidden; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}; mover tiles {tiles}, {most_tiles} on the lamp with the most",
+        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; culling walks {} entities a camera, {} not hidden; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active, {command_buffers} command buffers submitted; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}; mover tiles {tiles}, {most_tiles} on the lamp with the most",
         meshes.iter().len(),
         meshes.iter().filter(|(visible, ..)| shown(visible)).count(),
         culled.iter().len(),
@@ -318,9 +326,9 @@ impl Plugin for StageTimingPlugin {
             RenderGraph,
             (
                 graph_mark::<-1>.before(RenderGraphSystems::Begin),
-                graph_mark::<0>.after(RenderGraphSystems::Render).before(RenderGraphSystems::Submit),
-                graph_mark::<1>.after(RenderGraphSystems::Submit).before(RenderGraphSystems::Finish),
-                graph_mark::<2>.after(RenderGraphSystems::Finish),
+                (graph_mark::<0>, finish_encoders, graph_mark::<1>).chain().after(RenderGraphSystems::Render).before(RenderGraphSystems::Submit),
+                graph_mark::<2>.after(RenderGraphSystems::Submit).before(RenderGraphSystems::Finish),
+                graph_mark::<3>.after(RenderGraphSystems::Finish),
             ),
         );
         render.add_systems(
@@ -343,7 +351,7 @@ impl Plugin for StageTimingPlugin {
                 render_mark::<5>.after(Stage::PrepareResourcesFlush).before(Stage::PrepareBindGroups),
                 render_mark::<6>.after(Stage::PrepareBindGroups).before(Stage::Render),
                 render_mark::<7>.after(Stage::Render).before(Stage::Cleanup),
-                graph_mark::<3>.after(Stage::Render).before(Stage::Cleanup),
+                graph_mark::<4>.after(Stage::Render).before(Stage::Cleanup),
                 render_mark::<-1>.after(Stage::PostCleanup),
             ),
         );

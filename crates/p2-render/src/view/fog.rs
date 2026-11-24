@@ -1,23 +1,30 @@
 use super::*;
+use crate::scene::ZoneFogs;
+use bevy::ecs::message::MessageReader;
 
 pub(super) struct FogPlugin;
 
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, blend_zone_fog.in_set(SceneViewSystems::Fog));
+        app.add_message::<ZoneFogs>().add_systems(Update, blend_zone_fog.in_set(SceneViewSystems::Fog));
     }
 }
 
 fn blend_zone_fog(
     time: Res<Time>,
-    shown: Res<ShownScene>,
+    mut shown: ResMut<ShownScene>,
+    mut zone_fogs: MessageReader<ZoneFogs>,
+    facts: Res<FrameFacts>,
     collision: Res<LevelCollision>,
     mut cameras: Query<(&SceneView, &mut DistanceFog)>,
 ) {
+    if let Some(ZoneFogs(fogs)) = zone_fogs.read().last() {
+        shown.fogs.clone_from(fogs);
+    }
     let model = collision.model();
     let t = settle_step(time.delta_secs(), FOG_BLEND_SECONDS);
     for (view, mut fog) in &mut cameras {
-        let zone = shown.volume_fog.or_else(|| {
+        let zone = facts.volume_fog.or_else(|| {
             let position = to_bevy(view.position - shown.origin);
             shown.fogs.get(usize::from(p2_collision::point_zone(model?, position.into()))).copied().flatten()
         });

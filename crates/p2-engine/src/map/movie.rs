@@ -10,7 +10,7 @@ use bevy::ecs::prelude::{Commands, Entity};
 use bevy::image::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
-use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
+use bevy_egui::EguiContexts;
 use p2_movie::{RoqDecoder, SAMPLE_RATE};
 use p2_vm::{MovieState, ObjectId};
 use rustc_hash::FxHashMap;
@@ -80,7 +80,7 @@ impl Movies {
         play: &mut Play,
         commands: &mut Commands,
         assets: &mut AssetStores,
-        hud_textures: &mut FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
+        painter: &mut p2_render::canvas::CanvasPainter,
     ) {
         let now = Instant::now();
         let delta = self.last.map_or(0.0, |last| now.duration_since(last).as_secs_f32());
@@ -116,8 +116,7 @@ impl Movies {
                             bevy::log::info!("Movie {} opened: {width}x{height} at {} fps", s.file, opened.decoder.frame_rate());
                             reports.push(crate::play::MovieStatus { movie, width: width as i32, height: height as i32, playing: true });
                             let shown = show(opened, movie, s.looping, commands, assets);
-                            let id = contexts.add_image(EguiTextureHandle::Weak(shown.image.id()));
-                            hud_textures.insert(texture.clone(), Some((id, egui::vec2(width as f32, height as f32))));
+                            painter.set_image(texture.clone(), &shown.image, [width as f32, height as f32], contexts);
                             self.images.insert(texture.clone(), shown.image.clone());
                             Slot::Shown(plays, Box::new(shown))
                         }

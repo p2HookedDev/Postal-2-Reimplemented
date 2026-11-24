@@ -6,43 +6,33 @@ use std::path::Path;
 use bevy::app::{App, PostUpdate};
 use bevy::asset::Assets;
 use bevy::camera::visibility::Visibility;
-use bevy::ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
+use bevy::ecs::prelude::{IntoScheduleConfigs, Local, ResMut};
 use bevy::math::{UVec2, Vec3};
 use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
 use bevy::transform::components::{GlobalTransform, Transform};
-use p2_engine::map::{SceneTargets, Session};
+use p2_engine::map::{MapSystems, SceneTargets, Session};
 use p2_render::particle_material::ParticleMaterial;
 use p2_render::view::SceneView;
 use p2_engine::play::{PlaySystems, PlayerInput};
 
-#[derive(Resource)]
-struct Holder {
-    session: Session,
-    frame: u32,
-}
-
 fn played(root: &Path) -> App {
     let mut app = common::played_app();
-    app.insert_resource(Holder { session: Session::new(root.to_path_buf()), frame: 0 })
-        .add_systems(
-            PostUpdate,
-            (|mut holder: ResMut<Holder>, mut t: SceneTargets| {
-                t.view.viewport = Some((UVec2::ZERO, UVec2::new(1024, 768)));
-                if holder.frame == 0 {
-                    let map = Path::new("Maps").join("Suburbs-3.fuk").display().to_string();
-                    if let Err(error) = holder.session.load_map(&map, &mut t) {
-                        panic!("{error}");
-                    }
-                } else {
-                    let items = t.play.world().map(|world| world.hud_items().to_vec()).unwrap_or_default();
-                    t.play.set_canvas_size([1024.0, 768.0]);
-                    holder.session.present(&items, &mut t);
+    app.insert_resource(Session::new(root.to_path_buf())).add_systems(
+        PostUpdate,
+        (|mut session: ResMut<Session>, mut t: SceneTargets, mut view: ResMut<p2_render::view::MeshView>, mut loaded: Local<bool>| {
+            view.viewport = Some((UVec2::ZERO, UVec2::new(1024, 768)));
+            t.play.set_canvas_size([1024.0, 768.0]);
+            if !std::mem::replace(&mut *loaded, true) {
+                let map = Path::new("Maps").join("Suburbs-3.fuk").display().to_string();
+                if let Err(error) = session.load_map(&map, &mut t) {
+                    panic!("{error}");
                 }
-                holder.frame += 1;
-            })
-            .in_set(PlaySystems::Present),
-        );
+            }
+        })
+        .in_set(PlaySystems::Present)
+        .after(MapSystems::Present),
+    );
     app.world_mut().resource_mut::<PlayerInput>().playing = true;
     app
 }
@@ -64,7 +54,9 @@ fn urine_stream_drawn_ahead_of_the_view() {
             step(&mut app, Vec::new(), [turn / 10.0, 0.0]);
         }
         if turn == 0.0 {
-            step(&mut app, vec!["R"], [0.0; 2]);
+            for _ in 0..5 {
+                step(&mut app, vec!["R"], [0.0; 2]);
+            }
             for _ in 0..90 {
                 step(&mut app, Vec::new(), [0.0; 2]);
             }

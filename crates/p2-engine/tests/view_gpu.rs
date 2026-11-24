@@ -118,24 +118,17 @@ mod monday {
     use std::path::Path;
     use std::time::Duration;
 
-    use bevy::app::PostUpdate;
-    use bevy::ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
+    use bevy::app::{PostUpdate, Update};
+    use bevy::ecs::prelude::{IntoScheduleConfigs, Local, Res, ResMut};
     use bevy::math::UVec2;
     use bevy::time::TimeUpdateStrategy;
     use p2_engine::animation::AnimationPlugin;
-    use p2_engine::map::{Fluids, Hud, Particles, Projectors, SceneTargets, Session, SpawnedActors};
-    use p2_render::level::MaterialSwitches;
+    use p2_engine::map::{MapPresentPlugin, MapSystems, SceneTargets, Session, SpawnedActors};
     use p2_render::view::{MeshView, SceneView};
-    use p2_engine::play::{PlayPlugin, PlaySystems, PlayerInput};
+    use p2_engine::play::{Play, PlayPlugin, PlaySystems, PlayerInput};
 
     pub const W: u32 = 640;
     pub const H: u32 = 360;
-
-    #[derive(Resource)]
-    struct Holder {
-        session: Session,
-        frame: u32,
-    }
 
     pub struct Run {
         pub frames: Vec<Vec<u8>>,
@@ -146,60 +139,75 @@ mod monday {
         run_with(occlusion, warmup, count, |_| (Vec::new(), [turn, 0.0]))
     }
 
-    pub fn run_with(occlusion: bool, warmup: usize, count: usize, input: impl Fn(usize) -> (Vec<&'static str>, [f32; 2])) -> Option<Run> {
+    /// The game's map host drawing Suburbs-3 into an image of `size`, before its first frame.
+    fn host<M>(size: UVec2, settings: p2_host::display::Settings, look: impl bevy::app::Plugins<M>) -> Option<(App, bevy::asset::Handle<Image>)> {
         let root = common::game_dir()?;
         let mut app = App::new();
         common::headless_renderer(&mut app);
-        app.add_plugins((p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin))
-        .init_resource::<Fluids>()
-        .init_resource::<MaterialSwitches>()
-        .init_resource::<Projectors>()
-        .init_resource::<Particles>()
-        .init_resource::<SpawnedActors>()
-        .init_resource::<Hud>()
+        app.add_plugins((p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, MapPresentPlugin, p2_render::wounds::WoundsPlugin, bevy::render::diagnostic::RenderDiagnosticsPlugin))
+        .add_plugins(look)
+        .insert_resource(settings)
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
-        .insert_resource(Holder { session: Session::new(root), frame: 0 })
+        .insert_resource(Session::new(root))
+        // The game waits for neither: without both, which frame a tick or a built model lands on depends on the machine.
+        .add_systems(Update, (|mut play: ResMut<Play>| play.wait_for_tick()).before(PlaySystems::Tick))
+        .add_systems(PostUpdate, (|spawned: Res<SpawnedActors>| {
+            while spawned.building() {
+                std::thread::yield_now();
+            }
+        })
+        .before(MapSystems::Present))
         .add_systems(
             PostUpdate,
-            (|mut holder: ResMut<Holder>, mut t: SceneTargets| {
-                t.view.viewport = Some((UVec2::ZERO, UVec2::new(W, H)));
-                if holder.frame == 0 {
+            (move |mut session: ResMut<Session>, mut t: SceneTargets, mut view: ResMut<MeshView>, mut loaded: Local<bool>| {
+                view.viewport = Some((UVec2::ZERO, size));
+                t.play.set_canvas_size(size.as_vec2().to_array());
+                if !std::mem::replace(&mut *loaded, true) {
                     let map = Path::new("Maps").join("Suburbs-3.fuk").display().to_string();
-                    if let Err(error) = holder.session.load_map(&map, &mut t) {
+                    if let Err(error) = session.load_map(&map, &mut t) {
                         panic!("{error}");
                     }
-                } else {
-                    let items = t.play.world().map(|world| world.hud_items().to_vec()).unwrap_or_default();
-                    t.play.set_canvas_size([W as f32, H as f32]);
-                    holder.session.present(&items, &mut t);
                 }
-                holder.frame += 1;
             })
-            .in_set(PlaySystems::Present),
+            .in_set(PlaySystems::Present)
+            .after(MapSystems::Present),
         );
         app.finish();
         app.cleanup();
         let world = app.world_mut();
-        let mut target = Image::new_target_texture(W, H, TextureFormat::Rgba8UnormSrgb, None);
+        let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
         target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let target = world.resource_mut::<Assets<Image>>().add(target);
-        world.resource_mut::<MeshView>().occlusion_culling = occlusion;
         world.resource_mut::<PlayerInput>().playing = true;
-        let frames = Arc::new(Mutex::new(Vec::new()));
-        let store = frames.clone();
-        world.spawn(Readback::texture(target.clone())).observe(move |event: On<ReadbackComplete>| {
-            store.lock().expect("lock").push(event.data.clone());
-        });
+        Some((app, target))
+    }
+
+    /// The first frame makes the cameras; they draw into `target` from the next.
+    fn first_frame(app: &mut App, target: &bevy::asset::Handle<Image>) {
         app.update();
         let world = app.world_mut();
         let cameras: Vec<_> = world.query_filtered::<bevy::ecs::entity::Entity, bevy::ecs::query::With<Camera3d>>().iter(world).collect();
         for camera in cameras {
             world.entity_mut(camera).insert(RenderTarget::Image(target.clone().into()));
         }
+    }
+
+    pub fn run_with(occlusion: bool, warmup: usize, count: usize, input: impl Fn(usize) -> (Vec<&'static str>, [f32; 2])) -> Option<Run> {
+        let (mut app, target) = host(UVec2::new(W, H), p2_host::display::Settings::default(), ())?;
+        let world = app.world_mut();
+        world.resource_mut::<MeshView>().occlusion_culling = occlusion;
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let store = frames.clone();
+        world.spawn(Readback::texture(target.clone())).observe(move |event: On<ReadbackComplete>| {
+            store.lock().expect("lock").push(event.data.clone());
+        });
+        first_frame(&mut app, &target);
         for _ in 0..warmup {
             app.update();
         }
-        frames.lock().expect("lock").clear();
+        // A frame is read back some frames after it is drawn, how many depends on the machine: frames are told
+        // apart by their count since the read-back began, one an update.
+        let first = 1 + warmup;
         let mut placed = Vec::new();
         for frame in 0..count {
             let (held, mouse) = input(frame);
@@ -212,15 +220,101 @@ mod monday {
         }
         let mut player = app.world_mut().resource_mut::<PlayerInput>();
         (player.held, player.mouse) = (Vec::new(), [0.0; 2]);
-        for _ in 0..4 {
+        for _ in 0..120 {
+            if frames.lock().expect("lock").len() >= first + count {
+                break;
+            }
             app.update();
         }
         let world = app.world_mut();
         let culling = world.query_filtered::<bevy::ecs::query::Has<OcclusionCulling>, bevy::ecs::query::With<SceneView>>().iter(world).any(|on| on);
         assert_eq!(culling, occlusion, "occlusion culling not as asked");
-        let mut frames = std::mem::take(&mut *frames.lock().expect("lock"));
-        frames.truncate(count);
+        let frames: Vec<Vec<u8>> = frames.lock().expect("lock").drain(..).skip(first).take(count).collect();
+        assert_eq!(frames.len(), count, "frames read back");
         Some(Run { frames, cameras: placed })
+    }
+
+    /// GPU milliseconds a frame of each timed pass, over `frames` frames after `settle` frames.
+    fn pass_costs(app: &mut App, settle: usize, frames: usize) -> std::collections::BTreeMap<String, f64> {
+        use bevy::diagnostic::DiagnosticsStore;
+        let mut seen = std::time::Instant::now();
+        let mut spent = std::collections::BTreeMap::new();
+        for frame in 0..settle + frames {
+            app.update();
+            let store = app.world().resource::<DiagnosticsStore>();
+            let now = std::time::Instant::now();
+            for diagnostic in store.iter() {
+                let Some(name) = diagnostic.path().as_str().strip_prefix("render/").and_then(|name| name.strip_suffix("/elapsed_gpu")) else { continue };
+                let new: f64 = diagnostic.measurements().filter(|sample| sample.time > seen).map(|sample| sample.value).sum();
+                if frame >= settle {
+                    *spent.entry(name.to_owned()).or_insert(0.0) += new / frames as f64;
+                }
+            }
+            seen = now;
+        }
+        spent
+    }
+
+    /// The player's settings file with `changes` over it; `None` without the file.
+    fn player_settings(changes: &[(&str, &str)]) -> Option<p2_host::display::Settings> {
+        let path = Path::new(&std::env::var_os("APPDATA")?).join("p2-reimplemented").join("Settings.ini");
+        let text = std::fs::read_to_string(path).ok()?;
+        let value = |key: &str| {
+            let changed = changes.iter().find(|(name, _)| *name == key).map(|&(_, value)| value.to_owned());
+            changed.or_else(|| text.lines().filter_map(|line| line.split_once('=')).find(|(name, _)| name.trim().eq_ignore_ascii_case(key)).map(|(_, value)| value.trim().to_owned()))
+        };
+        Some(p2_host::display::Settings::read(|query| query.rsplit(' ').next().and_then(value).unwrap_or_default()))
+    }
+
+    pub fn opaque_cost_by_row() -> Option<()> {
+        const ROWS: [(&str, &str); 25] = [
+            ("ModernGraphics", "False"),
+            ("ModernSunShadows", "0"),
+            ("ModernSunShadows", "1"),
+            ("ModernSunShadows", "2"),
+            ("ModernSunShadows", "3"),
+            ("ModernShadowDistance", "1"),
+            ("ModernLampShadows", "0"),
+            ("ModernLampShadows", "2"),
+            ("ModernLampSize", "1"),
+            ("ModernContactShadows", "0"),
+            ("ModernContactShadows", "1"),
+            ("ModernAO", "0"),
+            ("ModernBounceLight", "0"),
+            ("ModernReflections", "0"),
+            ("ModernMaterials", "0"),
+            ("ModernRelief", "False"),
+            ("ModernSpecular", "False"),
+            ("ModernTemporalAA", "False"),
+            ("ModernBloom", "0"),
+            ("ModernGodRays", "0"),
+            ("ModernSoftParticles", "0"),
+            ("ModernParticleLight", "False"),
+            ("ModernFadeIn", "0"),
+            ("ModernTerrainDetail", "False"),
+            ("ModernDecalAging", "False"),
+        ];
+        let (mut app, target) = host(UVec2::new(2560, 1440), player_settings(&[])?, p2_render::modern::ModernGraphicsPlugin)?;
+        app.world_mut().resource_mut::<MeshView>().occlusion_culling = true;
+        first_frame(&mut app, &target);
+        let cost = |app: &mut App, changes: &[(&str, &str)], settle: usize, frames: usize| {
+            app.insert_resource(player_settings(changes).expect("the settings file"));
+            let costs = pass_costs(app, settle, frames);
+            (costs.get("main_opaque_pass_3d").copied().unwrap_or(0.0), costs.values().sum::<f64>())
+        };
+        cost(&mut app, &[], 240, 1);
+        // A row's first switch compiles its shaders, and a pass draws nothing meanwhile.
+        for row in ROWS {
+            cost(&mut app, &[row], 60, 1);
+        }
+        for (row, off) in ROWS {
+            let before = cost(&mut app, &[], 90, 60);
+            let with = cost(&mut app, &[(row, off)], 90, 60);
+            let after = cost(&mut app, &[], 90, 60);
+            let base = ((before.0 + after.0) / 2.0, (before.1 + after.1) / 2.0);
+            eprintln!("COST {:28} opaque {:+.2} all {:+.2} | as set {:.2} and {:.2}, row {:.2}; all {:.2}", format!("{row}={off}"), with.0 - base.0, with.1 - base.1, before.0, after.0, with.0, base.1);
+        }
+        Some(())
     }
 
     pub fn differs(a: &[u8], b: &[u8], i: usize, threshold: u8) -> bool {
@@ -258,6 +352,12 @@ fn monday_occlusion_culling_hides_only_hidden_things() {
     let differing: Vec<usize> =
         culled.frames.iter().zip(&all.frames).map(|(a, b)| (0..pixels).filter(|&i| monday::differs(a, b, i, 24)).count()).collect();
     assert!(differing.iter().all(|&n| n < pixels / 200), "{differing:?}");
+}
+
+#[test]
+#[ignore = "benchmark: prints only; needs a GPU, the game and the player's settings file"]
+fn monday_opaque_pass_cost_by_row() {
+    monday::opaque_cost_by_row();
 }
 
 #[test]
@@ -566,7 +666,8 @@ fn particles_drawn_every_frame_with_occlusion_culling() {
     assert_eq!(missing, 0);
 }
 
-fn decal_frames_changing(gpu_clustering: bool, frames_wanted: usize) -> (usize, usize) {
+/// The frames, counted from the first one held, that differ from the one before, and how many pairs were held.
+fn decal_frames_changing(gpu_clustering: bool, frames_wanted: usize) -> (Vec<usize>, usize) {
     use bevy::light::ClusteredDecal;
     use bevy::light::cluster::GlobalClusterSettings;
     let (mut app, frames, target) = app();
@@ -626,17 +727,16 @@ fn decal_frames_changing(gpu_clustering: bool, frames_wanted: usize) -> (usize, 
     let first = first.expect("decals never showed");
     let frames = frames.lock().expect("lock");
     let after = &frames[first..first + frames_wanted];
-    (after.windows(2).filter(|pair| pair[0] != pair[1]).count(), after.len() - 1)
+    (after.windows(2).enumerate().filter(|(_, pair)| pair[0] != pair[1]).map(|(at, _)| at + 1).collect(), after.len() - 1)
 }
 
 #[test]
 #[ignore = "needs a GPU"]
 fn overlapping_decals_are_steady() {
     let (changed, of) = decal_frames_changing(true, 120);
-    eprintln!("GPU clustering: {changed} of {of} frames differ from the one before");
+    eprintln!("GPU clustering: {} of {of} frames differ from the one before", changed.len());
     let (changed, of) = decal_frames_changing(false, 120);
-    eprintln!("CPU clustering: {changed} of {of} frames differ from the one before");
-    assert_eq!(changed, 0);
+    assert!(changed.is_empty(), "CPU clustering: of {of} frames these differ from the one before: {changed:?}");
 }
 
 fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {

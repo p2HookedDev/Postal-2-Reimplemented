@@ -14,8 +14,6 @@ use bevy::pbr::StandardMaterial;
 use bevy::time::TimeUpdateStrategy;
 use bevy::MinimalPlugins;
 use p2_engine::animation::AnimationPlugin;
-use p2_engine::map::{Fluids, Hud, Particles, Projectors, SpawnedActors};
-use p2_render::level::MaterialSwitches;
 use p2_render::P2RenderPlugins;
 use p2_engine::play::PlayPlugin;
 
@@ -34,18 +32,12 @@ pub fn game_dir() -> Option<PathBuf> {
 
 pub fn played_app() -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin))
+    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, p2_engine::map::MapPresentPlugin, p2_render::wounds::WoundsPlugin))
         .init_asset::<Mesh>()
         .init_asset::<Image>()
         .init_asset::<StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
-        .init_resource::<Fluids>()
-        .init_resource::<MaterialSwitches>()
-        .init_resource::<Projectors>()
-        .init_resource::<Particles>()
-        .init_resource::<SpawnedActors>()
-        .init_resource::<Hud>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
         .register_required_components::<Mesh3d, Visibility>();
     app

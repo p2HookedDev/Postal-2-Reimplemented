@@ -12,7 +12,7 @@ use bevy::render::settings::{Backends, WgpuSettings};
 use bevy::app::{App, AppExit, Plugin, PluginGroup, Update};
 use bevy::ecs::error::Result;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::prelude::{MessageReader, MessageWriter, Query, Res, ResMut, Single};
+use bevy::ecs::prelude::{Commands, MessageReader, MessageWriter, Query, Res, ResMut, Single};
 use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::state::prelude::{NextState, in_state};
 use bevy::log::LogPlugin;
@@ -24,7 +24,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use p2_engine::diagnostics::{DiagnosticsPlugin, StageTimingPlugin, capture_layer, console_layer, install_panic_hook, log_frame_times};
 use p2_host::display::{self, Display, Settings};
 use p2_host::game_dir::known_game_dir;
-use p2_engine::map::{MapFailed, MapLoadPlugin, MapSystems, SceneTargets, Session, map_package, start_map};
+use p2_engine::map::{CanvasArea, MapFailed, MapLoadPlugin, MapSystems, Session, map_package, start_map};
 use p2_engine::play::{Play, PlaySystems};
 use p2_vm::Pointer;
 use p2_engine::P2EnginePlugins;
@@ -97,7 +97,10 @@ impl Plugin for GamePlugin {
                 log_frame_times,
             ),
         )
-        .add_systems(EguiPrimaryContextPass, frame.after(MapSystems::Load).run_if(resource_exists::<Session>));
+        .add_systems(
+            EguiPrimaryContextPass,
+            (quit_when_asked, place_map.after(MapSystems::Load).before(MapSystems::Paint)).run_if(resource_exists::<Session>),
+        );
     }
 }
 
@@ -147,38 +150,33 @@ fn grab_cursor(window: Single<(&Window, &mut CursorOptions)>, play: Res<Play>) {
     }
 }
 
-fn frame(
+fn quit_when_asked(play: Res<Play>, mut exit: MessageWriter<AppExit>) {
+    if play.world().is_some_and(|world| world.wants_quit()) {
+        exit.write(AppExit::Success);
+    }
+}
+
+fn place_map(
     mut contexts: EguiContexts,
-    mut t: SceneTargets,
-    mut session: ResMut<Session>,
-    mut exit: MessageWriter<AppExit>,
+    mut view: ResMut<p2_render::view::MeshView>,
+    mut area: ResMut<CanvasArea>,
+    mut commands: Commands,
     mut launcher: ResMut<Launcher>,
     mut next: ResMut<NextState<GameState>>,
     mut failed: MessageReader<MapFailed>,
 ) -> Result {
-    let ctx = contexts.ctx_mut()?.clone();
+    let ctx = contexts.ctx_mut()?;
     let rect = ctx.viewport_rect();
     let scale = ctx.pixels_per_point();
     let size = UVec2::new((rect.width() * scale) as u32, (rect.height() * scale) as u32);
-    t.view.viewport = (size.x > 0 && size.y > 0).then_some((UVec2::ZERO, size));
-    if let Some(world) = t.play.world()
-        && world.wants_quit()
-    {
-        exit.write(AppExit::Success);
-    }
+    view.viewport = (size.x > 0 && size.y > 0).then_some((UVec2::ZERO, size));
+    area.0 = Some(rect);
     if let Some(MapFailed(failure)) = failed.read().last() {
         launcher.failure = Some(failure.clone());
-        session.clear(&mut t);
-        t.scenes.write(p2_render::scene::SceneChange::Clear);
-        t.view.viewport = None;
-        t.commands.remove_resource::<Session>();
+        view.viewport = None;
+        area.0 = None;
+        commands.remove_resource::<Session>();
         next.set(GameState::Launcher);
-        return Ok(());
-    }
-    if session.loading().is_some() {
-        session.loading_frame(&ctx, rect, &mut contexts, &mut t);
-    } else {
-        session.frame(&ctx, rect, &mut contexts, &mut t);
     }
     Ok(())
 }

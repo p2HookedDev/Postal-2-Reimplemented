@@ -19,7 +19,7 @@ use bevy::camera::Camera;
 use bevy::camera::visibility::{ViewVisibility, Visibility, VisibleEntities};
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::prelude::{
-    ChildOf, Commands, Component, Entity, Has, Local, MessageReader, Query, Res, ResMut, Resource, SystemSet, With,
+    ChildOf, Commands, Component, Entity, Has, Local, MessageReader, MessageWriter, Query, Res, ResMut, Resource, SystemSet, With,
     Without,
 };
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -44,6 +44,7 @@ use crate::actors::{
     emitter_properties, emitters_disabled, location_rotation, mesh_actor, object_path, projector_actor, skeletal_actor, skin_paths,
 };
 use p2_render::components::FollowBone;
+use p2_render::canvas::{Overlay, OverlayTitle};
 use p2_render::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
 use p2_render::view::ShadowOnly;
 use p2_host::frame_times::{FrameTimes, VmProfile, end_frame};
@@ -117,7 +118,7 @@ impl Plugin for PlayPlugin {
             .add_systems(Last, finish_saves_on_exit)
             .add_systems(
                 Update,
-                (gather_input, hand_off, publish_frame_facts, look_ahead, publish_frame_lights, publish_actor_frames, follow_actors)
+                (gather_input, hand_off, publish_frame_facts, publish_zone_fogs, look_ahead, publish_frame_lights, publish_actor_frames, follow_actors)
                     .chain()
                     .in_set(PlaySystems::Tick)
                     .after(sound::SoundSystems::Stop)
@@ -313,6 +314,13 @@ impl Play {
         }
     }
 
+    /// Blocks until the running tick is back. The game never does: a frame shows without it.
+    pub fn wait_for_tick(&mut self) {
+        if let Some(world) = self.world.as_mut() {
+            world.wait(VmWait::UntilBack);
+        }
+    }
+
     pub fn canvas(&self) -> HudCanvas {
         self.canvas
     }
@@ -381,9 +389,10 @@ fn gather_input(time: Res<Time>, mut play: ResMut<Play>, mut input: ResMut<Playe
     play.backlog.typed.push_str(&std::mem::take(&mut input.typed));
     play.backlog.key_events.append(&mut input.key_events);
     play.backlog.mouse = [0, 1].map(|i| play.backlog.mouse[i] + input.mouse[i]);
-    play.unstepped += if play.smooth_step { play.frame_clock.step(time.delta_secs()) } else { time.delta_secs().min(MAX_STEP) };
+    let frame_step = if play.smooth_step { play.frame_clock.step(time.delta_secs()) } else { time.delta_secs().min(MAX_STEP) };
+    play.unstepped += frame_step;
     play.tick_debt = (play.tick_debt + time.delta_secs()).min(TICK_PERIOD * 2.0);
-    world.shown.frame(time.delta_secs());
+    world.shown.frame(frame_step);
 }
 
 fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, drawn: DrawnActors) {
@@ -571,6 +580,14 @@ fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts
     facts.level_time = world.level_time();
     facts.glows.clear();
     facts.glows.extend_from_slice(world.glows());
+    facts.fov = world.fov().unwrap_or(0.0);
+    facts.volume_fog = world.volume_fog();
+}
+
+fn publish_zone_fogs(mut play: ResMut<Play>, mut fogs: MessageWriter<p2_render::scene::ZoneFogs>) {
+    if let Some(changed) = play.world_mut().and_then(PlayWorld::take_zone_fogs) {
+        fogs.write(p2_render::scene::ZoneFogs(changed));
+    }
 }
 
 #[cfg(test)]

@@ -1,22 +1,18 @@
 use bevy::camera::primitives::MeshAabb;
-use bevy::ecs::change_detection::DetectChangesMut;
 use p2_math::Vector;
 use p2_particles::{CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner};
 
 use super::*;
 use super::fluids::camera_view;
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
-use p2_render::view::alpha_key;
 use crate::emitter_changes::apply_command;
-use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape};
+use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook, OCCLUSION_MARGIN};
 use p2_render::level_collision::StaticCollision;
 mod mesh_particles;
 mod sprites;
 mod bounds;
-use mesh_particles::{MeshPool, mesh_box, place_mesh_particles};
-pub(crate) use mesh_particles::PoolSlot;
-use sprites::{fill_draw_buffers, standard_alpha};
-use p2_render::particle_draw::bounds::OCCLUSION_MARGIN;
+use mesh_particles::{mesh_box, mesh_reach};
+use sprites::fill_draw_buffers;
 use bounds::{apply_zone, particles_box};
 
 pub struct ParticleReport {
@@ -69,7 +65,6 @@ const PARALLEL_EMITTERS: usize = 32;
 
 #[derive(Default)]
 struct DrawBuffers {
-    meshes: Vec<(Vec<MeshParticle>, f32)>,
     strip_order: Vec<usize>,
 }
 
@@ -81,16 +76,10 @@ struct ParticleFrames {
     out_of_view: u32,
 }
 
-#[derive(PartialEq, Eq, Hash)]
-pub(super) struct PoolMaterialKey {
-    texture: Option<bevy::asset::AssetId<Image>>,
-    alpha: (std::mem::Discriminant<AlphaMode>, u32),
-    two_sided: bool,
-}
-
 struct EmitterDraw {
     disabled: bool,
-    pool: Option<MeshPool>,
+    /// Of a mesh emitter whose model is built: how far a particle of size 1 reaches.
+    mesh_reach: Option<f32>,
     pending_model: Option<ModelKey>,
     name: String,
 }
@@ -104,10 +93,10 @@ pub(super) fn particle_collision(world: &StaticCollision, start: Vector, end: Ve
 pub struct Particles {
     pub(super) actors: Vec<ParticleActor>,
     pub(super) particle_emitters: FxHashMap<ObjectId, (usize, usize)>,
-    pub(super) pool_materials: HashMap<PoolMaterialKey, Handle<StandardMaterial>>,
     pub(super) waiting_sprites: Vec<SpriteActor>,
     pub(super) waiting_coronas: Vec<CoronaActor>,
     pub(super) born: Vec<EmitterLook>,
+    pub(super) born_meshes: Vec<MeshEmitterLook>,
 }
 
 impl Session {
@@ -124,11 +113,14 @@ impl Session {
             let mut props = Vec::new();
             for (index, ((p, texture), mesh)) in emitter.emitters.into_iter().zip(emitter_meshes).enumerate() {
                 let emitter_name = if p.kind == EmitterKind::Mesh { mesh.clone() } else { texture.clone() }.unwrap_or_else(|| "-".into());
-                let (mut pool, mut pending_model) = (None, None);
+                let (mut reach, mut pending_model) = (None, None);
                 if p.kind == EmitterKind::Mesh && let Some(path) = mesh {
                     let key = static_model_key(&path, &[]);
                     match t.spawned.spawn_models.get(&key) {
-                        Some(Some(SpawnModel::Static { sections, .. })) => pool = Some(MeshPool::new(sections, &p, t.assets, &mut t.particles.pool_materials)),
+                        Some(Some(SpawnModel::Static { sections, .. })) => {
+                            reach = Some(mesh_reach(sections, &t.assets.meshes));
+                            t.particles.born_meshes.push(MeshEmitterLook { parent, order: index as u32, sections: sections.clone(), props: p.clone() });
+                        }
                         Some(_) => {}
                         None => {
                             if !t.spawned.spawn_builds.iter().any(|build| build.key == key) {
@@ -146,7 +138,7 @@ impl Session {
                 if let Some(image) = image {
                     t.particles.born.push(EmitterLook { parent, order: index as u32, image, props: p.clone(), name: emitter_name.clone(), fogless });
                 }
-                draws.push(EmitterDraw { disabled: p.disabled, pool, pending_model, name: emitter_name });
+                draws.push(EmitterDraw { disabled: p.disabled, mesh_reach: reach, pending_model, name: emitter_name });
                 props.push(p);
             }
             let started = std::time::Instant::now();
@@ -235,7 +227,7 @@ impl Particles {
         }
     }
 
-    pub(super) fn attach_late_pools(&mut self, model: Option<&SpawnModel>, key: &ModelKey, assets: &mut AssetStores) {
+    pub(super) fn attach_late_meshes(&mut self, model: Option<&SpawnModel>, key: &ModelKey, meshes: &Assets<Mesh>) {
         for p in &mut self.actors {
             for (index, draw) in p.draws.iter_mut().enumerate() {
                 if draw.pending_model.as_ref() != Some(key) {
@@ -243,7 +235,8 @@ impl Particles {
                 }
                 draw.pending_model = None;
                 if let (Some(SpawnModel::Static { sections, .. }), Some(emitter)) = (model, p.simulation.emitters().get(index)) {
-                    draw.pool = Some(MeshPool::new(sections, emitter.props(), assets, &mut self.pool_materials));
+                    draw.mesh_reach = Some(mesh_reach(sections, meshes));
+                    self.born_meshes.push(MeshEmitterLook { parent: p.parent, order: index as u32, sections: sections.clone(), props: emitter.props().clone() });
                 }
             }
         }
@@ -270,15 +263,6 @@ fn emitter_turn(place: Option<(Vector, p2_math::Rotator)>, actor: &crate::play::
     }
 }
 
-pub(super) struct ParticleTargets<'a, 'w, 's> {
-    pub(super) particles: &'a mut Particles,
-    pub(super) drawn: &'a mut DrawnParticles,
-    pub(super) play: &'a mut Play,
-    pub(super) canvas: &'a [CanvasActor],
-    pub(super) view: &'a mut ParticleView<'w, 's>,
-    pub(super) commands: &'a mut Commands<'w, 's>,
-}
-
 #[derive(SystemParam)]
 pub(super) struct ParticleParams<'w, 's> {
     particles: ResMut<'w, Particles>,
@@ -292,19 +276,13 @@ pub(super) struct ParticleParams<'w, 's> {
 
 pub(super) fn present_particles(mut t: ParticleParams) {
     let started = std::time::Instant::now();
-    update_particles(&mut ParticleTargets {
-        particles: &mut t.particles,
-        drawn: &mut t.drawn,
-        play: &mut t.play,
-        canvas: &t.hud.canvas_actors,
-        view: &mut t.view,
-        commands: &mut t.commands,
-    });
+    update_particles(&mut t);
     t.times.add("particles", started);
 }
 
-pub(super) fn update_particles(t: &mut ParticleTargets) {
+fn update_particles(t: &mut ParticleParams) {
     t.drawn.born.append(&mut t.particles.born);
+    t.drawn.born_meshes.append(&mut t.particles.born_meshes);
     let step = t.play.world_mut().map_or(0.0, PlayWorld::take_step);
     if let Some(world) = t.play.world_mut() {
         t.particles.apply_vm_changes(world);
@@ -320,7 +298,7 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
     let in_frustum = frustum_test(&t.view.cameras, &t.view.projections, world.origin());
     // Hung on a bone of a HUD-drawn actor (the muzzle flash): retail draws a skeletal actor's attachments
     // in its own scene node, so `Canvas.DrawActor` draws them at its FOV after its depth clear.
-    let canvas = t.canvas;
+    let canvas = &t.hud.canvas_actors;
     let particles = &mut *t.particles;
     let shown = 1.0 - world.shown.clock.behind();
     t.drawn.eye = eye;
@@ -343,14 +321,7 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
         sync_disabled(p, &actor.emitters_disabled);
         // Off screen longer than `SecondsBeforeInactive`, emitters pause. An emitter without particles counts
         // as drawn, or it would never spawn; what retail does with an empty emitter's bounds is (unverified).
-        let overlay = actor.attachment.as_ref().and_then(|attachment| overlay_slot(world, canvas, attachment.base));
-        if p.overlay != overlay {
-            p.overlay = overlay;
-            let layer = overlay.map_or_else(RenderLayers::default, |slot| RenderLayers::layer(OVERLAY_LAYERS[slot]));
-            for entity in p.draws.iter().filter_map(|draw| draw.pool.as_ref()).flat_map(|pool| pool.slots.iter().flatten()) {
-                t.commands.entity(*entity).insert(layer.clone());
-            }
-        }
+        p.overlay = actor.attachment.as_ref().and_then(|attachment| overlay_slot(world, canvas, attachment.base));
         let turn = emitter_turn(world.place(p.actor), actor, step, shown);
         let (hidden, here) = (turn.hidden, turn.here);
         let zone_seen = t.view.zone_culled.get(p.parent).ok().is_none_or(|shown| *shown != Visibility::Hidden);
@@ -399,12 +370,9 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
         });
     }
     for p in &mut particles.actors {
-        let Turn { here, seen, seen_box, .. } = p.turn;
-        let buffers = std::mem::take(&mut p.buffers);
-        place_mesh_particles(t.commands, t.view, p, &buffers.meshes, seen);
-        p.buffers = buffers;
+        let Turn { here, seen_box, .. } = p.turn;
         p.bounds = seen_box;
-        apply_zone(t.commands, p, (leaves, here));
+        apply_zone(&mut t.commands, p, (leaves, here));
     }
     if !removed.is_empty() {
         particles.index_particle_emitters();

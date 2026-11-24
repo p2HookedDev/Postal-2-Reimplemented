@@ -37,9 +37,9 @@ impl Shown {
     }
 
     /// The tick `new` came after `old`: what each thing shows now is where its way to `old` starts.
-    pub(super) fn tick(&mut self, old: &VmFrame, new: &VmFrame, actors: &FxHashMap<ObjectId, ActorFrame>) {
+    pub(super) fn tick(&mut self, old: &VmFrame, new: &VmFrame, actors: &FxHashMap<ObjectId, ActorFrame>, landed: &mut FxHashSet<ObjectId>) {
         let glide = self.glide;
-        self.places.tick(glide, actors);
+        self.places.tick(glide, actors, landed);
         let shown = old.view.map(|view| (self.view((view.location, view.rotation)), (view.location, view.rotation)));
         self.view_from = shown.zip(new.view).filter(|((_, mid), to)| (to.location - mid.0).size() <= GLIDE_REACH).map(|((from, mid), _)| [from, mid]);
         let before = std::mem::take(&mut self.pose_from);
@@ -100,7 +100,7 @@ mod tests {
         let mover = ObjectId::from_index(1);
         let (before, now) = (ActorFrame::kept_at([0.0; 3], None), ActorFrame::kept_at([10.0, 0.0, 0.0], None));
         let mut shown = Shown::default();
-        shown.tick(&old, &new, &FxHashMap::default());
+        shown.tick(&old, &new, &FxHashMap::default(), &mut FxHashSet::default());
         shown.places.changed(mover, Some(&before), &now);
         for (glide, at) in [(Glide { to_mid: 1.0, to_newest: 0.25 }, 2.5), (Glide { to_mid: 1.0, to_newest: 0.5 }, 5.0), (Glide { to_mid: 1.0, to_newest: 1.0 }, 10.0)] {
             shown.glide = glide;

@@ -33,7 +33,7 @@ impl Plugin for MapLoadPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<MapState>().add_message::<LoadMap>().add_message::<MapFailed>().add_systems(
             EguiPrimaryContextPass,
-            (request_travel, begin_loads, finish_loads.run_if(in_state(MapState::Loading)), report_lost_vm)
+            (request_travel, begin_loads, finish_loads.run_if(in_state(MapState::Loading)), report_lost_vm, drop_failed_map)
                 .chain()
                 .in_set(MapSystems::Load)
                 .run_if(resource_exists::<Session>),
@@ -91,6 +91,13 @@ fn report_lost_vm(play: Res<Play>, session: Res<Session>, mut next: ResMut<NextS
     }
 }
 
+fn drop_failed_map(mut failed: MessageReader<MapFailed>, mut session: ResMut<Session>, mut t: SceneTargets) {
+    if failed.read().last().is_some() {
+        session.clear(&mut t);
+        t.scenes.write(p2_render::scene::SceneChange::Clear);
+    }
+}
+
 pub(super) fn play_loader(game: &Game, map: &str) -> Result<(Arc<Loader>, PackageId), ResolveError> {
     Game::add_map(Game::script_loader(&game.system, p2_host::game_dir::config_folder())?, map, &LoadProgress::default())
 }
@@ -140,8 +147,7 @@ mod tests {
     use bevy::ecs::message::Messages;
     use bevy::state::prelude::State;
 
-    #[test]
-    fn a_map_that_cannot_be_opened_fails_and_no_map_is_loading() {
+    fn host() -> App {
         let root = std::env::temp_dir().join("p2-engine-no-such-install");
         let mut app = App::new();
         app.add_plugins((
@@ -156,7 +162,7 @@ mod tests {
         ))
         .init_asset::<Mesh>()
         .init_asset::<Image>()
-        .init_asset::<StandardMaterial>()
+        .init_asset::<bevy::pbr::StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<bevy::audio::AudioSource>()
         .init_resource::<Fluids>()
@@ -166,13 +172,30 @@ mod tests {
         .init_resource::<SpawnedActors>()
         .init_resource::<Hud>()
         .insert_resource(Session::new(root));
+        app
+    }
+
+    #[test]
+    fn a_map_that_cannot_be_opened_fails_is_dropped_and_no_map_is_loading() {
+        let mut app = host();
         app.world_mut().write_message(LoadMap { package: map_package("Nope"), url: None });
+        let level = app.world().resource::<p2_render::particle_frame::DrawnParticles>().level;
         app.world_mut().run_schedule(EguiPrimaryContextPass);
+        assert_ne!(app.world().resource::<p2_render::particle_frame::DrawnParticles>().level, level);
         let failures: Vec<String> = app.world_mut().resource_mut::<Messages<MapFailed>>().drain().map(|failed| failed.0).collect();
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("Nope"), "{failures:?}");
         app.update();
         assert_eq!(*app.world().resource::<State<MapState>>().get(), MapState::Empty);
         assert!(app.world().resource::<Session>().loading().is_none());
+    }
+
+    #[test]
+    fn without_an_area_the_canvas_is_left_alone() {
+        let mut app = host();
+        app.init_resource::<CanvasArea>().init_resource::<bevy_egui::EguiUserTextures>().add_systems(EguiPrimaryContextPass, paint_map_canvas);
+        let canvas = app.world().resource::<Play>().canvas();
+        app.world_mut().run_schedule(EguiPrimaryContextPass);
+        assert_eq!(app.world().resource::<Play>().canvas(), canvas);
     }
 }

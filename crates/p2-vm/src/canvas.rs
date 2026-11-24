@@ -335,6 +335,42 @@ fn clip_text(mut x: f32, glyphs: &[(char, f32)], clip: f32) -> (String, Option<f
     (kept, start)
 }
 
+/// A call shares the previous call's slot when nothing was painted between them, it does not clear the depth and its
+/// field of view is the same: retail draws it into that call's depth, with nothing over the first (`MapScreen`'s trail:
+/// up to 10 calls).
+pub fn call_slots(items: &[CanvasItem]) -> Vec<usize> {
+    let mut slots: Vec<usize> = Vec::new();
+    let mut previous = None;
+    for item in items {
+        if let CanvasItem::Actor { clear_z, fov, .. } = *item {
+            let slot = match slots.last() {
+                Some(&last) if previous == Some(fov) && !clear_z => last,
+                Some(&last) => last + 1,
+                None => 0,
+            };
+            slots.push(slot);
+            previous = Some(fov);
+        } else {
+            previous = None;
+        }
+    }
+    slots
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::{CanvasItem, call_slots};
+    use crate::ObjectId;
+
+    #[test]
+    fn back_to_back_calls_share_a_slot() {
+        let call = |clear_z: bool, fov: f32| CanvasItem::Actor { actor: ObjectId::from_index(1), clear_z, fov, location: [0.0; 3].into(), rotation: [0; 3].into(), scale: [1.0; 3].into() };
+        let text = CanvasItem::Text { text: String::new(), position: [0.0; 2], scale: [1.0; 2], color: [0; 4], font: None };
+        let items = [call(false, 0.0), call(false, 0.0), call(false, 0.0), text, call(false, 0.0), call(true, 0.0), call(false, 60.0)];
+        assert_eq!(call_slots(&items), [0, 0, 0, 1, 2, 3]);
+    }
+}
+
 #[cfg(test)]
 mod clip_tests {
     use super::{CanvasItem, clip_text, clip_tile, inset_hud_items};

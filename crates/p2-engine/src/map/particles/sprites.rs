@@ -1,32 +1,20 @@
 use super::*;
 
-pub(super) fn standard_alpha(style: DrawStyle) -> AlphaMode {
-    match style {
-        DrawStyle::AlphaBlend => AlphaMode::Blend,
-        DrawStyle::Modulated | DrawStyle::Darken => AlphaMode::Multiply,
-        DrawStyle::Regular => AlphaMode::Mask(0.5),
-        DrawStyle::Translucent | DrawStyle::AlphaModulate | DrawStyle::Brighten => AlphaMode::Add,
-    }
-}
-
 pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, slot: &mut DrawnActor, seen: bool, view: p2_particles::View) {
-    let DrawBuffers { meshes, strip_order } = buffers;
+    let DrawBuffers { strip_order } = buffers;
     slot.parent = p.parent;
     (slot.seen, slot.drawn, slot.overlay, slot.puddle_seed) = (seen, p.drawn, p.overlay, p.puddle_seed);
     slot.place = p.turn.place;
     slot.emitters.resize_with(p.draws.len(), Default::default);
-    meshes.resize_with(p.draws.len(), Default::default);
     for (index, draw) in p.draws.iter().enumerate() {
-        let DrawnEmitter { sprites, strip, beams, shape } = &mut slot.emitters[index];
+        let DrawnEmitter { sprites, strip, beams, meshes, shape } = &mut slot.emitters[index];
         if let Some(props) = p.simulation.emitters().get(index).map(|e| e.props()) {
             let facing = (props.use_direction_as != DirectionUsage::None).then(|| Vec3::from_array(props.real_projection_normal.into()).normalize_or_zero());
             *shape = EmitterShape { kind: props.kind, facing, beam_scale: [props.beam.u_scale, props.beam.v_scale], sheets: props.beam.sheets() };
         }
-        let (mesh_particles, reach) = &mut meshes[index];
         strip.clear();
         sprites.clear();
-        mesh_particles.clear();
-        *reach = 0.0;
+        meshes.clear();
         if !seen {
             beams.clear();
             continue;
@@ -42,13 +30,13 @@ pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, sl
             }
         }
         p.simulation.beams_into(index, beams);
-        if let Some(pool) = &draw.pool {
-            mesh_particles.extend(p.simulation.meshes(index));
-            *reach = pool.reach;
+        if draw.mesh_reach.is_some() {
+            meshes.extend(p.simulation.meshes(index));
         }
     }
-    slot.mesh_reach = (meshes.iter())
-        .flat_map(|(particles, reach)| particles.iter().map(move |m| mesh_box(m, *reach)))
+    slot.mesh_reach = (slot.emitters.iter().zip(&p.draws))
+        .filter_map(|(emitter, draw)| Some((&emitter.meshes, draw.mesh_reach?)))
+        .flat_map(|(particles, reach)| particles.iter().map(move |m| mesh_box(m, reach)))
         .reduce(|(lo, hi), (min, max)| (lo.min(min), hi.max(max)));
 }
 

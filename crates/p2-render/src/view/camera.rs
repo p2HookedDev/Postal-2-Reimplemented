@@ -55,6 +55,8 @@ impl Plugin for ViewCameraPlugin {
 
 fn place_overlay_cameras(
     view: Res<MeshView>,
+    hud: Res<HudView>,
+    facts: Res<FrameFacts>,
     look: Res<crate::components::OverlayLook>,
     cameras: Query<&Transform, (With<SceneView>, Without<OverlayCamera>)>,
     mut overlays: Query<(&mut Camera, &mut Transform, &mut Projection, &OverlayCamera), Without<SceneView>>,
@@ -62,8 +64,8 @@ fn place_overlay_cameras(
     let viewport = view.bevy_viewport();
     let view_transform = look.0.or_else(|| cameras.iter().next().copied());
     for (mut camera, mut transform, mut projection, OverlayCamera(slot)) in &mut overlays {
-        let fov = view.overlays.get(*slot).copied();
-        view.set_fov(&mut projection, fov.filter(|&fov| fov > 0.0).unwrap_or(view.view_fov()));
+        let fov = hud.overlays.get(*slot).copied();
+        view.set_fov(&mut projection, fov.filter(|&fov| fov > 0.0).unwrap_or(view.view_fov(&facts)));
         set_camera(&mut camera, viewport.is_some() && fov.is_some(), viewport.as_ref());
         if let Some(view) = view_transform
             && *transform != view
@@ -85,13 +87,14 @@ fn show_canvas_layers(view: Res<MeshView>, mut layers: Query<(&mut Camera, &Canv
 fn place_camera(
     mut commands: Commands,
     view: Res<MeshView>,
+    facts: Res<FrameFacts>,
     mut cameras: Query<
         (Entity, &mut Camera, &mut Transform, &SceneView, &mut Projection, Has<OcclusionCulling>, Has<ScreenSpaceAmbientOcclusion>),
         Without<SkyCamera>,
     >,
     mut skies: Query<(&mut Camera, &mut Transform, &SkyCamera, &mut Projection), Without<SceneView>>,
 ) {
-    let view_fov = view.view_fov();
+    let view_fov = view.view_fov(&facts);
     let viewport = view.bevy_viewport();
     let has_sky = skies.iter().any(|(_, _, sky, _)| sky.position.is_some());
     let mut rotation = Quat::IDENTITY;

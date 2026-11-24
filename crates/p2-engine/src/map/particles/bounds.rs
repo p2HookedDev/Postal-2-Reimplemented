@@ -5,8 +5,8 @@ const DRAWN_REACH: f32 = 2.0;
 pub(super) fn particles_box(p: &ParticleActor) -> Option<(Vec3, Vec3)> {
     (p.draws.iter().enumerate())
         .filter_map(|(index, draw)| {
-            let reach = match (&draw.pool, p.simulation.emitters().get(index)?.props().kind) {
-                (Some(pool), _) => pool.reach,
+            let reach = match (draw.mesh_reach, p.simulation.emitters().get(index)?.props().kind) {
+                (Some(reach), _) => reach,
                 (None, EmitterKind::Mesh) => return None,
                 (None, _) => DRAWN_REACH,
             };

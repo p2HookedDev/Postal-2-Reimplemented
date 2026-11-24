@@ -1,15 +1,5 @@
 use super::*;
-use p2_vm::ERenderStyle;
-
-pub(super) mod distance;
-pub(super) mod sharp;
-
-pub(super) struct HudFont {
-    font: Font,
-    pages: Vec<Option<(egui::TextureId, egui::Vec2)>>,
-}
-
-type HudImage = (Handle<Image>, egui::Vec2);
+use p2_render::canvas::{CanvasFont, CanvasImage, CanvasSource};
 
 /// The least and the most main-thread time one frame gives to first reads of HUD textures and fonts (half the frame
 /// before, within these): what does not fit is drawn a frame later instead of holding this one.
@@ -17,20 +7,15 @@ const FIRST_READS: [std::time::Duration; 2] = [std::time::Duration::from_millis(
 
 #[derive(Resource, Default)]
 pub struct Hud {
-    pub(super) hud_textures: FxHashMap<String, Option<(egui::TextureId, egui::Vec2)>>,
-    pub(super) hud_fonts: FxHashMap<String, Option<HudFont>>,
-    /// Keeps those images alive: egui holds them weakly and forgets each once it goes.
-    pub(super) hud_images: Vec<Handle<Image>>,
     pub(super) movies: Movies,
     pub(super) hud_assets: HudAssets,
     pub(super) canvas_actors: Vec<CanvasActor>,
     pub(super) failed_canvas_meshes: FxHashSet<String>,
     /// Loading frames show it again: the engine does not clear the screen.
     pub(super) last_hud: Arc<[CanvasItem]>,
-    pub(super) progress_bar: Option<Option<(ProgressBar, egui::TextureId)>>,
+    pub(super) progress_bar_read: bool,
     painted_at: Option<std::time::Instant>,
     first_reads_left: std::time::Duration,
-    pub(super) nearest: sharp::NearestImages,
 }
 
 impl Hud {
@@ -53,8 +38,8 @@ impl Hud {
 
 #[derive(Default)]
 pub(super) struct HudAssets {
-    fonts: HashMap<String, (Font, Vec<Option<HudImage>>)>,
-    textures: HashMap<String, HudImage>,
+    fonts: HashMap<String, CanvasFont>,
+    textures: HashMap<String, CanvasImage>,
 }
 
 impl HudAssets {
@@ -95,241 +80,45 @@ fn object_refs(value: &p2_vm::Value, found: &mut Vec<ObjectId>) {
     }
 }
 
-fn read_hud_font(game: &mut Game, path: &str, mut add: impl FnMut(Image) -> Handle<Image>) -> Option<(Font, Vec<Option<HudImage>>)> {
+fn read_hud_font(game: &mut Game, path: &str, mut add: impl FnMut(Image) -> Handle<Image>) -> Option<CanvasFont> {
     let (package, export) = game.export_by_path(path)?;
     let (pkg, data) = game.data(package);
     let font = read_font(pkg, data, &pkg.exports[export]).ok()?;
     let pages = font.textures.iter().map(|&reference| read_ui_image(game, package, reference, &mut add)).collect();
-    Some((font, pages))
+    Some(CanvasFont { font, pages })
 }
 
-fn read_hud_texture(game: &mut Game, material: &str, add: impl FnMut(Image) -> Handle<Image>) -> Option<HudImage> {
+fn read_hud_texture(game: &mut Game, material: &str, add: impl FnMut(Image) -> Handle<Image>) -> Option<CanvasImage> {
     let (package, export) = game.export_by_path(material)?;
     read_ui_image(game, package, export_reference(export), add)
 }
 
-fn read_ui_image(game: &mut Game, package: PackageId, reference: i32, mut add: impl FnMut(Image) -> Handle<Image>) -> Option<HudImage> {
+fn read_ui_image(game: &mut Game, package: PackageId, reference: i32, mut add: impl FnMut(Image) -> Handle<Image>) -> Option<CanvasImage> {
     let texture = game.ui_texture(package, reference)?;
     let size = texture.image.size().as_vec2();
-    Some((add(texture.image), egui::vec2(size.x, size.y)))
+    Some(CanvasImage { image: add(texture.image), texels: egui::vec2(size.x, size.y) })
 }
 
-pub(super) fn paint_overlay(
-    ctx: &egui::Context,
-    rect: egui::Rect,
-    Overlay { flash_scale: scale, flash_fog: fog, titles }: Overlay,
-    session: &mut Session,
-    contexts: &mut EguiContexts,
-    targets: &mut SceneTargets,
-) {
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, "matinee".into())).with_clip_rect(rect);
-    let cover = (1.0 - scale).clamp(0.0, 1.0);
-    if cover > 0.0 {
-        let [r, g, b] = fog.map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
-        painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(r, g, b, (cover * 255.0) as u8));
-    }
-    for OverlayTitle { material, color: [r, g, b, a], size, at: [x, y], alpha } in titles {
-        let Some((id, texels)) = session.cached_hud_texture(&material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
-        let width = size * rect.width();
-        let height = width * texels.y / texels.x.max(1.0);
-        let centre = rect.min + egui::vec2(x * rect.width(), y * rect.height());
-        let area = egui::Rect::from_center_size(centre, egui::vec2(width, height));
-        let tint = egui::Color32::from_rgba_unmultiplied(r, g, b, (f32::from(a) * alpha.clamp(0.0, 1.0)) as u8);
-        painter.image(id, area, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
-    }
+/// The canvas's reads: what the map's start read ahead, else the library, inside the frame's time for first reads.
+pub(super) struct LibraryReads<'a> {
+    pub(super) session: &'a mut Session,
+    pub(super) hud: &'a mut Hud,
 }
 
-/// A call shares the previous call's slot when nothing was painted between them, it does not clear the depth and its
-/// field of view is the same: retail draws it into that call's depth, with nothing over the first (`MapScreen`'s trail:
-/// up to 10 calls).
-pub(super) fn call_slots(items: &[CanvasItem]) -> Vec<usize> {
-    let mut slots: Vec<usize> = Vec::new();
-    let mut previous = None;
-    for item in items {
-        if let CanvasItem::Actor { clear_z, fov, .. } = *item {
-            let slot = match slots.last() {
-                Some(&last) if previous == Some(fov) && !clear_z => last,
-                Some(&last) => last + 1,
-                None => 0,
-            };
-            slots.push(slot);
-            previous = Some(fov);
-        } else {
-            previous = None;
-        }
-    }
-    slots
-}
-
-/// As retail: the 2D items before the n-th `DrawActor` call go to its slot's canvas layer ([`call_slots`]), over the
-/// scene and the calls before it, under that call; the items after the last call go to `ctx`, over everything.
-pub(super) fn paint_canvas(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], session: &mut Session, contexts: &mut EguiContexts, targets: &mut SceneTargets) {
-    let is_call = |item: &CanvasItem| matches!(item, CanvasItem::Actor { .. });
-    let slots = call_slots(items);
-    for (n, segment) in items.split(is_call).enumerate().filter(|(_, segment)| !segment.is_empty()) {
-        let slot = slots.get(n).copied();
-        let layer = slot.and_then(|slot| targets.view.canvas_layers.get(slot).copied());
-        let layer = layer.and_then(|layer| contexts.ctx_for_entity_mut(layer).ok()).cloned();
-        match (layer, slot) {
-            (Some(layer), Some(slot)) => {
-                if let Some(shown) = targets.view.canvas_below.get_mut(slot) {
-                    *shown = true;
-                }
-                paint_hud(&layer, rect, segment, session, contexts, targets);
-            }
-            _ => paint_hud(ctx, rect, segment, session, contexts, targets),
-        }
-    }
-}
-
-pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], session: &mut Session, contexts: &mut EguiContexts, targets: &mut SceneTargets) {
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, "hud".into())).with_clip_rect(rect);
-    let color = |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-    let (sharp_hud, sharp_text, per_point) = (targets.view.modern.sharp_hud, targets.view.modern.sharp_text, ctx.pixels_per_point());
-    for item in items {
-        match item {
-            CanvasItem::Text { text, position, scale, color: c, font } => {
-                let path = font.as_deref().unwrap_or_default();
-                let hud = &mut *targets.hud;
-                let hud_font = match hud.hud_fonts.get(path) {
-                    Some(found) => found.as_ref(),
-                    None => {
-                        let images = &mut targets.assets.images;
-                        let Some(found) = hud.first_read(|hud| font.as_deref().and_then(|path| session.hud_font(path, hud, contexts, images))) else { continue };
-                        hud.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
-                    }
-                };
-                let mut origin = rect.min + egui::vec2(position[0], position[1]);
-                let nearest = sharp_hud && !sharp_text && scale.iter().all(|&scale| sharp::whole_per_texel(scale * per_point, 1.0));
-                if nearest {
-                    origin = sharp::on_pixel(origin, per_point);
-                }
-                let magnified = scale[0].max(scale[1]) * per_point;
-                let smooth = sharp_text && magnified > 1.0;
-                match hud_font {
-                    Some(hud_font) => {
-                        let mut x = 0.0;
-                        for glyph in text.chars().filter_map(|ch| hud_font.font.glyph(ch)) {
-                            let size = egui::vec2(glyph.u_size as f32 * scale[0], glyph.v_size as f32 * scale[1]);
-                            if let Some(Some((id, texels))) = hud_font.pages.get(usize::from(glyph.texture)) {
-                                let uv = egui::Rect::from_min_size(
-                                    egui::pos2(glyph.start_u as f32 / texels.x, glyph.start_v as f32 / texels.y),
-                                    egui::vec2(glyph.u_size as f32 / texels.x, glyph.v_size as f32 / texels.y),
-                                );
-                                let id = if smooth {
-                                    hud.nearest.text_page(*id, magnified, &hud.hud_images, contexts, &mut targets.assets.images)
-                                } else if nearest {
-                                    hud.nearest.texture(*id, &hud.hud_images, contexts, &mut targets.assets.images)
-                                } else {
-                                    *id
-                                };
-                                painter.image(id, egui::Rect::from_min_size(origin + egui::vec2(x, 0.0), size), uv, color(*c));
-                            }
-                            x += (glyph.u_size + hud_font.font.kerning) as f32 * scale[0];
-                        }
-                    }
-                    None => {
-                        let font = egui::FontId::proportional(13.0 * scale[1]);
-                        painter.text(origin, egui::Align2::LEFT_TOP, text, font, color(*c));
-                    }
-                }
-            }
-            CanvasItem::Actor { .. } => {}
-            CanvasItem::Tile { material, position, size, uv, color: c, style } => {
-                let Some((mut id, texels)) = session.cached_hud_texture(material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
-                let mut area = egui::Rect::from_min_size(rect.min + egui::vec2(position[0], position[1]), egui::vec2(size[0], size[1]));
-                let mut size = *size;
-                let mut whole = false;
-                if sharp_hud {
-                    // Both edges snap, never the size: tiles of one picture keep sharing their edges.
-                    area = egui::Rect::from_min_max(sharp::on_pixel(area.min, per_point), sharp::on_pixel(area.max, per_point));
-                    size = [area.width(), area.height()];
-                    if sharp::whole_per_texel(size[0] * per_point, uv[2].abs()) && sharp::whole_per_texel(size[1] * per_point, uv[3].abs()) {
-                        let hud = &mut *targets.hud;
-                        let copy = hud.nearest.texture(id, &hud.hud_images, contexts, &mut targets.assets.images);
-                        whole = copy != id;
-                        id = copy;
-                    }
-                }
-                let (u, v) = if whole { ([uv[0], uv[2]], [uv[1], uv[3]]) } else { (inside_borders(uv[0], uv[2], texels.x, size[0]), inside_borders(uv[1], uv[3], texels.y, size[1])) };
-                let uv = egui::Rect::from_min_size(egui::pos2(u[0] / texels.x, v[0] / texels.y), egui::vec2(u[1] / texels.x, v[1] / texels.y));
-                let tint = if ERenderStyle::from_byte(*style) == Some(ERenderStyle::Translucent) { egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], 0) } else { color(*c) };
-                painter.image(id, area, uv, tint);
-            }
-        }
-    }
-}
-
-fn inside_borders(start: f32, length: f32, texels: f32, drawn: f32) -> [f32; 2] {
-    if length <= 0.0 || drawn <= length || drawn <= 1.0 {
-        return [start, length];
-    }
-    let inset = 0.5 * (drawn - length) / (drawn - 1.0);
-    let (end, at_border) = (start + length, |edge: f32| edge == 0.0 || edge == texels);
-    let (from, to) = (if at_border(start) { start + inset } else { start }, if at_border(end) { end - inset } else { end });
-    [from, to - from]
-}
-
-impl Session {
-    pub(super) fn hud_font(&mut self, path: &str, hud: &mut Hud, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<HudFont> {
-        let (font, pages) = match hud.hud_assets.fonts.remove(path) {
-            Some(read) => read,
-            None => read_hud_font(open_game(&mut self.library, self.map_system.as_deref())?, path, |image| images.add(image))?,
-        };
-        let pages = pages.into_iter().map(|page| page.map(|(handle, size)| (hud.registered_image(handle, contexts), size))).collect();
-        Some(HudFont { font, pages })
+impl CanvasSource for LibraryReads<'_> {
+    fn texture(&mut self, material: &str, images: &mut Assets<Image>) -> Option<Option<CanvasImage>> {
+        let Self { session, hud } = self;
+        hud.first_read(|hud| {
+            let ahead = hud.hud_assets.textures.remove(material);
+            ahead.or_else(|| read_hud_texture(open_game(&mut session.library, session.map_system.as_deref())?, material, |image| images.add(image)))
+        })
     }
 
-    pub(super) fn hud_texture(&mut self, material: &str, hud: &mut Hud, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<(egui::TextureId, egui::Vec2)> {
-        let (handle, size) = match hud.hud_assets.textures.remove(material) {
-            Some(read) => read,
-            None => read_hud_texture(open_game(&mut self.library, self.map_system.as_deref())?, material, |image| images.add(image))?,
-        };
-        Some((hud.registered_image(handle, contexts), size))
-    }
-
-    pub(super) fn cached_hud_texture(&mut self, material: &str, hud: &mut Hud, contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<(egui::TextureId, egui::Vec2)> {
-        if let Some(found) = hud.hud_textures.get(material) {
-            return *found;
-        }
-        let found = hud.first_read(|hud| self.hud_texture(material, hud, contexts, images))?;
-        hud.hud_textures.insert(material.to_owned(), found);
-        found
-    }
-}
-
-impl Hud {
-    fn registered_image(&mut self, handle: Handle<Image>, contexts: &mut EguiContexts) -> egui::TextureId {
-        let id = contexts.add_image(EguiTextureHandle::Weak(handle.id()));
-        self.hud_images.push(handle);
-        id
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn call(clear_z: bool, fov: f32) -> CanvasItem {
-        CanvasItem::Actor { actor: ObjectId::from_index(1), clear_z, fov, location: [0.0; 3].into(), rotation: [0; 3].into(), scale: [1.0; 3].into() }
-    }
-
-    fn text() -> CanvasItem {
-        CanvasItem::Text { text: String::new(), position: [0.0; 2], scale: [1.0; 2], color: [0; 4], font: None }
-    }
-
-    #[test]
-    fn an_enlarged_tile_reads_no_texel_across_the_border() {
-        assert_eq!(inside_borders(0.0, 32.0, 32.0, 32.0), [0.0, 32.0]);
-        assert_eq!(inside_borders(8.0, 16.0, 32.0, 64.0), [8.0, 16.0]);
-        let [start, length] = inside_borders(0.0, 32.0, 32.0, 64.0);
-        let first_pixel = start + 0.5 * length / 64.0;
-        assert!((first_pixel - 0.5).abs() < 1e-4 && (start + length - (32.0 - start)).abs() < 1e-4);
-    }
-
-    #[test]
-    fn back_to_back_calls_share_a_slot() {
-        let items = [call(false, 0.0), call(false, 0.0), call(false, 0.0), text(), call(false, 0.0), call(true, 0.0), call(false, 60.0)];
-        assert_eq!(call_slots(&items), [0, 0, 0, 1, 2, 3]);
+    fn font(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Option<CanvasFont>> {
+        let Self { session, hud } = self;
+        hud.first_read(|hud| {
+            let ahead = hud.hud_assets.fonts.remove(path);
+            ahead.or_else(|| read_hud_font(open_game(&mut session.library, session.map_system.as_deref())?, path, |image| images.add(image)))
+        })
     }
 }

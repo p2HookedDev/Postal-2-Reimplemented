@@ -39,16 +39,21 @@ pub(crate) struct Places {
 }
 
 impl Places {
-    /// A new tick came: what was shown becomes where each glide starts.
-    pub(super) fn tick(&mut self, glide: Glide, actors: &FxHashMap<ObjectId, ActorFrame>) {
+    /// A new tick came: what was shown becomes where each glide starts. `landed` takes the actors whose glide ended:
+    /// the frame before may have drawn them short of their place, and nothing places them again unless told.
+    pub(super) fn tick(&mut self, glide: Glide, actors: &FxHashMap<ObjectId, ActorFrame>, landed: &mut FxHashSet<ObjectId>) {
         self.gliding.retain(|actor, [from, mid]| {
             let on_its_way = actors.get(actor).filter(|_| glide.to_newest < 1.0);
-            on_its_way.is_some_and(|to| {
+            let kept = on_its_way.is_some_and(|to| {
                 let to = (to.location, to.rotation);
                 *from = glide.pick(*from, *mid, to, glided);
                 *mid = to;
                 *from != to
-            })
+            });
+            if !kept {
+                landed.insert(*actor);
+            }
+            kept
         });
     }
 
@@ -152,7 +157,7 @@ mod tests {
         places.tell(&seen, &mut told);
         assert!(told.is_empty());
         for _ in 0..3 {
-            places.tick(NEWEST, &FxHashMap::default());
+            places.tick(NEWEST, &FxHashMap::default(), &mut FxHashSet::default());
             assert!(places.shown(flash, &now, NEWEST).is_some());
         }
     }
@@ -200,5 +205,18 @@ mod tests {
         let halfway = Glide { to_mid: 1.0, to_newest: 0.5 };
         assert_eq!(places.shown(mover, &now, halfway).map(|(location, _)| location), Some(Vector::from([5.0, 0.0, 0.0])));
         assert_eq!(places.newest(mover, &now).map(|(location, _)| location), Some(Vector::from([10.0, 0.0, 0.0])));
+    }
+
+    #[test]
+    fn an_actor_whose_glide_ends_at_a_tick_is_named_to_be_placed_once_more() {
+        let mover = id(1);
+        let (before, now) = (ActorFrame::kept_at([0.0; 3], None), ActorFrame::kept_at([10.0, 0.0, 0.0], None));
+        let mut places = Places::default();
+        places.changed(mover, Some(&before), &now);
+        let (actors, mut landed) = (FxHashMap::from_iter([(mover, now)]), FxHashSet::default());
+        places.tick(Glide { to_mid: 1.0, to_newest: 0.5 }, &actors, &mut landed);
+        assert!(landed.is_empty() && places.glides(mover));
+        places.tick(NEWEST, &actors, &mut landed);
+        assert!(landed.contains(&mover) && !places.glides(mover));
     }
 }

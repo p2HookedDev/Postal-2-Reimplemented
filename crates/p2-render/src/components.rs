@@ -1,4 +1,7 @@
+use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::prelude::{Component, Entity, Resource};
+use bevy::ecs::world::DeferredWorld;
 use bevy::math::{Mat4, Quat, Vec3};
 use bevy::transform::components::Transform;
 use p2_bevy_assets::{rotator_matrix, unreal_mesh_matrix, unreal_to_bevy, unreal_transform};
@@ -59,9 +62,17 @@ impl FollowActor {
 #[derive(Component, Clone, Copy)]
 pub struct CanvasDrawn(pub usize);
 
-#[derive(Component, Clone, Copy)]
-pub struct SpriteQuad {
-    pub texels: f32,
+/// The slot of the `DrawActor` call a draw belongs to; `None`: back in the world. Its layers follow it at once.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[component(on_insert = follow_overlay_slot)]
+#[require(RenderLayers)]
+pub struct OverlaySlot(pub Option<usize>);
+
+fn follow_overlay_slot(mut world: DeferredWorld, context: HookContext) {
+    let Some(&OverlaySlot(slot)) = world.get::<OverlaySlot>(context.entity) else { return };
+    if let Some(mut layers) = world.get_mut::<RenderLayers>(context.entity) {
+        *layers = slot.and_then(|slot| OVERLAY_LAYERS.get(slot)).map_or_else(RenderLayers::default, |&layer| RenderLayers::layer(layer));
+    }
 }
 
 #[derive(Component, Clone, Copy)]

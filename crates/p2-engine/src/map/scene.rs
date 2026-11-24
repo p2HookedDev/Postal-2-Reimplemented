@@ -102,18 +102,8 @@ impl Session {
 
 }
 
-pub(super) struct SwitchTargets<'a, 'w, 's> {
-    pub(super) library: &'a mut Library,
-    pub(super) map_system: Option<&'a Path>,
-    pub(super) switches: &'a mut MaterialSwitches,
-    pub(super) play: &'a mut Play,
-    pub(super) images: &'a mut ResMut<'w, Assets<Image>>,
-    pub(super) commands: &'a mut Commands<'w, 's>,
-}
-
 #[derive(SystemParam)]
 pub(super) struct SwitchParams<'w, 's> {
-    session: ResMut<'w, Session>,
     switches: ResMut<'w, MaterialSwitches>,
     play: ResMut<'w, Play>,
     images: ResMut<'w, Assets<Image>>,
@@ -121,28 +111,16 @@ pub(super) struct SwitchParams<'w, 's> {
     times: ResMut<'w, FrameTimes>,
 }
 
-pub(super) fn present_material_switches(mut t: SwitchParams) {
+pub(super) fn present_material_switches(mut session: ResMut<Session>, mut t: SwitchParams) {
     let started = std::time::Instant::now();
-    let session = &mut *t.session;
-    update_material_switches(&mut SwitchTargets {
-        library: &mut session.library,
-        map_system: session.map_system.as_deref(),
-        switches: &mut t.switches,
-        play: &mut t.play,
-        images: &mut t.images,
-        commands: &mut t.commands,
-    });
-    t.times.add("material switches", started);
-}
-
-pub(super) fn update_material_switches(t: &mut SwitchTargets) {
-    let Some(world) = t.play.world_mut() else { return };
-    let changes = world.take_material_switches();
-    if changes.is_empty() {
-        return;
+    let changes = t.play.world_mut().map(PlayWorld::take_material_switches).unwrap_or_default();
+    let session = &mut *session;
+    if !changes.is_empty()
+        && let Some(game) = open_game(&mut session.library, session.map_system.as_deref())
+    {
+        switch_materials(game, &mut t.switches, &mut t.images, &mut t.commands, changes);
     }
-    let Some(game) = open_game(t.library, t.map_system) else { return };
-    switch_materials(game, t.switches, t.images, t.commands, changes);
+    t.times.add("material switches", started);
 }
 
 impl PreparedScene {

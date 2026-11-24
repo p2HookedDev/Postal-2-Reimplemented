@@ -2,28 +2,26 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use bevy::asset::{Assets, Handle, RenderAssetUsages};
-use bevy::camera::visibility::{NoFrustumCulling, RenderLayers, Visibility};
+use bevy::asset::{Assets, Handle};
+use bevy::camera::visibility::{RenderLayers, Visibility};
 use bevy::ecs::prelude::{AnyOf, ChildOf, Commands, Entity, Has, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::system::SystemParam;
 use bevy::image::Image;
 use bevy::light::ClusteredDecal;
-use bevy::material::AlphaMode;
 use bevy::math::{Mat4, UVec2, Vec2, Vec3, Vec4};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
-use bevy::mesh::{Indices, Mesh, Mesh3d, MeshTag, PrimitiveTopology};
-use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::mesh::{Mesh, MeshTag};
 use bevy::transform::components::Transform;
 use bevy::camera::{Camera, Camera2d, CameraOutputMode, ClearColorConfig, Projection};
 use bevy::color::Color;
-use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiTextureHandle, PrimaryEguiContext, egui};
+use bevy_egui::{EguiContexts, EguiGlobalSettings, PrimaryEguiContext, egui};
 use rustc_hash::{FxHashMap, FxHashSet};
 use wgpu_types::BlendState;
-use p2_assets::{Font, MeshAnimation, Model, SkeletalMesh, StaticMesh, read_font, read_level, read_mesh_animation, read_model, read_static_mesh, read_static_mesh_materials, read_terrain};
+use p2_assets::{MeshAnimation, Model, SkeletalMesh, StaticMesh, read_font, read_level, read_mesh_animation, read_model, read_static_mesh, read_static_mesh_materials, read_terrain};
 use p2_render_cpu::MeshPlacement;
 use p2_bevy_assets::{bone_matrices, rotator_matrix, to_bevy, unreal_mesh_matrix, unreal_to_bevy, unreal_transform};
 use p2_package::{Ini, LoadedPackage, Loader, Package, PackageId};
-use p2_particles::{DrawStyle, Emitter, SpriteParticle};
+use p2_particles::{Emitter, SpriteParticle};
 use p2_vm::{CanvasItem, Kind, ObjectId, ParticleCommand, ProjectorEvent, Vm};
 
 use p2_render::actor_light::{
@@ -37,15 +35,14 @@ use crate::animation::{Animated, AnimatedMesh};
 use p2_render::components::FollowBone;
 use p2_render::components::{LeftCanvasActor, MapScoped};
 use p2_bevy_assets::library::{Game, Library, LoadError, LoadProgress, export_reference};
-use loading::ProgressBar;
-use p2_render::translucent_order::TranslucentDraw;
-use p2_render::view::{ActorLook, ActorMaterials, ActorModel, CanvasDrawn, FollowActor, MeshView, MapModel, SceneView, OVERLAY_LAYERS, spawn_actor_sections};
+use loading::read_progress_bar;
+use p2_render::view::{ActorLook, ActorMaterials, ActorModel, CanvasDrawn, FollowActor, MeshView, MapModel, OverlaySlot, SceneView, OVERLAY_LAYERS, spawn_actor_sections};
 use p2_render::scene::{MaterialImages, MovingModel, Scene, SectionView, Sky, LayeredByZone, ZoneCulled};
-use p2_render::particle_material::ParticleMaterial;
 use p2_render::level::{ActorTexture, MaterialSwitches, PendingAssets, SceneAssets, SectionChunks, material_images, projector_image, sections_of_static_mesh, skeletal_sections};
 use p2_host::frame_times::FrameTimes;
-use crate::play::{Overlay, OverlayTitle, Play, PlayWorld};
+use crate::play::{Play, PlayWorld};
 use p2_render::level_collision::LevelCollision;
+use p2_render::canvas::CanvasStores;
 
 mod canvas_actors;
 mod coronas;
@@ -61,7 +58,7 @@ mod scene;
 mod spawned;
 mod sprites;
 
-use hud::{HudAssets, paint_canvas, paint_hud, paint_overlay};
+use hud::{HudAssets, LibraryReads};
 pub use hud::Hud;
 pub use load::{LoadMap, MapFailed, MapLoadPlugin, MapState};
 use load::{configs, play_loader, spawn_play_loader};
@@ -69,7 +66,7 @@ use movie::Movies;
 pub use particles::{ParticleReport, Particles};
 pub use spawned::SpawnedActors;
 use spawned::SpawnTargets;
-use canvas_actors::HudTargets;
+use canvas_actors::HudParams;
 pub use fluids::Fluids;
 pub use scene::animate_mesh_with;
 use scene::{projector_tag, projector_transform, scene_preparer};
@@ -79,14 +76,32 @@ pub struct MapPlugin;
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MapSystems {
-    /// In the egui pass: a host that paints a map's frame does it after this.
     Load,
+    /// In the egui pass, after `Load`: a host sets [`CanvasArea`] before this.
+    Paint,
     Present,
     Particles,
-    Sprites,
+    CoronaPlaces,
 }
 
 impl bevy::app::Plugin for MapPlugin {
+    fn build(&self, app: &mut bevy::app::App) {
+        use bevy::ecs::schedule::IntoScheduleConfigs;
+        app.add_plugins(MapPresentPlugin).init_resource::<CanvasArea>().add_systems(bevy::app::Startup, spawn_hud_camera).add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            paint_map_canvas
+                .in_set(MapSystems::Paint)
+                .after(MapSystems::Load)
+                .run_if(bevy::ecs::schedule::common_conditions::resource_exists::<Session>),
+        );
+    }
+}
+
+/// What presents a played map's frame, without the HUD's own camera: all a host without a window adds beside its
+/// `Session` resource.
+pub struct MapPresentPlugin;
+
+impl bevy::app::Plugin for MapPresentPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
         app.add_plugins(decal_aging::DecalAgingPlugin)
@@ -96,8 +111,7 @@ impl bevy::app::Plugin for MapPlugin {
             .init_resource::<Particles>()
             .init_resource::<SpawnedActors>()
             .init_resource::<Hud>()
-            .add_systems(bevy::app::Startup, spawn_hud_camera)
-            .add_systems(bevy::app::Update, (sprites::face_sprites, coronas::draw_coronas).chain().in_set(MapSystems::Sprites))
+            .add_systems(bevy::app::Update, coronas::place_coronas.in_set(MapSystems::CoronaPlaces))
             .configure_sets(bevy::app::PostUpdate, MapSystems::Present.in_set(crate::play::PlaySystems::Present).run_if(map_shown))
             .add_systems(
                 bevy::app::PostUpdate,
@@ -142,15 +156,37 @@ fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobal
     ));
 }
 
+/// Where the host shows the map, in egui points: its canvas is painted there. `None` paints nothing.
+#[derive(Resource, Default)]
+pub struct CanvasArea(pub Option<egui::Rect>);
+
+#[derive(SystemParam)]
+struct CanvasTargets<'w, 's> {
+    assets: AssetStores<'w>,
+    view: ResMut<'w, MeshView>,
+    times: ResMut<'w, FrameTimes>,
+    play: ResMut<'w, Play>,
+    commands: Commands<'w, 's>,
+    hud: ResMut<'w, Hud>,
+    painter: ResMut<'w, p2_render::canvas::CanvasPainter>,
+}
+
+fn paint_map_canvas(area: Res<CanvasArea>, mut session: ResMut<Session>, mut contexts: EguiContexts, mut t: CanvasTargets) -> bevy::ecs::error::Result {
+    let Some(rect) = area.0 else { return Ok(()) };
+    let ctx = contexts.ctx_mut()?.clone();
+    match session.loading() {
+        Some(progress) => session.loading_frame(&ctx, rect, progress, &mut contexts, &mut t),
+        None => session.frame(&ctx, rect, &mut contexts, &mut t),
+    }
+    Ok(())
+}
+
+/// What loading a map fills and dropping it empties.
 #[derive(SystemParam)]
 pub struct SceneTargets<'w, 's> {
     pub assets: AssetStores<'w>,
-    pub(crate) particle_view: ParticleView<'w, 's>,
-    pub(crate) canvas: CanvasModels<'w, 's>,
     pub(crate) models: ActorModels<'w, 's>,
-    pub view: ResMut<'w, MeshView>,
     pub scenes: bevy::ecs::prelude::MessageWriter<'w, p2_render::scene::SceneChange>,
-    pub(crate) shown: ResMut<'w, p2_render::view::ShownScene>,
     pub animated: ResMut<'w, Animated>,
     pub times: ResMut<'w, FrameTimes>,
     pub play: ResMut<'w, Play>,
@@ -162,6 +198,7 @@ pub struct SceneTargets<'w, 's> {
     pub(crate) particle_frame: ResMut<'w, p2_render::particle_frame::DrawnParticles>,
     pub(crate) spawned: ResMut<'w, SpawnedActors>,
     pub(crate) hud: ResMut<'w, Hud>,
+    pub(crate) painter: ResMut<'w, p2_render::canvas::CanvasPainter>,
 }
 
 impl<'w, 's> SceneTargets<'w, 's> {
@@ -186,7 +223,6 @@ pub struct AssetStores<'w> {
     pub images: ResMut<'w, Assets<Image>>,
     pub meshes: ResMut<'w, Assets<Mesh>>,
     pub actor_materials: ActorMaterials<'w>,
-    pub particle_materials: ResMut<'w, Assets<ParticleMaterial>>,
     pub sprite_buffers: Option<ResMut<'w, Assets<bevy::render::storage::ShaderBuffer>>>,
     pub audio: Option<ResMut<'w, Assets<bevy::audio::AudioSource>>>,
     pub bindposes: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
@@ -217,7 +253,6 @@ pub(crate) struct ParticleView<'w, 's> {
     pub(crate) cameras: Query<'w, 's, &'static Transform, With<SceneView>>,
     pub(crate) projections: Query<'w, 's, &'static Projection, With<SceneView>>,
     pub(crate) zone_culled: Query<'w, 's, &'static Visibility, With<ZoneCulled>>,
-    pub(crate) pool_slots: Query<'w, 's, &'static mut Transform, (With<particles::PoolSlot>, Without<FollowActor>, Without<SceneView>)>,
 }
 
 fn frustum_test(
@@ -242,7 +277,7 @@ pub(crate) struct CanvasModels<'w, 's> {
     pub(crate) attached: Query<
         'w,
         's,
-        (Entity, &'static FollowActor, &'static mut Transform, &'static mut Visibility, Option<&'static RenderLayers>),
+        (Entity, &'static FollowActor, &'static mut Transform, &'static mut Visibility, Option<&'static OverlaySlot>),
         (Without<CanvasDrawn>, Without<SceneView>, Without<ZoneCulled>),
     >,
 }
@@ -250,7 +285,6 @@ pub(crate) struct CanvasModels<'w, 's> {
 #[derive(SystemParam)]
 pub(crate) struct ActorModels<'w, 's> {
     pub(crate) followers: Query<'w, 's, (Entity, AnyOf<(&'static FollowActor, &'static FollowBone)>, Option<&'static ChildOf>), Without<CanvasDrawn>>,
-    pub(crate) untagged: Query<'w, 's, (Entity, AnyOf<(&'static FollowActor, &'static FollowBone)>), (Without<CanvasDrawn>, Without<MeshTag>)>,
     pub(crate) actor_models: Query<'w, 's, (Entity, &'static ActorModel, Has<MapModel>)>,
 }
 
@@ -467,11 +501,8 @@ impl Session {
         t.play.set(None);
         self.map = None;
         self.map_system = None;
+        t.painter.forget();
         let hud = &mut *t.hud;
-        hud.hud_textures.clear();
-        hud.hud_fonts.clear();
-        hud.hud_images.clear();
-        hud.nearest = Default::default();
         hud.hud_assets = HudAssets::default();
         hud.movies.stop(&mut t.commands);
         hud.canvas_actors.clear();
@@ -479,116 +510,66 @@ impl Session {
         t.commands.queue(despawn_map_scoped);
         *t.projectors = Projectors::default();
         *t.spawned = SpawnedActors::default();
+        t.assets.actor_materials.forget_spawned();
         let particles = &mut *t.particles;
         particles.waiting_sprites.clear();
         particles.waiting_coronas.clear();
         particles.actors.clear();
         particles.particle_emitters.clear();
-        particles.pool_materials.clear();
         particles.born.clear();
+        particles.born_meshes.clear();
         t.particle_frame.born.clear();
+        t.particle_frame.born_meshes.clear();
         t.particle_frame.level = t.particle_frame.level.wrapping_add(1);
         *t.fluids = Fluids::default();
     }
 
-    pub fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut SceneTargets) {
+    fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut CanvasTargets) {
         let started = std::time::Instant::now();
         t.hud.start_frame(started);
         t.play.set_canvas_size([rect.width(), rect.height()]);
         t.play.set_hud_inset(if t.view.modern.safe_area { p2_render::modern_view::hud_area(rect).min.x - rect.min.x } else { 0.0 });
-        t.view.canvas_below = [false; OVERLAY_LAYERS.len()];
+        t.view.hide_canvas_layers();
         // Until a new map's first VM frame is presented, the last image (the load screen) stays up, as in the
         // engine's frame buffer; its canvas actors belong to the level left.
         if t.play.world().is_some_and(|world| !world.presented()) {
             let items = Arc::clone(&t.hud.last_hud);
-            paint_hud(ctx, rect, &items, self, contexts, t);
+            self.paint_items(ctx, rect, &items, contexts, t);
             t.times.add("hud paint", started);
             return;
         }
         let items = t.play.world().map(PlayWorld::hud_items).unwrap_or_default();
-        let hud = &mut *t.hud;
-        hud.movies.update(&self.root, contexts, &mut t.play, &mut t.commands, &mut t.assets, &mut hud.hud_textures);
+        t.hud.movies.update(&self.root, contexts, &mut t.play, &mut t.commands, &mut t.assets, &mut t.painter);
+        let mut stores = CanvasStores { contexts, images: &mut t.assets.images };
+        let mut source = LibraryReads { session: self, hud: &mut t.hud };
         if let Some(overlay) = t.play.world().and_then(PlayWorld::screen_overlay) {
-            paint_overlay(ctx, rect, overlay, self, contexts, t);
+            t.painter.paint_overlay(ctx, rect, overlay, &mut source, &mut stores);
         }
         if !items.is_empty() {
-            paint_canvas(ctx, rect, &items, self, contexts, t);
+            t.painter.paint_canvas(ctx, rect, &items, &mut t.view, &mut source, &mut stores);
         }
         t.times.add("hud paint", started);
         t.hud.last_hud = items;
     }
 
-    /// Runs the parts of `MapSystems::Present` in their order, for hosts that keep a `Session` outside the app's resources.
-    pub fn present(&mut self, items: &[CanvasItem], t: &mut SceneTargets) {
-        let started = std::time::Instant::now();
-        self.update_spawned(&mut t.spawn_targets());
-        t.times.add("spawned", started);
-        let started = std::time::Instant::now();
-        self.show_hud_actors(items, &mut t.hud_targets());
-        t.times.add("canvas actors", started);
-        let started = std::time::Instant::now();
-        spawned::update_projections(&mut spawned::ProjectionTargets {
-            library: &mut self.library,
-            map_system: self.map_system.as_deref(),
-            projectors: &mut t.projectors,
-            play: &mut t.play,
-            followers: &t.models.followers,
-            untagged: &t.models.untagged,
-            images: &mut t.assets.images,
-            commands: &mut t.commands,
-        });
-        t.times.add("projections", started);
-        let started = std::time::Instant::now();
-        scene::update_material_switches(&mut scene::SwitchTargets {
-            library: &mut self.library,
-            map_system: self.map_system.as_deref(),
-            switches: &mut t.switches,
-            play: &mut t.play,
-            images: &mut t.assets.images,
-            commands: &mut t.commands,
-        });
-        t.times.add("material switches", started);
-        let started = std::time::Instant::now();
-        fluids::update_fluids(&mut fluids::FluidTargets {
-            fluids: &mut t.fluids,
-            play: &mut t.play,
-            cameras: &t.particle_view.cameras,
-            projections: &t.particle_view.projections,
-            commands: &mut t.commands,
-            meshes: &mut t.assets.meshes,
-            materials: &mut t.assets.actor_materials,
-        });
-        t.times.add("fluids", started);
-        let started = std::time::Instant::now();
-        particles::update_particles(&mut particles::ParticleTargets {
-            particles: &mut t.particles,
-            drawn: &mut t.particle_frame,
-            play: &mut t.play,
-            canvas: &t.hud.canvas_actors,
-            view: &mut t.particle_view,
-            commands: &mut t.commands,
-        });
-        t.times.add("particles", started);
+    fn paint_items(&mut self, ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], contexts: &mut EguiContexts, t: &mut CanvasTargets) {
+        let mut stores = CanvasStores { contexts, images: &mut t.assets.images };
+        t.painter.paint(ctx, rect, items, &t.view.modern, &mut LibraryReads { session: self, hud: &mut t.hud }, &mut stores);
     }
 
-    pub fn loading_frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut SceneTargets) {
-        let Some(progress) = self.loading() else { return };
+    fn loading_frame(&mut self, ctx: &egui::Context, rect: egui::Rect, progress: f32, contexts: &mut EguiContexts, t: &mut CanvasTargets) {
         t.play.set_canvas_size([rect.width(), rect.height()]);
-        t.view.canvas_below = [false; OVERLAY_LAYERS.len()];
+        t.view.hide_canvas_layers();
         let items = Arc::clone(&t.hud.last_hud);
-        paint_hud(ctx, rect, &items, self, contexts, t);
-        if t.hud.progress_bar.is_none() {
+        self.paint_items(ctx, rect, &items, contexts, t);
+        if !std::mem::replace(&mut t.hud.progress_bar_read, true) {
             let entry = map_package("Entry");
-            let found = self.library.open(&self.root, &entry).ok().and_then(|(game, id)| ProgressBar::read(game, id));
-            t.hud.progress_bar = Some(found.map(|(bar, image)| {
-                let id = contexts.add_image(EguiTextureHandle::Strong(t.assets.images.add(image)));
-                (bar, id)
-            }));
+            if let Some((bar, image)) = self.library.open(&self.root, &entry).ok().and_then(|(game, id)| read_progress_bar(game, id)) {
+                let image = t.assets.images.add(image);
+                t.painter.set_progress_bar(bar, image, contexts);
+            }
         }
-        if let Some(Some((bar, texture))) = &t.hud.progress_bar {
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, "progress".into())).with_clip_rect(rect);
-            painter.add(bar.mesh(rect, progress, *texture));
-        }
+        t.painter.paint_progress(ctx, rect, progress);
     }
 
     /// Viewer-only (and the real-data tests of this crate, which cannot use `p2-viewer`): loads on this thread, blocking.
