@@ -45,6 +45,7 @@ use crate::actors::{
 };
 use crate::animation::{BoneFrame, FollowBone};
 use crate::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
+use crate::display::MODERN_FIRE_LIGHT;
 use crate::mesh_view::ShadowOnly;
 
 mod times;
@@ -280,6 +281,12 @@ impl LookAhead {
     }
 }
 
+/// Whether a game is in play and paused: what moves by the engine's own clock (particles, panned textures) stands
+/// still then, as the game's actors do.
+pub(crate) fn game_paused(play: Option<&Play>) -> bool {
+    play.and_then(Play::world).is_some_and(PlayWorld::game_paused)
+}
+
 impl Play {
     pub(crate) fn generation(&self) -> u64 {
         self.generation
@@ -388,7 +395,7 @@ fn gather_input(time: Res<Time>, mut play: ResMut<Play>, mut input: ResMut<Playe
     world.shown.frame(time.delta_secs());
 }
 
-fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, drawn: DrawnActors) {
+fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<PlayerInput>, drawn: DrawnActors, settings: Option<Res<crate::display::Settings>>) {
     let (threaded, canvas) = (play.threaded, play.canvas);
     let play = &mut *play;
     let Some(world) = play.world.as_mut() else { return };
@@ -406,7 +413,8 @@ fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<Pl
         let waited = std::mem::take(&mut play.waited);
         let step = if play.smooth_step { play.clock.step(waited) } else { waited.min(MAX_STEP) };
         sent = play.backlog.mouse;
-        job = Some(next_job(world, drawn, &input, &mut play.backlog, &times, step, canvas));
+        let fire_light = settings.is_some_and(|settings| settings.modern_level(MODERN_FIRE_LIGHT) > 0);
+        job = Some(Job { fire_light, ..next_job(world, drawn, &input, &mut play.backlog, &times, step, canvas) });
     }
     if inline
         && world.frame.travel.is_none()
@@ -495,6 +503,7 @@ fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, back
         finished: std::mem::take(&mut world.finished),
         vm_profile: times.vm_profile,
         forces: world.wants_forces,
+        fire_light: false,
         movie_status: std::mem::take(&mut world.movie_status),
     }
 }

@@ -18,6 +18,7 @@ function CreateMenuContents()
 	AddBox(2, "ModernDecalAging");
 	AddBox(3, "ModernWounds");
 	AddBox(4, "ModernLiquidFlow");
+	AddBox(5, "ModernFireLight");
 	AddBack();
 	LoadRows();
 }
@@ -40,10 +41,12 @@ defaultproperties
 	Labels(2)="Drying blood"
 	Labels(3)="Blood on bodies"
 	Labels(4)="Puddles and streams"
+	Labels(5)="Fire and muzzle flash light"
 
 	Helps(0)="Smoke and other particles are lit by the room, the sun and nearby lamps."
 	Helps(1)="Particles fade where they touch walls and floors instead of cutting into them."
 	Helps(2)="Blood dries over time, and old marks fade out instead of vanishing."
 	Helps(3)="Blood stays on a body where it was hit."
 	Helps(4)="Smoother streams and uneven puddle edges."
+	Helps(5)="Fire and gunshots light up nearby people, walls and smoke."
 }

@@ -10,8 +10,6 @@ function CreateMenuContents()
 	bUpdate = false;
 	AddBox(0, "ModernFootPlacement");
 	AddLevelSlider(1, "ModernHitReactions", 0, 10, 5);
-	AddLevelSlider(2, "ModernCutsceneDof", 0, 10, 4);
-	AddLevelSlider(3, "ModernCutsceneMotionBlur", 0, 10, 3);
 	AddBack();
 	LoadRows();
 }
@@ -22,16 +20,12 @@ function RowChanged(int i)
 
 defaultproperties
 {
-	TitleText="Animation and Cutscenes"
+	TitleText="Animation"
 	BackHelp="Return to the Modern Graphics menu."
 
 	Labels(0)="Foot IK"
 	Labels(1)="Hit reactions"
-	Labels(2)="Cutscene depth of field"
-	Labels(3)="Cutscene motion blur"
 
 	Helps(0)="Feet rest on stairs and slopes instead of floating or sinking."
 	Helps(1)="How strongly people flinch where they are hit."
-	Helps(2)="Cutscenes blur what is out of focus."
-	Helps(3)="Cutscenes blur fast movement."
 }

@@ -23,7 +23,6 @@ pub(crate) mod terrain_light;
 pub(crate) mod terrain_material;
 pub(crate) mod wet;
 pub(crate) mod wounds;
-pub mod cutscene_lens;
 pub mod modern_view;
 pub mod reflections;
 pub mod screen_pass;
@@ -31,6 +30,7 @@ pub mod bounce;
 pub mod fire_volume;
 pub mod temporal_aa;
 pub mod fade_in;
+pub mod photo;
 
 pub struct RetailRenderPlugin;
 
@@ -38,7 +38,6 @@ impl bevy::app::Plugin for RetailRenderPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_plugins((
             modern_view::ModernViewPlugin,
-            cutscene_lens::CutsceneLensPlugin,
             reflections::ReflectionsPlugin,
             lamp_fog::LampFogPlugin,
             bounce::BounceLightPlugin,
@@ -53,7 +52,7 @@ impl bevy::app::Plugin for RetailRenderPlugin {
             world_pass::WorldPassPlugin,
             sampler_refresh::SamplerRefreshPlugin,
         ));
-        app.add_plugins(fade_in::FadeInPlugin);
+        app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin));
     }
 }
 

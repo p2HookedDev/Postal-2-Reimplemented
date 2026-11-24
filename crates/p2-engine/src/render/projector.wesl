@@ -55,23 +55,6 @@ const FADE_SHIFT: u32 = 10u;
 const FADE_MASK: u32 = 0x1fu;
 const WOUND: u32 = 0x8000u;
 const DRY_TINT: vec3<f32> = vec3(0.6, 0.42, 0.36);
-const WOUND_STAIN: vec3<f32> = vec3(0.62, 0.1, 0.1);
-const WOUND_HOLE: vec3<f32> = vec3(0.2, 0.02, 0.02);
-
-// A wound drawn over its box (uv 0..1, v down the body as it stood when hit) with no texture: x = how far blood stains
-// the surface (a ragged blot and a thin run below it), y = how far it is the dark hole. `seed` 0..255 varies both.
-fn wound_mark(uv: vec2<f32>, seed: f32) -> vec2<f32> {
-    let p = (uv - vec2(0.5, 0.35)) * 2.0;
-    let r = length(p);
-    let angle = atan2(p.y, p.x);
-    let ragged = 1.0 + 0.25 * sin(3.0 * angle + seed) + 0.15 * sin(7.0 * angle + seed * 2.3);
-    let blot = 1.0 - smoothstep(0.14 * ragged, 0.24 * ragged, r);
-    let reach = 0.45 + 0.7 * fract(seed * 0.618);
-    let width = 0.07 * (1.0 - 0.6 * saturate(p.y / reach));
-    let side = abs(p.x - 0.03 * sin(p.y * 9.0 + seed));
-    let run = (1.0 - smoothstep(0.5 * width, width, side)) * step(0.0, p.y) * (1.0 - smoothstep(0.8 * reach, reach, p.y));
-    return vec2(max(blot, 0.85 * run), 1.0 - smoothstep(0.035, 0.07, r));
-}
 
 fn section_target(instance_index: u32, kind: u32) -> u32 {
     let tag = get_tag(instance_index);
@@ -152,9 +135,8 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
     var frame = vec3(0.0);
     var drawn = false;
     while clustered_decal_iterator_next(&iterator) {
-        let marked = (iterator.tag & WOUND) != 0u;
-        let wound = marked && surface == 0u;
-        if (iterator.tag & PROJECTOR) == 0u || (iterator.base_color_texture_index < 0 && !marked) || ((iterator.tag & surface & TARGETS) == 0u && !wound) {
+        let wound = (iterator.tag & WOUND) != 0u && surface == 0u;
+        if (iterator.tag & PROJECTOR) == 0u || iterator.base_color_texture_index < 0 || ((iterator.tag & surface & TARGETS) == 0u && !wound) {
             continue;
         }
         // `ProjectTag` filters actors only: BSP and terrain take the projector regardless.
@@ -172,45 +154,35 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
         if (surface == TARGET_BSP || (iterator.tag & WOUND) != 0u) && !faces_projector(iterator.decal_index_offset, pbr_input.world_normal) {
             continue;
         }
-        var texel = vec4(0.0);
-        if !marked {
-            texel = decal_texel(iterator.base_color_texture_index, iterator.uv);
-            if (iterator.tag & ALPHA_TEST) != 0u && texel.a * 255.0 <= f32((iterator.tag >> 22u) & 0xffu) {
-                continue;
-            }
+        let texel = decal_texel(iterator.base_color_texture_index, iterator.uv);
+        if (iterator.tag & ALPHA_TEST) != 0u && texel.a * 255.0 <= f32((iterator.tag >> 22u) & 0xffu) {
+            continue;
         }
         if !drawn {
             base = to_display(texture);
             frame = to_display(color.rgb);
             drawn = true;
         }
+        let projected = to_display(texel.rgb);
+        let material = (iterator.tag >> 8u) & 0x3u;
+        var src = projected;
+        if material == PB_MODULATE {
+            src = projected * base;
+        } else if material == PB_ALPHA_BLEND {
+            src = mix(projected, base, texel.a);
+        } else if material == PB_ADD {
+            src = min(projected + base, vec3(1.0));
+        }
         let under = frame;
-        if marked {
-            // Both multiply: the mark keeps the light and the cloth's weave of what it lies on.
-            let mark = wound_mark(iterator.uv, f32((iterator.tag >> 22u) & 0xffu));
-            frame = mix(frame, frame * WOUND_STAIN, mark.x);
-            frame = mix(frame, frame * WOUND_HOLE, mark.y);
-        } else {
-            let projected = to_display(texel.rgb);
-            let material = (iterator.tag >> 8u) & 0x3u;
-            var src = projected;
-            if material == PB_MODULATE {
-                src = projected * base;
-            } else if material == PB_ALPHA_BLEND {
-                src = mix(projected, base, texel.a);
-            } else if material == PB_ADD {
-                src = min(projected + base, vec3(1.0));
-            }
-            switch iterator.tag & 0x7u {
-                case FB_OVERWRITE: { frame = src; }
-                case FB_MODULATE: { frame = 2.0 * src * frame; }
-                case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }
-                case FB_ALPHA_MODULATE: { frame = src + frame * (1.0 - texel.a); }
-                case FB_TRANSLUCENT: { frame = src + frame; }
-                case FB_DARKEN: { frame = frame * (1.0 - src); }
-                case FB_BRIGHTEN: { frame = src + frame * (1.0 - src); }
-                default: {}
-            }
+        switch iterator.tag & 0x7u {
+            case FB_OVERWRITE: { frame = src; }
+            case FB_MODULATE: { frame = 2.0 * src * frame; }
+            case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }
+            case FB_ALPHA_MODULATE: { frame = src + frame * (1.0 - texel.a); }
+            case FB_TRANSLUCENT: { frame = src + frame; }
+            case FB_DARKEN: { frame = frame * (1.0 - src); }
+            case FB_BRIGHTEN: { frame = src + frame * (1.0 - src); }
+            default: {}
         }
         // Drying darkens what the splat changed, whatever its blend; fading takes the frame back to what lay under it.
         let dry = (iterator.tag >> DRY_SHIFT) & DRY_MASK;

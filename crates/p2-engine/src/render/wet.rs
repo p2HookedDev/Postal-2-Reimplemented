@@ -32,8 +32,8 @@ impl WetTextures {
     }
 }
 
-pub fn animate_wet(time: Res<Time>, mut wet: ResMut<WetTextures>, mut images: ResMut<Assets<Image>>) {
-    let delta = time.delta_secs();
+pub fn animate_wet(time: Res<Time>, play: Option<Res<crate::play::Play>>, mut wet: ResMut<WetTextures>, mut images: ResMut<Assets<Image>>) {
+    let delta = if crate::play::game_paused(play.as_deref()) { 0.0 } else { time.delta_secs() };
     let interval = 1.0 / STEPS_PER_SECOND;
     wet.0.retain_mut(|wet| {
         // Only a step touches the image: `get_mut` marks it changed, and a changed image is uploaded again.

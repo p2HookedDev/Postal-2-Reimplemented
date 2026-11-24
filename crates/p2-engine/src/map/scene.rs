@@ -24,7 +24,7 @@ pub use mesh_sections::{
 };
 pub(crate) use mesh_sections::VmAnimations;
 pub use projectors::projector_box;
-pub(super) use projectors::{projector_decal, projector_image, projector_tag, projector_transform};
+pub(super) use projectors::{plain_projector_blend, projector_decal, projector_image, projector_tag, projector_transform};
 use terrain::{TerrainParts, TerrainZones, terrain_models};
 use static_meshes::{MeshPlacing, StaticLevel, StaticParts, antiportal_actors, cell, resolve_mesh_paths, static_models};
 use pawns::pawn_models;

@@ -9,6 +9,9 @@ struct Reflections {
     view_from_world: mat4x4<f32>,
     // x strength, y stride in pixels per step, z steps, w the materials level.
     look: vec4<f32>,
+    // In view space: xyz the centre and w the radius of each puddle; `puddle_count.x` of them are set.
+    puddles: array<vec4<f32>, 16>,
+    puddle_count: vec4<f32>,
 }
 
 @group(0) @binding(0) var scene: texture_2d<f32>;
@@ -60,6 +63,30 @@ fn class_surface(code: u32) -> vec3<f32> {
             return vec3(1.0, 0.0, 0.0);
         }
     }
+}
+
+// A liquid's roughness and reflectance: it mirrors at a low angle and hardly at all from above.
+const PUDDLE_SURFACE: vec3<f32> = vec3(0.1, 0.04, 0.0);
+// How far off a puddle's plane a pixel still lies in it, in world units.
+const PUDDLE_DEPTH: f32 = 4.0;
+
+// 1 on a puddle, falling to 0 inside the sprite's uneven rim; only ground counts, never a wall that stands in the disc.
+fn wetness(at: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let ground = smoothstep(0.7, 0.9, dot(normal, normalize(reflections.view_from_world[1].xyz)));
+    if ground <= 0.0 {
+        return 0.0;
+    }
+    var wet = 0.0;
+    let count = u32(reflections.puddle_count.x);
+    for (var i = 0u; i < count; i++) {
+        let puddle = reflections.puddles[i];
+        let off = at - puddle.xyz;
+        let height = dot(off, normal);
+        if abs(height) < PUDDLE_DEPTH {
+            wet = max(wet, 1.0 - smoothstep(0.55 * puddle.w, 0.8 * puddle.w, length(off - normal * height)));
+        }
+    }
+    return wet * ground;
 }
 
 fn noise(at: vec2<f32>) -> f32 {
@@ -145,14 +172,18 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let here = textureSampleLevel(scene, scene_sampler, in.uv, 0.0);
     let size = vec2<f32>(textureDimensions(depth));
     let packed = textureLoad(normals, clamp(vec2<i32>(in.position.xy), vec2(0), vec2<i32>(size) - 1), 0);
-    let surface = surface_of_code(u32(round(packed.a * 3.0)));
-    let glossy = 1.0 - smoothstep(ROUGH_FROM, ROUGH_TO, surface.x);
+    var surface = surface_of_code(u32(round(packed.a * 3.0)));
     let z = depth_at(in.uv, size);
-    if glossy <= 0.0 || z <= 0.0 {
+    if z <= 0.0 || (surface.x >= ROUGH_TO && reflections.puddle_count.x == 0.0) {
         return here;
     }
     let origin = view_at(reflections.view_from_clip, in.uv, z);
     let normal = normalize((reflections.view_from_world * vec4(packed.xyz * 2.0 - 1.0, 0.0)).xyz);
+    surface = mix(surface, PUDDLE_SURFACE, wetness(origin, normal));
+    let glossy = 1.0 - smoothstep(ROUGH_FROM, ROUGH_TO, surface.x);
+    if glossy <= 0.0 {
+        return here;
+    }
     let eye = normalize(-origin);
     // A ray that meets nothing on screen shows nothing: no stand-in light is put in its place.
     let hit = march(origin, reflect(-eye, normal), size, in.position.xy);

@@ -199,6 +199,7 @@ impl PlayWorld {
         let seen = vm.object_ids().count();
         let lights = vm.object_ids().filter(|&actor| crate::actors::mesh_light(&vm, actor).is_some_and(|light| light.dynamic)).collect();
         let fluid_surfaces = vm.actors().filter(|&actor| vm.store.is_a(actor, "FluidSurfaceInfo") && !vm.store.is_deleted(actor)).collect();
+        let glows = vm.object_ids().filter(|&actor| glows(&vm, actor)).collect();
         let corona_lights = vm.object_ids().filter(|&actor| crate::map::is_corona(&vm, actor)).collect();
         let volumes = vm.actors().filter(|&actor| vm.store.is_a(actor, Kind::Volume) && !vm.store.is_deleted(actor)).collect();
         let switches = vm
@@ -216,6 +217,7 @@ impl PlayWorld {
             recent_read: Vec::new(),
             logged: FxHashSet::default(),
             lights,
+            glows,
             light_clock: Default::default(),
             volumes,
             switches,
@@ -359,6 +361,7 @@ impl PlayWorld {
         if frame.set_mouse.is_none() {
             frame.set_mouse = old.set_mouse.take();
         }
+        frame.screenshot |= old.screenshot;
         for (actor, now) in frame.actor_changes.drain(..) {
             self.changed.insert(actor);
             self.shown.places.changed(actor, self.actors.get(&actor), &now);

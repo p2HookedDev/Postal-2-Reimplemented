@@ -291,6 +291,7 @@ pub enum HostCommand {
     SetMouse([i32; 2]),
     SaveGame { slot: i32, save: Box<SaveGame> },
     OpenUrl(String),
+    Screenshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

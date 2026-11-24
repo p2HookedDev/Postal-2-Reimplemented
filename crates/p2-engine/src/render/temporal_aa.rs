@@ -17,14 +17,14 @@ use bevy::render::camera::TemporalJitter;
 use crate::components::SceneView;
 use crate::display::{MODERN_TEMPORAL_AA, Settings};
 use crate::mesh_view::SceneViewSystems;
-use crate::render::cutscene_lens::follow_cutscene;
+use crate::render::photo::follow_photo_lens;
 use crate::render::modern::ModernGraphicsSystems;
 
 pub struct TemporalAaPlugin;
 
 impl Plugin for TemporalAaPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, follow_temporal_aa.after(ModernGraphicsSystems::Apply).after(SceneViewSystems::Place).after(follow_cutscene));
+        app.add_systems(Update, follow_temporal_aa.after(ModernGraphicsSystems::Apply).after(SceneViewSystems::Place).after(follow_photo_lens));
     }
 }
 

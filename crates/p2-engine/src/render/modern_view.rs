@@ -23,6 +23,7 @@ pub(crate) struct ModernView {
     pub(crate) safe_area: bool,
     pub(crate) sharp_hud: bool,
     pub(crate) sharp_text: bool,
+    pub(crate) photo_fov: Option<u8>,
 }
 
 pub struct ModernViewPlugin;
@@ -43,6 +44,7 @@ fn follow_settings(settings: Option<Res<Settings>>, play: Option<Res<Play>>, vie
         safe_area: level(MODERN_HUD_SAFE_AREA) > 0,
         sharp_hud: level(MODERN_SHARP_HUD) > 0,
         sharp_text: level(MODERN_SHARP_HUD) > 1,
+        photo_fov: settings.as_deref().and_then(Settings::photo_fov),
     };
     if view.modern != wanted {
         view.modern = wanted;

@@ -45,7 +45,23 @@ pub struct LightEnvironment {
     /// The still suns that shine together with `sun`: every one of the map, or its zone's after
     /// [`Self::suns_of_one_zone`].
     pub(crate) suns: Vec<MeshLight>,
+    /// Each zone that holds still suns of its own, after [`Self::suns_of_one_zone`].
+    pub(crate) zone_suns: Vec<ZoneSuns>,
     pub(crate) terrain: Vec<crate::render::terrain_light::TerrainSector>,
+}
+
+pub(crate) struct ZoneSuns {
+    zone: u8,
+    sun: Option<(MeshLight, HardwareLight)>,
+    suns: Vec<MeshLight>,
+}
+
+/// The suns that shine together: the one that casts the shadow and the still ones around it.
+#[derive(Clone, Copy)]
+pub(crate) struct SunSet<'a> {
+    pub(crate) sun: Option<&'a (MeshLight, HardwareLight)>,
+    pub(crate) suns: &'a [MeshLight],
+    pub(crate) level_brightness: f32,
 }
 
 pub(crate) fn brightest_sun<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, level_brightness: f32) -> Option<(MeshLight, HardwareLight)> {
@@ -106,18 +122,38 @@ impl LightEnvironment {
         ordered.sort_unstable_by_key(|&(&key, _)| std::cmp::Reverse(key));
         let sun = brightest_sun(ordered.into_iter().map(|(_, light)| light), level_brightness);
         let suns = lights.values().filter(|light| light.effect == LE_SUNLIGHT && !light.dynamic).copied().collect();
-        Self { lights, zone_ambients, level_brightness, sun, suns, terrain: Vec::new() }
+        Self { lights, zone_ambients, level_brightness, sun, suns, zone_suns: Vec::new(), terrain: Vec::new() }
     }
 
     /// A map holds a copy of its suns in each outdoor zone, and a copy lights its own zone only (unverified in the
     /// game's code; the maps repeat one set of suns many times over). Counting every copy made such a map many times
-    /// too bright, so only the picked sun's zone counts.
+    /// too bright, so only the picked sun's zone counts. The other zones' sets are kept for an eye that stands in them;
+    /// a set is the suns that light every surface, never the ones for `bSpecialLit` surfaces alone.
     pub fn suns_of_one_zone(mut self, zone_of: impl Fn(Vector) -> u8) -> Self {
+        for light in self.suns.iter().filter(|light| !light.special_lit) {
+            let zone = zone_of(light.location);
+            match self.zone_suns.iter_mut().find(|set| set.zone == zone) {
+                Some(set) => set.suns.push(*light),
+                None => self.zone_suns.push(ZoneSuns { zone, sun: None, suns: vec![*light] }),
+            }
+        }
+        for set in &mut self.zone_suns {
+            set.sun = brightest_sun(&set.suns, self.level_brightness);
+        }
         if let Some((sun, _)) = self.sun {
             let zone = zone_of(sun.location);
             self.suns.retain(|light| light.special_lit == sun.special_lit && zone_of(light.location) == zone);
         }
         self
+    }
+
+    pub(crate) fn sun_set(&self) -> SunSet<'_> {
+        SunSet { sun: self.sun.as_ref(), suns: &self.suns, level_brightness: self.level_brightness }
+    }
+
+    pub(crate) fn zone_sun_set(&self, zone: u8) -> Option<SunSet<'_>> {
+        let set = self.zone_suns.iter().find(|set| set.zone == zone)?;
+        Some(SunSet { sun: set.sun.as_ref(), suns: &set.suns, level_brightness: self.level_brightness })
     }
 
     pub fn with_terrain(self, terrain: Vec<crate::render::terrain_light::TerrainSector>) -> Self {

@@ -234,15 +234,16 @@ pub fn location_rotation(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> (Vector, R
 }
 
 pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight> {
-    let light_type = vm.store.byte_of(actor, Prop::LightType);
-    if light_type == 0 || vm.store.is_deleted(actor) {
-        return None;
-    }
+    (vm.store.byte_of(actor, Prop::LightType) != 0 && !vm.store.is_deleted(actor)).then(|| light_values(vm, actor))
+}
+
+/// The actor's light properties, whether its `LightType` has it lit or not.
+pub fn light_values(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> MeshLight {
     let (location, rotation) = location_rotation(vm, actor);
-    Some(MeshLight {
+    MeshLight {
         location,
         rotation,
-        light_type: p2_render_cpu::LightType(light_type),
+        light_type: p2_render_cpu::LightType(vm.store.byte_of(actor, Prop::LightType)),
         period: vm.store.byte_of(actor, Prop::LightPeriod),
         phase: vm.store.byte_of(actor, Prop::LightPhase),
         intensity: 1.0,
@@ -262,7 +263,7 @@ pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight>
         } else {
             0.0
         },
-    })
+    }
 }
 
 pub fn zone_ambient(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> [f32; 3] {

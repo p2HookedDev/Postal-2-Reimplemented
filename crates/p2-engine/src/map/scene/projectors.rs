@@ -28,9 +28,18 @@ pub(crate) fn projector_tag(projector: &ProjectorActor, final_blend: Option<Fina
         Some(inner) if projector.material_blending == ProjectorBlending::None => (inner.blending.byte(), inner.alpha_ref),
         _ => (match projector.blending { ProjectorBlending::AlphaBlend => FB_ALPHA_BLEND, ProjectorBlending::Add => FB_TRANSLUCENT, _ => FB_MODULATE }, None),
     };
-    let alpha_test = alpha_ref.map_or(0, |alpha_ref| ALPHA_TEST_TAG | u32::from(alpha_ref) << 22);
     let tagged = if projector.tagged { TAGGED_TAG } else { 0 };
-    PROJECTOR_TAG | tagged | alpha_test | u32::from(projector.targets.0) << 16 | u32::from(projector.material_blending as u8) << 8 | u32::from(blending)
+    PROJECTOR_TAG | tagged | blend_bits(blending, alpha_ref) | u32::from(projector.targets.0) << 16 | u32::from(projector.material_blending as u8) << 8
+}
+
+fn blend_bits(blending: u8, alpha_ref: Option<u8>) -> u32 {
+    alpha_ref.map_or(0, |alpha_ref| ALPHA_TEST_TAG | u32::from(alpha_ref) << 22) | u32::from(blending)
+}
+
+/// The blend bits of [`projector_tag`] for a projector that leaves both blending properties as the class has them, as
+/// the game's blood splats do: its texture's `FinalBlend`, else modulate.
+pub(crate) fn plain_projector_blend(final_blend: Option<FinalBlend>) -> u32 {
+    final_blend.map_or(u32::from(FB_MODULATE), |inner| blend_bits(inner.blending.byte(), inner.alpha_ref))
 }
 
 pub(crate) fn projector_image(game: &mut Game, add: impl FnOnce(Image) -> Handle<Image>, texture: &str) -> Option<(Handle<Image>, Vec2, Option<FinalBlend>)> {

@@ -2,7 +2,9 @@
 // blend turns into the engine's result. Sprite grids expand each quad from this frame's records.
 
 import package::p2_engine::color::to_display;
-import package::p2_engine::sun_shadow::{sun_index, sun_map_visibility};
+import package::p2_engine::sun_shadow::{has_sun, sun_index, sun_map_visibility, sun_seen};
+import package::p2_engine::modern::{ambient_occlusion, modern_surface, surface_of};
+import package::p2_engine::modern_base::LampLight;
 import bevy_pbr::render::{
     mesh_functions::{get_world_from_local, get_tag},
     view_transformations::{depth_ndc_to_view_z, position_world_to_clip},
@@ -25,7 +27,7 @@ struct Params {
     blend_frames: u32,
     fogged: u32,
     // Modern graphics: the depth in world units over which a sprite fades into the geometry behind it (0 off), and
-    // whether it takes the light where it is.
+    // how it takes the light where it is: 0 not, 1 as a puff in the air, `LIT_LYING` as the surface it lies on.
     soft: f32,
     lit: u32,
 }
@@ -59,6 +61,9 @@ struct VertexOutput {
     @location(6) light: vec3<f32>,
     // A modern puddle: the place across its quad (-1 to 1 each way) and its edge seed; all 0 for any other sprite.
     @location(7) puddle: vec3<f32>,
+    // For a sprite lying on a surface: its emitter's lamps alone (display light) and the sprite's normal.
+    @location(8) lamps: vec3<f32>,
+    @location(9) normal: vec3<f32>,
 }
 
 @if(!PARTICLE_INSTANCES)
@@ -110,6 +115,8 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.uv_b = vec2(select(sprite.next_uv.x, sprite.next_uv.z, along_right), select(sprite.next_uv.y, sprite.next_uv.w, along_up));
     out.color = unpack4x8unorm(sprite.color);
     out.light = sprites[first].center;
+    out.lamps = sprites[first].up;
+    out.normal = normalize((get_world_from_local(vertex.instance_index) * vec4(cross(sprite.up, sprite.right), 0.0)).xyz);
     if sprite.unused != 0u {
         out.puddle = vec3(select(-1.0, 1.0, along_right), select(-1.0, 1.0, along_up), f32(sprite.unused));
     }
@@ -158,6 +165,8 @@ fn scene_fog_color() -> vec3<f32> {
 
 // A puff of smoke faces the sun with about half of itself.
 const PUFF_SUN: f32 = 0.5;
+// Matches `particle_material.rs` `LIT_LYING`.
+const LIT_LYING: u32 = 2u;
 const LIGHT_LIMIT: f32 = 2.0;
 // Matches `modern.rs` `sky_view_mark`.
 const SKY_VIEW_MARK: f32 = -0.5;
@@ -176,6 +185,19 @@ fn particle_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>
         light += to_display(lights.directional_lights[sun].color.rgb) * (seen * PUFF_SUN);
     }
     return min(light, vec3(LIGHT_LIMIT));
+}
+
+// A sprite lying on a surface takes the light the modern surfaces give a white texel there, as a decal on the same
+// surface does; the emitter's lamps stand in for the surface's own. Without a sun the surfaces keep their lightmaps.
+fn lying_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>, lamps: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    if emitter.x < 0.0 || lights.ambient_color.a < SKY_VIEW_MARK || !has_sun() {
+        return particle_light(position, frag_coord, emitter);
+    }
+    let facing = select(-normal, normal, dot(normal, view.world_position.xyz - position) >= 0.0);
+    let seen = sun_seen(vec4(position, 1.0), facing, frag_coord.xy);
+    let lamp_light = LampLight(lamps, vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0);
+    let white = modern_surface(vec3(1.0), position, facing, seen, ambient_occlusion(frag_coord.xy), false, lamp_light, surface_of(0.0));
+    return to_display(white);
 }
 
 // 1 where the sprite stands `params.soft` units or more before the geometry behind it, falling to 0 where it meets it.
@@ -232,7 +254,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if params.alpha_test != 0u && alpha <= params.alpha_ref {
         discard;
     }
-    if params.lit != 0u {
+    if params.lit == LIT_LYING {
+        color *= lying_light(in.world_position.xyz, in.position, in.light, in.lamps, in.normal);
+    } else if params.lit != 0u {
         color *= particle_light(in.world_position.xyz, in.position, in.light);
     }
     // D3D fog mixes the colour towards a per-style fog colour: the scene's for regular and alpha blend,

@@ -145,6 +145,10 @@ fn console_command<L: LoaderRef>(vm: &mut Vm<L>, command: &str) -> Result<(Strin
             }
             String::new()
         }
+        "shot" => {
+            vm.host.commands.push(HostCommand::Screenshot);
+            String::new()
+        }
         "exit" | "quit" => {
             vm.host.commands.push(HostCommand::Quit);
             String::new()

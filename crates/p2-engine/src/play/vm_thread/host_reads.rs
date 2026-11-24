@@ -8,7 +8,8 @@ impl Simulation {
         self.vm.store.next_stamp();
         self.time_dilation = self.vm.time_dilation().to_bits();
         self.cull_volume = self.vm.set_cull_view(self.view.and_then(|view| view.actor));
-        self.view_key = ViewKey { viewed: self.view.and_then(|view| view.actor), behind: self.view.is_some_and(|view| view.behind), ..self.view_key };
+        let hidden_pawn = crate::render::photo::photo_hidden_pawn(&mut self.vm);
+        self.view_key = ViewKey { viewed: self.view.and_then(|view| view.actor), behind: self.view.is_some_and(|view| view.behind), hidden_pawn, ..self.view_key };
     }
 
     pub(in crate::play) fn pass_actor(&mut self, actor: ObjectId, changes: &mut Vec<(ObjectId, ActorFrame)>, restyled: &mut Vec<Spawned>) {
@@ -16,6 +17,7 @@ impl Simulation {
         let (time_dilation, view_key, cull_volume) = (self.time_dilation, self.view_key, self.cull_volume);
         let undrawn = |sent: &Sent| {
             (sent.steady || sent.view == view_key)
+                && sent.view.hidden_pawn == view_key.hidden_pawn
                 && sent.time_dilation == time_dilation
                 && sent.cull_volume == cull_volume
                 && (sent.frame.cull_distance == 0.0 || vm.beyond_cull_distance(actor, view_key.viewed) == sent.beyond)
@@ -38,7 +40,9 @@ impl Simulation {
         let (vm, view, hud_drawn, names) = (&self.vm, self.view.as_ref(), &self.hud_drawn, &mut self.lower_names);
         let (owner_only, now) = vm.store.reading_drawn(|| {
             let owner_only = vm.store.flag_of(actor, Prop::bOwnerNoSee) || vm.store.flag_of(actor, Prop::bOnlyOwnerSee);
-            (owner_only, actor_frame(vm, actor, view, hud_drawn, names))
+            let mut frame = actor_frame(vm, actor, view, hud_drawn, names);
+            frame.hidden |= view_key.hidden_pawn.is_some_and(|pawn| hangs_on(vm, actor, pawn));
+            (owner_only, frame)
         });
         let (read_at, steady) = (self.mark, now.attachment.is_none() && !owner_only);
         let vm = &self.vm;
@@ -157,6 +161,11 @@ impl Simulation {
         let frames = animation.animation.sequences[index].num_frames.max(1) as f32;
         Some(ChannelPose { animation, sequence: index, time: frame * frames, looping, tween })
     }
+}
+
+/// The pawn itself, what it owns, and what hangs from its bones or rides on it.
+fn hangs_on(vm: &Vm<Arc<Loader>>, actor: ObjectId, pawn: ObjectId) -> bool {
+    actor == pawn || vm.store.object_of(actor, Prop::Base) == Some(pawn) || vm.view_chain(actor).any(|other| other == pawn)
 }
 
 fn actor_frame(vm: &Vm<Arc<Loader>>, actor: ObjectId, view: Option<&p2_vm::PlayerView>, hud_drawn: &[ObjectId], names: &mut FxHashMap<p2_vm::NameId, Arc<str>>) -> ActorFrame {

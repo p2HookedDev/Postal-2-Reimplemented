@@ -345,7 +345,7 @@ fn start_vm(
             for (name, ini) in configs {
                 vm.add_config(name, ini);
             }
-            for (retail, ours) in [("MenuOptions", "ModernMenuOptions"), ("MenuMain", "ModernMenuMain")] {
+            for (retail, ours) in [("MenuOptions", "ModernMenuOptions"), ("MenuMain", "ModernMenuMain"), ("MenuGame", "ModernMenuGame")] {
                 if vm.redirect_class(("Shell", retail), ("P2Modern", ours)) {
                     bevy::log::info!("modern menu: P2Modern.{ours} found, {retail} swapped");
                 } else {
@@ -356,6 +356,7 @@ fn start_vm(
             vm
         }
     };
+    crate::render::photo::clear_photo_active(&mut vm);
     if fresh && let Some(dir) = crate::saves::save_dir() {
         vm.options.data_dir = dir.parent().map(Path::to_path_buf);
         vm.set_save_dir(dir);
@@ -403,7 +404,7 @@ fn start_vm(
     };
     progress.set(0.8);
     // The camera is the player's eyes, so its own pawn is not drawn.
-    if fresh && let Err(error) = vm.init_client() {
+    if fresh && let Err(error) = vm.init_client().and_then(|()| vm.add_viewport_interaction("P2Modern", "ModernPhotoMode")) {
         bevy::log::warn!("client: {error}");
     }
     let player = vm.login(options).unwrap_or_else(|error| {

@@ -26,7 +26,7 @@ use bevy::window::{PrimaryWindow, Window};
 
 use crate::components::{CanvasLayer, SceneView, SunShadow};
 use crate::display::{
-    MODERN_CHROMATIC_ABERRATION, MODERN_CONTRAST, MODERN_EXPOSURE, MODERN_GOD_RAYS, MODERN_SATURATION, MODERN_VIGNETTE, NEUTRAL_LEVEL, Settings,
+    MODERN_CHROMATIC_ABERRATION, MODERN_CONTRAST, MODERN_EXPOSURE, MODERN_GOD_RAYS, MODERN_PHOTO_WARMTH, MODERN_SATURATION, MODERN_VIGNETTE, NEUTRAL_LEVEL, Settings,
 };
 use crate::render::shaders::{add_libraries, add_shaders};
 
@@ -71,12 +71,23 @@ pub(crate) struct ToneEffects {
     tint: Vec4,
     grade: Vec4,
     lens: Vec4,
+    balance: Vec4,
 }
 
 impl Default for ToneEffects {
     fn default() -> Self {
-        Self { sun: Vec4::new(0.5, 0.5, 0.0, 1.0), tint: Vec4::ONE, grade: Vec4::new(1.0, 1.0, 1.0, 0.0), lens: Vec4::ZERO }
+        Self { sun: Vec4::new(0.5, 0.5, 0.0, 1.0), tint: Vec4::ONE, grade: Vec4::new(1.0, 1.0, 1.0, 0.0), lens: Vec4::ZERO, balance: Vec4::ONE }
     }
+}
+
+/// Red up and blue down for each level of warmth above neutral.
+const WARMTH_PER_LEVEL: Vec3 = Vec3::new(0.03, 0.0, -0.04);
+const LUMINANCE: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
+
+/// Gains for the colour channels, warmer above 0 and colder below; a grey keeps its brightness.
+pub(crate) fn white_balance(warmth: f32) -> Vec3 {
+    let gains = Vec3::ONE + WARMTH_PER_LEVEL * warmth;
+    gains / gains.dot(LUMINANCE)
 }
 
 const RAYS_PER_LEVEL: f32 = 0.08;
@@ -130,6 +141,7 @@ fn follow_effects(
             let panini = fov.map_or(Vec3::ZERO, |fov| crate::render::modern_view::panini(settings.modern_level(crate::display::MODERN_PANINI), fov, aspect));
             Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, panini.x, panini.y, panini.z)
         },
+        balance: white_balance(if settings.photo_active() { around_neutral(MODERN_PHOTO_WARMTH) } else { 0.0 }).extend(1.0),
     };
     let rays = level(MODERN_GOD_RAYS) * RAYS_PER_LEVEL;
     let view = views.iter().find(|(camera, _)| camera.is_active);

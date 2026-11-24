@@ -297,7 +297,7 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    pub(crate) fn set_command(&mut self, query: &str) {
+    pub fn set_command(&mut self, query: &str) {
         let mut parts = query.trim().splitn(3, ' ');
         let (Some(path), Some(property), text) = (parts.next(), parts.next(), parts.next().unwrap_or("").trim()) else { return };
         let path = self.command_class_path(path);

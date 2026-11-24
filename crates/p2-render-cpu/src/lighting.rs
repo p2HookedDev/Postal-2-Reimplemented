@@ -10,17 +10,17 @@ pub struct LightType(pub u8);
 pub struct LightEffect(pub u8);
 
 pub(crate) const LT_NONE: LightType = LightType(0);
-const LT_STEADY: LightType = LightType(1);
+pub const LT_STEADY: LightType = LightType(1);
 const LT_PULSE: LightType = LightType(2);
 const LT_BLINK: LightType = LightType(3);
 const LT_FLICKER: LightType = LightType(4);
 const LT_STROBE: LightType = LightType(5);
-const LT_SUBTLE_PULSE: LightType = LightType(7);
+pub const LT_SUBTLE_PULSE: LightType = LightType(7);
 const LT_TEXTURE_PALETTE_ONCE: LightType = LightType(8);
 const LT_TEXTURE_PALETTE_LOOP: LightType = LightType(9);
 pub const LE_STATIC_SPOT: LightEffect = LightEffect(8);
 pub const LE_SPOTLIGHT: LightEffect = LightEffect(12);
-const LE_NON_INCIDENCE: LightEffect = LightEffect(13);
+pub const LE_NON_INCIDENCE: LightEffect = LightEffect(13);
 const LE_CYLINDER: LightEffect = LightEffect(17);
 pub const LE_SUNLIGHT: LightEffect = LightEffect(20);
 

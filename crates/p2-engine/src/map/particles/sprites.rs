@@ -1,4 +1,5 @@
 use super::*;
+use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT, MeshLight};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SpriteGrid {
@@ -143,25 +144,43 @@ const UNLIT: Vec3 = Vec3::NEG_ONE;
 
 /// In display light, as `particle.wesl` adds it: a lamp lights a puff in its reach through and through.
 pub(super) fn emitter_light(zone_ambient: Vec3, lamps: Vec3) -> Vec3 {
-    zone_ambient + lamps.max(Vec3::ZERO).powf(1.0 / 2.2)
+    zone_ambient + lamps_shown(lamps)
 }
 
-/// The emitter's sprite count, and in the place of a sprite's centre its `emitter_light`.
-pub(super) fn header_record(count: usize, lamps: Vec3) -> [u32; RECORD_WORDS] {
+pub(super) fn lamps_shown(lamps: Vec3) -> Vec3 {
+    lamps.max(Vec3::ZERO).powf(1.0 / 2.2)
+}
+
+/// A puff's share of the script lights around it (a fire, a gun flash), in display light: their falloff with no facing,
+/// at half of what a surface facing them takes.
+pub(super) fn glow_at(lights: &[MeshLight], location: Vector, level_brightness: f32) -> Vec3 {
+    let points = lights.iter().filter(|light| light.dynamic && !matches!(light.effect, LE_SUNLIGHT | LE_SPOTLIGHT | LE_STATIC_SPOT));
+    points
+        .map(|light| {
+            let a = ((light.location - location).size() / light.world_radius()).min(1.0);
+            Vec3::from(light.color(level_brightness)) * (0.5 * (2.0 * a * a * a - 3.0 * a * a + 1.0))
+        })
+        .sum()
+}
+
+/// The emitter's sprite count, in the place of a sprite's centre its `emitter_light` and of its up axis its
+/// `lamps_shown`, which a sprite lying on a surface takes in place of the zone's ambient.
+pub(super) fn header_record(count: usize, light: Vec3, lamps: Vec3) -> [u32; RECORD_WORDS] {
     let mut record = [0; RECORD_WORDS];
-    record[0..3].copy_from_slice(&lamps.to_array().map(f32::to_bits));
+    record[0..3].copy_from_slice(&light.to_array().map(f32::to_bits));
+    record[4..7].copy_from_slice(&lamps.to_array().map(f32::to_bits));
     record[7] = u32::try_from(count).unwrap_or(u32::MAX);
     record
 }
 
 pub(super) fn write_sprite_records(writes: &mut MeshWrites, p: &mut ParticleActor, particles: &[(Vec<StripPoint>, Vec<SpriteParticle>)], drawn: Option<(Vec3, Vec3)>) {
     let grid_at = drawn.map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
-    let lamps = if p.overlay.is_some() { UNLIT } else { p.lamp_light };
+    let lamps = if p.overlay.is_some() { UNLIT } else { p.lamp_light + p.fire_light };
     let puddle_seed = p.puddle_seed.filter(|_| writes.liquid_flow);
     for (draw, (_, sprites)) in p.draws.iter_mut().zip(particles) {
         let (Some(EmitterMesh { entity, shown: true, .. }), Some(grid)) = (&draw.mesh, &mut draw.grid) else { continue };
         let first = u32::try_from(writes.records.len()).unwrap_or(u32::MAX);
-        writes.records.push(header_record(sprites.len(), lamps));
+        writes.records.push(header_record(sprites.len(), lamps, p.lamps_alone + p.fire_light));
         let sprites_at = writes.records.len();
         writes.records.extend(sprites.iter().map(|sprite| sprite_record(sprite, grid_at)));
         if let Some(seed) = puddle_seed {
@@ -193,5 +212,16 @@ mod tests {
         let light = emitter_light(Vec3::splat(0.25), Vec3::splat(0.5));
         assert!((light - Vec3::splat(0.98)).abs().max_element() < 0.01, "{light}");
         assert_eq!(emitter_light(Vec3::splat(0.25), Vec3::splat(-1.0)), Vec3::splat(0.25));
+    }
+
+    #[test]
+    fn a_puff_takes_half_a_script_light_at_it_and_none_at_its_radius() {
+        let light = MeshLight { radius: 3.0, brightness: 255.0, saturation: 255, dynamic: true, ..MeshLight::default() };
+        let full = Vec3::from(light.color(1.0));
+        assert_eq!(glow_at(&[light], Vector::ZERO, 1.0), full * 0.5);
+        assert_eq!(glow_at(&[light], Vector::new(50.0, 0.0, 0.0), 1.0), full * 0.25);
+        assert_eq!(glow_at(&[light], Vector::new(100.0, 0.0, 0.0), 1.0), Vec3::ZERO);
+        assert_eq!(glow_at(&[light], Vector::new(500.0, 0.0, 0.0), 1.0), Vec3::ZERO);
+        assert_eq!(glow_at(&[MeshLight { dynamic: false, ..light }, MeshLight { effect: LE_SPOTLIGHT, ..light }], Vector::ZERO, 1.0), Vec3::ZERO);
     }
 }

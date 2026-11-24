@@ -248,7 +248,11 @@ pub enum SceneChange {
 
 impl MeshView {
     fn view_fov(&self) -> f32 {
-        if self.fov > 0.0 { self.fov } else { 90.0 }
+        match self.modern.photo_fov {
+            Some(degrees) => f32::from(degrees),
+            None if self.fov > 0.0 => self.fov,
+            None => 90.0,
+        }
     }
 
     fn set_fov(&self, projection: &mut Mut<Projection>, degrees: f32) {

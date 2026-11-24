@@ -1,7 +1,8 @@
 //! Modern graphics: screen-space reflections. After the main passes one full-screen pass marches the depth prepass
 //! along each reflecting pixel's mirrored ray and adds what it meets to the frame. A pixel reflects when its normal
 //! prepass alpha names a reflecting class, which our lit materials' prepass writes. A ray that leaves the screen or
-//! meets nothing shows nothing: no stand-in light takes its place. Level 1 marches half as far as level 2.
+//! meets nothing shows nothing: no stand-in light takes its place. Level 1 marches half as far as level 2. A puddle
+//! is a sprite, which writes no prepass: the pass is told where the nearest puddles lie and mirrors the floor there.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -31,8 +32,10 @@ use bevy::transform::components::GlobalTransform;
 
 use crate::components::SceneView;
 use crate::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS, Settings};
+use crate::map::Particles;
 use crate::render::screen_pass::{PassUniformOffset, PassUniforms, modern_level, prepare_pass_uniforms};
 use crate::render::shaders::{add_libraries, add_shaders};
+use crate::shown_scene::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
 const CLASS_PREPASS_SHADER: Handle<Shader> = uuid_handle!("e2a4f9c1-7b36-4d58-9f0e-3c81b6d27a45");
@@ -40,6 +43,8 @@ const HALF_SIZE_LEVEL: u8 = 2;
 const FULL_SIZE_LEVEL: u8 = 3;
 const FULL_STRENGTH: f32 = 10.0;
 const FULL_SIZE_STEPS: f32 = 48.0;
+/// Matches the array in `reflections.wesl`.
+const MAX_PUDDLES: usize = 16;
 
 pub struct ReflectionsPlugin;
 
@@ -96,6 +101,9 @@ pub struct Reflections {
     view_from_clip: Mat4,
     view_from_world: Mat4,
     look: Vec4,
+    /// In view space: the centre and the radius of each puddle; `puddle_count.x` of them are set.
+    puddles: [Vec4; MAX_PUDDLES],
+    puddle_count: Vec4,
 }
 
 /// x the strength, 1 at the top level (a surface returns no more than reaches it), y the march's stride in pixels (2 at
@@ -111,6 +119,8 @@ pub(crate) fn look(level: u8, strength: u8, materials: u8) -> Option<Vec4> {
 fn follow_reflection_settings(
     mut commands: Commands,
     settings: Option<Res<Settings>>,
+    particles: Option<Res<Particles>>,
+    scene: Option<Res<ShownScene>>,
     views: Query<(Entity, &Camera, &GlobalTransform, &Msaa, Option<&Reflections>), With<SceneView>>,
 ) {
     let wanted = look(
@@ -126,8 +136,14 @@ fn follow_reflection_settings(
             }
             continue;
         };
-        let clip_from_view = camera.clip_from_view();
-        let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world: place.to_matrix().inverse(), look };
+        let (clip_from_view, view_from_world) = (camera.clip_from_view(), place.to_matrix().inverse());
+        let discs = particles.as_deref().zip(scene.as_deref()).map_or_else(Vec::new, |(particles, scene)| particles.puddle_discs(scene.origin, place.translation(), MAX_PUDDLES));
+        let mut puddles = [Vec4::ZERO; MAX_PUDDLES];
+        for (puddle, disc) in puddles.iter_mut().zip(&discs) {
+            *puddle = view_from_world.transform_point3(disc.truncate()).extend(disc.w);
+        }
+        let puddle_count = Vec4::new(discs.len() as f32, 0.0, 0.0, 0.0);
+        let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world, look, puddles, puddle_count };
         if shown != Some(&reflections) {
             commands.entity(entity).insert(reflections);
         }

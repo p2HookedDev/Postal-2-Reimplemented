@@ -26,7 +26,7 @@ impl ParticleEmitter {
         let front = screen_right.cross(screen_down);
         self.live().filter(move |_| !props.disabled).map(move |(_, p)| {
             let location = to_world(p.location);
-            let moved = || direction_to_world((p.location - p.old_location).safe_normal());
+            let moved = || direction_to_world(p.heading);
             let [size_x, size_y] = [p.size.x, p.size.y];
             let (mut up, mut right, axis) = match props.use_direction_as {
                 DirectionUsage::None => (screen_down * size_x, screen_right * size_x, front),

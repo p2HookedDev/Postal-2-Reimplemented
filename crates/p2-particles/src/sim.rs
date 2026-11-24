@@ -63,6 +63,9 @@ const MAX_SPAWN_PASSES: u32 = 1024;
 struct Particle {
     location: Vector,
     old_location: Vector,
+    /// The way its last move went. A bounce leaves the particle where it stood for that tick, and a sprite drawn along
+    /// its motion took no direction from that and vanished (unverified for POSTAL 2).
+    heading: Vector,
     velocity: Vector,
     start_size: Vector,
     /// Rotation units per second.

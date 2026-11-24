@@ -2,11 +2,13 @@ import package::p2_engine::tone_curve::pbr_neutral;
 
 // `sun`: its place on the screen in uv, the rays' strength (0 without rays) and the frame's width over its height.
 // `tint`: the rays' colour. `grade`: exposure, saturation, contrast, vignette. `lens`: colour fringe in uv at the corner.
+// `balance`: the white balance's gains on red, green and blue.
 struct Post {
     sun: vec4<f32>,
     tint: vec4<f32>,
     grade: vec4<f32>,
     lens: vec4<f32>,
+    balance: vec4<f32>,
 }
 
 @group(2) @binding(0) var scene: texture_2d<f32>;
@@ -97,7 +99,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         color.r = textureSampleLevel(scene, scene_sampler, at + shift, 0.0).r;
         color.b = textureSampleLevel(scene, scene_sampler, at - shift, 0.0).b;
     }
-    color = color * post.grade.x + sun_rays(at, in.position.xy);
+    color = (color * post.grade.x + sun_rays(at, in.position.xy)) * post.balance.rgb;
     color = pbr_neutral(color);
     let grey = dot(color, LUMINANCE);
     color = max(mix(vec3(grey), color, post.grade.y), vec3(0.0));

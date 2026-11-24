@@ -30,7 +30,7 @@ use bevy::render::render_resource::BlendState;
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_math::Vector;
-use p2_render_cpu::{HardwareLight, MeshLight};
+use p2_render_cpu::MeshLight;
 
 use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow, UNSEEN_LAYER};
 use crate::display::{
@@ -41,7 +41,7 @@ use crate::render::material_class::level_bits;
 use crate::level_collision::LevelCollision;
 use crate::mesh_view::{NoSunCast, SKY_LAYER};
 use crate::render::tone::ToneCamera;
-use crate::render::actor_light::{ActorLitMaterial, HardwareLighting, LightEnvironment, settle_step};
+use crate::render::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step};
 use crate::render::blended::{OpaqueDecals, TerrainLayerMaterial};
 use crate::render::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::render::map_lights::{MapLights, follow_map_lights};
@@ -438,15 +438,15 @@ const SAME_SUN_COS: f32 = 0.99452;
 
 /// The map's still suns grouped by direction, each group's colours summed as retail's baked light sums them. The
 /// shadowed sun's group is first when there is one, then the strongest others.
-fn sun_groups(environment: &LightEnvironment, sun: Option<&(MeshLight, HardwareLight)>) -> Vec<(Vector, [f32; 3])> {
-    let strength = |light: &MeshLight| light.color(environment.level_brightness).iter().sum::<f32>();
-    let mut candidates: Vec<&MeshLight> = environment.suns.iter().collect();
+fn sun_groups(set: SunSet) -> Vec<(Vector, [f32; 3])> {
+    let strength = |light: &MeshLight| light.color(set.level_brightness).iter().sum::<f32>();
+    let mut candidates: Vec<&MeshLight> = set.suns.iter().collect();
     candidates.sort_by(|a, b| {
         strength(b).total_cmp(&strength(a)).then_with(|| <[f32; 3]>::from(a.location).partial_cmp(&<[f32; 3]>::from(b.location)).unwrap_or(std::cmp::Ordering::Equal))
     });
-    let mut groups: Vec<(Vector, [f32; 3])> = sun.map(|(light, _)| (light.rotation.vector(), [0.0; 3])).into_iter().collect();
+    let mut groups: Vec<(Vector, [f32; 3])> = set.sun.map(|(light, _)| (light.rotation.vector(), [0.0; 3])).into_iter().collect();
     for light in candidates {
-        let (along, color) = (light.rotation.vector(), light.color(environment.level_brightness));
+        let (along, color) = (light.rotation.vector(), light.color(set.level_brightness));
         match groups.iter_mut().find(|(other, _)| other.dot(along) > SAME_SUN_COS) {
             Some((_, sum)) => sum.iter_mut().zip(color).for_each(|(sum, channel)| *sum += channel),
             None => groups.push((along, color)),
@@ -456,18 +456,18 @@ fn sun_groups(environment: &LightEnvironment, sun: Option<&(MeshLight, HardwareL
 }
 
 /// The shadowed sun's linear colour: every sun on its direction together.
-pub(crate) fn sun_color(environment: &LightEnvironment) -> [f32; 3] {
-    let Some(sun) = environment.sun.as_ref() else { return [0.0; 3] };
-    let own = sun.0.color(environment.level_brightness);
-    let summed = sun_groups(environment, Some(sun)).first().map_or(own, |&(_, sum)| sum);
+pub(crate) fn sun_color(set: SunSet) -> [f32; 3] {
+    let Some(sun) = set.sun else { return [0.0; 3] };
+    let own = sun.0.color(set.level_brightness);
+    let summed = sun_groups(set).first().map_or(own, |&(_, sum)| sum);
     // A sun that is not in the list of lights still shines.
     linear_light(if summed.iter().sum::<f32>() > 0.0 { summed } else { own })
 }
 
-pub(crate) fn fill_suns(environment: &LightEnvironment, sun: Option<&(MeshLight, HardwareLight)>) -> Vec<(Vec3, [f32; 3])> {
-    sun_groups(environment, sun)
+pub(crate) fn fill_suns(set: SunSet) -> Vec<(Vec3, [f32; 3])> {
+    sun_groups(set)
         .into_iter()
-        .skip(usize::from(sun.is_some()))
+        .skip(usize::from(set.sun.is_some()))
         .take(MAX_FILL_SUNS)
         .map(|(along, color)| (Vec3::from(p2_bevy_assets::to_bevy(along)), linear_light(color)))
         .collect()
@@ -480,6 +480,7 @@ fn sun_shadows(
     mut suns: Query<(Entity, &mut DirectionalLight, &mut Transform, &mut CascadeShadowConfig), With<SunShadow>>,
     fills: Query<Entity, With<FillSun>>,
     mut last_fills: Local<Vec<(Vec3, [f32; 3])>>,
+    time: Res<Time>,
 ) {
     let Some(map) = map else {
         for entity in suns.iter().map(|(entity, ..)| entity).chain(&fills) {
@@ -499,8 +500,10 @@ fn sun_shadows(
             commands.entity(entity).despawn();
             continue;
         }
-        if current.color != wanted.color || current.contact_shadows_enabled != wanted.contact_shadows_enabled || current.shadow_maps_enabled != wanted.shadow_maps_enabled {
-            *current = wanted;
+        // Another zone's suns come in as its ambient does.
+        let color = Color::LinearRgba(blend_light(current.color.to_linear(), wanted.color.to_linear(), settle_step(time.delta_secs(), ZONE_AMBIENT_BLEND_SECONDS)));
+        if current.color != color || current.contact_shadows_enabled != wanted.contact_shadows_enabled || current.shadow_maps_enabled != wanted.shadow_maps_enabled {
+            *current = DirectionalLight { color, ..wanted };
         }
         if config.bounds != cascades.bounds {
             *config = cascades.clone();
@@ -546,7 +549,7 @@ pub fn view_ambient(
                 let zone = level.model().map_or(0, |model| p2_collision::point_zone(model, position.into()));
                 let [r, g, b] = environment.zone_ambients.get(usize::from(zone)).copied().unwrap_or_default();
                 let target = LinearRgba::new(r, g, b, probes.as_ref().map_or(0.0, |probes| probes.spacing));
-                let color = if ambient.brightness == 1.0 { blend_ambient(ambient.color.to_linear(), target, step) } else { target };
+                let color = if ambient.brightness == 1.0 { blend_light(ambient.color.to_linear(), target, step) } else { target };
                 AmbientLight { color: Color::LinearRgba(color), brightness: 1.0, affects_lightmapped_meshes: false }
             }
             None => AmbientLight { affects_lightmapped_meshes: false, ..AmbientLight::default() },
@@ -557,7 +560,7 @@ pub fn view_ambient(
     }
 }
 
-fn blend_ambient(shown: LinearRgba, target: LinearRgba, t: f32) -> LinearRgba {
+fn blend_light(shown: LinearRgba, target: LinearRgba, t: f32) -> LinearRgba {
     let mix = |a: f32, b: f32| a + (b - a) * t;
     let blended = LinearRgba::new(mix(shown.red, target.red), mix(shown.green, target.green), mix(shown.blue, target.blue), target.alpha);
     let near = [blended.red - target.red, blended.green - target.green, blended.blue - target.blue].iter().all(|d| d.abs() < 1.0 / 512.0);

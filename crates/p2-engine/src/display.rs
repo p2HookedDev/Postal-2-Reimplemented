@@ -111,6 +111,7 @@ pub const QUERIES: &[&str] = &[
     MODERN_REFLECTIONS,
     MODERN_REFLECTION_STRENGTH,
     MODERN_PARTICLE_LIGHT,
+    MODERN_FIRE_LIGHT,
     MODERN_SOFT_PARTICLES,
     MODERN_DECAL_AGING,
     MODERN_WOUNDS,
@@ -122,13 +123,25 @@ pub const QUERIES: &[&str] = &[
     MODERN_FOOT_PLACEMENT,
     MODERN_HIT_REACTIONS,
     MODERN_LAMP_SIZE,
-    MODERN_CUTSCENE_DOF,
-    MODERN_CUTSCENE_MOTION_BLUR,
     MODERN_TEMPORAL_AA,
     MODERN_BOUNCE_LIGHT,
     MODERN_LIQUID_FLOW,
     MODERN_FIRE_VOLUMES,
     MODERN_VOLUMETRIC_FOG,
+    MODERN_PHOTO_ACTIVE,
+    MODERN_PHOTO_FOV,
+    MODERN_PHOTO_FOCUS,
+    MODERN_PHOTO_BLUR,
+    MODERN_PHOTO_EXPOSURE,
+    MODERN_PHOTO_SATURATION,
+    MODERN_PHOTO_CONTRAST,
+    MODERN_PHOTO_VIGNETTE,
+    MODERN_PHOTO_BLOOM,
+    MODERN_PHOTO_GOD_RAYS,
+    MODERN_PHOTO_FRINGE,
+    MODERN_PHOTO_SHARPEN,
+    MODERN_PHOTO_WARMTH,
+    MODERN_PHOTO_HIDE_PLAYER,
     MSAA,
 ];
 
@@ -178,6 +191,7 @@ pub const MODERN_EXPOSURE: &str = "ini:Engine.Engine.RenderDevice ModernExposure
 pub const MODERN_REFLECTIONS: &str = "ini:Engine.Engine.RenderDevice ModernReflections";
 pub const MODERN_REFLECTION_STRENGTH: &str = "ini:Engine.Engine.RenderDevice ModernReflectionStrength";
 pub const MODERN_PARTICLE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernParticleLight";
+pub const MODERN_FIRE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernFireLight";
 pub const MODERN_SOFT_PARTICLES: &str = "ini:Engine.Engine.RenderDevice ModernSoftParticles";
 pub const MODERN_DECAL_AGING: &str = "ini:Engine.Engine.RenderDevice ModernDecalAging";
 pub const MODERN_WOUNDS: &str = "ini:Engine.Engine.RenderDevice ModernWounds";
@@ -189,19 +203,51 @@ pub const MODERN_FADE_IN: &str = "ini:Engine.Engine.RenderDevice ModernFadeIn";
 pub const MODERN_FOOT_PLACEMENT: &str = "ini:Engine.Engine.RenderDevice ModernFootPlacement";
 pub const MODERN_HIT_REACTIONS: &str = "ini:Engine.Engine.RenderDevice ModernHitReactions";
 pub const MODERN_LAMP_SIZE: &str = "ini:Engine.Engine.RenderDevice ModernLampSize";
-pub const MODERN_CUTSCENE_DOF: &str = "ini:Engine.Engine.RenderDevice ModernCutsceneDof";
-pub const MODERN_CUTSCENE_MOTION_BLUR: &str = "ini:Engine.Engine.RenderDevice ModernCutsceneMotionBlur";
 pub const MODERN_TEMPORAL_AA: &str = "ini:Engine.Engine.RenderDevice ModernTemporalAA";
 pub const MODERN_BOUNCE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernBounceLight";
 pub const MODERN_LIQUID_FLOW: &str = "ini:Engine.Engine.RenderDevice ModernLiquidFlow";
 pub const MODERN_FIRE_VOLUMES: &str = "ini:Engine.Engine.RenderDevice ModernFireVolumes";
 pub const MODERN_VOLUMETRIC_FOG: &str = "ini:Engine.Engine.RenderDevice ModernVolumetricFog";
+/// Set by the photo mode script while it is open. The photo rows stand in only for rows that act without a reload, so
+/// opening it changes `Settings` but reloads nothing and leaves the player's rows as saved.
+pub const MODERN_PHOTO_ACTIVE: &str = "ini:Engine.Engine.RenderDevice ModernPhotoActive";
+/// 0 keeps the game's field of view, else horizontal degrees.
+pub const MODERN_PHOTO_FOV: &str = "ini:Engine.Engine.RenderDevice ModernPhotoFov";
+/// 0 is no depth of field, else the focus distance (see `photo::focus_distance`).
+pub const MODERN_PHOTO_FOCUS: &str = "ini:Engine.Engine.RenderDevice ModernPhotoFocus";
+pub const MODERN_PHOTO_BLUR: &str = "ini:Engine.Engine.RenderDevice ModernPhotoBlur";
+pub const MODERN_PHOTO_EXPOSURE: &str = "ini:Engine.Engine.RenderDevice ModernPhotoExposure";
+pub const MODERN_PHOTO_SATURATION: &str = "ini:Engine.Engine.RenderDevice ModernPhotoSaturation";
+pub const MODERN_PHOTO_CONTRAST: &str = "ini:Engine.Engine.RenderDevice ModernPhotoContrast";
+pub const MODERN_PHOTO_VIGNETTE: &str = "ini:Engine.Engine.RenderDevice ModernPhotoVignette";
+pub const MODERN_PHOTO_BLOOM: &str = "ini:Engine.Engine.RenderDevice ModernPhotoBloom";
+pub const MODERN_PHOTO_GOD_RAYS: &str = "ini:Engine.Engine.RenderDevice ModernPhotoGodRays";
+pub const MODERN_PHOTO_FRINGE: &str = "ini:Engine.Engine.RenderDevice ModernPhotoFringe";
+pub const MODERN_PHOTO_SHARPEN: &str = "ini:Engine.Engine.RenderDevice ModernPhotoSharpen";
+/// A white balance while photo mode is open: `NEUTRAL_LEVEL` leaves the picture, lower is colder, higher warmer.
+pub const MODERN_PHOTO_WARMTH: &str = "ini:Engine.Engine.RenderDevice ModernPhotoWarmth";
+/// While photo mode is open, the player's pawn and what hangs on it are not drawn.
+pub const MODERN_PHOTO_HIDE_PLAYER: &str = "ini:Engine.Engine.RenderDevice ModernPhotoHidePlayer";
+
+/// While photo mode is open each picture row answers with its photo row; an unset photo row leaves the player's.
+const PHOTO_TWINS: [(&str, &str); 8] = [
+    (MODERN_EXPOSURE, MODERN_PHOTO_EXPOSURE),
+    (MODERN_SATURATION, MODERN_PHOTO_SATURATION),
+    (MODERN_CONTRAST, MODERN_PHOTO_CONTRAST),
+    (MODERN_VIGNETTE, MODERN_PHOTO_VIGNETTE),
+    (MODERN_BLOOM, MODERN_PHOTO_BLOOM),
+    (MODERN_GOD_RAYS, MODERN_PHOTO_GOD_RAYS),
+    (MODERN_CHROMATIC_ABERRATION, MODERN_PHOTO_FRINGE),
+    (MODERN_SHARPEN, MODERN_PHOTO_SHARPEN),
+];
+
+const PHOTO_FOV_LEAST: u8 = 10;
 
 /// The slider value that leaves saturation, contrast and exposure as they are.
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 36] = [
+const LEVELS: [(&str, u8, u8); 49] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
@@ -220,6 +266,7 @@ const LEVELS: [(&str, u8, u8); 36] = [
     (MODERN_REFLECTIONS, 2, 3),
     (MODERN_REFLECTION_STRENGTH, 10, 10),
     (MODERN_PARTICLE_LIGHT, 1, 1),
+    (MODERN_FIRE_LIGHT, 1, 1),
     (MODERN_SOFT_PARTICLES, 5, 10),
     (MODERN_DECAL_AGING, 1, 1),
     (MODERN_WOUNDS, 1, 1),
@@ -231,8 +278,6 @@ const LEVELS: [(&str, u8, u8); 36] = [
     (MODERN_FOOT_PLACEMENT, 1, 1),
     (MODERN_HIT_REACTIONS, 5, 10),
     (MODERN_LAMP_SIZE, 5, 10),
-    (MODERN_CUTSCENE_DOF, 4, 10),
-    (MODERN_CUTSCENE_MOTION_BLUR, 3, 10),
     // Held at 0 until each is sound: the temporal resolve ghosts and flickers, the fire volume and the lamp fog were
     // rejected in play, bounce light brightens what is lit and not what is dark. A saved value above 0 reads as 0.
     (MODERN_TEMPORAL_AA, 0, 0),
@@ -240,6 +285,20 @@ const LEVELS: [(&str, u8, u8); 36] = [
     (MODERN_LIQUID_FLOW, 1, 1),
     (MODERN_FIRE_VOLUMES, 0, 0),
     (MODERN_VOLUMETRIC_FOG, 0, 0),
+    (MODERN_PHOTO_ACTIVE, 0, 1),
+    (MODERN_PHOTO_FOV, 0, 150),
+    (MODERN_PHOTO_FOCUS, 0, 36),
+    (MODERN_PHOTO_BLUR, 0, 10),
+    (MODERN_PHOTO_EXPOSURE, NEUTRAL_LEVEL, 10),
+    (MODERN_PHOTO_SATURATION, NEUTRAL_LEVEL, 10),
+    (MODERN_PHOTO_CONTRAST, NEUTRAL_LEVEL, 10),
+    (MODERN_PHOTO_VIGNETTE, 2, 10),
+    (MODERN_PHOTO_BLOOM, 5, 10),
+    (MODERN_PHOTO_GOD_RAYS, 5, 10),
+    (MODERN_PHOTO_FRINGE, 0, 10),
+    (MODERN_PHOTO_SHARPEN, 4, 10),
+    (MODERN_PHOTO_WARMTH, NEUTRAL_LEVEL, 10),
+    (MODERN_PHOTO_HIDE_PLAYER, 0, 1),
 ];
 
 const ANTI_ALIASING_MSAA_2X: u8 = 3;
@@ -320,7 +379,23 @@ impl Settings {
         if self.modern_level(MODERN_SPECULAR) > 0 { 8 } else { 0 }
     }
 
+    pub fn photo_active(&self) -> bool {
+        self.modern_level(MODERN_PHOTO_ACTIVE) > 0
+    }
+
+    /// Degrees, while photo mode is open and its own field of view is set.
+    pub fn photo_fov(&self) -> Option<u8> {
+        let degrees = self.modern_level(MODERN_PHOTO_FOV);
+        (degrees > 0 && self.photo_active()).then(|| degrees.max(PHOTO_FOV_LEAST))
+    }
+
+    fn photo_twin(&self, query: &str) -> Option<&'static str> {
+        let &(_, twin) = PHOTO_TWINS.iter().find(|&&(row, _)| row == query)?;
+        (!self.text(twin).trim().is_empty() && self.photo_active()).then_some(twin)
+    }
+
     pub fn modern_level(&self, query: &str) -> u8 {
+        let query = self.photo_twin(query).unwrap_or(query);
         let Some(&(_, high, top)) = LEVELS.iter().find(|(key, ..)| *key == query) else { return 0 };
         if !self.modern_graphics() {
             return 0;
@@ -452,9 +527,9 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 4, 3, 0, 0, 1, 0, 0]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0]);
         let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
-        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 10, 10, 0, 0, 1, 0, 0]);
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 0, 0, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
         assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 0);
         assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);
@@ -466,6 +541,43 @@ mod tests {
         assert_eq!(with("True", MODERN_AO, "False").modern_level(MODERN_AO), 0);
         assert_eq!(with("True", MODERN_CONTACT_SHADOWS, "True").modern_level(MODERN_CONTACT_SHADOWS), 1);
         assert_eq!(with("True", MODERN_RELIEF, "3").modern_level(MODERN_RELIEF), 0);
+    }
+
+    fn photo(master: &str, active: &str, row: &str, twin: &str, fov: &str) -> Settings {
+        Settings::read(|query| match query {
+            MODERN_GRAPHICS => master.to_owned(),
+            MODERN_PHOTO_ACTIVE => active.to_owned(),
+            MODERN_PHOTO_FOV => fov.to_owned(),
+            query if PHOTO_TWINS.iter().any(|&(key, _)| key == query) => row.to_owned(),
+            query if PHOTO_TWINS.iter().any(|&(_, key)| key == query) => twin.to_owned(),
+            _ => String::new(),
+        })
+    }
+
+    #[test]
+    fn photo_rows_answer_for_the_picture_rows_only_while_open() {
+        let rows = |settings: Settings| PHOTO_TWINS.map(|(row, _)| settings.modern_level(row));
+        assert_eq!(rows(photo("True", "0", "3", "7", "")), [3; 8]);
+        assert_eq!(rows(photo("True", "", "3", "7", "")), [3; 8]);
+        assert_eq!(rows(photo("True", "1", "3", "7", "")), [7; 8]);
+        assert_eq!(rows(photo("True", "1", "3", "0", "")), [0; 8]);
+        assert_eq!(rows(photo("True", "1", "3", "", "")), [3; 8]);
+        assert_eq!(rows(photo("False", "1", "3", "7", "")), [0; 8]);
+        let open = photo("True", "1", "3", "7", "");
+        assert_eq!(PHOTO_TWINS.map(|(row, _)| open.text(row)), ["3"; 8]);
+        assert_eq!(open.modern_level(MODERN_AO), 2);
+    }
+
+    #[test]
+    fn photo_field_of_view_only_while_open_and_set() {
+        let fov = |master: &str, active: &str, degrees: &str| photo(master, active, "", "", degrees).photo_fov();
+        assert_eq!(fov("True", "0", "60"), None);
+        assert_eq!(fov("True", "1", "0"), None);
+        assert_eq!(fov("True", "1", ""), None);
+        assert_eq!(fov("False", "1", "60"), None);
+        assert_eq!(fov("True", "1", "60"), Some(60));
+        assert_eq!(fov("True", "1", "3"), Some(PHOTO_FOV_LEAST));
+        assert_eq!(fov("True", "1", "200"), Some(150));
     }
 
     #[test]

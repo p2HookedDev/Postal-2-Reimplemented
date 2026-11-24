@@ -79,6 +79,10 @@ impl PlayWorld {
         self.frame.set_mouse.take()
     }
 
+    pub fn take_screenshot(&mut self) -> bool {
+        std::mem::take(&mut self.frame.screenshot)
+    }
+
     pub fn wants_quit(&self) -> bool {
         self.frame.quit
     }
@@ -105,8 +109,10 @@ impl PlayWorld {
 
     /// In seconds, once: later calls return 0 until the next frame (egui may run a frame's UI pass twice, which must not
     /// advance what follows the game twice).
+    /// The time particles move by: none while the game is paused, as its own emitters stand still then.
     pub fn take_step(&mut self) -> f32 {
-        std::mem::take(&mut self.frame.step)
+        let step = std::mem::take(&mut self.frame.step);
+        if self.frame.paused { 0.0 } else { step }
     }
 
     pub fn take_projections(&mut self) -> Vec<(ProjectorEvent, Option<ProjectorActor>)> {

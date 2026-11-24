@@ -153,6 +153,7 @@ impl ParticleEmitter {
         *p = Particle {
             location,
             old_location,
+            heading: (location - old_location).safe_normal(),
             velocity,
             start_size,
             spins_per_second: spins_per_second * RETAIL_UNITS_PER_TURN,

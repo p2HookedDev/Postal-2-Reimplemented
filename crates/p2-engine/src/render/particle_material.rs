@@ -54,10 +54,23 @@ impl Plugin for ParticlePlugin {
 /// World units of fade per level of the soft particles setting.
 const SOFT_UNITS_PER_LEVEL: f32 = 6.0;
 
+/// `lit` for a sprite that takes the light of the surface it lies on rather than a puff's.
+const LIT_LYING: u32 = 2;
+
 /// The uniform's `soft` (fade depth in world units, 0 off) and `lit` for a material, from the two setting levels.
-fn modern_params(soft_level: u8, light_level: u8, soft_edge: bool, takes_light: bool) -> (f32, u32) {
-    let soft = if soft_edge { f32::from(soft_level) * SOFT_UNITS_PER_LEVEL } else { 0.0 };
-    (soft, u32::from(takes_light && light_level > 0))
+fn modern_params(soft_level: u8, light_level: u8, material: &ParticleMaterial) -> (f32, u32) {
+    let soft = if material.soft_edge { f32::from(soft_level) * SOFT_UNITS_PER_LEVEL } else { 0.0 };
+    let lit = match material.light {
+        SpriteLight::Puff if light_level > 0 => 1,
+        SpriteLight::Lying if light_level > 0 => LIT_LYING,
+        _ => 0,
+    };
+    (soft, lit)
+}
+
+/// Faces the normal it was given, so it lies on the surface it was put on: a puddle, a trail.
+fn lies_flat(usage: DirectionUsage) -> bool {
+    matches!(usage, DirectionUsage::Normal | DirectionUsage::UpAndNormal | DirectionUsage::RightAndNormal)
 }
 
 const PUFF_WORDS: [&str; 4] = ["smoke", "dust", "steam", "blood"];
@@ -65,12 +78,30 @@ const PUFF_WORDS: [&str; 4] = ["smoke", "dust", "steam", "blood"];
 /// Additive and brighten sprites (fire, sparks, flashes) and the multiplying ones are self-lit; covering ones take light.
 /// The game also draws its hit puffs, dust, steam and blood spray with brighten: those are told from flames by the
 /// texture's name and take light.
-pub(crate) fn takes_light(style: DrawStyle, texture: &str) -> bool {
+fn takes_light(style: DrawStyle, texture: &str) -> bool {
     let texture = texture.to_ascii_lowercase();
     match style {
         DrawStyle::Regular | DrawStyle::AlphaBlend | DrawStyle::AlphaModulate => true,
         DrawStyle::Brighten => PUFF_WORDS.iter().any(|word| texture.contains(word)),
         _ => false,
+    }
+}
+
+/// How a sprite takes the modern look's light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SpriteLight {
+    SelfLit,
+    /// The light of a puff in the air, at its emitter.
+    Puff,
+    /// The light of the surface it lies on.
+    Lying,
+}
+
+pub(crate) fn sprite_light(style: DrawStyle, texture: &str, usage: DirectionUsage) -> SpriteLight {
+    match (takes_light(style, texture), lies_flat(usage)) {
+        (false, _) => SpriteLight::SelfLit,
+        (true, false) => SpriteLight::Puff,
+        (true, true) => SpriteLight::Lying,
     }
 }
 
@@ -85,7 +116,7 @@ fn follow_modern_levels(
         cursor.read(events).filter_map(|event| match *event { AssetEvent::Added { id } => Some(id), _ => None }).collect()
     });
     let (soft_level, light_level) = (settings.modern_level(MODERN_SOFT_PARTICLES), settings.modern_level(MODERN_PARTICLE_LIGHT));
-    let wanted = |material: &ParticleMaterial| modern_params(soft_level, light_level, material.soft_edge, material.takes_light);
+    let wanted = |material: &ParticleMaterial| modern_params(soft_level, light_level, material);
     let stale = |material: &ParticleMaterial| {
         let (soft, lit) = wanted(material);
         (soft.to_bits(), lit) != (material.params.soft.to_bits(), material.params.lit)
@@ -128,7 +159,7 @@ pub struct ParticleMaterial {
     pub no_depth: bool,
     /// Fades into the level geometry behind it under modern graphics: a sprite facing the eye, which never lies on a surface.
     pub soft_edge: bool,
-    pub takes_light: bool,
+    pub light: SpriteLight,
 }
 
 /// What two particle materials must share to draw alike.
@@ -138,7 +169,7 @@ pub struct SharedParticleKey {
     params: [u32; 5],
     no_depth: bool,
     soft_edge: bool,
-    takes_light: bool,
+    light: SpriteLight,
 }
 
 impl ParticleMaterial {
@@ -149,7 +180,7 @@ impl ParticleMaterial {
             params: [style, alpha_ref.to_bits(), alpha_test, blend_frames, fogged],
             no_depth: self.no_depth,
             soft_edge: self.soft_edge,
-            takes_light: self.takes_light,
+            light: self.light,
         }
     }
 
@@ -165,7 +196,7 @@ impl ParticleMaterial {
             lit: 0,
         };
         let soft_edge = props.use_direction_as == DirectionUsage::None && props.draw_style != DrawStyle::Regular;
-        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, no_depth: false, soft_edge, takes_light: takes_light(props.draw_style, "") }
+        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, no_depth: false, soft_edge, light: sprite_light(props.draw_style, "", props.use_direction_as) }
     }
 
     /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene (unverified
@@ -179,7 +210,7 @@ impl ParticleMaterial {
             SpriteBlend::Modulated => (DrawStyle::Modulated, 0.0, 0),
         };
         let params = ParticleParams { style: style as u32, alpha_ref, alpha_test, blend_frames: 0, fogged: 1, soft: 0.0, lit: 0 };
-        Self { texture, params, sprites: PARTICLE_SPRITES, style, no_depth: false, soft_edge: false, takes_light: false }
+        Self { texture, params, sprites: PARTICLE_SPRITES, style, no_depth: false, soft_edge: false, light: SpriteLight::SelfLit }
     }
 
     pub fn corona(texture: Handle<Image>) -> Self {
@@ -296,14 +327,33 @@ pub(crate) fn particle_blend(style: DrawStyle) -> BlendState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Blending, DrawStyle, RenderStyle, SOFT_UNITS_PER_LEVEL, SpriteBlend, modern_params, sprite_blend, takes_light};
+    use super::{
+        Blending, DirectionUsage, DrawStyle, Handle, LIT_LYING, ParticleMaterial, RenderStyle, SOFT_UNITS_PER_LEVEL, SpriteBlend, modern_params,
+        sprite_blend, takes_light,
+    };
+    use p2_particles::EmitterProperties;
+
+    fn material(use_direction_as: DirectionUsage, draw_style: DrawStyle) -> ParticleMaterial {
+        ParticleMaterial::new(Handle::default(), &EmitterProperties { use_direction_as, draw_style, ..EmitterProperties::default() })
+    }
 
     #[test]
     fn modern_params_are_off_at_level_zero_and_for_exempt_materials() {
-        assert_eq!(modern_params(0, 0, true, true), (0.0, 0));
-        assert_eq!(modern_params(5, 1, false, false), (0.0, 0));
-        assert_eq!(modern_params(5, 1, true, true), (5.0 * SOFT_UNITS_PER_LEVEL, 1));
-        assert_eq!(modern_params(10, 0, true, true), (10.0 * SOFT_UNITS_PER_LEVEL, 0));
+        assert_eq!(modern_params(0, 0, &material(DirectionUsage::None, DrawStyle::AlphaBlend)), (0.0, 0));
+        assert_eq!(modern_params(5, 1, &material(DirectionUsage::Up, DrawStyle::Translucent)), (0.0, 0));
+        assert_eq!(modern_params(5, 1, &material(DirectionUsage::None, DrawStyle::AlphaBlend)), (5.0 * SOFT_UNITS_PER_LEVEL, 1));
+        assert_eq!(modern_params(10, 0, &material(DirectionUsage::None, DrawStyle::AlphaBlend)), (10.0 * SOFT_UNITS_PER_LEVEL, 0));
+    }
+
+    #[test]
+    fn a_sprite_lying_on_a_surface_takes_its_light_and_one_in_the_air_a_puffs() {
+        for usage in [DirectionUsage::Normal, DirectionUsage::UpAndNormal, DirectionUsage::RightAndNormal] {
+            assert_eq!(modern_params(5, 1, &material(usage, DrawStyle::AlphaBlend)), (0.0, LIT_LYING), "{usage:?}");
+            assert_eq!(modern_params(5, 0, &material(usage, DrawStyle::AlphaBlend)), (0.0, 0), "{usage:?}");
+        }
+        for usage in [DirectionUsage::None, DirectionUsage::Up, DirectionUsage::Right, DirectionUsage::Forward] {
+            assert_eq!(modern_params(5, 1, &material(usage, DrawStyle::AlphaBlend)).1, 1, "{usage:?}");
+        }
     }
 
     #[test]

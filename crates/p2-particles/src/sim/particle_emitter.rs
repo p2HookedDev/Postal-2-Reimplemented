@@ -134,6 +134,10 @@ impl ParticleEmitter {
                     p.velocity += self.props.acceleration * dt;
                     p.old_location = p.location;
                     p.location += p.velocity * dt;
+                    let heading = (p.location - p.old_location).safe_normal();
+                    if heading != Vector::ZERO {
+                        p.heading = heading;
+                    }
                 }
             } else if self.props.respawn_dead_particles {
                 let overshoot = self.props.initial_time_range.rand(rng) + (p.time - p.max_lifetime);

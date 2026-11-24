@@ -61,6 +61,16 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
+    /// Adds an interaction of the host's own to the player's viewport, after [`Vm::init_client`]. `false` when the
+    /// class is not installed.
+    pub fn add_viewport_interaction(&mut self, package: &str, class: &str) -> Result<bool, Error> {
+        let (Some(master), Some(viewport)) = (self.host.client.master, self.host.client.viewport) else { return Ok(false) };
+        if self.find_class(package, class).is_err() {
+            return Ok(false);
+        }
+        Ok(self.add_interaction(master, &format!("{package}.{class}"), Some(viewport))?.is_some())
+    }
+
     pub fn viewport(&self) -> Option<ObjectId> {
         self.host.client.viewport
     }

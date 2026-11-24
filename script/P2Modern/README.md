@@ -35,6 +35,24 @@ sliders and boxes. It is our code, not retail's; it uses only the stock Shell me
   effects, no preset writes them and changing one keeps the preset. A box reads `True` as at least 1, so
   `ModernTemporalAA` (default 0) works as a box.
 
+- `ModernPhotoMode` (an `Interaction` the host adds to the viewport) and `ModernPhotoCamera`: photo mode.
+  F3 or the in-game menu's row opens it: the game pauses, a hidden camera
+  flies, the photo page shows. H hides and shows the page; with it hidden the mouse turns the camera and a click
+  takes a picture; Q and E tilt; Esc leaves. Opening (and Reset) copies the player's eight picture rows into their
+  `ModernPhoto*` twins, sets `ModernPhotoFov`, `ModernPhotoFocus`, `ModernPhotoBlur` and `ModernPhotoHidePlayer` to 0
+  and `ModernPhotoWarmth` to 5, and puts tilt, camera speed, grid and black bars back. The root window is told not to
+  pause or resume around the page, so photo mode keeps the pause. It draws the black bars (in the picture) and the
+  rule-of-thirds grid (never in the picture) on the canvas; "Focus on center" traces once along the view and writes
+  the focus level nearest the hit (32 x 2^(level / 4) units).
+- `ModernMenuPhoto` extends `ModernMenuPage`: what the two photo pages share, the page's rows, a row to the other page,
+  then Take photo, Reset, Hide menu, Exit photo mode. Its sliders write the `ModernPhoto*` keys alone, never
+  `ModernPreset`. It sits at the left edge; like every retail page it draws no backdrop (`bDarkenBackground` off, no
+  client border), so the game shows behind it. `ModernMenuPhotoCamera`: field of view, tilt, orbit player, height,
+  camera speed, focus on center, focus distance, background blur, hide player, grid, black bars, reset camera; the
+  camera sliders follow the camera as it flies. `ModernMenuPhotoPicture`: the eight picture sliders and warmth.
+- `ModernMenuGame` extends retail `Shell.MenuGame`: with modern graphics on and photo mode able to open, Super's
+  Resume row becomes "Photo Mode" and a fresh Resume goes below it. The host swaps it in for `Shell.MenuGame`.
+
 `ModernBake` keeps its key but has no row. Values and presets: `crates/p2-host/src/display.rs`.
 
 ## Building

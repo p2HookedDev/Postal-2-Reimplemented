@@ -41,8 +41,9 @@ pub(crate) fn set_specular_uv<M: bevy::asset::Asset>(
     }
 }
 
+/// Panned and turned textures follow a clock that stands still while the game is paused.
 pub(super) fn animate_materials(
-    time: Res<Time>,
+    (time, play, mut clock): (Res<Time>, Option<Res<crate::play::Play>>, bevy::ecs::system::Local<f32>),
     animated: Res<AnimatedMaterials>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut lightmapped: ResMut<Assets<LightmappedMaterial>>,
@@ -50,7 +51,10 @@ pub(super) fn animate_materials(
     mut blended: ResMut<Assets<BlendedMaterial>>,
     mut terrain_layers: ResMut<Assets<TerrainLayerMaterial>>,
 ) {
-    let seconds = time.elapsed_secs();
+    if !crate::play::game_paused(play.as_deref()) {
+        *clock += time.delta_secs();
+    }
+    let seconds = *clock;
     for MovingUv { material, modifiers, size } in &animated.textures {
         let [[a, b, c], [d, e, f]] = uv_matrix(modifiers, seconds, *size);
         let transform = Affine2::from_cols(Vec2::new(a, d), Vec2::new(b, e), Vec2::new(c, f));

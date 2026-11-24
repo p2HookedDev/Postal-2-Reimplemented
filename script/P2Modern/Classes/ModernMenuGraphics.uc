@@ -99,7 +99,7 @@ defaultproperties
 	Labels(5)="Reflections and light"
 	Labels(6)="Blood and particles"
 	Labels(7)="Screen and HUD"
-	Labels(8)="Animation and cutscenes"
+	Labels(8)="Animation"
 
 	Helps(0)="Turns every new graphics feature on or off; off is the original look."
 	Helps(1)="Sets the shadow, lighting and image rows at once; changing one makes it Custom."
@@ -109,7 +109,7 @@ defaultproperties
 	Helps(5)="Screen space reflections and light source size."
 	Helps(6)="Particle lighting, soft particles, drying blood, blood on bodies and puddles."
 	Helps(7)="HUD scaling, widescreen FOV, centred HUD, Panini projection and draw distance fade."
-	Helps(8)="Foot IK, hit reactions, and cutscene depth of field and motion blur."
+	Helps(8)="Foot IK and hit reactions."
 
 	PresetKeys(0)="ModernSunShadows"
 	PresetKeys(1)="ModernShadowDistance"

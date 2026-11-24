@@ -367,7 +367,7 @@ pub(super) fn update_fluids(t: &mut FluidTargets) {
     if t.fluids.0.is_empty() {
         return;
     }
-    let step = world.step();
+    let step = if world.game_paused() { 0.0 } else { world.step() };
     if t.cameras.iter().next().is_none() {
         return;
     }

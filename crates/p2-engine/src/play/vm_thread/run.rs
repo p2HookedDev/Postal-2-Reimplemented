@@ -95,8 +95,10 @@ impl Simulation {
                 _ => {}
             }
         }
-        // Actors a camera saw last frame are marked rendered, or POSTAL 2's pawns go into stasis.
-        for &actor in &job.visible {
+        // Actors a camera saw last frame are marked rendered, or POSTAL 2's pawns go into stasis. Photo mode's free
+        // camera marks nothing: it would wake people the player never saw.
+        let photo = crate::render::photo::photo_active(&mut self.vm);
+        for &actor in job.visible.iter().filter(|_| !photo) {
             if let Err(error) = self.vm.mark_rendered(actor) {
                 bevy::log::warn!("{actor:?}: {error}");
             }
@@ -149,7 +151,7 @@ impl Simulation {
             frame.times.push(("hud scripts", started.elapsed()));
         }
         let started = Instant::now();
-        self.read_after_hud(&mut frame, &job.watched, job.forces);
+        self.read_after_hud(&mut frame, &job.watched, job.forces, job.fire_light);
         frame.times.push(("vm read after hud", started.elapsed()));
         frame.profile = self.vm.diagnostics.tick_profile.take().unwrap_or_default();
         let vm_time = frame.times.iter().filter(|(name, _)| !name.starts_with("after hud: ")).map(|(_, time)| *time).sum();

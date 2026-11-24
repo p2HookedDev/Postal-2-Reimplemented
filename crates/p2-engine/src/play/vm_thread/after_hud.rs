@@ -28,7 +28,7 @@ impl Simulation {
         );
     }
 
-    pub(in crate::play) fn read_after_hud(&mut self, frame: &mut VmFrame, watched: &[ObjectId], forces: bool) {
+    pub(in crate::play) fn read_after_hud(&mut self, frame: &mut VmFrame, watched: &[ObjectId], forces: bool, fire_light: bool) {
         let mut started = Instant::now();
         let mut part = |frame: &mut VmFrame, name: &'static str| frame.times.push((name, std::mem::replace(&mut started, Instant::now()).elapsed()));
         self.begin_reads();
@@ -47,6 +47,9 @@ impl Simulation {
         part(frame, "after hud: watched actors");
         self.update_tracked_lists(frame, &new);
         self.animate_dynamic_lights(frame);
+        if fire_light {
+            self.light_glows(frame);
+        }
         part(frame, "after hud: lights, switches, coronas");
         self.recent.swap(0, 1);
         self.recent[0] = new;
@@ -168,6 +171,7 @@ impl Simulation {
             |actor| vm.store.flag_of(actor, Prop::bDynamicLight) || crate::actors::mesh_light(vm, actor).is_some(),
             destroyed,
         );
+        track(&mut self.glows, new, |actor| glows(vm, actor), destroyed);
         track(&mut self.volumes, new, |actor| vm.store.is_a(actor, Kind::Volume), destroyed);
         track(&mut self.corona_lights, new, |actor| crate::map::is_corona(vm, actor), destroyed);
         Self::pass_switches(vm, &mut self.switches, new, frame);
@@ -206,6 +210,7 @@ impl Simulation {
                         | HostCommand::SetMouse(_)
                         | HostCommand::SaveGame { .. }
                         | HostCommand::OpenUrl(_)
+                        | HostCommand::Screenshot
                 )
             })
             .collect();
@@ -225,6 +230,7 @@ impl Simulation {
                 HostCommand::SetMouse([x, y]) => frame.set_mouse = Some([x as f32, y as f32]),
                 HostCommand::SaveGame { slot, save } => crate::saves::write(slot, save),
                 HostCommand::OpenUrl(url) => open_url(&url),
+                HostCommand::Screenshot => frame.screenshot = true,
                 _ => {}
             }
         }
@@ -273,7 +279,7 @@ fn fluid_touchers(vm: &Vm<Arc<Loader>>, surfaces: &[ObjectId], touchers: &mut Ve
     }
 }
 
-fn level_time(vm: &Vm<Arc<Loader>>) -> f32 {
+pub(super) fn level_time(vm: &Vm<Arc<Loader>>) -> f32 {
     match vm.level().and_then(|level| vm.store.get(level, Prop::TimeSeconds)) {
         Some(p2_vm::Value::Float(time)) => time,
         _ => 0.0,

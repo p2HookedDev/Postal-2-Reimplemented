@@ -1,6 +1,8 @@
 use p2_math::Vector;
 use super::*;
 mod after_hud;
+mod glow_lights;
+pub(in crate::play) use glow_lights::glows;
 mod host_reads;
 mod run;
 mod sounds;
@@ -51,6 +53,7 @@ pub struct VmFrame {
     pub(super) window: Option<p2_vm::WindowRequest>,
     pub(super) settings: Option<crate::display::Settings>,
     pub(super) set_mouse: Option<[f32; 2]>,
+    pub(super) screenshot: bool,
     pub(super) times: Vec<(&'static str, Duration)>,
     pub(super) profile: FxHashMap<String, Duration>,
     pub(super) job_buffers: JobBuffers,
@@ -82,6 +85,8 @@ pub(super) struct ViewKey {
     pub(super) behind: bool,
     /// A hash of the HUD-drawn list.
     pub(super) hud: u64,
+    /// Photo mode's hidden player: a change re-reads every actor, steady ones too.
+    pub(super) hidden_pawn: Option<ObjectId>,
 }
 
 pub(super) enum CanvasModel {
@@ -154,7 +159,7 @@ impl VmFrame {
         self.movies.clear();
         self.times.clear();
         self.profile.clear();
-        Self { step, view: None, hud_view: None, zone_sounds: None, zone_fogs: None, pointer: Pointer::Captured, travel: None, fov: None, overlay: None, quit: false, window: None, settings: None, set_mouse: None, ..self }
+        Self { step, view: None, hud_view: None, zone_sounds: None, zone_fogs: None, pointer: Pointer::Captured, travel: None, fov: None, overlay: None, quit: false, window: None, settings: None, set_mouse: None, screenshot: false, ..self }
     }
 }
 
@@ -177,6 +182,7 @@ pub(super) struct Job {
     pub(super) finished: Vec<ObjectId>,
     pub(super) vm_profile: VmProfile,
     pub(super) forces: bool,
+    pub(super) fire_light: bool,
     pub(super) movie_status: Vec<MovieStatus>,
 }
 
@@ -199,6 +205,8 @@ pub(super) struct Simulation {
     pub(super) recent: [Vec<ObjectId>; 2],
     pub(super) recent_read: Vec<ObjectId>,
     pub(super) lights: Vec<ObjectId>,
+    /// Fires and gun flashes: what the fire light setting lights.
+    pub(super) glows: Vec<ObjectId>,
     pub(super) light_clock: p2_render_cpu::LightClock,
     pub(super) volumes: Vec<ObjectId>,
     pub(super) switches: Vec<(ObjectId, Option<Option<ObjectId>>)>,

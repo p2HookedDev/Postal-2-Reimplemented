@@ -355,6 +355,38 @@ fn sprite_axes_follow_direction_usage() {
 }
 
 #[test]
+fn a_sprite_drawn_along_its_motion_keeps_its_size_through_bounces_and_at_rest() {
+    let chunk = EmitterProperties {
+        use_direction_as: DirectionUsage::Forward,
+        acceleration: [0.0, 0.0, -1000.0].into(),
+        use_collision: true,
+        damping_factor_range: RangeVector::splat(0.2, 0.2),
+        start_size_range: RangeVector { x: Range::new(10.0, 10.0), y: Range::new(10.0, 10.0), z: Range::new(1.0, 1.0) },
+        min_squared_velocity: 2500.0,
+        max_particles: 1,
+        respawn_dead_particles: false,
+        automatic_initial_spawning: false,
+        initial_particles_per_second: 1000.0,
+        lifetime_range: Range::new(10.0, 10.0),
+        ..drawn()
+    };
+    let mut emitter = Emitter::new(EmitterSettings::default(), vec![chunk], 1);
+    let owner = Owner { location: [0.0, 0.0, 50.0].into(), ..Owner::default() };
+    let view = View { location: [-500.0, 0.0, 0.0].into(), right: [0.0, 1.0, 0.0].into(), up: [0.0, 0.0, 1.0].into() };
+    let mut landed = 0;
+    for _ in 0..300 {
+        emitter.tick_colliding(1.0 / 60.0, owner, &mut floor);
+        if !emitter.emitters()[0].particles.iter().any(|p| p.active && p.hit_count > 0) {
+            continue;
+        }
+        let sprite = emitter.sprites(0, view).next().expect("a sprite");
+        assert!(sprite.up.dot(sprite.up) > 1.0 && sprite.right.dot(sprite.right) > 1.0, "{sprite:?}");
+        landed += 1;
+    }
+    assert!(landed > 100, "{landed}");
+}
+
+#[test]
 fn mesh_particles_spin_and_scale_per_axis() {
     let fixed = |v: Vector| RangeVector { x: Range::new(v[0], v[0]), y: Range::new(v[1], v[1]), z: Range::new(v[2], v[2]) };
     let mesh = EmitterProperties {

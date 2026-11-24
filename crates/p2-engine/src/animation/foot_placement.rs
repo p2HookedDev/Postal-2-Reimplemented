@@ -31,7 +31,9 @@ const MIN_GROUND_Z: f32 = 0.7;
 /// Per second: about five frames at 60 to settle.
 const BLEND_RATE: f32 = 15.0;
 const SETTLED: f32 = 0.05;
-const SIDES: [[&str; 3]; 2] = [[" l thigh", " l calf", " l foot"], [" r thigh", " r calf", " r foot"]];
+/// Seconds over which a body that became a ragdoll loses the correction it stood with.
+const HAND_OVER: f32 = 0.5;
+pub(super) const SIDES: [[&str; 3]; 2] =[[" l thigh", " l calf", " l foot"], [" r thigh", " r calf", " r foot"]];
 
 pub(super) struct FootPlacementPlugin;
 
@@ -69,11 +71,13 @@ struct Person {
     place: Mat4,
     shown: Shown,
     applied: Option<Shown>,
+    /// What was shown when a ragdoll took the body, and the game seconds since.
+    handed: Option<(Shown, f32)>,
 }
 
 impl Person {
     fn new(item: &AnimatedMesh, bones: &[Mat4]) -> Self {
-        Self { mesh: Arc::clone(&item.mesh), rig: leg_rig(item), animated: bones.to_vec(), place: Mat4::IDENTITY, shown: REST, applied: None }
+        Self { mesh: Arc::clone(&item.mesh), rig: leg_rig(item), animated: bones.to_vec(), place: Mat4::IDENTITY, shown: REST, applied: None, handed: None }
     }
 }
 
@@ -115,6 +119,7 @@ pub(super) fn place_feet(
     let eye = world.view_location().map(|location| Vec3::from_array(location.into()));
     let cutscene = world.cutscene();
     let blend = 1.0 - (-time.delta_secs() * BLEND_RATE).exp();
+    let seconds = if world.game_paused() { 0.0 } else { time.delta_secs() * world.time_dilation() };
     feet.visited.clear();
     for item in &animated.0 {
         let Some(actor) = item.actor else { continue };
@@ -159,7 +164,16 @@ pub(super) fn place_feet(
             }
             None => REST,
         };
-        person.shown = if snap { target } else { ease(person.shown, target, blend) };
+        person.handed = match (world.ragdolled(actor), person.handed) {
+            (false, _) => None,
+            (true, Some((from, age))) => Some((from, age + seconds)),
+            (true, None) => Some((person.shown, 0.0)),
+        };
+        person.shown = match person.handed {
+            Some((from, age)) => hand_over(from, age),
+            None if snap => target,
+            None => ease(person.shown, target, blend),
+        };
         let shown = person.shown;
         let rest = shown == REST;
         if person.applied != Some(shown) {
@@ -268,6 +282,17 @@ fn ease((offsets, normals): Shown, (to_offsets, to_normals): Shown, blend: f32) 
         if normal.dot(to_normals[side]) > 0.9999 && to_normals[side] == Vec3::Z { Vec3::Z } else { normal }
     });
     (offsets, normals)
+}
+
+/// The ragdoll starts from the uncorrected pose; the correction fades from a standstill so the body never rises
+/// faster than it starts to fall.
+fn hand_over((offsets, normals): Shown, age: f32) -> Shown {
+    let t = (age / HAND_OVER).clamp(0.0, 1.0);
+    let left = 1.0 - t * t * (3.0 - 2.0 * t);
+    if left <= 0.0 {
+        return REST;
+    }
+    (offsets.map(|offset| offset * left), normals.map(|normal| Vec3::Z.lerp(normal, left).normalize_or(Vec3::Z)))
 }
 
 fn plant(lift: f32) -> f32 {
@@ -407,5 +432,17 @@ mod tests {
             shown = ease(shown, REST, 0.25);
         }
         assert!(shown == REST);
+    }
+
+    #[test]
+    fn a_ragdoll_takes_over_the_correction_without_a_jump_and_loses_it_by_the_end() {
+        let from = ([-10.0, -4.0], [Vec3::new(0.2, 0.0, 1.0).normalize(); 2]);
+        let first = hand_over(from, 0.0);
+        assert!((first.0[0] - from.0[0]).abs() < 1e-5 && first.1[0].distance(from.1[0]) < 1e-5, "{first:?}");
+        let next = hand_over(from, 1.0 / 60.0);
+        assert!((next.0[0] - from.0[0]).abs() < 0.02 * from.0[0].abs(), "{next:?}");
+        assert!(ease(from, REST, 1.0 - (-BLEND_RATE / 60.0f32).exp()).0[0] > next.0[0]);
+        assert!(hand_over(from, HAND_OVER) == REST);
+        assert!(hand_over(REST, 0.0) == REST && hand_over(REST, 0.2) == REST);
     }
 }

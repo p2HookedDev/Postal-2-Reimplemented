@@ -4113,6 +4113,7 @@ version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "chrono",
  "dirs",
  "naga",
  "p2-assets",

@@ -12,8 +12,8 @@ use super::fluids::{camera_view, empty_quads, fill_beams, fill_smooth_strip, fil
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
 use crate::mesh_view::alpha_key;
 use crate::emitter_changes::apply_command;
-use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS, takes_light};
-use crate::display::{MODERN_LIQUID_FLOW, MODERN_PARTICLE_LIGHT, Settings};
+use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS, sprite_light};
+use crate::display::{MODERN_FIRE_LIGHT, MODERN_LIQUID_FLOW, MODERN_PARTICLE_LIGHT, Settings};
 use crate::render::lamps::{Lamp, Placed, lamp_sum};
 use crate::level_collision::StaticCollision;
 use crate::shown_scene::ShownScene;
@@ -21,10 +21,11 @@ mod mesh_particles;
 mod sprites;
 mod bounds;
 mod fire;
+mod puddles;
 use mesh_particles::{MeshPool, mesh_box, place_mesh_particles};
 pub(crate) use mesh_particles::PoolSlot;
 use sprites::{
-    MIN_QUADS, SpriteGrid, emitter_light, fill_draw_buffers, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
+    MIN_QUADS, SpriteGrid, emitter_light, fill_draw_buffers, glow_at, lamps_shown, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
     upload_sprites, write_sprite_records,
 };
 use bounds::{apply_bounds, particles_box};
@@ -58,10 +59,14 @@ pub(super) struct ParticleActor {
     peak: usize,
     frames: ParticleFrames,
     turn: Turn,
-    /// The `emitter_light` at the emitter, for lit sprites under modern graphics; where and how many frames ago.
+    /// The `emitter_light` at the emitter and its lamps' share (`lamps_shown`), for lit sprites under modern graphics;
+    /// where and how many frames ago.
     lamp_light: Vec3,
+    lamps_alone: Vec3,
     lamp_at: Vec3,
     lamp_age: u8,
+    /// This frame's share of the script lights around it (`glow_at`), zero with the fire light setting off.
+    fire_light: Vec3,
     puddle_seed: Option<u32>,
 }
 
@@ -208,7 +213,7 @@ impl Session {
                     // bounds. Its `Aabb` (the actor's, set with the mesh each frame) is for GPU occlusion culling.
                     let model = (Mesh3d(mesh.clone()), Transform::default(), Visibility::Hidden, NoFrustumCulling, ChildOf(parent));
                     let mut material = ParticleMaterial::new(image, &p);
-                    material.takes_light = takes_light(p.draw_style, &emitter_name);
+                    material.light = sprite_light(p.draw_style, &emitter_name, p.use_direction_as);
                     if fogless {
                         material.params.fogged = 0;
                     }
@@ -228,7 +233,7 @@ impl Session {
             t.times.add("spawned: emitters: log", started);
             let started = std::time::Instant::now();
             let seed = t.particles.actors.len() as u32 + 1;
-            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), lamp_light: Vec3::ZERO, lamp_at: Vec3::ZERO, lamp_age: u8::MAX, puddle_seed: emitter.puddle.then(|| liquid_flow::puddle_seed(seed)) });
+            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), lamp_light: Vec3::ZERO, lamps_alone: Vec3::ZERO, lamp_at: Vec3::ZERO, lamp_age: u8::MAX, fire_light: Vec3::ZERO, puddle_seed: emitter.puddle.then(|| liquid_flow::puddle_seed(seed)) });
             t.times.add("spawned: emitters: simulation", started);
             let started = std::time::Instant::now();
             if let Some(world) = t.play.world_mut() {
@@ -242,12 +247,13 @@ impl Session {
 
 impl Particles {
     /// One sum a drawn emitter, at its place this frame, again when it moves or on a slow rota. A lamp a wall hides adds
-    /// nothing.
-    fn light_emitters(&mut self, world: &PlayWorld, lamps: &[(Vec3, &Placed)], level: Option<&StaticCollision>, zone_ambients: &[[f32; 3]]) {
+    /// nothing. `glow` is the level's brightness where the script lights count too; those are read every frame.
+    fn light_emitters(&mut self, world: &PlayWorld, lamps: &[(Vec3, &Placed)], level: Option<&StaticCollision>, zone_ambients: &[[f32; 3]], glow: Option<f32>) {
         let origin = world.origin();
         for p in self.actors.iter_mut().filter(|p| p.drawn) {
             p.lamp_age = p.lamp_age.saturating_add(1);
             let Some((location, _)) = world.place(p.actor) else { continue };
+            p.fire_light = glow.map_or(Vec3::ZERO, |brightness| glow_at(world.dynamic_lights(), location, brightness));
             let here = Vec3::from(to_bevy(location)) + origin;
             if p.lamp_age >= LAMP_RECHECK_FRAMES || here.distance_squared(p.lamp_at) > LAMP_RECHECK_UNITS * LAMP_RECHECK_UNITS {
                 let reaches = |at: Vec3| {
@@ -259,7 +265,8 @@ impl Particles {
                 };
                 let zone = level.map_or(0, |level| p2_collision::point_zone(&level.model, location));
                 let ambient = Vec3::from(zone_ambients.get(usize::from(zone)).copied().unwrap_or_default());
-                (p.lamp_light, p.lamp_at, p.lamp_age) = (emitter_light(ambient, lamp_sum(lamps, here, reaches)), here, 0);
+                let sum = lamp_sum(lamps, here, reaches);
+                (p.lamp_light, p.lamps_alone, p.lamp_at, p.lamp_age) = (emitter_light(ambient, sum), lamps_shown(sum), here, 0);
             }
         }
     }
@@ -392,11 +399,14 @@ pub(super) struct ParticleParams<'w, 's> {
 
 pub(super) fn present_particles(mut t: ParticleParams) {
     let started = std::time::Instant::now();
-    let lit = t.settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_PARTICLE_LIGHT) > 0);
+    let level = |name: &str| t.settings.as_deref().map_or(0, |settings| settings.modern_level(name));
+    let (lit, fire_light) = (level(MODERN_PARTICLE_LIGHT) > 0, level(MODERN_FIRE_LIGHT) > 0);
     if lit && let Some(world) = t.play.world() {
         let lamps: Vec<(Vec3, &Placed)> = t.lamps.iter().map(|(at, placed)| (at.translation, placed)).collect();
-        let zone_ambients = t.shown.as_deref().and_then(|shown| shown.lighting.as_deref()).map_or(&[][..], |lighting| &lighting.zone_ambients[..]);
-        t.particles.light_emitters(world, &lamps, t.view.collision.0.as_deref(), zone_ambients);
+        let lighting = t.shown.as_deref().and_then(|shown| shown.lighting.as_deref());
+        let zone_ambients = lighting.map_or(&[][..], |lighting| &lighting.zone_ambients[..]);
+        let glow = fire_light.then(|| lighting.map_or(1.0, |lighting| lighting.level_brightness));
+        t.particles.light_emitters(world, &lamps, t.view.collision.0.as_deref(), zone_ambients, glow);
     }
     t.particles.liquid_flow = t.settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_LIQUID_FLOW) > 0);
     update_particles(&mut ParticleTargets {

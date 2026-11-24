@@ -75,7 +75,7 @@ fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
 fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, grid: ProbeGrid) -> Option<ProbeBake> {
     let lamps = map_lamps(environment);
     let sun = environment.sun.as_ref().map(|(_, hardware)| {
-        (-Vec3::from(p2_bevy_assets::to_bevy(hardware.direction)).normalize_or_zero(), sun_color(environment))
+        (-Vec3::from(p2_bevy_assets::to_bevy(hardware.direction)).normalize_or_zero(), sun_color(environment.sun_set()))
     });
     let world = ProbeWorld {
         triangles: &world.triangles,

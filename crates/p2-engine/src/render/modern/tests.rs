@@ -6,6 +6,7 @@ use bevy::pbr::StandardMaterial;
 use super::*;
 use p2_render_cpu::LE_SUNLIGHT;
 use crate::display::MODERN_GRAPHICS;
+use crate::render::actor_light::LightEnvironment;
 use crate::render::blended::TerrainLayer;
 use crate::render::terrain_material::TerrainLayers;
 
@@ -115,12 +116,12 @@ fn sun_shadow_quality_follows_its_levels() {
 #[test]
 fn ambient_fades_then_lands_on_the_zone() {
     let (dark, bright) = (LinearRgba::rgb(0.0, 0.0, 0.0), LinearRgba::rgb(1.0, 0.5, 0.25));
-    assert_eq!(blend_ambient(dark, bright, 0.5), LinearRgba::rgb(0.5, 0.25, 0.125));
-    assert_eq!(blend_ambient(dark, bright, 0.0), dark);
-    assert_eq!(blend_ambient(dark, bright, 1.0), bright);
+    assert_eq!(blend_light(dark, bright, 0.5), LinearRgba::rgb(0.5, 0.25, 0.125));
+    assert_eq!(blend_light(dark, bright, 0.0), dark);
+    assert_eq!(blend_light(dark, bright, 1.0), bright);
     let mut shown = dark;
     for _ in 0..32 {
-        shown = blend_ambient(shown, bright, 0.25);
+        shown = blend_light(shown, bright, 0.25);
     }
     assert_eq!(shown, bright);
 }
@@ -215,10 +216,10 @@ fn suns_on_one_direction_add_up_and_others_are_fills() {
     let environment = LightEnvironment::new(lights.into_iter().enumerate().map(|(key, light)| (key as i32, light)).collect(), Vec::new(), 1.0);
     let alone = linear_light(sun(128.0, down, 1.0).color(1.0));
     let together = linear_light(sun(224.0, down, 1.0).color(1.0));
-    let shown = sun_color(&environment);
+    let shown = sun_color(environment.sun_set());
     assert!(shown[0] > alone[0] * 2.0, "the stacked suns are not in the sun: {shown:?} against one sun {alone:?}");
     assert!((shown[0] - together[0]).abs() < together[0] * 0.02, "{shown:?} against {together:?}");
-    assert_eq!(fill_suns(&environment, environment.sun.as_ref()).len(), 1);
+    assert_eq!(fill_suns(environment.sun_set()).len(), 1);
 }
 
 #[test]
@@ -229,7 +230,21 @@ fn a_copy_of_the_suns_in_another_zone_does_not_add_up() {
     let copies = [sun(128.0, 1.0), sun(64.0, 2.0), sun(128.0, 101.0), sun(64.0, 102.0), sun(128.0, 201.0), sun(64.0, 202.0)];
     let environment = |lights: &[MeshLight]| LightEnvironment::new(lights.iter().enumerate().map(|(key, light)| (key as i32, *light)).collect(), Vec::new(), 1.0);
     let zone_of = |at: Vector| (at.x / 100.0) as u8;
-    let wanted = sun_color(&environment(&one_zone));
-    assert!(sun_color(&environment(&copies))[0] > wanted[0] * 4.0);
-    assert_eq!(sun_color(&environment(&copies).suns_of_one_zone(zone_of)), wanted);
+    let wanted = sun_color(environment(&one_zone).sun_set());
+    assert!(sun_color(environment(&copies).sun_set())[0] > wanted[0] * 4.0);
+    assert_eq!(sun_color(environment(&copies).suns_of_one_zone(zone_of).sun_set()), wanted);
+}
+
+#[test]
+fn a_zone_has_the_set_of_its_own_suns_without_the_special_ones() {
+    let down = p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 };
+    let sun = |brightness: f32, x: f32| MeshLight { rotation: down, ..light(LE_SUNLIGHT, brightness, x) };
+    let lights = [sun(128.0, 1.0), sun(64.0, 101.0), MeshLight { special_lit: true, ..sun(200.0, 102.0) }, MeshLight { special_lit: true, ..sun(90.0, 201.0) }];
+    let environment = LightEnvironment::new(lights.into_iter().enumerate().map(|(key, light)| (key as i32, light)).collect(), Vec::new(), 1.0)
+        .suns_of_one_zone(|at| (at.x / 100.0) as u8);
+    let color = |zone: u8| environment.zone_sun_set(zone).map(sun_color);
+    assert_eq!(color(0), Some(linear_light(sun(128.0, 1.0).color(1.0))));
+    assert_eq!(color(1), Some(linear_light(sun(64.0, 101.0).color(1.0))));
+    assert_eq!(color(2), None);
+    assert_eq!(color(3), None);
 }
