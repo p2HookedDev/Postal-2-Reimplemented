@@ -47,6 +47,11 @@ fn church_saves_and_loads() {
     for property in ["Location", "Health"] {
         assert_eq!(loaded.store.get(loaded_pawn, property), vm.store.get(pawn, property), "{property}");
     }
+    let scenes: Vec<_> = loaded.object_ids().filter(|&o| loaded.store.is_a(o, "SceneManager")).collect();
+    for scene in scenes {
+        let turn = loaded.store.get_path(scene, &["RotInterpolator", "_value"]);
+        assert_eq!(turn, Some(Value::Float(1.0)), "{}: a loaded scene's camera would never turn", loaded.store.object(scene).path);
+    }
     let (before, after) = (live_actors(&vm), live_actors(&loaded));
     assert!(before.abs_diff(after) <= 2, "saved {before}, loaded {after}");
     for _ in 0..20 {

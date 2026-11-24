@@ -1,5 +1,6 @@
 use super::*;
-use crate::components::CanvasDrawn;
+use bevy::camera::visibility::RenderLayers;
+use crate::components::{CanvasDrawn, UNSEEN_LAYER};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct BoneFrame {
@@ -46,10 +47,10 @@ pub(super) fn follow_bones(
     mut commands: Commands,
     poses: Res<Poses>,
     mut play: ResMut<Play>,
-    mut attached: Query<(Entity, Ref<FollowBone>, &mut Transform, &mut Visibility)>,
+    mut attached: Query<(Entity, Ref<FollowBone>, &mut Transform, &mut Visibility, Option<&RenderLayers>)>,
 ) {
     let mut world = play.world_mut();
-    for (entity, follow, mut transform, mut shown) in &mut attached {
+    for (entity, follow, mut transform, mut shown, layers) in &mut attached {
         let world = world.as_deref_mut();
         let base = world.as_deref().and_then(|world| world.actor(follow.base));
         let own = world.as_deref().and_then(|world| world.actor(follow.actor));
@@ -61,7 +62,12 @@ pub(super) fn follow_bones(
             && own.attachment.as_ref().is_none_or(|attachment| attachment.base != follow.base)
         {
             let skeletal = Some((follow.mesh_scale, follow.origin, follow.rot_origin));
-            commands.entity(entity).remove::<FollowBone>().insert(FollowActor { actor: follow.actor, scale: follow.scale, pre_pivot: follow.pre_pivot, skeletal });
+            let mut detached = commands.entity(entity);
+            detached.remove::<FollowBone>().insert(FollowActor { actor: follow.actor, scale: follow.scale, pre_pivot: follow.pre_pivot, skeletal });
+            // It left the view with the model it was on, which no longer decides for it.
+            if let Some(layers) = layers.filter(|layers| layers.intersects(&RenderLayers::layer(UNSEEN_LAYER))) {
+                detached.insert(layers.clone().without(UNSEEN_LAYER).with(0));
+            }
             continue;
         }
         if base.is_some() || own.is_some() {

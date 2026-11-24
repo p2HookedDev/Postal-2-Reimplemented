@@ -32,7 +32,7 @@ use bevy::transform::components::Transform;
 use p2_math::Vector;
 use p2_render_cpu::{HardwareLight, LE_SUNLIGHT, MeshLight};
 
-use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow};
+use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow, UNSEEN_LAYER};
 use crate::display::{
     MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_LAMP_SHADOWS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS, MODERN_SHARPEN,
     MODERN_SPECULAR, Settings,
@@ -640,7 +640,7 @@ fn is_see_through(entity: &EntityWorldMut) -> bool {
 }
 
 fn caster_layers(layers: &RenderLayers, casts: bool, mover: bool) -> RenderLayers {
-    let world = layers.intersects(&RenderLayers::from_layers(&[0, CASTER_LAYER])) && !layers.intersects(&RenderLayers::from_layers(&OVERLAY_LAYERS));
+    let world = layers.intersects(&RenderLayers::from_layers(&[0, CASTER_LAYER, UNSEEN_LAYER])) && !layers.intersects(&RenderLayers::from_layers(&OVERLAY_LAYERS));
     let casts = casts && world;
     let on_layer = |layers: RenderLayers, layer: usize, wanted: bool| if wanted { layers.with(layer) } else { layers.without(layer) };
     let tagged = on_layer(on_layer(layers.clone(), CASTER_LAYER, casts), MOVER_LAYER, casts && mover);

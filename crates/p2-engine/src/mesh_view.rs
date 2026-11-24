@@ -1,7 +1,7 @@
-pub use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, SKY_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SunShadow};
+pub use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, SKY_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SunShadow, UNSEEN_LAYER};
 pub use crate::shown_scene::ShownScene;
 pub use crate::level_collision::{LevelAlbedos, LevelCollision, StaticCollision};
-pub use crate::components::{ActorModel, SceneView};
+pub use crate::components::{ActorModel, BaseModel, SceneView};
 pub(crate) use crate::components::CanvasLayer;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -442,7 +442,7 @@ fn apply_change(
                             world_from_local: Transform::from_translation(-center).compute_affine() * instance.compute_affine(),
                             chunks: chunks.clone(),
                             casts: model.casts,
-                            zone: model.zone.as_ref().filter(|zone| zone.zones.len() == 1).map(|zone| zone.zones[0]),
+                            zones: model.zone.as_ref().map(|zone| zone.zones.clone()).filter(|zones| !zones.is_empty()),
                         };
                         world.add(mesh, material, lightmap.as_ref().map(|lightmap| &lightmap.image), placement);
                         continue;

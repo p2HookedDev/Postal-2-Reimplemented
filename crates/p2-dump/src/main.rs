@@ -5,31 +5,341 @@
 //! packages next to it, or in `..\System`). `p2-dump <folder> --shaders` counts the `Shader` forms of every
 //! `.utx` / `.usx` / `.fuk` under the folder. `p2-dump <map> --reach` reads lights from standard input, one `x y z radius`
 //! a line in Unreal units, and prints each with the zones it could light in the map's largest BSP model, its own first
-//! (the radius is printed twice: the fifth column once held a reach).
+//! (the radius is printed twice: the fifth column once held a reach). `p2-dump <map> --zones` lists each zone's polygons,
+//! sky backdrop polygons and portals, what level polygon lies straight behind each backdrop, and for every `x y z` eye
+//! on standard input the zones its rays meet and what they meet behind a backdrop. `p2-dump <map> --walk` runs the portal
+//! walk from eyes at the map's path nodes, and near the walls around them, and counts the rays that meet a polygon of a
+//! zone the walk did not reach. `p2-dump <animation package> --rig <.ka file> <mesh>` compares a ragdoll asset with the
+//! skeletal mesh it is used on: for each joint, how far the asset's two parts and the mesh's two bones disagree in
+//! turn and in place, bind pose against bind pose.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::Context;
+use p2_assets::pose::{Frame, LocalBone, bone_frames};
+use p2_assets::{Model, ModelPolygon, poly_flags};
+use p2_math::Vector;
 use p2_package::{Export, MAP_EXTENSION, Package, TagValue};
+use p2_render_cpu::{Plane, VisibleZones, ZonePortals};
 use p2_script::{NativeName, ScriptObject, decode_script, disassemble, native_names, read_export};
 
-const USAGE: &str = "usage: p2-dump <package> [--props | --code | --reach] | p2-dump <folder> --shaders";
+const USAGE: &str = "usage: p2-dump <package> [--props | --code | --reach | --zones | --walk | --rig <.ka file> <mesh>] | p2-dump <folder> --shaders";
 
 
-fn light_reaches(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Result<()> {
-    let model = pkg
-        .exports
+fn level_model(pkg: &Package, data: &[u8]) -> anyhow::Result<Model> {
+    pkg.exports
         .iter()
         .filter(|export| p2_script::class_name(pkg, export) == "Model")
         .filter_map(|export| p2_assets::read_model(pkg, data, export).ok())
         .max_by_key(|model| model.nodes.len())
-        .context("no BSP model in the package")?;
+        .context("no BSP model in the package")
+}
+
+/// The polygons a ray meets from their drawn side, nearest first.
+fn ray_hits<'a>(polygons: &[&'a ModelPolygon], origin: Vector, direction: Vector) -> Vec<(f32, &'a ModelPolygon)> {
+    let mut hits: Vec<_> = polygons
+        .iter()
+        .filter_map(|&polygon| {
+            let normal = Vector::from(polygon.normal);
+            let facing = normal.dot(direction);
+            if facing == 0.0 || (facing > 0.0 && polygon.poly_flags & poly_flags::TWO_SIDED == 0) {
+                return None;
+            }
+            let distance = normal.dot(Vector::from(*polygon.positions.first()?) - origin) / facing;
+            if distance <= 1.0 {
+                return None;
+            }
+            let at = origin + direction * distance;
+            let corners = || polygon.positions.iter().map(|&p| Vector::from(p));
+            let (mut left, mut right) = (false, false);
+            for (a, b) in corners().zip(corners().cycle().skip(1)) {
+                let turn = (b - a).cross(at - a).dot(normal);
+                left |= turn > 0.0;
+                right |= turn < 0.0;
+            }
+            (!(left && right)).then_some((distance, polygon))
+        })
+        .collect();
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    hits
+}
+
+const SURVEY_RAYS: usize = 4000;
+
+fn zone_survey(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Result<()> {
+    let model = level_model(pkg, data)?;
+    let polygons = model.polygons();
+    let front_zone = |polygon: &ModelPolygon| model.nodes[polygon.node].zones[1];
+    let actor = |zone: usize| {
+        let export = model.zones.get(zone).and_then(|zone| usize::try_from(zone.actor).ok()?.checked_sub(1)).and_then(|index| pkg.exports.get(index));
+        export.map_or("-", |export| pkg.name(export.object_name))
+    };
+    writeln!(out, "zone actor polygons backdrop portals min max")?;
+    for zone in 0..=u8::MAX {
+        let own: Vec<&ModelPolygon> = polygons.iter().filter(|polygon| front_zone(polygon) == zone).collect();
+        if own.is_empty() {
+            continue;
+        }
+        let count = |flag: u32| own.iter().filter(|polygon| polygon.poly_flags & flag != 0).count();
+        let (min, max) = own.iter().flat_map(|polygon| &polygon.positions).fold(([f32::MAX; 3], [f32::MIN; 3]), |(min, max), p| {
+            ([0, 1, 2].map(|k| min[k].min(p[k])), [0, 1, 2].map(|k| max[k].max(p[k])))
+        });
+        writeln!(
+            out,
+            "{zone} {} {} {} {} {:.0?} {:.0?}",
+            actor(usize::from(zone)),
+            own.len(),
+            count(poly_flags::FAKE_BACKDROP),
+            count(poly_flags::PORTAL),
+            min,
+            max
+        )?;
+    }
+    writeln!(out, "portals: zones, centre")?;
+    for polygon in polygons.iter().filter(|polygon| polygon.poly_flags & poly_flags::PORTAL != 0) {
+        let centre = polygon.positions.iter().fold(Vector::ZERO, |sum, &p| sum + Vector::from(p)) / polygon.positions.len().max(1) as f32;
+        writeln!(out, "  {:?} {:.0} {:.0} {:.0}", model.nodes[polygon.node].zones, centre.x, centre.y, centre.z)?;
+    }
+
+    let solid: Vec<&ModelPolygon> =
+        polygons.iter().filter(|polygon| polygon.poly_flags & (poly_flags::INVISIBLE | poly_flags::PORTAL | poly_flags::TRANSLUCENT) == 0).collect();
+    let level: Vec<&ModelPolygon> = solid.iter().copied().filter(|polygon| polygon.poly_flags & poly_flags::FAKE_BACKDROP == 0).collect();
+    let mut behind: BTreeMap<(u8, Option<u8>), (usize, f32)> = BTreeMap::new();
+    for backdrop in solid.iter().filter(|polygon| polygon.poly_flags & poly_flags::FAKE_BACKDROP != 0) {
+        let centre = backdrop.positions.iter().fold(Vector::ZERO, |sum, &p| sum + Vector::from(p)) / backdrop.positions.len().max(1) as f32;
+        let hit = ray_hits(&level, centre, -Vector::from(backdrop.normal)).first().map(|&(distance, polygon)| (distance, front_zone(polygon)));
+        let entry = behind.entry((front_zone(backdrop), hit.map(|(_, zone)| zone))).or_insert((0, f32::MAX));
+        entry.0 += 1;
+        entry.1 = entry.1.min(hit.map_or(f32::MAX, |(distance, _)| distance));
+    }
+    writeln!(out, "straight behind each backdrop polygon, (its zone, the zone of the level polygon behind): (polygons, nearest)")?;
+    for (key, (count, nearest)) in behind {
+        writeln!(out, "  {key:?}: {count} {nearest:.0}")?;
+    }
+
+    for line in std::io::stdin().lines() {
+        let numbers: Vec<f32> = line?.split_whitespace().filter_map(|part| part.parse().ok()).collect();
+        let [x, y, z] = numbers[..] else { continue };
+        let eye = Vector::new(x, y, z);
+        let leaf = p2_collision::point_leaf(&model, eye).and_then(|leaf| model.leaves.get(leaf));
+        writeln!(out, "eye {x} {y} {z}: zone {}, leaf's visible zones {:#018x}", p2_collision::point_zone(&model, eye), leaf.map_or(0, |leaf| leaf.visible_zones))?;
+        let mut first: BTreeMap<u8, usize> = BTreeMap::new();
+        let mut leaks: BTreeMap<(u8, u8), (usize, f32, f32, f32)> = BTreeMap::new();
+        let mut sky = 0;
+        for i in 0..SURVEY_RAYS {
+            let up = 1.0 - (i as f32 + 0.5) / SURVEY_RAYS as f32 * 2.0;
+            let (flat, turn) = ((1.0 - up * up).sqrt(), i as f32 * 2.399_963);
+            let direction = Vector::new(flat * turn.cos(), flat * turn.sin(), up);
+            let hits = ray_hits(&solid, eye, direction);
+            let Some(&(_, nearest)) = hits.first() else { continue };
+            *first.entry(front_zone(nearest)).or_default() += 1;
+            if nearest.poly_flags & poly_flags::FAKE_BACKDROP == 0 {
+                continue;
+            }
+            sky += 1;
+            if let Some(&(distance, polygon)) = hits.iter().find(|(_, polygon)| polygon.poly_flags & poly_flags::FAKE_BACKDROP == 0) {
+                let height = (eye + direction * distance).z;
+                let entry = leaks.entry((front_zone(nearest), front_zone(polygon))).or_insert((0, f32::MAX, f32::MAX, f32::MIN));
+                *entry = (entry.0 + 1, entry.1.min(distance), entry.2.min(height), entry.3.max(height));
+            }
+        }
+        writeln!(out, "  rays by the zone of the first polygon met: {first:?}")?;
+        writeln!(out, "  {sky} rays meet a backdrop first; behind it, (backdrop's zone, zone of the level polygon): (rays, nearest, lowest z, highest z)")?;
+        for (key, (count, nearest, low, high)) in leaks {
+            writeln!(out, "    {key:?}: {count} {nearest:.0} {low:.0} {high:.0}")?;
+        }
+    }
+    Ok(())
+}
+
+/// The angle in degrees between two frames' turns, their scale left out.
+fn turn_between(a: &Frame, b: &Frame) -> f32 {
+    let unit = |frame: &Frame| frame.axes.map(|axis| Vector::from(axis).safe_normal());
+    let (a, b) = (unit(a), unit(b));
+    let trace: f32 = (0..3).map(|i| a[i].dot(b[i])).sum();
+    ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
+fn rig_check(pkg: &Package, data: &[u8], asset_path: &Path, mesh_name: &str, out: &mut impl Write) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(asset_path).with_context(|| format!("reading {}", asset_path.display()))?;
+    let export = pkg
+        .exports
+        .iter()
+        .find(|export| p2_script::class_name(pkg, export) == "SkeletalMesh" && pkg.name(export.object_name).eq_ignore_ascii_case(mesh_name))
+        .with_context(|| format!("no skeletal mesh {mesh_name}"))?;
+    let mesh = p2_assets::read_skeletal_mesh(pkg, data, export)?;
+    let parents: Vec<usize> = mesh.bones.iter().map(|bone| bone.parent).collect();
+    let bind: Vec<LocalBone> = mesh.bones.iter().map(|bone| (bone.orientation, bone.position)).collect();
+    let frames = bone_frames(&parents, &bind, |_| 1.0);
+    let bone = |name: &str| mesh.bones.iter().position(|bone| pkg.name(bone.name).eq_ignore_ascii_case(name));
+    writeln!(out, "mesh {mesh_name}: {} bones, scale {:?}, origin {:?}, rot origin {:?}", mesh.bones.len(), mesh.scale, mesh.origin, mesh.rot_origin)?;
+    for asset in p2_assets::read_karma_assets(&text)? {
+        let units = if asset.scale > 0.0 { 1.0 / asset.scale } else { 1.0 };
+        let part = |name: &str| {
+            let part = asset.parts.iter().find(|part| part.id.eq_ignore_ascii_case(name))?;
+            let row = |at: usize| [part.tm[at], part.tm[at + 1], part.tm[at + 2]];
+            Some(Frame { axes: [row(0), row(4), row(8)], origin: row(12).map(|c| c * units) })
+        };
+        let unmatched: Vec<&str> = asset.parts.iter().map(|part| part.id.as_str()).filter(|name| bone(name).is_none()).collect();
+        writeln!(out, "asset {}: {} parts, {} joints; parts with no bone of that name: {unmatched:?}", asset.id, asset.parts.len(), asset.joints.len())?;
+        writeln!(out, "joint: child in its parent, asset against mesh: turn apart (degrees), place apart (units), bone length asset / mesh")?;
+        for joint in &asset.joints {
+            let [child, parent] = &joint.parts;
+            let (Some(asset_child), Some(asset_parent)) = (part(child), part(parent)) else { continue };
+            let (Some(mesh_child), Some(mesh_parent)) = (bone(child), bone(parent)) else {
+                writeln!(out, "  {child} on {parent}: no such bones")?;
+                continue;
+            };
+            let (Some(in_asset), Some(in_mesh)) =
+                (asset_parent.inverse().map(|inverse| inverse.then(&asset_child)), frames[mesh_parent].inverse().map(|inverse| inverse.then(&frames[mesh_child])))
+            else {
+                continue;
+            };
+            let apart = (Vector::from(in_asset.origin) - Vector::from(in_mesh.origin)).size();
+            writeln!(
+                out,
+                "  {child} on {parent}: {:.1} {apart:.1} {:.1} / {:.1}",
+                turn_between(&in_asset, &in_mesh),
+                Vector::from(in_asset.origin).size(),
+                Vector::from(in_mesh.origin).size()
+            )?;
+        }
+    }
+    Ok(())
+}
+
+const WALK_EYES: usize = 80;
+const WALK_RAYS: i32 = 8;
+const EYE_HEIGHT: f32 = 40.0;
+/// How far from a wall the near-wall eyes stand: about a player's radius, and nearly touching.
+const WALL_GAPS: [f32; 2] = [30.0, 4.0];
+
+fn node_locations(pkg: &Package, data: &[u8]) -> Vec<Vector> {
+    let nodes = pkg.exports.iter().filter(|export| matches!(p2_script::class_name(pkg, export), "PathNode" | "PlayerStart"));
+    nodes
+        .filter_map(|export| {
+            let object = pkg.read_object(data, export).ok()?;
+            object.properties.iter().find_map(|property| match &property.value {
+                TagValue::Struct { data, .. } if pkg.name(property.name) == "Location" => {
+                    let number = |at: usize| Some(f32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?));
+                    Some(Vector::new(number(0)?, number(4)?, number(8)?))
+                }
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// The four sides of a square view, 90 degrees wide, looking along `forward`.
+fn view_sides(eye: Vector, forward: Vector, right: Vector, up: Vector) -> Vec<Plane> {
+    [right, -right, up, -up]
+        .into_iter()
+        .map(|side| {
+            let normal = (forward - side).safe_normal();
+            Plane { normal, d: normal.dot(eye) }
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct WalkTally {
+    eyes: usize,
+    outside: usize,
+    rays: usize,
+    unreached: usize,
+    outside_volume: usize,
+    examples: BTreeMap<(u8, u8), (usize, String)>,
+}
+
+fn walk_check(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Result<()> {
+    let model = level_model(pkg, data)?;
+    let portals = ZonePortals::new(&model, Vec::new());
+    let polygons = model.polygons();
+    let sky_zones: Vec<usize> = (0..model.zones.len())
+        .filter(|&zone| {
+            let export = usize::try_from(model.zones[zone].actor).ok().and_then(|actor| pkg.exports.get(actor.checked_sub(1)?));
+            export.is_some_and(|export| p2_script::class_name(pkg, export) == "SkyZoneInfo")
+        })
+        .collect();
+    let drawn: Vec<&ModelPolygon> = polygons
+        .iter()
+        .filter(|polygon| polygon.poly_flags & (poly_flags::INVISIBLE | poly_flags::PORTAL) == 0)
+        .filter(|polygon| !sky_zones.contains(&usize::from(model.nodes[polygon.node].zones[1])))
+        .collect();
+    let nodes = node_locations(pkg, data);
+    let step = nodes.len().div_ceil(WALK_EYES).max(1);
+    let level = Vector::new(0.0, 0.0, 1.0);
+    let headings = [Vector::new(1.0, 0.0, 0.0), Vector::new(0.0, 1.0, 0.0), Vector::new(-1.0, 0.0, 0.0), Vector::new(0.0, -1.0, 0.0)];
+    let mut seen = VisibleZones::default();
+    let mut tallies = [WalkTally::default(), WalkTally::default(), WalkTally::default()];
+    for node in nodes.iter().step_by(step) {
+        let base = *node + level * EYE_HEIGHT;
+        let mut eyes = vec![(0, base)];
+        for heading in headings {
+            let Some(hit) = p2_collision::line_check(&model, base, base + heading * 4000.0) else { continue };
+            let reach = hit.time * 4000.0;
+            eyes.extend(WALL_GAPS.iter().enumerate().filter(|&(_, &gap)| reach > gap).map(|(kind, &gap)| (kind + 1, base + heading * (reach - gap))));
+        }
+        for (kind, eye) in eyes {
+            let tally = &mut tallies[kind];
+            tally.eyes += 1;
+            let zone = p2_collision::point_zone(&model, eye);
+            if zone == 0 {
+                tally.outside += 1;
+                continue;
+            }
+            for forward in headings {
+                let right = forward.cross(level);
+                portals.visible(eye, zone, &view_sides(eye, forward, right, level), &mut seen);
+                for (i, j) in (0..WALK_RAYS).flat_map(|i| (0..WALK_RAYS).map(move |j| (i, j))) {
+                    let across = |k: i32| (k as f32 + 0.5) / WALK_RAYS as f32 * 1.9 - 0.95;
+                    let direction = (forward + right * across(i) + level * across(j)).safe_normal();
+                    tally.rays += 1;
+                    for (distance, polygon) in ray_hits(&drawn, eye, direction) {
+                        let node = &model.nodes[polygon.node];
+                        let zones = if polygon.poly_flags & poly_flags::TWO_SIDED == 0 { [node.zones[1]; 2] } else { node.zones };
+                        let at = eye + direction * distance;
+                        // Through empty space a line changes zone only at a portal, so the walk must reach what it meets.
+                        let clear = p2_collision::line_check(&model, eye, eye + direction * (distance - 1.0)).is_none();
+                        if clear && !zones.contains(&0) {
+                            if !zones.iter().any(|&z| seen.reached(z)) {
+                                tally.unreached += 1;
+                                let example = format!("eye {:.0} {:.0} {:.0} looking {:.2} {:.2} {:.2}, {distance:.0} away", eye.x, eye.y, eye.z, direction.x, direction.y, direction.z);
+                                tally.examples.entry((zone, zones[0])).or_insert((0, example)).0 += 1;
+                            } else if !zones.iter().any(|&z| seen.sees(z, at, at)) {
+                                tally.outside_volume += 1;
+                            }
+                        }
+                        if polygon.poly_flags & (poly_flags::MASKED | poly_flags::TRANSLUCENT) == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    writeln!(out, "{} path nodes, every {step}. of them an eye; the walk runs without antiportal actors", nodes.len())?;
+    for (name, tally) in ["at the node", "30 from a wall", "4 from a wall"].iter().zip(&tallies) {
+        writeln!(
+            out,
+            "{name}: {} eyes ({} in zone 0, all seen), {} rays; a polygon in sight of a zone the walk did not reach: {}; reached but outside its volumes: {}",
+            tally.eyes, tally.outside, tally.rays, tally.unreached, tally.outside_volume
+        )?;
+        for ((from, to), (count, example)) in &tally.examples {
+            writeln!(out, "  eye zone {from}, polygon zone {to}: {count}, first: {example}")?;
+        }
+    }
+    Ok(())
+}
+
+fn light_reaches(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Result<()> {
+    let model = level_model(pkg, data)?;
     for line in std::io::stdin().lines() {
         let numbers: Vec<f32> = line?.split_whitespace().filter_map(|part| part.parse().ok()).collect();
         let [x, y, z, radius] = numbers[..] else { continue };
-        let zones: Vec<String> = p2_collision::light_zones(&model, p2_math::Vector::new(x, y, z), radius).iter().map(u8::to_string).collect();
+        let zones: Vec<String> = p2_collision::light_zones(&model, Vector::new(x, y, z), radius).iter().map(u8::to_string).collect();
         writeln!(out, "{x} {y} {z} {radius} {radius} {}", zones.join(","))?;
     }
     Ok(())
@@ -50,6 +360,12 @@ fn main() -> anyhow::Result<()> {
         None => dump(&pkg, &mut out)?,
         Some("--props") => dump_properties(&pkg, &data, &mut out)?,
         Some("--reach") => light_reaches(&pkg, &data, &mut out)?,
+        Some("--zones") => zone_survey(&pkg, &data, &mut out)?,
+        Some("--walk") => walk_check(&pkg, &data, &mut out)?,
+        Some("--rig") => {
+            let (asset, mesh) = (args.next().context(USAGE)?, args.next().context(USAGE)?);
+            rig_check(&pkg, &data, Path::new(&asset), &mesh.to_string_lossy(), &mut out)?;
+        }
         Some("--code") => dump_code(&pkg, &data, &natives_near(Path::new(&path)), &mut out)?,
         Some(_) => anyhow::bail!(USAGE),
     }

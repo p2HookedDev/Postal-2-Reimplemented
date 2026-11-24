@@ -11,9 +11,9 @@ pub(crate) struct BspKey {
 }
 
 /// Invisible surfaces and portals are left out; fake backdrop surfaces too where a sky zone shows
-/// through them (unverified). Opaque and masked surfaces are not split by zone or place, to keep draws few; the depth test
-/// hides what is behind. Translucent ones are split by zone for culling: a node by its front zone, two-sided ones the
-/// eye's side.
+/// through them (unverified). Surfaces are split by zone for culling, a node by its front zone and a two-sided one by
+/// both: a backdrop is a hole, and without culling the zones behind it showed where the sky is. Opaque and masked
+/// surfaces of zone 0 stay unsplit and always drawn. Translucent ones are split by place too.
 pub(crate) fn bsp_groups<'a>(
     model: &Model,
     polygons: &'a [ModelPolygon],
@@ -27,13 +27,14 @@ pub(crate) fn bsp_groups<'a>(
         let node = model.nodes.get(polygon.node);
         let in_sky = sky_zone.is_some_and(|zone| node.is_some_and(|node| node.zones[1] == zone));
         let translucent = polygon.poly_flags & poly_flags::TRANSLUCENT != 0;
-        let zones = node.filter(|_| translucent && !in_sky).map(|node| {
+        let zones = node.filter(|_| !in_sky).map(|node| {
             let mut zones = if polygon.poly_flags & poly_flags::TWO_SIDED == 0 { vec![node.zones[1]] } else { node.zones.to_vec() };
             zones.sort_unstable();
             zones.dedup();
             zones
         });
-        let at = if zones.is_some() { polygon.positions.first().map_or([0, 0], |&p| cell(Vec3::from(to_bevy(p)))) } else { [0, 0] };
+        let zones = zones.filter(|zones| translucent || !zones.contains(&0));
+        let at = if translucent && zones.is_some() { polygon.positions.first().map_or([0, 0], |&p| cell(Vec3::from(to_bevy(p)))) } else { [0, 0] };
         let (atlas, uvs) = model.light_map_uvs(polygon).unzip();
         groups.entry(BspKey { in_sky, material: polygon.material, atlas, flags: polygon.poly_flags & drawing, zones, cell: at }).or_default().push((polygon, uvs));
     }
@@ -109,7 +110,7 @@ pub(super) fn bsp_models(
             }
             let zone = zones.clone().zip(bounds(polygons.iter().flat_map(|(p, _)| p.positions.iter().copied())));
             let zone = zone.map(|(zones, (min, max))| ZoneCulled { zones, min, max, only_from: None });
-            let chunks = if zone.is_none() { crate::render::world_pass::chunks_of(&mut mesh) } else { None };
+            let chunks = if flags & poly_flags::TRANSLUCENT == 0 { crate::render::world_pass::chunks_of(&mut mesh) } else { None };
             let section = SectionView::textured(t.add_mesh(mesh), found.clone());
             let section = SectionView { no_scene_lights: true, lightmap: lightmap.clone().filter(|_| !section.fullbright), chunks, bsp_node, ..section };
             drawn.push((in_sky, ModelView { sections: vec![section], instances: vec![Transform::IDENTITY], zone, casts: !in_sky }));

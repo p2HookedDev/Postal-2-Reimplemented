@@ -4103,6 +4103,7 @@ dependencies = [
  "p2-collision",
  "p2-math",
  "p2-package",
+ "p2-render-cpu",
  "p2-script",
 ]
 

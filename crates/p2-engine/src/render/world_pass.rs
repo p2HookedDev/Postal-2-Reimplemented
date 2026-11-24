@@ -88,7 +88,7 @@ const WORKGROUP: u32 = 64;
 const CASTS: u32 = 1;
 const ZONED: u32 = 2;
 const WAIT_LOG_FRAMES: u32 = 300;
-const CHUNK_SIZE: u64 = 48;
+const CHUNK_SIZE: u64 = 80;
 const CHUNK_FIRST_INDEX_AT: u64 = 32;
 const CHUNK_BASE_VERTEX_AT: u64 = 40;
 
@@ -144,8 +144,8 @@ pub struct WorldSection {
     pub lightmap: Option<AssetId<Image>>,
     pub chunks: Arc<[Chunk]>,
     pub casts: bool,
-    /// Drawn only while the eye's portals reach this zone. `None`: always.
-    pub zone: Option<u8>,
+    /// Drawn only while the eye's portals reach one of these zones. `None`: always.
+    pub zones: Option<Vec<u8>>,
 }
 
 /// Whether sun shadow views draw the static world. Off, the shadow phase queues nothing and culls nothing.
@@ -168,7 +168,7 @@ pub struct WorldPlacement {
     pub world_from_local: Affine3A,
     pub chunks: Arc<[Chunk]>,
     pub casts: bool,
-    pub zone: Option<u8>,
+    pub zones: Option<Vec<u8>>,
 }
 
 #[derive(Resource, Clone, ExtractResource)]
@@ -213,14 +213,14 @@ impl WorldTargets<'_, '_> {
     }
 
     pub fn add(&mut self, mesh: &Handle<Mesh>, material: &SectionMaterial, lightmap: Option<&Handle<Image>>, placement: WorldPlacement) {
-        let WorldPlacement { world_from_local, chunks, casts, zone } = placement;
+        let WorldPlacement { world_from_local, chunks, casts, zones } = placement;
         if chunks.is_empty() {
             return;
         }
         self.assets.meshes.push(mesh.clone());
         self.assets.materials.push(material.clone());
         self.assets.images.extend(lightmap.cloned());
-        self.pending.push(WorldSection { mesh: mesh.id(), material: material.id(), world_from_local, lightmap: lightmap.map(Handle::id), chunks, casts, zone });
+        self.pending.push(WorldSection { mesh: mesh.id(), material: material.id(), world_from_local, lightmap: lightmap.map(Handle::id), chunks, casts, zones });
     }
 
     pub fn finish(&mut self) {

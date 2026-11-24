@@ -7,7 +7,7 @@ use crate::object::Stamp;
 use crate::ai_move::LatentMove;
 use crate::memory::{self, Mem, Shape};
 use crate::states::ObjectState;
-use crate::{ClassId, Error, HostCommand, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
+use crate::{ClassId, Error, HostCommand, Kind, LoaderRef, NameId, ObjectId, Prop, Value, Vm};
 use p2_script::flags::CPF_TRANSIENT;
 
 const MAGIC: &[u8; 8] = b"P2RSAVE\0";
@@ -355,6 +355,10 @@ impl<L: LoaderRef> Vm<L> {
             });
             *self.store.objects[id.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn) = mem;
             self.reset_transient_properties(id, class);
+            // The engine's constructor ran before the load and no save touches what it set: transient members.
+            if self.store.is_a(id, Kind::SceneManager) {
+                self.construct_scene_manager(id);
+            }
             if let Some(state) = &saved.state {
                 self.restore_state(id, state, &reference, &name);
             }

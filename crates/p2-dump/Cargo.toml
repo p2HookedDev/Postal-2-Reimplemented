@@ -13,6 +13,7 @@ p2-script.workspace = true
 p2-assets.workspace = true
 p2-collision.workspace = true
 p2-math.workspace = true
+p2-render-cpu.workspace = true
 
 [lints]
 workspace = true

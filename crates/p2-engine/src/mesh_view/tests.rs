@@ -1,7 +1,7 @@
 use super::*;
 use super::restyle::{surface_alpha_mode, surface_two_sided};
 use super::fog::blend_fog;
-use super::zone_culling::{forced_shown, sun_reaches, walk_view};
+use super::zone_culling::{CastsUnseen, attachments_with_their_base, forced_shown, move_draws, sun_reaches, walk_view};
 use bevy::math::EulerRot;
 use p2_assets::Model;
 
@@ -191,6 +191,73 @@ fn a_moving_actor_is_in_the_zones_where_it_is() {
         assert_eq!(zones(&app), Some(expected));
         assert_eq!(layers(&app), drawn);
     }
+}
+
+#[test]
+fn an_unseen_caster_leaves_the_view_with_its_children_and_comes_back() {
+    let mut app = App::new();
+    app.insert_resource(ShownScene::default());
+    app.add_systems(Update, layers_by_zone);
+    let zone = ZoneCulled { zones: vec![1], min: [0.0; 3], max: [0.0; 3], only_from: None };
+    let root = app.world_mut().spawn((zone, LayeredByZone)).id();
+    let caster = app.world_mut().spawn((ChildOf(root), RenderLayers::layer(0).with(CASTER_LAYER))).id();
+    let plain = app.world_mut().spawn((ChildOf(root), Mesh3d::default())).id();
+    let overlay = app.world_mut().spawn((ChildOf(root), RenderLayers::layer(4))).id();
+    let layers = |app: &App, entity| app.world().get::<RenderLayers>(entity).cloned().unwrap_or_default();
+    move_draws(app.world_mut(), root, 0, UNSEEN_LAYER);
+    assert_eq!(layers(&app, caster), RenderLayers::layer(UNSEEN_LAYER).with(CASTER_LAYER));
+    assert_eq!(layers(&app, plain), RenderLayers::layer(UNSEEN_LAYER));
+    assert_eq!(layers(&app, overlay), RenderLayers::layer(4));
+    app.world_mut().entity_mut(root).insert(CastsUnseen);
+    let later = app.world_mut().spawn(ChildOf(root)).id();
+    app.update();
+    assert_eq!(layers(&app, caster), RenderLayers::layer(UNSEEN_LAYER).with(CASTER_LAYER), "its zones changing leaves it unseen");
+    assert_eq!(layers(&app, later), RenderLayers::layer(UNSEEN_LAYER), "a draw that joins an unseen actor is unseen");
+    move_draws(app.world_mut(), root, UNSEEN_LAYER, 0);
+    assert_eq!(layers(&app, caster), RenderLayers::layer(0).with(CASTER_LAYER));
+    assert_eq!(layers(&app, plain), RenderLayers::layer(0));
+    assert_eq!(layers(&app, later), RenderLayers::layer(0));
+}
+
+#[test]
+fn an_attachment_leaves_the_view_with_the_model_it_is_on() {
+    let mut app = App::new();
+    app.add_systems(Update, attachments_with_their_base);
+    let id = ObjectId::from_index;
+    let one = Vector::new(1.0, 1.0, 1.0);
+    let none = Vector::ZERO;
+    let turn = Rotator::ZERO;
+    let follow = FollowActor { actor: id(1), scale: one, pre_pivot: none, skeletal: None };
+    let on = |actor, base| FollowBone {
+        actor,
+        base,
+        bone: 0,
+        body: bevy::math::Mat4::IDENTITY,
+        base_follow: follow,
+        relative_location: none,
+        relative_rotation: turn,
+        scale: one,
+        pre_pivot: none,
+        mesh_scale: one,
+        origin: none,
+        rot_origin: turn,
+    };
+    let body = app.world_mut().spawn((ActorModel(id(1)), Visibility::Hidden)).id();
+    let head = app.world_mut().spawn(on(id(2), id(1))).id();
+    let hat = app.world_mut().spawn((on(id(3), id(2)), RenderLayers::layer(0).with(CASTER_LAYER))).id();
+    let loose = app.world_mut().spawn(on(id(5), id(4))).id();
+    let layers = |app: &App, entity| app.world().get::<RenderLayers>(entity).cloned().unwrap_or_default();
+    app.update();
+    assert_eq!(layers(&app, head), RenderLayers::layer(UNSEEN_LAYER));
+    assert_eq!(layers(&app, hat), RenderLayers::layer(UNSEEN_LAYER).with(CASTER_LAYER), "a hat is on the head, which is on the body");
+    assert_eq!(layers(&app, loose), RenderLayers::layer(0), "on an actor with no model: left in view");
+    app.world_mut().entity_mut(body).insert(Visibility::Inherited);
+    app.update();
+    assert_eq!(layers(&app, head), RenderLayers::layer(0));
+    assert_eq!(layers(&app, hat), RenderLayers::layer(0).with(CASTER_LAYER));
+    app.world_mut().entity_mut(body).insert(CastsUnseen);
+    app.update();
+    assert_eq!(layers(&app, head), RenderLayers::layer(UNSEEN_LAYER), "the body only casts: so does the head");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use bevy::ecs::prelude::{Component, Resource};
+use bevy::ecs::prelude::{Component, Entity, Resource};
 use bevy::math::{Mat4, Quat, Vec3};
 use bevy::transform::components::Transform;
 use p2_bevy_assets::{rotator_matrix, unreal_mesh_matrix, unreal_to_bevy, unreal_transform};
@@ -26,6 +26,10 @@ pub const STATIC_CASTER_LAYER: usize = 10;
 /// The layer it adds to a placed mesh that stands still. Its lamp shadow is drawn with the movers': the lamps' atlas
 /// holds only what can never move.
 pub const RESTING_PROP_LAYER: usize = 11;
+
+/// Where a draw waits, in place of layer 0, while its actor is kept only to cast the sun's shadow from a zone the eye
+/// cannot see. No camera sees it.
+pub const UNSEEN_LAYER: usize = 12;
 
 #[derive(Component)]
 pub struct SunShadow;
@@ -89,6 +93,10 @@ pub(crate) struct CanvasLayer(pub(crate) usize);
 
 #[derive(Component, Clone, Copy)]
 pub struct ActorModel(pub ObjectId);
+
+/// On a map attachment: the model of the actor it is on, found through other attachments. `None`: it has none.
+#[derive(Component)]
+pub struct BaseModel(pub Option<Entity>);
 
 /// On the root of what is made for the map being played and the scene does not own.
 #[derive(Component)]

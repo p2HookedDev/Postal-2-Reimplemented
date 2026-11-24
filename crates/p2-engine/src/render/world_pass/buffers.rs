@@ -72,7 +72,10 @@ pub(super) fn section_uniform(section: &WorldSection, material: &PreparedMateria
     let mut uniform = MeshUniform::new(&transforms, first_vertex, material.binding.slot, None, None, None, None, metadata_index);
     // The section's zone plus one, for the lamps' zone test in `modern.wesl`; 0 on a section in several zones or in
     // zone 0, which no portal closes off.
-    uniform.tag = section.zone.filter(|&zone| zone != 0).map_or(0, |zone| u32::from(zone) + 1);
+    uniform.tag = section.zones.as_deref().map_or(0, |zones| match *zones {
+        [zone] if zone != 0 => u32::from(zone) + 1,
+        _ => 0,
+    });
     if let Some(slot) = light_slot {
         uniform.material_and_lightmap_bind_group_slot = u32::from(material.binding.slot) | ((slot as u32) << 16);
         uniform.lightmap_uv_rect = UVec2::new(0, u32::MAX);
@@ -105,9 +108,14 @@ pub(super) fn chunk_table(
             push_vec3(&mut chunk_bytes, center);
             push_u32s(&mut chunk_bytes, &[bucket_index as u32]);
             push_vec3(&mut chunk_bytes, half);
-            let zone = section.zone.map_or(0, |zone| ZONED | (u32::from(zone) << 8));
+            let zoned = if section.zones.is_some() { ZONED } else { 0 };
             let casts = if casts_shadow(section, bucket.properties.alpha_mode) { CASTS } else { 0 };
-            push_u32s(&mut chunk_bytes, &[section_index as u32, first_index, chunk.index_count, base_vertex, zone | casts]);
+            push_u32s(&mut chunk_bytes, &[section_index as u32, first_index, chunk.index_count, base_vertex, zoned | casts]);
+            let mut zones = [0u32; 8];
+            for &zone in section.zones.iter().flatten() {
+                zones[usize::from(zone >> 5)] |= 1 << (zone & 31);
+            }
+            push_u32s(&mut chunk_bytes, &zones);
         }
     }
     Some((chunk_bytes, firsts, next_draw))

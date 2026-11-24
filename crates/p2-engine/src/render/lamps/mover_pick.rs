@@ -20,7 +20,7 @@ use super::grounding::{Capsule, GRID_COLUMNS, grounding_row};
 use super::movers::{Drawn, MOST_MOVER_TILES, MoverCaster, MoverTile, MoverTiles, TILE_MARGIN, WIDEST_TILE};
 use super::tile_grid::tile_grid_rows;
 use super::{DetailSquares, Lamp, LampAtlas, MOVER_FADE_SECONDS, Placed, lamp_quality, scene_eye};
-use crate::components::{FollowActor, FollowBone, MOVER_LAYER, RESTING_PROP_LAYER, SceneView};
+use crate::components::{ActorModel, BaseModel, FollowActor, FollowBone, MOVER_LAYER, RESTING_PROP_LAYER, SceneView};
 use crate::display::{MODERN_LAMP_SHADOWS, Settings};
 use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::render::modern::StillProp;
@@ -451,11 +451,17 @@ pub(super) fn pick_mover_tiles(
     cameras: Query<(&Transform, &Projection, &Camera), With<SceneView>>,
     lamps: Query<(&Transform, &Placed, &InheritedVisibility), With<Lamp>>,
     meshes: Query<
-        (Entity, Option<&ChildOf>, &Mesh3d, &Aabb, &GlobalTransform, &RenderLayers, Option<&Visibility>, Option<&StillProp>, Option<&SkinnedMesh>),
+        (Entity, Option<&ChildOf>, &Mesh3d, &Aabb, &GlobalTransform, &RenderLayers, Option<&Visibility>, Option<&StillProp>, Option<&SkinnedMesh>, Option<&BaseModel>),
         Or<(With<FollowActor>, With<FollowBone>)>,
     >,
+    models: Query<(), With<ActorModel>>,
     joints: Query<&GlobalTransform>,
 ) {
+    // A head or bolt-on casts with the body it is on. Every map attachment shares one parent, which is no mover.
+    let mover_of = |entity: Entity, child: Option<&ChildOf>, base: Option<&BaseModel>| {
+        let own = child.map(ChildOf::parent).filter(|&parent| models.contains(parent));
+        base.and_then(|base| base.0).or(own).unwrap_or(entity)
+    };
     let state = &mut *state;
     if state.made != squares.made || squares.book.is_none() {
         state.made = squares.made;
@@ -487,13 +493,13 @@ pub(super) fn pick_mover_tiles(
     }));
 
     state.bounds.clear();
-    for (entity, child, _, aabb, placed, layers, seen, still, _) in &meshes {
+    for (entity, child, _, aabb, placed, layers, seen, still, _, base) in &meshes {
         if !casts(layers, seen) {
             continue;
         }
         let (min, max) = world_box(aabb, placed);
         let resting = still.is_some_and(|still| still.0) || layers.intersects(&resting_layer);
-        state.bounds.entry(child.map_or(entity, ChildOf::parent))
+        state.bounds.entry(mover_of(entity, child, base))
             .and_modify(|bounds| {
                 bounds.min = bounds.min.min(min);
                 bounds.max = bounds.max.max(max);
@@ -517,8 +523,8 @@ pub(super) fn pick_mover_tiles(
     for column_units in GRID_COLUMNS {
         grounding_row(eye.at, capsules.clone(), column_units, &mut out.grounding);
     }
-    for (entity, child, mesh, _, placed, layers, seen, _, skinned) in &meshes {
-        let Some(&mover) = state.numbers.get(&child.map_or(entity, ChildOf::parent)) else { continue };
+    for (entity, child, mesh, _, placed, layers, seen, _, skinned, base) in &meshes {
+        let Some(&mover) = state.numbers.get(&mover_of(entity, child, base)) else { continue };
         if !casts(layers, seen) {
             continue;
         }

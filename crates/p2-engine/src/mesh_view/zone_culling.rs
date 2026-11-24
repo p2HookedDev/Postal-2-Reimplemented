@@ -12,7 +12,7 @@ pub(super) struct ZoneCullingPlugin;
 
 impl Plugin for ZoneCullingPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShadowOnly>().add_systems(Update, (follower_zones, layers_by_zone, zone_visibility).chain().in_set(SceneViewSystems::Zones));
+        app.init_resource::<ShadowOnly>().add_systems(Update, (follower_zones, layers_by_zone, zone_visibility, attachments_with_their_base).chain().in_set(SceneViewSystems::Zones));
     }
 }
 
@@ -121,7 +121,7 @@ fn zone_visibility(
             own.is_some_and(|own| own.intersects(layer)) || children.is_some_and(|children| children.iter().any(|&child| layers.get(child).is_ok_and(|l| l.intersects(layer))))
         };
         let drawn = seen || (forced && sun.is_some_and(|(eye, reach)| casts_on(&cached_caster) || (sun_reaches(eye, reach, zone) && casts_on(&caster))));
-        let casts_unseen = drawn && !seen && own.is_some_and(|own| own.intersects(&caster));
+        let casts_unseen = drawn && !seen;
         if casts_unseen != unseen_caster
             && let Ok(mut flips) = unseen_flips.lock()
         {
@@ -137,19 +137,77 @@ fn zone_visibility(
     }
     for (root, casts_unseen) in unseen_flips.into_inner().unwrap_or_default() {
         commands.entity(root).queue_silenced(move |mut entity: bevy::ecs::world::EntityWorldMut| {
-            let layers = entity.get::<RenderLayers>().cloned().unwrap_or_default();
             if casts_unseen {
-                entity.insert((layers.without(0), CastsUnseen));
+                entity.insert(CastsUnseen);
             } else {
-                entity.insert(layers.with(0)).remove::<CastsUnseen>();
+                entity.remove::<CastsUnseen>();
             }
+            let (from, to) = if casts_unseen { (0, UNSEEN_LAYER) } else { (UNSEEN_LAYER, 0) };
+            entity.world_scope(|world| move_draws(world, root, from, to));
         });
     }
 }
 
-/// A caster in a zone the eye cannot see: off the view's layer but still on the sun's, so it keeps casting.
+/// A caster in a zone the eye cannot see: its draws wait on [`UNSEEN_LAYER`] in place of the view's layer, and stay on
+/// the sun's, so it keeps casting.
 #[derive(Component)]
-struct CastsUnseen;
+pub(super) struct CastsUnseen;
+
+/// The engine culls an attachment by its own box. Ours has no zones, so it leaves the view with the model it is on,
+/// and keeps casting with it.
+pub(super) fn attachments_with_their_base(
+    mut commands: Commands,
+    models: Query<(Entity, &ActorModel)>,
+    shown: Query<(&Visibility, Has<CastsUnseen>), With<ActorModel>>,
+    attached: Query<(Entity, bevy::ecs::change_detection::Ref<FollowBone>, Option<&RenderLayers>, Option<&BaseModel>)>,
+    spawned: Query<(), bevy::ecs::query::Added<ActorModel>>,
+) {
+    let retry = !spawned.is_empty();
+    let mut by_actor: Option<FxHashMap<ObjectId, Entity>> = None;
+    for (entity, follow, layers, base) in &attached {
+        let known = base.filter(|_| !follow.is_changed()).map(|base| base.0).filter(|found| match found {
+            Some(model) => shown.contains(*model),
+            None => !retry,
+        });
+        let model = known.unwrap_or_else(|| {
+            let by_actor = by_actor.get_or_insert_with(|| models.iter().map(|(entity, model)| (model.0, entity)).collect());
+            let mut on = follow.base;
+            for _ in 0..4 {
+                if by_actor.contains_key(&on) {
+                    break;
+                }
+                let Some(under) = attached.iter().find(|(_, other, ..)| other.actor == on) else { break };
+                on = under.1.base;
+            }
+            let found = by_actor.get(&on).copied();
+            commands.entity(entity).insert(BaseModel(found));
+            found
+        });
+        let unseen = model.and_then(|model| shown.get(model).ok()).is_some_and(|(visibility, casts_unseen)| *visibility == Visibility::Hidden || casts_unseen);
+        let (from, to) = if unseen { (0, UNSEEN_LAYER) } else { (UNSEEN_LAYER, 0) };
+        let layers = layers.cloned().unwrap_or_default();
+        if layers.intersects(&RenderLayers::layer(from)) {
+            commands.entity(entity).insert(layers.without(from).with(to));
+        }
+    }
+}
+
+/// Moves every draw of `root` and under it from one layer to the other. A mesh without layers is on layer 0.
+pub(super) fn move_draws(world: &mut bevy::ecs::world::World, root: Entity, from: usize, to: usize) {
+    let mut draws = vec![root];
+    let mut next = 0;
+    while let Some(&draw) = draws.get(next) {
+        next += 1;
+        if let Some(children) = world.get::<Children>(draw) {
+            draws.extend(children.iter().copied());
+        }
+        let unlayered = || world.get::<Mesh3d>(draw).map(|_| RenderLayers::default());
+        let Some(layers) = world.get::<RenderLayers>(draw).cloned().or_else(unlayered) else { continue };
+        if layers.intersects(&RenderLayers::layer(from)) {
+            world.entity_mut(draw).insert(layers.without(from).with(to));
+        }
+    }
+}
 
 /// Sets the draws under a moving actor, a particle actor or a corona to the sky camera's layer, the view's or both,
 /// when its zones change or a draw joins it (a particle pool grows).
@@ -160,15 +218,16 @@ pub(super) fn layers_by_zone(
     changed: Query<Entity, (Or<(With<ActorModel>, With<LayeredByZone>)>, Changed<ZoneCulled>)>,
     joined: Query<Entity, bevy::ecs::query::Added<ChildOf>>,
     parents: Query<&ChildOf>,
-    roots: Query<&ZoneCulled, Or<(With<ActorModel>, With<LayeredByZone>)>>,
+    roots: Query<(&ZoneCulled, Has<CastsUnseen>), Or<(With<ActorModel>, With<LayeredByZone>)>>,
     children: Query<&Children>,
     layers: Query<Option<&RenderLayers>>,
 ) {
     let joined = joined.iter().flat_map(|entity| parents.iter_ancestors(entity)).filter(|&root| roots.contains(root));
     let dirty: EntityHashSet = changed.iter().chain(joined).collect();
-    let scene = RenderLayers::layer(0).with(SKY_LAYER);
+    let scene = RenderLayers::layer(0).with(SKY_LAYER).with(UNSEEN_LAYER);
     for root in dirty {
-        let Ok(zone) = roots.get(root) else { continue };
+        let Ok((zone, unseen)) = roots.get(root) else { continue };
+        let world_layer = if unseen { UNSEEN_LAYER } else { 0 };
         let (in_sky, in_world) = sky_and_world(&zone.zones, shown.sky_zone);
         for draw in children.iter_descendants(root) {
             let Ok(now) = layers.get(draw) else { continue };
@@ -177,12 +236,12 @@ pub(super) fn layers_by_zone(
             if !now.intersects(&scene) {
                 continue;
             }
-            let mut next = now.clone().without(0).without(SKY_LAYER);
+            let mut next = now.clone().without(0).without(UNSEEN_LAYER).without(SKY_LAYER);
             if in_sky {
                 next = next.with(SKY_LAYER);
             }
             if in_world {
-                next = next.with(0);
+                next = next.with(world_layer);
             }
             if next != now {
                 commands.entity(draw).insert(next);

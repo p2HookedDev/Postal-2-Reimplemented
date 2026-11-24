@@ -7,7 +7,7 @@ use p2_package::TagValue;
 
 use super::*;
 use super::projectors::{ALPHA_TEST_TAG, PROJECTOR_TAG, TAGGED_TAG};
-use super::static_meshes::box_zones;
+use super::static_meshes::placed_box;
 use crate::render::actor_light::mesh_sphere;
 
 fn mesh_placement(loader: &Loader, actor: &MeshActor) -> ((PackageId, i32), MeshPlacement) {
@@ -382,9 +382,8 @@ fn props_without_baked_light_not_black() {
     }
 }
 
-#[test]
-fn only_translucent_bsp_splits_by_place() {
-    let node = p2_assets::BspNode {
+fn bsp_node(zones: [u8; 2]) -> p2_assets::BspNode {
+    p2_assets::BspNode {
         plane: [0.0; 4],
         node_flags: 0,
         vert_pool: 0,
@@ -394,13 +393,29 @@ fn only_translucent_bsp_splits_by_place() {
         coplanar: None,
         collision_bound: None,
         render_bound: None,
-        zones: [1, 1],
+        zones,
         num_vertices: 0,
         leaves: [0; 2],
         section: None,
         first_vertex: 0,
         light_map: None,
-    };
+    }
+}
+
+#[test]
+fn opaque_bsp_splits_by_zone_but_for_zone_0() {
+    let model = Model { nodes: vec![bsp_node([9, 1]), bsp_node([9, 2]), bsp_node([9, 0]), bsp_node([2, 0])], ..Model::default() };
+    let polygon = |node, poly_flags| ModelPolygon { node, surface: 0, material: 1, poly_flags, normal: [0.0; 3], positions: vec![[0.0; 3]], uvs: Vec::new() };
+    let polygons = [polygon(0, 0), polygon(1, 0), polygon(1, poly_flags::TWO_SIDED), polygon(2, 0), polygon(3, 0)];
+    let groups = bsp_groups(&model, &polygons, None);
+    let sizes: Vec<usize> = groups.values().map(Vec::len).collect();
+    assert_eq!(groups.len(), 4, "zone 1, zone 2, zones 2 and 9 of the two-sided one, and zone 0's two together: {sizes:?}");
+    assert!(sizes.contains(&2));
+}
+
+#[test]
+fn only_translucent_bsp_splits_by_place() {
+    let node = bsp_node([1, 1]);
     let model = Model { nodes: vec![node], ..Model::default() };
     let polygon = |poly_flags, x| ModelPolygon { node: 0, surface: 0, material: 1, poly_flags, normal: [0.0; 3], positions: vec![[x, 0.0, 0.0]], uvs: Vec::new() };
     let far = 1_000_000.0;
@@ -528,6 +543,7 @@ fn a_mesh_is_in_the_zones_its_vertices_reach_not_its_pivots() {
     let mesh = StaticMesh { positions: vec![[0.0, 0.0, 110.0], [10.0, 10.0, 120.0]], ..Default::default() };
     let local = bounds(mesh.positions.iter().map(|&p| to_bevy(p)));
     let pivot_below = Transform::from_translation(Vec3::from(to_bevy([0.0, 0.0, -100.0])));
-    assert_eq!(box_zones(&model, local, &pivot_below), [2]);
-    assert_eq!(box_zones(&model, None, &pivot_below), []);
+    let (min, max) = placed_box(local, &pivot_below).unwrap();
+    assert_eq!(p2_collision::box_zones(&model, min.into(), max.into()), [2]);
+    assert!(placed_box(None, &pivot_below).is_none());
 }

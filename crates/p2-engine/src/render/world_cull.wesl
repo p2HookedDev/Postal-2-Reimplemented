@@ -7,6 +7,8 @@ struct Chunk {
     index_count: u32,
     base_vertex: i32,
     flags: u32,
+    // One bit per zone the chunk is in, read with `ZONED`.
+    zones: array<u32, 8>,
 }
 
 struct DrawArgs {
@@ -46,8 +48,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     if (chunk.flags & ZONED) != 0u {
-        let zone = (chunk.flags >> 8u) & 255u;
-        if ((view.seen_zones[zone >> 7u][(zone >> 5u) & 3u] >> (zone & 31u)) & 1u) == 0u {
+        var seen = 0u;
+        for (var word = 0u; word < 8u; word++) {
+            seen |= chunk.zones[word] & view.seen_zones[word >> 2u][word & 3u];
+        }
+        if seen == 0u {
             return;
         }
     }

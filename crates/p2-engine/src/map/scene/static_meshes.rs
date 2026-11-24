@@ -15,16 +15,16 @@ pub(super) struct MeshPlacing<I> {
     pub(super) only_from: Option<Vec<u8>>,
 }
 
-/// The zones of the BSP leaves the placed mesh's box touches: the engine files an actor under each of them, wherever
-/// its pivot is.
-pub(super) fn box_zones(model: &Model, local: Option<([f32; 3], [f32; 3])>, transform: &Transform) -> Vec<u8> {
-    let Some((min, max)) = local else { return Vec::new() };
+/// The placed mesh's box in Unreal space. The engine files an actor under the zone of each BSP leaf this box touches,
+/// wherever its pivot is.
+pub(super) fn placed_box(local: Option<([f32; 3], [f32; 3])>, transform: &Transform) -> Option<([f32; 3], [f32; 3])> {
+    let (min, max) = local?;
     let affine = transform.compute_affine();
     let corners = (0..8).map(|i: usize| {
         let pick = |axis: usize| if i >> axis & 1 == 0 { min[axis] } else { max[axis] };
         to_bevy(affine.transform_point3(Vec3::new(pick(0), pick(1), pick(2))).to_array())
     });
-    bounds(corners).map_or_else(Vec::new, |(min, max)| p2_collision::box_zones(model, min.into(), max.into()))
+    bounds(corners)
 }
 
 pub(super) struct StaticLevel<'a> {
@@ -40,6 +40,8 @@ struct BatchKey {
     material: String,
     has_uvs: bool,
     has_colors: bool,
+    /// The zones its actors' boxes touch: the batch is culled by them. `None` for actors in no leaf, always drawn.
+    zones: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -51,7 +53,7 @@ pub(super) struct StaticParts {
     pub(super) lamp_casters: Vec<[[f32; 3]; 3]>,
     pub(super) lamp_caster_albedos: Vec<[f32; 3]>,
     pub(super) lamp_masked: HashMap<AssetId<Image>, MaskedCaster>,
-    batches: BTreeMap<BatchKey, (SectionView, MeshBatch)>,
+    batches: BTreeMap<BatchKey, (SectionView, MeshBatch, ([f32; 3], [f32; 3]))>,
     pub(super) lit_actors: usize,
 }
 
@@ -112,7 +114,9 @@ fn static_mesh_models(
     let mut shared: Option<Arc<StaticMesh>> = None;
     for MeshPlacing { transform, instance, placement, follow, fixed, only_from } in placements {
         let collision = placement.map(|Placement { location, rotation, scale, pre_pivot }| MeshCollision::new(&mesh, location, rotation, scale, pre_pivot));
-        let (in_sky, in_world) = crate::mesh_view::sky_and_world(&box_zones(level.model, local_box, &transform), level.sky_zone);
+        let world_box = placed_box(local_box, &transform);
+        let zones = world_box.map_or_else(Vec::new, |(min, max)| p2_collision::box_zones(level.model, min.into(), max.into()));
+        let (in_sky, in_world) = crate::mesh_view::sky_and_world(&zones, level.sky_zone);
         if let Some(Placement { location, rotation, scale, pre_pivot }) = fixed.filter(|_| in_world) {
             let built;
             let placed = if let Some(collision) = &collision {
@@ -133,7 +137,6 @@ fn static_mesh_models(
                 parts.lamp_caster_albedos.push(view.texture.as_ref().and_then(|image| t.albedos.get(&image.id())).copied().unwrap_or(GREY_ALBEDO));
             }
         }
-        let bounds = collision.as_ref().map(MeshCollision::bounds);
         parts.collisions.extend(collision);
         let mirrored = mirrors(&transform);
         let lit = instance.map(|(reference, lighting)| {
@@ -162,20 +165,26 @@ fn static_mesh_models(
             continue;
         }
         parts.lit_actors += usize::from(lighting.is_some());
-        let zone = bounds
-            .filter(|_| !level.model.leaves.is_empty())
-            .map(|(min, max)| ZoneCulled { zones: p2_collision::box_zones(level.model, min, max), min: min.into(), max: max.into(), only_from: only_from.clone() });
+        let zone = world_box.filter(|_| !level.model.leaves.is_empty()).map(|(min, max)| ZoneCulled { zones, min, max, only_from: only_from.clone() });
         if only_from.is_some() {
             parts.models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone, casts: true });
             continue;
         }
         let colors = lighting.as_deref().map(lighting_colors);
+        let culled = zone.as_ref().filter(|zone| !zone.zones.is_empty());
+        let reach = culled.map_or(([0.0; 3], [0.0; 3]), |zone| (zone.min, zone.max));
         for (i, section) in base.iter().enumerate().filter(|&(i, _)| !blended[i]) {
             let view = &views[i];
             let colors = colors.as_deref().filter(|_| !view.fullbright);
-            let key = BatchKey { material: material_keys[i].clone(), has_uvs: section.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), has_colors: colors.is_some() };
-            let (_, batch) = parts.batches.entry(key).or_insert_with(|| (view.clone(), MeshBatch::default()));
+            let key = BatchKey {
+                material: material_keys[i].clone(),
+                has_uvs: section.attribute(Mesh::ATTRIBUTE_UV_0).is_some(),
+                has_colors: colors.is_some(),
+                zones: culled.map(|zone| zone.zones.clone()),
+            };
+            let (_, batch, held) = parts.batches.entry(key).or_insert_with(|| (view.clone(), MeshBatch::default(), reach));
             batch.push(section, &transform, colors);
+            *held = merged_box(*held, reach);
         }
         if blended.contains(&true) {
             match lighting {
@@ -250,10 +259,11 @@ pub(super) fn static_models(
     }
     let batches = std::mem::take(&mut parts.batches);
     let merged = batches.len();
-    for (view, batch) in batches.into_values() {
+    for (key, (view, batch, (min, max))) in batches {
         let mut mesh = batch.into_mesh();
         let chunks = crate::render::world_pass::chunks_of(&mut mesh);
-        parts.models.push(ModelView { sections: vec![SectionView { mesh: t.add_mesh(mesh), chunks, ..view }], instances: vec![Transform::IDENTITY], zone: None, casts: true });
+        let zone = key.zones.map(|zones| ZoneCulled { zones, min, max, only_from: None });
+        parts.models.push(ModelView { sections: vec![SectionView { mesh: t.add_mesh(mesh), chunks, ..view }], instances: vec![Transform::IDENTITY], zone, casts: true });
     }
     (parts, missing, merged)
 }

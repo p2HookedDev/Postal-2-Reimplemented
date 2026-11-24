@@ -97,7 +97,12 @@ fn swing_excess(d: Vector, [about_y, about_z]: [f32; 2]) -> Option<(f32, Vector)
     (reach > 1.0).then(|| (angle - angle / reach, Vector::new(0.0, -d.z, d.y) / side))
 }
 
-/// Each jointed tree keeps its total mass, so the body's flight stays retail's.
+/// A part that turns this many times more easily than one it is jointed to breaks its joints in the solver. Measured
+/// on the midget's neck, a sphere of 1.7 units between two shapeless clavicles: it held at 50 and broke at 100.
+const INERTIA_RATIO: f32 = 25.0;
+
+/// Each jointed tree keeps its total mass, so the body's flight stays retail's. A part's inertia is raised to what
+/// its joints can hold.
 fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math::Vector)> {
     let n = parts.len();
     let mut parent = vec![None; n];
@@ -120,7 +125,7 @@ fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math:
         total[root] += part.mass;
         ratios[root] += ratio;
     }
-    parts
+    let mut evened: Vec<(f32, p2_math::Vector)> = parts
         .iter()
         .zip(&walks)
         .map(|(part, &(root, _, ratio))| {
@@ -129,7 +134,17 @@ fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math:
             let scale = if scale.is_finite() { scale } else { 1.0 };
             (mass, part.inertia * scale)
         })
-        .collect()
+        .collect();
+    let largest = |inertia: p2_math::Vector| inertia.x.max(inertia.y).max(inertia.z);
+    let mut least = vec![0.0_f32; n];
+    for joint in joints.iter().filter(|j| j.child < n && j.parent < n) {
+        least[joint.child] = least[joint.child].max(largest(evened[joint.parent].1) / INERTIA_RATIO);
+        least[joint.parent] = least[joint.parent].max(largest(evened[joint.child].1) / INERTIA_RATIO);
+    }
+    for ((_, inertia), least) in evened.iter_mut().zip(least) {
+        *inertia = inertia.map(|axis| axis.max(least));
+    }
+    evened
 }
 
 /// Spherical, as Karma without `bKNonSphericalInertia`, which no script sets.
@@ -510,6 +525,65 @@ mod tests {
             assert!((3.0..12.0).contains(&z), "part at height {z}");
         }
         assert!(slept.is_some_and(|f| f < 240), "slept at frame {slept:?}");
+    }
+
+    /// The midget's neck and what hangs on it, with the sizes and masses of `Avg_Mini.ka`: the neck is a sphere of
+    /// 1.7 units between two shapeless clavicles and a head.
+    fn midget_shoulders(neck_radius: f32) -> RagdollParams {
+        let mass = 0.0647;
+        let part = |shapes: Vec<Shape>, location: [f32; 3]| {
+            let inertia = shapes_inertia(&shapes, mass).unwrap_or([32.35; 3].into());
+            PartParams { shapes, location: location.into(), rotation: [0.0, 0.0, 0.0, 1.0], mass, center_of_mass: [0.0; 3].into(), inertia, velocity: [0.0; 3].into() }
+        };
+        let arm = |side: f32| Shape::Capsule([0.0; 3].into(), [0.0, side * 11.5, 0.0].into(), 4.0);
+        let parts = vec![
+            part(vec![Shape::Sphere([0.0; 3].into(), 15.0)], [0.0, 0.0, 100.0]),
+            part(vec![Shape::Sphere([0.0; 3].into(), neck_radius)], [0.0, 0.0, 115.3]),
+            part(vec![Shape::Sphere([0.0; 3].into(), 7.5)], [0.0, 0.0, 121.6]),
+            part(Vec::new(), [0.0, 3.4, 115.3]),
+            part(Vec::new(), [0.0, -3.4, 115.3]),
+            part(vec![arm(1.0)], [0.0, 13.9, 115.3]),
+            part(vec![arm(-1.0)], [0.0, -13.9, 115.3]),
+        ];
+        let joint = |child: usize, parent: usize, limit: JointLimit| {
+            let offset = [0, 1, 2].map(|k| parts[child].location[k] - parts[parent].location[k]);
+            JointParams {
+                child,
+                parent,
+                child_anchor: [0.0; 3].into(),
+                child_axes: [[1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into()],
+                parent_anchor: offset.into(),
+                parent_axes: [[1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into()],
+                limit,
+            }
+        };
+        let cone = JointLimit::Cone { swing: Some([1.4, 0.4]), twist: Some(0.1) };
+        let joints = vec![
+            joint(1, 0, JointLimit::Hinge(Some([-0.4, 0.4]))),
+            joint(2, 1, JointLimit::Hinge(Some([-0.4, 0.4]))),
+            joint(3, 1, JointLimit::Hinge(Some([-0.1, 0.1]))),
+            joint(4, 1, JointLimit::Hinge(Some([-0.1, 0.1]))),
+            joint(5, 3, cone),
+            joint(6, 4, cone),
+        ];
+        RagdollParams { parts, joints, linear_damping: 0.2, angular_damping: 0.2, friction: 0.8, restitution: 0.0, asleep: false }
+    }
+
+    #[test]
+    fn a_tiny_part_between_heavy_ones_keeps_its_hinges() {
+        let mut world = World::new([0.0, 0.0, -950.0].into());
+        floor(&mut world);
+        let bodies = world.add_ragdoll(&midget_shoulders(1.7));
+        world.set_spin(bodies[2], [0.0, 3.0, 2.0].into());
+        let (mut bent, mut fastest) = (0.0_f32, 0.0_f32);
+        for _ in 0..240 {
+            world.step(1.0 / 60.0);
+            for (parent, child) in [(0, 1), (1, 2), (1, 3), (1, 4)] {
+                bent = bent.max(swing_between(&world, bodies[parent], bodies[child]));
+            }
+            fastest = fastest.max(world.bodies.get(bodies[1].0).map_or(0.0, |body| body.angvel().length()));
+        }
+        assert!(bent < 0.4 && fastest < 30.0, "a hinge's axes came {bent} rad apart, the neck spun at {fastest} rad/s; unheld it was 1.6 rad and 82");
     }
 
     #[test]
