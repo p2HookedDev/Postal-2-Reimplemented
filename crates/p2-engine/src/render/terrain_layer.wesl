@@ -9,8 +9,9 @@ import bevy_pbr::{
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
+import package::p2_engine::dynamic_light::dynamic_light;
 import package::p2_engine::modern::{
-    base_relief, is_modern, key_shading, masked_sun_visibility, static_occlusion, sun_highlight, sun_shadowed,
+    allows_gloss, ambient_occlusion, base_relief, has_sun, is_modern, lamp_light, modern_surface, sun_seen, surface_of, with_light,
 };
 @if(BINDLESS)
 import package::p2_engine::layer_bindings::indices;
@@ -31,10 +32,8 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var input = vertex_output;
     var light = vec3(0.5);
-    var mask = 0.0;
     @if(VERTEX_COLORS) {
         light = input.color.rgb;
-        mask = input.color.a;
         input.color = vec4(1.0);
     }
     var pbr_input = pbr_input_from_standard_material(input, is_front);
@@ -65,21 +64,19 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let layers = layers_array[indices(vertex_output).data];
 @else
     let layers = layers_data;
-    var shine = vec3(0.0);
-    if is_modern(layers.detail.z) {
+    var surface = to_linear(min(to_display(pbr_input.material.base_color.rgb) * 2.0 * light, vec3(1.0)));
+    if is_modern(layers.detail.z) && has_sun() {
         let normal = normalize(pbr_input.world_normal);
-        let visibility = masked_sun_visibility(mask, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
-        light = sun_shadowed(light, mask, visibility, normal);
-        let relief = base_relief(vertex_output, pbr_input, normal, layers.specular.x, layers.detail.z);
-        let key = key_shading(normal, relief, pbr_input.world_position.xyz);
-        let sun = sun_highlight(relief, mask, visibility, pbr_input.world_position.xyz, normal);
-        light *= static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy);
-        shine = key.y * to_linear(2.0 * min(light, vec3(1.0))) + sun;
-        light *= key.x;
+        let position = pbr_input.world_position.xyz;
+        let seen = sun_seen(pbr_input.world_position, normal, pbr_input.frag_coord.xy);
+        let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
+        let gloss = allows_gloss(layers.detail.z);
+        let lamps = lamp_light(vertex_output, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, surface_of(0.0));
+        surface = modern_surface(pbr_input.material.base_color.rgb, position, bumped, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface_of(0.0));
+        surface = with_light(surface, pbr_input.material.base_color.rgb, dynamic_light(pbr_input.world_position, normal, ranges));
     }
-    let lit = min(to_display(pbr_input.material.base_color.rgb) * 2.0 * light, vec3(1.0));
     var out: FragmentOutput;
-    let layered = apply_layers(vertex_output, vec4(to_linear(lit) + shine, alpha), base_alpha, pbr_input, layers);
+    let layered = apply_layers(vertex_output, vec4(surface, alpha), base_alpha, pbr_input, layers);
     out.color = post_lighting(pbr_input, project(pbr_input, ranges, pbr_input.material.base_color.rgb, layered, TARGET_TERRAIN));
     return out;
 }

@@ -34,6 +34,7 @@ pub struct PendingAssets {
     image_sizes: HashMap<AssetId<Image>, UVec2>,
     bindposes: Vec<(Handle<SkinnedMeshInverseBindposes>, SkinnedMeshInverseBindposes)>,
     pub wet: Vec<(AssetId<Image>, crate::library::WetSource)>,
+    pub(super) albedos: HashMap<AssetId<Image>, [f32; 3]>,
 }
 
 impl PendingAssets {
@@ -47,6 +48,7 @@ impl PendingAssets {
             image_sizes: HashMap::new(),
             bindposes: Vec::new(),
             wet: Vec::new(),
+            albedos: HashMap::new(),
         }
     }
 

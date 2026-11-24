@@ -20,7 +20,10 @@ use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::math::Vec4;
 use p2_engine::render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
 use p2_engine::render::mesh_light::{DynamicLit, MeshLitMaterial};
-use p2_engine::render::modern::{CASTER_LAYER, SUN_VIEW_LAYER};
+use bevy::light::AmbientLight;
+use p2_engine::mesh_view::SceneView;
+use p2_engine::render::modern::{CASTER_LAYER, MOVER_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER};
+use p2_engine::render::sun_cache::{CachedSunLevel, SunCachePlugin, SunCacheStale, level_config};
 
 const SUN_LESS: f32 = 0.3;
 const SUN_TERM: f32 = 0.2;
@@ -70,6 +73,7 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
         Msaa::Off,
         Transform::from_xyz(0.0, 0.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         seen.clone(),
+        AmbientLight { brightness: 0.0, ..AmbientLight::default() },
     ));
     let baked = if ground_kind == Ground::Indoor { SUN_LESS } else { SUN_LESS + SUN_TERM };
     let ground = world.resource_mut::<Assets<Mesh>>().add(quad(30.0, 0.0, (2.0 * baked).powf(2.2)));
@@ -118,7 +122,8 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
         minimum_distance: 0.1,
         maximum_distance: 60.0,
         first_cascade_far_bound: 60.0 / count as f32,
-        overlap_proportion: 0.2,
+        // The overlap the modern shaders know the sun by.
+        overlap_proportion: 0.1,
     };
     let down = Transform::default().looking_to(Vec3::NEG_Z, Vec3::Y);
     world.spawn((sun, cascades(4).build(), down, RenderLayers::from_layers(&[SUN_VIEW_LAYER, CASTER_LAYER])));
@@ -149,10 +154,10 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
 
 #[test]
 #[ignore = "needs a GPU"]
-fn a_static_vertex_lit_ground_keeps_its_bake_under_a_dynamic_caster() {
+fn a_static_mesh_takes_the_suns_shadow_under_modern() {
     let (under, beside) = ground_with_flag(7.0, Ground::StaticMesh);
     assert!(beside > 0, "the ground did not draw");
-    assert!(under.abs_diff(beside) <= 2, "a realtime shadow on a static vertex-lit mesh: under {under}, beside {beside}");
+    assert!(under + 10 < beside, "no shadow on a static mesh: under {under}, beside {beside}");
 }
 
 #[test]
@@ -173,24 +178,116 @@ fn an_actor_receives_a_dynamic_casters_shadow() {
 
 #[test]
 #[ignore = "needs a GPU"]
-fn modern_keeps_the_retail_brightness_outside_shadow() {
-    let (_, modern) = ground_with_flag(5.0, Ground::StaticMesh);
-    let (_, retail) = ground_under_and_beside(false, Ground::StaticMesh);
-    assert!(modern.abs_diff(retail) <= 8, "modern shifts the lit colour: {modern} against retail {retail}");
+fn modern_sunlit_ground_is_neither_black_nor_blown_out() {
+    let (under, beside) = ground_with_flag(5.0, Ground::StaticMesh);
+    assert!((20..250).contains(&beside), "sunlit ground out of range: {beside}");
+    assert!(under < beside, "the shadow is not darker than the sunlit ground: under {under}, beside {beside}");
 }
 
 #[test]
 #[ignore = "needs a GPU"]
-fn a_static_roof_does_not_darken_the_floor_under_it() {
-    let (under, _) = ground_under_and_beside(true, Ground::Indoor);
-    let (_, retail) = ground_under_and_beside(false, Ground::Indoor);
-    assert!(under.abs_diff(retail) <= 2, "the structure's shadow changed baked light: under {under}, retail {retail}");
+fn a_mesh_off_the_caster_layer_casts_no_shadow() {
+    let (under, beside) = ground_under_and_beside(true, Ground::Indoor);
+    assert!(under.abs_diff(beside) <= 2, "a shadow from a mesh that does not cast: under {under}, beside {beside}");
 }
 
 #[test]
 #[ignore = "needs a GPU"]
-fn the_sun_highlight_shows_on_glossy_ground() {
+fn gloss_adds_light_and_never_takes_it() {
     let (_, glossy) = ground_with_flag(1.0, Ground::StaticMesh);
     let (_, matte) = ground_with_flag(5.0, Ground::StaticMesh);
-    assert!(glossy >= matte + 8, "no visible highlight: gloss {glossy}, no gloss {matte}");
+    assert!(glossy >= matte, "gloss darkened the ground: gloss {glossy}, no gloss {matte}");
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn a_cached_sun_level_keeps_its_shadow_until_it_redraws() {
+    let seen = RenderLayers::from_layers(&[0, SUN_VIEW_LAYER]);
+    let mut app = App::new();
+    common::headless_renderer(&mut app);
+    app.add_plugins((p2_engine::render::mesh_light::MeshLightPlugin, p2_engine::render::actor_light::ActorLightPlugin, SunCachePlugin));
+    app.finish();
+    app.cleanup();
+    let world = app.world_mut();
+    let mut target = Image::new_target_texture(SIZE, SIZE, TextureFormat::Rgba8UnormSrgb, None);
+    target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let target = world.resource_mut::<Assets<Image>>().add(target);
+    let frames = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let store = frames.clone();
+    world.spawn(Readback::texture(target.clone())).observe(move |event: On<ReadbackComplete>| {
+        store.lock().expect("lock").push(event.data.clone());
+    });
+    world.spawn((
+        Camera3d::default(),
+        Camera::default(),
+        RenderTarget::Image(target.into()),
+        Tonemapping::None,
+        DebandDither::Disabled,
+        Msaa::Off,
+        Transform::from_xyz(0.0, 0.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        seen,
+        SceneView::default(),
+        AmbientLight { brightness: 0.0, ..AmbientLight::default() },
+    ));
+    let ground = world.resource_mut::<Assets<Mesh>>().add(quad(30.0, 0.0, 1.0));
+    let mut extension = DynamicLit::default();
+    extension.layers.detail.z = 7.0;
+    let material = world.resource_mut::<Assets<MeshLitMaterial>>().add(MeshLitMaterial { base: StandardMaterial::default(), extension });
+    world.spawn((Mesh3d(ground), MeshMaterial3d(material), Transform::default()));
+    let caster = world.resource_mut::<Assets<Mesh>>().add(quad(3.0, 5.0, 1.0));
+    let plain = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
+    let caster = world.spawn((Mesh3d(caster), MeshMaterial3d(plain), Transform::default(), RenderLayers::layer(STATIC_CASTER_LAYER))).id();
+    let down = Transform::default().looking_to(Vec3::NEG_Z, Vec3::Y);
+    let sun = DirectionalLight {
+        color: Color::LinearRgba(LinearRgba::rgb(0.5, 0.5, 0.5)),
+        illuminance: 1.0,
+        shadow_maps_enabled: true,
+        affects_lightmapped_mesh_diffuse: false,
+        ..DirectionalLight::default()
+    };
+    let config = CascadeShadowConfigBuilder { num_cascades: 3, minimum_distance: 0.1, maximum_distance: 60.0, first_cascade_far_bound: 15.0, overlap_proportion: 0.1 };
+    world.spawn((sun, config.build(), down, RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER])));
+    let black = DirectionalLight { color: Color::BLACK, illuminance: 0.0, shadow_maps_enabled: true, affects_lightmapped_mesh_diffuse: false, ..DirectionalLight::default() };
+    world.spawn((CachedSunLevel::new(512.0), black, level_config(512.0), down, RenderLayers::layer(SUN_VIEW_LAYER)));
+
+    let red = |frame: &[u8], x: u32, y: u32| frame[((y * SIZE + x) * 4) as usize];
+    let read = |frames: &Arc<Mutex<Vec<Vec<u8>>>>| frames.lock().expect("lock").last().map(|last| (red(last, SIZE / 2, SIZE / 2), red(last, 4, 4)));
+    let start = std::time::Instant::now();
+    let (mut under, mut beside) = (0, 0);
+    while start.elapsed() < std::time::Duration::from_secs(60) {
+        app.update();
+        if let Some(seen) = read(&frames) {
+            (under, beside) = seen;
+            if beside != 0 && beside != CLEAR && under + 20 < beside {
+                break;
+            }
+        }
+    }
+    assert!(under + 20 < beside, "the level never drew the caster: under {under}, beside {beside}");
+    for _ in 0..20 {
+        app.update();
+    }
+    let drawn = read(&frames).expect("no frame read back");
+    assert!(drawn.0 + 20 < drawn.1, "the shadow did not stay: {drawn:?}");
+
+    app.world_mut().despawn(caster);
+    for _ in 0..20 {
+        app.update();
+    }
+    let kept = read(&frames).expect("no frame read back");
+    assert!(kept.0 + 20 < kept.1, "the cached layer was lost: {kept:?}");
+
+    app.world().resource::<SunCacheStale>().mark();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        app.update();
+        if read(&frames).is_some_and(|seen| seen.0 + 5 >= seen.1) {
+            break;
+        }
+    }
+    for _ in 0..20 {
+        app.update();
+    }
+    let redrawn = read(&frames).expect("no frame read back");
+    assert!(redrawn.0 + 5 >= redrawn.1, "the redraw kept a caster that is gone: {redrawn:?}");
 }

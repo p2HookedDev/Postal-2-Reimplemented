@@ -187,7 +187,7 @@ fn decoration_models(
             let tint = |s: &SectionView| std::array::from_fn(|i| s.tint[i] * color.get(i).copied().map_or(1.0, modulate_2x));
             let sections = sections.iter().map(|s| SectionView { no_scene_lights: true, tint: tint(s), ..s.clone() }).collect();
             let zone = (!in_sky).then(|| ZoneCulled { zones: vec![zone], min, max, only_from: None });
-            ModelView { sections, instances, zone }
+            ModelView { sections, instances, zone, casts: false }
         })
         .collect();
     Some(models)
@@ -203,6 +203,7 @@ pub(super) struct TerrainParts {
     pub(super) models: Vec<ModelView>,
     pub(super) sky_models: Vec<ModelView>,
     pub(super) static_terrains: Vec<p2_assets::Terrain>,
+    pub(super) terrain_albedos: Vec<[f32; 3]>,
     pub(super) terrain_sectors: Vec<crate::render::terrain_light::TerrainSector>,
     pub(super) terrains: usize,
     pub(super) hidden_terrains: usize,
@@ -221,6 +222,7 @@ pub(super) fn terrain_models(
     let mut terrains = 0;
     let mut hidden_terrains = 0;
     let mut static_terrains = Vec::new();
+    let mut terrain_albedos = Vec::new();
     let mut decorations = Vec::new();
     let mut terrain_sectors = Vec::new();
     for mut terrain in terrain_infos {
@@ -235,6 +237,9 @@ pub(super) fn terrain_models(
             continue;
         }
         terrains += 1;
+        // Its first layer stands for all of them: the layers' maps stay unread here.
+        let base = terrain.layers.iter().find(|layer| layer.texture != 0).and_then(|layer| texture(game, t, id, layer.texture));
+        terrain_albedos.push(base.and_then(|base| t.albedos.get(&base.image.id()).copied()).unwrap_or(GREY_ALBEDO));
         // A terrain belongs to the zone its `TerrainInfo` stands in (`ZoneInfo.Terrains`): in the sky zone it is part
         // of the sky (some `SkyZoneInfo`s are `bTerrainZone`).
         let zone = p2_collision::point_zone(zones.model, terrain.location);
@@ -297,7 +302,7 @@ pub(super) fn terrain_models(
                 }
                 let zone = (!in_sky).then(|| ZoneCulled { zones: vec![zone], min, max, only_from: None });
                 let drawn_by = if in_sky { &mut sky_models } else { &mut models };
-                drawn_by.push(ModelView { sections, instances: vec![Transform::IDENTITY], zone });
+                drawn_by.push(ModelView { sections, instances: vec![Transform::IDENTITY], zone, casts: !in_sky });
             }
         }
         static_terrains.push(terrain);
@@ -310,5 +315,5 @@ pub(super) fn terrain_models(
         let drawn_by = if in_sky { &mut sky_models } else { &mut models };
         drawn_by.extend(decorated);
     }
-    TerrainParts { models, sky_models, static_terrains, terrain_sectors, terrains, hidden_terrains, drawn_decorations }
+    TerrainParts { models, sky_models, static_terrains, terrain_albedos, terrain_sectors, terrains, hidden_terrains, drawn_decorations }
 }

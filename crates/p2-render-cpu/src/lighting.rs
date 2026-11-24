@@ -42,6 +42,7 @@ pub struct MeshLight {
     pub radius: f32,
     pub cone: u8,
     pub dynamic: bool,
+    pub special_lit: bool,
 }
 
 impl Default for MeshLight {
@@ -60,6 +61,7 @@ impl Default for MeshLight {
             radius: 64.0,
             cone: 128,
             dynamic: false,
+            special_lit: false,
         }
     }
 }

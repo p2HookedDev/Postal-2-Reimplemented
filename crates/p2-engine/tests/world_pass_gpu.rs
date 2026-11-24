@@ -97,7 +97,7 @@ fn a_section_draws_without_an_entity() {
     let mut scene = scene(false);
     let (mesh, chunks) = add_quad(&mut scene, 5.0);
     let material = red_material(&mut scene);
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, zone: None };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, casts: true, zone: None };
     show(&mut scene, vec![section]);
     let frame = run_until(&mut scene, |pixel: &dyn Fn(u32, u32) -> [u8; 4]| pixel(SIZE / 2, SIZE / 2)[0] > 200);
     assert!(frame.is_some(), "the section never drew");
@@ -109,7 +109,7 @@ fn the_depth_prepass_takes_the_section_too() {
     let mut scene = scene(true);
     let (mesh, chunks) = add_quad(&mut scene, 5.0);
     let material = red_material(&mut scene);
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, zone: None };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, casts: true, zone: None };
     show(&mut scene, vec![section]);
     let frame = run_until(&mut scene, |pixel: &dyn Fn(u32, u32) -> [u8; 4]| pixel(SIZE / 2, SIZE / 2)[0] > 200);
     assert!(frame.is_some(), "the section never drew with a depth prepass");
@@ -127,6 +127,7 @@ fn a_placed_section_moves_and_a_section_out_of_view_is_culled() {
         world_from_local: Affine3A::from_translation(Vec3::new(x, 0.0, 0.0)),
         lightmap: None,
         chunks: chunks.clone(),
+        casts: true,
         zone: None,
     };
     show(&mut scene, vec![at(5.0), at(-5000.0)]);
@@ -149,7 +150,7 @@ fn a_light_map_reaches_the_section_in_the_retail_look() {
     let light = world.resource_mut::<Assets<Image>>().add(image([0, 255, 0, 255]));
     let base = StandardMaterial { base_color_texture: Some(white), lightmap_exposure: 1.0 / bevy::camera::Exposure::default().exposure(), ..StandardMaterial::default() };
     let material = world.resource_mut::<Assets<LightmappedMaterial>>().add(LightmappedMaterial { base, extension: BakedLight::default() });
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: Some(light.id()), chunks, zone: None };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: Some(light.id()), chunks, casts: true, zone: None };
     show(&mut scene, vec![section]);
     let frame = run_until(&mut scene, |pixel: &dyn Fn(u32, u32) -> [u8; 4]| {
         let [r, g, _, _] = pixel(SIZE / 2, SIZE / 2);
@@ -174,7 +175,7 @@ fn a_section_stays_drawn_while_other_meshes_and_its_own_are_uploaded_again() {
     let mut scene = scene(false);
     let (mesh, chunks) = add_quad(&mut scene, 5.0);
     let material = red_material(&mut scene);
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, zone: None };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, casts: true, zone: None };
     show(&mut scene, vec![section]);
     let red_centre = |pixel: &dyn Fn(u32, u32) -> [u8; 4]| pixel(SIZE / 2, SIZE / 2)[0] > 200;
     assert!(run_until(&mut scene, red_centre).is_some(), "the section never drew");
@@ -202,7 +203,7 @@ fn a_section_shows_only_while_its_zone_is_seen() {
     let mut scene = scene(false);
     let (mesh, chunks) = add_quad(&mut scene, 5.0);
     let material = red_material(&mut scene);
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, zone: Some(40) };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, casts: true, zone: Some(40) };
     show(&mut scene, vec![section]);
     let frame = run_until(&mut scene, |pixel: &dyn Fn(u32, u32) -> [u8; 4]| pixel(SIZE / 2, SIZE / 2)[0] > 200);
     assert!(frame.is_some(), "the section never drew with its zone seen");
@@ -219,7 +220,7 @@ fn a_section_comes_back_after_its_camera_was_off() {
     let mut scene = scene(false);
     let (mesh, chunks) = add_quad(&mut scene, 5.0);
     let material = red_material(&mut scene);
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, zone: None };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, casts: true, zone: None };
     show(&mut scene, vec![section]);
     assert!(run_until(&mut scene, |pixel: &dyn Fn(u32, u32) -> [u8; 4]| pixel(SIZE / 2, SIZE / 2)[0] > 200).is_some(), "the section never drew");
     for active in [false, true] {
@@ -244,7 +245,7 @@ fn a_material_turning_masked_takes_the_masked_pipeline() {
     let (mesh, chunks) = add_quad(&mut scene, 5.0);
     let clear_red = StandardMaterial { base_color: Color::srgba(1.0, 0.0, 0.0, 0.0), unlit: true, ..StandardMaterial::default() };
     let material = scene.app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(clear_red);
-    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, zone: None };
+    let section = WorldSection { mesh: mesh.id(), material: material.id().untyped(), world_from_local: Affine3A::IDENTITY, lightmap: None, chunks, casts: true, zone: None };
     show(&mut scene, vec![section]);
     assert!(run_until(&mut scene, |pixel: &dyn Fn(u32, u32) -> [u8; 4]| pixel(SIZE / 2, SIZE / 2)[0] > 200).is_some(), "the section never drew");
     let mut materials = scene.app.world_mut().resource_mut::<Assets<StandardMaterial>>();

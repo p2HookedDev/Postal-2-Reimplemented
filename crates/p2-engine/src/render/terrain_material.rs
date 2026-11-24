@@ -1,9 +1,10 @@
 use bevy::asset::{Asset, Handle, uuid_handle};
 use bevy::image::Image;
 use bevy::math::{UVec4, Vec3, Vec4};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial};
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, StandardMaterial};
 use bevy::reflect::Reflect;
-use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::{Shader, ShaderRef};
 
 pub const MAX_LAYERS: usize = 8;
@@ -126,6 +127,16 @@ impl From<&TerrainLayers> for TerrainParams {
 pub(crate) const TERRAIN_SHADER: Handle<Shader> = uuid_handle!("a4c9e2f7-3b61-4d58-9e0a-7f2b18c6d953");
 
 impl MaterialExtension for TerrainLayers {
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        crate::render::modern::cast_both_sides(descriptor, key.mesh_key);
+        Ok(())
+    }
+
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(TERRAIN_SHADER)
     }

@@ -7,6 +7,7 @@ mod sweep;
 mod tree;
 pub use extent::{BspHulls, box_check, point_check, point_solid};
 pub use primitive::{Primitive, pull_back, pull_back_units, segment_cylinder, world_to_local};
+pub use tree::TriangleTree;
 pub use sweep::{box_overlaps_triangle, mesh_box_check, mesh_box_overlaps, terrain_box_check};
 /// `NF_NotCsg | NF_IsNew`: nodes with these flags do not divide solid from empty space.
 const NOT_CSG: u8 = 0x21;
@@ -286,7 +287,7 @@ pub fn model_triangles(model: &Model) -> Vec<[[f32; 3]; 3]> {
 #[derive(Debug, Clone)]
 pub struct MeshCollision {
     triangles: Vec<[[f32; 3]; 3]>,
-    tree: tree::TriangleTree,
+    tree: TriangleTree,
     slots: std::sync::Arc<[u32]>,
 }
 
@@ -322,7 +323,7 @@ impl MeshCollision {
     pub fn placed(local: impl AsRef<[[[f32; 3]; 3]]>, location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vector) -> Self {
         let world = to_world(location, rotation, scale, pre_pivot);
         let triangles: Vec<[[f32; 3]; 3]> = local.as_ref().iter().map(|t| t.map(&world)).collect();
-        let tree = tree::TriangleTree::new(&triangles);
+        let tree = TriangleTree::new(&triangles);
         Self { triangles, tree, slots: std::sync::Arc::default() }
     }
 
@@ -362,7 +363,7 @@ fn to_world(location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vecto
 /// A tree over the boxes of a mesh list, for line checks that skip the meshes a segment does not come near.
 #[derive(Debug, Clone, Default)]
 pub struct MeshSet {
-    tree: tree::TriangleTree,
+    tree: TriangleTree,
 }
 
 impl MeshSet {
@@ -374,7 +375,7 @@ impl MeshSet {
                 [min.into(), max.into()]
             })
             .collect();
-        Self { tree: tree::TriangleTree::new(&boxes) }
+        Self { tree: TriangleTree::new(&boxes) }
     }
 
     /// The same answer as [`mesh_line_check_at`] over `meshes`, which must be the list the set was built from.

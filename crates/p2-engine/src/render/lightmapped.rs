@@ -3,7 +3,9 @@
 
 use bevy::app::{App, Plugin};
 use bevy::asset::{Handle, uuid_handle};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial};
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, StandardMaterial};
+use bevy::render::render_resource::{RenderPipelineDescriptor, SpecializedMeshPipelineError};
 use bevy::shader::{Shader, ShaderRef};
 
 use crate::render::shader_layers::ShaderLayers;
@@ -18,6 +20,16 @@ crate::render::shader_layers::layered_extension!(
 const LIGHTMAPPED_SHADER: Handle<Shader> = uuid_handle!("9c4e7a12-5f3b-4d8e-a6c1-2b7f90e3d518");
 
 impl MaterialExtension for BakedLight {
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        crate::render::modern::cast_both_sides(descriptor, key.mesh_key);
+        Ok(())
+    }
+
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(LIGHTMAPPED_SHADER)
     }

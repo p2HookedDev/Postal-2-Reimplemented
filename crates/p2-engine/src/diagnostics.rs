@@ -36,7 +36,10 @@ use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::display::{MODERN_AO, MODERN_CONTACT_SHADOWS, MODERN_POST, MODERN_RELIEF, MODERN_SHADOWS, MODERN_SPECULAR, Settings};
+use crate::display::{
+    MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_INDIRECT, MODERN_LAMP_SHADOWS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
+    MODERN_SHARPEN, MODERN_SPECULAR, Settings,
+};
 use crate::map::{Particles, Session};
 use crate::components::{FollowActor, FollowBone};
 use crate::mesh_view::SceneView;

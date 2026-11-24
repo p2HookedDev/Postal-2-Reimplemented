@@ -58,6 +58,10 @@ pub(super) fn prepass_reads_material(properties: &MaterialProperties) -> bool {
     properties.get_shader(PrepassVertexShader).is_some() || properties.get_shader(PrepassFragmentShader).is_some()
 }
 
+pub(super) fn casts_shadow(section: &WorldSection, alpha_mode: AlphaMode) -> bool {
+    section.casts && matches!(alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_))
+}
+
 pub(super) fn section_uniform(section: &WorldSection, material: &PreparedMaterial, first_vertex: u32, metadata_index: Option<u32>, light_slot: Option<usize>) -> MeshUniform {
     let mut flags = MeshFlags::SHADOW_RECEIVER | MeshFlags::LOD_INDEX_MASK;
     if section.world_from_local.matrix3.determinant().is_sign_positive() {
@@ -99,7 +103,8 @@ pub(super) fn chunk_table(
             push_u32s(&mut chunk_bytes, &[bucket_index as u32]);
             push_vec3(&mut chunk_bytes, half);
             let zone = section.zone.map_or(0, |zone| ZONED | (u32::from(zone) << 8));
-            push_u32s(&mut chunk_bytes, &[section_index as u32, first_index, chunk.index_count, base_vertex, zone]);
+            let casts = if casts_shadow(section, bucket.properties.alpha_mode) { CASTS } else { 0 };
+            push_u32s(&mut chunk_bytes, &[section_index as u32, first_index, chunk.index_count, base_vertex, zone | casts]);
         }
     }
     Some((chunk_bytes, firsts, next_draw))

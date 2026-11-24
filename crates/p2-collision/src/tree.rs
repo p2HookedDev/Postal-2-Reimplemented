@@ -32,14 +32,14 @@ impl Node {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TriangleTree {
+pub struct TriangleTree {
     nodes: Vec<Node>,
     order: Vec<u32>,
 }
 
 impl TriangleTree {
     /// Each shape is given by its corners: a triangle's three, or a box's minimum and maximum.
-    pub(crate) fn new<const CORNERS: usize>(triangles: &[[[f32; 3]; CORNERS]]) -> Self {
+    pub fn new<const CORNERS: usize>(triangles: &[[[f32; 3]; CORNERS]]) -> Self {
         let mut tree = Self { nodes: Vec::new(), order: (0..triangles.len() as u32).collect() };
         if !triangles.is_empty() {
             tree.build(triangles, 0, triangles.len());
@@ -102,7 +102,9 @@ impl TriangleTree {
         false
     }
 
-    pub(crate) fn along(&self, start: Vector, end: Vector, mut limit: f32, mut visit: impl FnMut(usize) -> f32) {
+    /// Visits the shapes of every leaf the segment enters before `limit` (line time, 1 at `end`), nearest boxes
+    /// first; `visit` returns the limit to go on with.
+    pub fn along(&self, start: Vector, end: Vector, mut limit: f32, mut visit: impl FnMut(usize) -> f32) {
         let inverse = [0, 1, 2].map(|i| 1.0 / (end[i] - start[i]));
         let entry = |node: u32, limit: f32| self.nodes[node as usize].entry(start, inverse, limit).map(|time| (node, time));
         if self.nodes.is_empty() {

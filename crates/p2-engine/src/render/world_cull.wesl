@@ -21,10 +21,13 @@ struct CullView {
     planes: array<vec4<f32>, 6>,
     first_args: u32,
     first_count: u32,
-    unused: vec2<u32>,
+    casters_only: u32,
+    unused: u32,
+    // All set for a shadow view.
     seen_zones: array<vec4<u32>, 2>,
 }
 
+const CASTS: u32 = 1u;
 const ZONED: u32 = 2u;
 
 @group(0) @binding(0) var<storage> chunks: array<Chunk>;
@@ -39,6 +42,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let chunk = chunks[id.x];
+    if view.casters_only != 0u && (chunk.flags & CASTS) == 0u {
+        return;
+    }
     if (chunk.flags & ZONED) != 0u {
         let zone = (chunk.flags >> 8u) & 255u;
         if ((view.seen_zones[zone >> 7u][(zone >> 5u) & 3u] >> (zone & 31u)) & 1u) == 0u {

@@ -161,7 +161,16 @@ fn a_forced_zone_tag_shows_only_from_its_zones() {
 fn a_moving_actor_is_in_the_zones_where_it_is() {
     let mut app = App::new();
     let model = two_zones();
-    let collision = StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: Vec::new(), meshes: Vec::new(), mesh_set: p2_collision::MeshSet::default() };
+    let collision = StaticCollision {
+        hulls: p2_collision::BspHulls::new(&model),
+        model,
+        terrains: Vec::new(),
+        meshes: Vec::new(),
+        mesh_set: p2_collision::MeshSet::default(),
+        lamp_casters: Vec::new(),
+        lamp_masked: Vec::new(),
+        albedos: LevelAlbedos::default(),
+    };
     app.insert_resource(LevelCollision(Some(Arc::new(collision))));
     app.insert_resource(ShownScene { sky_zone: Some(2), ..Default::default() });
     app.add_systems(Update, (follower_zones, layers_by_zone).chain());
@@ -224,6 +233,7 @@ fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
         sections: vec![SectionView::textured(Handle::default(), None)],
         instances: vec![Transform::default(), Transform::from_xyz(1.0, 0.0, 0.0)],
         zone: None,
+        casts: false,
     };
     let scene = Scene {
         models: vec![model],
@@ -237,6 +247,7 @@ fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
         actors: Vec::new(),
         attachments: Vec::new(),
         lighting: None,
+        light_bakes: None,
         antiportals: Vec::new(),
         light_maps: Vec::new(),
     };

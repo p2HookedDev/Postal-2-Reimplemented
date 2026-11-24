@@ -29,9 +29,9 @@ use bevy::math::{Affine3, Affine3A, Mat4, UVec2, Vec3, Vec4};
 use bevy::mesh::{Indices, Mesh, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{
     LIGHTMAPS_PER_SLAB,
-    MeshFlags, MeshPipeline, MeshPipelineKey,
+    LightEntity, LightKeyCache, MeshFlags, MeshPipeline, MeshPipelineKey,
     MeshTransforms, MeshUniform, PreparedMaterial, PrepassFragmentShader, PrepassPipeline, PrepassVertexShader, SetMeshViewBindGroup, SetMeshViewBindingArrayBindGroup, SetPrepassEmptyMaterialBindGroup, SetPrepassViewBindGroup,
-    SetPrepassViewEmptyBindGroup, ViewKeyCache, ViewKeyPrepassCache, alpha_mode_pipeline_key,
+    SetPrepassViewEmptyBindGroup, Shadow, ShadowBatchSetKey, ShadowBinKey, ShadowView, ViewKeyCache, ViewKeyPrepassCache, alpha_mode_pipeline_key,
 };
 use bevy::platform::collections::HashMap;
 use bevy::render::erased_render_asset::ErasedRenderAssets;
@@ -67,7 +67,7 @@ mod queue;
 mod cull;
 mod draw;
 use buffers::{
-    chunk_table, cull_buffers, cull_pipeline, lightmap_arrays_usable, lightmap_slots, mesh_bind_groups,
+    casts_shadow, chunk_table, cull_buffers, cull_pipeline, lightmap_arrays_usable, lightmap_slots, mesh_bind_groups,
     prepass_reads_material, push_u32s, section_uniform,
 };
 use build::{extract_modified_meshes, rebuild_if_stale};
@@ -77,12 +77,14 @@ use draw::{DrawWorld, DrawWorldDepthOnly, DrawWorldPrepass};
 
 /// In Unreal units: small enough to cull well, large enough to keep draws few.
 const CELL: f32 = 2048.0;
-const MAX_VIEWS: usize = 1;
+/// The camera and the four cascades of one sun.
+const MAX_VIEWS: usize = 5;
 const VIEW_STRIDE: u64 = 256;
 const VIEW_SIZE: u64 = 144;
 const ARGS_SIZE: u64 = 20;
 const COUNT_SIZE: u64 = 4;
 const WORKGROUP: u32 = 64;
+const CASTS: u32 = 1;
 const ZONED: u32 = 2;
 const WAIT_LOG_FRAMES: u32 = 300;
 const CHUNK_SIZE: u64 = 48;
@@ -140,9 +142,15 @@ pub struct WorldSection {
     pub world_from_local: Affine3A,
     pub lightmap: Option<AssetId<Image>>,
     pub chunks: Arc<[Chunk]>,
+    pub casts: bool,
     /// Drawn only while the eye's portals reach this zone. `None`: always.
     pub zone: Option<u8>,
 }
+
+/// Whether sun shadow views draw the static world. Off, the shadow phase queues nothing and culls nothing.
+#[derive(Resource, Clone, Copy, Default, ExtractResource)]
+#[extract_app(RenderApp)]
+pub struct WorldCasts(pub bool);
 
 /// One bit per zone the eye's portals reach.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, ExtractResource)]
@@ -158,6 +166,7 @@ impl Default for WorldSeenZones {
 pub struct WorldPlacement {
     pub world_from_local: Affine3A,
     pub chunks: Arc<[Chunk]>,
+    pub casts: bool,
     pub zone: Option<u8>,
 }
 
@@ -203,14 +212,14 @@ impl WorldTargets<'_, '_> {
     }
 
     pub fn add(&mut self, mesh: &Handle<Mesh>, material: &SectionMaterial, lightmap: Option<&Handle<Image>>, placement: WorldPlacement) {
-        let WorldPlacement { world_from_local, chunks, zone } = placement;
+        let WorldPlacement { world_from_local, chunks, casts, zone } = placement;
         if chunks.is_empty() {
             return;
         }
         self.assets.meshes.push(mesh.clone());
         self.assets.materials.push(material.clone());
         self.assets.images.extend(lightmap.cloned());
-        self.pending.push(WorldSection { mesh: mesh.id(), material: material.id(), world_from_local, lightmap: lightmap.map(Handle::id), chunks, zone });
+        self.pending.push(WorldSection { mesh: mesh.id(), material: material.id(), world_from_local, lightmap: lightmap.map(Handle::id), chunks, casts, zone });
     }
 
     pub fn finish(&mut self) {
@@ -256,6 +265,7 @@ struct Bucket {
     index_format: IndexFormat,
     mask: bool,
     lightmapped: bool,
+    casts: bool,
     first_draw: u32,
     draws: u32,
     mesh_group: usize,
@@ -286,6 +296,7 @@ pub(crate) struct WorldPass {
     built: Option<Built>,
     pipeline: Option<(BindGroupLayoutDescriptor, CachedComputePipelineId)>,
     queued: HashMap<RetainedViewEntity, (MeshPipelineKey, Option<MeshPipelineKey>)>,
+    shadow_queued: HashMap<RetainedViewEntity, MeshPipelineKey>,
     waited_frames: u32,
 }
 
@@ -296,12 +307,17 @@ pub struct WorldPassPlugin;
 
 impl Plugin for WorldPassPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldDraws>().init_resource::<WorldAssets>().init_resource::<WorldSeenZones>();
+        app.init_resource::<WorldDraws>().init_resource::<WorldAssets>().init_resource::<WorldSeenZones>().init_resource::<WorldCasts>();
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
         add_shaders(app, [(CULL_SHADER, Shader::from_wesl(include_str!("world_cull.wesl"), "p2_engine/world_cull.wesl"))]);
-        app.add_plugins((ExtractResourcePlugin::<WorldDraws>::default(), ExtractResourcePlugin::<WorldSeenZones>::default(), ExtractComponentPlugin::<WorldCamera>::default()));
+        app.add_plugins((
+            ExtractResourcePlugin::<WorldDraws>::default(),
+            ExtractResourcePlugin::<WorldSeenZones>::default(),
+            ExtractResourcePlugin::<WorldCasts>::default(),
+            ExtractComponentPlugin::<WorldCamera>::default(),
+        ));
     }
 
     fn finish(&self, app: &mut App) {
@@ -314,6 +330,8 @@ impl Plugin for WorldPassPlugin {
             .add_render_command::<Opaque3dPrepass, DrawWorldPrepass>()
             .add_render_command::<Opaque3dPrepass, DrawWorldDepthOnly>()
             .add_render_command::<AlphaMask3dPrepass, DrawWorldPrepass>()
+            .add_render_command::<Shadow, DrawWorldPrepass>()
+            .add_render_command::<Shadow, DrawWorldDepthOnly>()
             .add_systems(ExtractSchedule, extract_modified_meshes)
             .add_systems(Render, queue_world.in_set(RenderSystems::QueueMeshes))
             .add_systems(Render, prepare_world_views.in_set(RenderSystems::PrepareResources))
@@ -325,7 +343,7 @@ impl Plugin for WorldPassPlugin {
 mod tests {
     use super::*;
     use super::buffers::world_box;
-    use super::cull::view_planes;
+    use super::cull::{Planes, view_planes};
     use bevy::asset::RenderAssetUsages;
     use bevy::camera::CameraProjection;
 
@@ -362,7 +380,7 @@ mod tests {
     #[test]
     fn planes_keep_what_the_camera_sees_and_drop_what_is_behind_it() {
         let clip = bevy::camera::PerspectiveProjection { near: 1.0, ..Default::default() }.get_clip_from_view();
-        let planes = view_planes(clip);
+        let planes = view_planes(clip, Planes::Frustum);
         let seen = |point: Vec3| planes.iter().all(|plane| plane.truncate().dot(point) + plane.w >= 0.0);
         assert!(seen(Vec3::new(0.0, 0.0, -100.0)));
         assert!(seen(Vec3::new(0.0, 0.0, -100_000.0)));

@@ -16,6 +16,7 @@ pub struct ShownScene {
     pub origin: Vec3,
     pub(crate) portals: Option<Arc<ZonePortals>>,
     pub lighting: Option<Arc<LightEnvironment>>,
+    pub(crate) light_bakes: Option<Arc<crate::render::lamps::LightBakes>>,
     pub radius: f32,
     pub start: Option<(Vec3, i32)>,
     pub light_maps: Vec<Option<Handle<Image>>>,

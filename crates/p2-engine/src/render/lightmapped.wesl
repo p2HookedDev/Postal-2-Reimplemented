@@ -12,18 +12,11 @@ import package::p2_engine::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::modern::{
-    base_relief, highlight, is_modern, key_shading, masked_sun_visibility, no_relief, relief_light, static_occlusion, sun_highlight,
-    sun_shadowed_linear,
-    to_eye,
+    allows_gloss, ambient_occlusion, base_relief, has_sun, is_lamp, is_modern, is_see_through, lamp_light, modern_glass, modern_surface, sun_seen,
+    surface_of,
 };
 @if(BINDLESS)
 import package::p2_engine::layer_bindings::indices;
-@if(LIGHTMAP)
-import bevy_pbr::render::mesh_bindings::mesh;
-@if(LIGHTMAP && MULTIPLE_LIGHTMAPS_IN_ARRAY)
-import bevy_pbr::lightmap::{lightmaps_textures, lightmaps_samplers};
-@if(LIGHTMAP && !MULTIPLE_LIGHTMAPS_IN_ARRAY)
-import bevy_pbr::lightmap::{lightmaps_texture, lightmaps_sampler};
 
 @if(BINDLESS)
 @group(3) @binding(107) var<storage> layers_array: array<ShaderLayers>;
@@ -54,22 +47,6 @@ fn light_pass(light_id: u32, position: vec3<f32>, normal: vec3<f32>) -> vec3<f32
     return color * max(1.0 - (32.0 / 30.5) * rho / circle, 0.0);
 }
 
-fn sun_mask(in: VertexOutput) -> f32 {
-@if(LIGHTMAP) {
-    let packed_uv_rect = mesh[in.instance_index].lightmap_uv_rect;
-    let uv_rect = vec4(unpack2x16unorm(packed_uv_rect.x), unpack2x16unorm(packed_uv_rect.y));
-    let uv = mix(uv_rect.xy, uv_rect.zw, in.uv_b);
-    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot >> 16u;
-@if(MULTIPLE_LIGHTMAPS_IN_ARRAY)
-    return textureSampleLevel(lightmaps_textures[slot], lightmaps_samplers[slot], uv, 0.0).a;
-@else
-    return textureSampleLevel(lightmaps_texture, lightmaps_sampler, uv, 0.0).a;
-}
-@else {
-    return 0.0;
-}
-}
-
 @fragment
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(vertex_output, is_front);
@@ -89,50 +66,50 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
 @else
     let layers = layers_data;
     let normal = normalize(pbr_input.world_normal);
-    let modern = is_modern(layers.detail.z);
-    var relief = no_relief(normal);
-    var light_map = view.exposure * pbr_input.lightmap_light;
+    let modern = is_modern(layers.detail.z) && has_sun();
+    let light_map = view.exposure * pbr_input.lightmap_light;
     var surface = lit_color(layers, color.rgb, light_map);
-    var eye = vec3(0.0);
+    var alpha = color.a;
     if modern {
-        eye = to_eye(pbr_input.world_position.xyz);
-        let mask = sun_mask(vertex_output);
-        let visibility = masked_sun_visibility(mask, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
-        light_map = sun_shadowed_linear(light_map, mask, visibility, normal);
-        relief = base_relief(vertex_output, pbr_input, normal, layers.specular.x, layers.detail.z);
-        let key = key_shading(normal, relief, pbr_input.world_position.xyz);
-        let sun = sun_highlight(relief, mask, visibility, pbr_input.world_position.xyz, normal);
-        let shade = static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy) * light_map;
-        if layers.blend.x == 0.0 {
-            surface = shade * (key.x * color.rgb + key.y) + sun;
+        let position = pbr_input.world_position.xyz;
+        let seen = sun_seen(pbr_input.world_position, normal, pbr_input.frag_coord.xy);
+        let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
+        let darken = layers.blend.x != 0.0;
+        let gloss = allows_gloss(layers.detail.z) && !darken;
+        let material_surface = surface_of(0.0);
+        let lamps = lamp_light(vertex_output, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface);
+        let occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
+        if darken {
+            // A darken surface takes the light alone, as it took the light map.
+            surface = lit_color(layers, color.rgb, modern_surface(vec3(1.0), position, bumped, seen, occlusion, gloss, lamps, material_surface));
+        } else if is_see_through(pbr_input.material.flags) {
+            let glass = modern_glass(color, position, bumped, seen, occlusion, gloss, lamps, material_surface);
+            surface = glass.rgb;
+            alpha = glass.a;
         } else {
-            surface = lit_color(layers, color.rgb, shade * key.x);
+            surface = modern_surface(color.rgb, position, bumped, seen, occlusion, gloss, lamps, material_surface);
         }
     }
-    let layered = apply_layers(vertex_output, vec4(surface, color.a), base_alpha, pbr_input, layers);
+    let layered = apply_layers(vertex_output, vec4(surface, alpha), base_alpha, pbr_input, layers);
     var lit = layered.rgb;
 
     var passes = vec3(0.0);
-    var shine = vec3(0.0);
     for (var i = ranges.first_point_light_index_offset; i < ranges.first_spot_light_index_offset; i++) {
         let id = clustering::get_clusterable_object_id(i);
-        var one = light_pass(id, pbr_input.world_position.xyz, normal);
-        if modern {
-            let to_light = clustered_lights.data[id].position_radius.xyz - pbr_input.world_position.xyz;
-            let direction = to_light / max(length(to_light), 1e-6);
-            one *= relief_light(normal, relief.normal, direction);
-            shine += one * highlight(relief, direction, eye);
+        if is_lamp(id) {
+            continue;
         }
-        passes += one;
+        passes += light_pass(id, pbr_input.world_position.xyz, normal);
     }
     if any(passes > vec3(0.0)) {
         let texture = to_display(color.rgb);
-        if layers.blend.x == 0.0 {
-            let display = to_display(lit) + texture * passes + shine;
-            lit = to_linear(min(display, vec3(1.0)));
-        } else {
+        if layers.blend.x != 0.0 {
             // A darken surface stores one minus its colour: light on the colour takes off the stored one.
             lit = to_linear(max(to_display(lit) - (1.0 - texture) * passes, vec3(0.0)));
+        } else if modern {
+            lit = to_linear(to_display(lit) + texture * passes);
+        } else {
+            lit = to_linear(min(to_display(lit) + texture * passes, vec3(1.0)));
         }
     }
     out.color = post_lighting(pbr_input, project(pbr_input, ranges, color.rgb, vec4(lit, layered.a), TARGET_BSP));

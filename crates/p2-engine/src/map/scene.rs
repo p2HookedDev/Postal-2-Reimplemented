@@ -2,6 +2,7 @@ use crate::actors::ProjectorBlending;
 use super::*;
 use crate::library::{LoadError, SourceLayers, SpecularMask, SpecularSource, TextureDecode, TextureSource, specular_params};
 use bevy::asset::{AssetHandleProvider, AssetId};
+use crate::level_collision::{GREY_ALBEDO, LevelAlbedos, MaskedCaster, masked_triangles, mean_albedo};
 use p2_assets::FinalBlend;
 use p2_math::{Rotator, Vector};
 use p2_bevy_assets::{MeshBatch, mirrors};
@@ -256,7 +257,9 @@ impl PreparedScene {
                     let (source, state) = game.material_source(package, material)?;
                     let image = images.entry(source).or_insert_with(|| {
                         let SourceLayers { image, glow, wet } = game.source_layers(source, TextureDecode::Keep)?;
+                        let albedo = mean_albedo(&image);
                         let handle = t.add_image(image);
+                        t.albedos.insert(handle.id(), albedo);
                         let glow = glow.map(|glow| t.add_image(glow));
                         let detail = source.detail.and_then(|key| {
                             details.entry(key).or_insert_with(|| game.detail_image(source).map(|detail| t.add_image(detail))).clone()
@@ -286,7 +289,7 @@ impl PreparedScene {
         if drawn == 0 {
             return Err(LoadError::NoPolygons { name });
         }
-        let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases } = bsp_models(game, t, &mut texture, id, &model, &groups);
+        let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos } = bsp_models(game, t, &mut texture, id, &model, &groups);
         phase("HUD and BSP");
 
         let mut placements: HashMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>> = HashMap::new();
@@ -330,7 +333,7 @@ impl PreparedScene {
         phase("projectors and meshes found");
 
         let zones = TerrainZones { model: &model, sky_zone, terrain_zones: &terrain_zones };
-        let TerrainParts { models: terrain_drawn, sky_models: terrain_sky, static_terrains, terrain_sectors, terrains, hidden_terrains, drawn_decorations } =
+        let TerrainParts { models: terrain_drawn, sky_models: terrain_sky, static_terrains, terrain_albedos, terrain_sectors, terrains, hidden_terrains, drawn_decorations } =
             terrain_models(game, t, &mut texture, id, &zones, terrain_infos);
         models.extend(terrain_drawn);
         sky_models.extend(terrain_sky);
@@ -341,7 +344,8 @@ impl PreparedScene {
         let level = StaticLevel { pkg, file, model: &model, environment: &environment, sky_zone };
         let (parts, static_missing, static_batches) = static_models(game, t, &mut texture, &level, placements);
         missing += static_missing;
-        let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lit_actors, .. } = parts;
+        let StaticParts { models: static_drawn, sky_models: static_sky, mut followers, collisions, lamp_casters, lamp_caster_albedos, lamp_masked, lit_actors, .. } = parts;
+        lamp_masked_all.extend(lamp_masked.into_values());
         models.extend(static_drawn);
         sky_models.extend(static_sky);
         phase("static meshes");
@@ -370,22 +374,36 @@ impl PreparedScene {
             models: sky_models,
         });
         let center = (min + max) / 2.0;
-        let scene = Scene {
+        let mut scene = Scene {
             models,
             center,
             radius: ((max - min).length() / 2.0).max(1.0),
             sky,
             start: start.map(|(location, rotation)| (Vec3::from(to_bevy(location)), rotation.yaw)),
-            collision: Some(StaticCollision { hulls: p2_collision::BspHulls::new(&model), model, terrains: static_terrains, mesh_set: p2_collision::MeshSet::new(&collisions), meshes: collisions }),
+            collision: Some(StaticCollision {
+                hulls: p2_collision::BspHulls::new(&model),
+                model,
+                terrains: static_terrains,
+                mesh_set: p2_collision::MeshSet::new(&collisions),
+                meshes: collisions,
+                lamp_casters,
+                lamp_masked: lamp_masked_all,
+                albedos: LevelAlbedos { bsp: material_albedos, casters: lamp_caster_albedos, terrains: terrain_albedos },
+            }),
             fogs: zone_fogs,
             decals,
             actors: followers,
             attachments: attached,
             lighting: Some(environment),
+            light_bakes: None,
             antiportals,
             light_maps: atlases,
         };
         phase("rest");
+        if let (Some(collision), Some(environment)) = (&scene.collision, &scene.lighting) {
+            scene.light_bakes = crate::render::lamps::bake_for_load(environment, collision, -scene.center);
+        }
+        phase("lamps and probes");
         bevy::log::info!("load: {package} scene built in {} ms ({})", clock.elapsed().as_millis(), times.join(", "));
         Ok(Self { emitter_models, package: package.to_owned(), game: built, animations, vm_animations, assets, scene, played, animated: animated_meshes, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches })
     }

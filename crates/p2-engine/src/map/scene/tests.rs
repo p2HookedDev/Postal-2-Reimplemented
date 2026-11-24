@@ -20,7 +20,7 @@ fn only_surfaces_a_switch_restyles_leave_the_world_pass() {
     let mut images = Assets::<Image>::default();
     let [restyled, image_only, plain] = [(); 3].map(|()| images.add(Image::default()));
     let section = |image: &Handle<Image>| SectionView { texture: Some(image.clone()), chunks: Some(Arc::from(Vec::new())), ..SectionView::textured(Handle::default(), None) };
-    let mut models = [ModelView { sections: vec![section(&restyled), section(&image_only), section(&plain)], instances: Vec::new(), zone: None }];
+    let mut models = [ModelView { sections: vec![section(&restyled), section(&image_only), section(&plain)], instances: Vec::new(), zone: None, casts: false }];
     let switch = |image: &Handle<Image>, whole| SwitchImage { image: image.id(), whole, shown: RenderState::default() };
     keep_restyled_out_of_world_pass(&mut models, [switch(&restyled, true), switch(&image_only, false)].iter());
     let in_table: Vec<bool> = models[0].sections.iter().map(|section| section.chunks.is_some()).collect();

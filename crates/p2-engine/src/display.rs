@@ -89,14 +89,26 @@ pub const QUERIES: &[&str] = &[
     TEXTURE_MIN_LOD,
     TEXTURE_MAX_LOD,
     MODERN_GRAPHICS,
+    MODERN_PRESET,
     MODERN_SHADOWS,
+    MODERN_SHADOW_DISTANCE,
+    MODERN_LAMP_SHADOWS,
     MODERN_CONTACT_SHADOWS,
     MODERN_AO,
+    MODERN_INDIRECT,
+    MODERN_ANTI_ALIASING,
+    MODERN_BLOOM,
+    MODERN_SHARPEN,
     MODERN_RELIEF,
     MODERN_SPECULAR,
-    MODERN_POST,
-    MODERN_BAKE,
     MODERN_TERRAIN_DETAIL,
+    MODERN_GOD_RAYS,
+    MODERN_VIGNETTE,
+    MODERN_FILM_GRAIN,
+    MODERN_CHROMATIC_ABERRATION,
+    MODERN_SATURATION,
+    MODERN_CONTRAST,
+    MODERN_EXPOSURE,
     MSAA,
 ];
 
@@ -124,15 +136,52 @@ pub const MSAA: &str = "ini:Engine.Engine.RenderDevice MSAA";
 
 pub const MODERN_GRAPHICS: &str = "ini:Engine.Engine.RenderDevice ModernGraphics";
 
-pub const MODERN_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernShadows";
+pub const MODERN_PRESET: &str = "ini:Engine.Engine.RenderDevice ModernPreset";
+pub const MODERN_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernSunShadows";
+pub const MODERN_SHADOW_DISTANCE: &str = "ini:Engine.Engine.RenderDevice ModernShadowDistance";
+pub const MODERN_LAMP_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernLampShadows";
 pub const MODERN_CONTACT_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernContactShadows";
 pub const MODERN_AO: &str = "ini:Engine.Engine.RenderDevice ModernAO";
+pub const MODERN_INDIRECT: &str = "ini:Engine.Engine.RenderDevice ModernIndirect";
+pub const MODERN_ANTI_ALIASING: &str = "ini:Engine.Engine.RenderDevice ModernAntiAliasing";
+pub const MODERN_BLOOM: &str = "ini:Engine.Engine.RenderDevice ModernBloom";
+pub const MODERN_SHARPEN: &str = "ini:Engine.Engine.RenderDevice ModernSharpen";
 pub const MODERN_RELIEF: &str = "ini:Engine.Engine.RenderDevice ModernRelief";
 pub const MODERN_SPECULAR: &str = "ini:Engine.Engine.RenderDevice ModernSpecular";
-pub const MODERN_POST: &str = "ini:Engine.Engine.RenderDevice ModernPost";
-pub const MODERN_BAKE: &str = "ini:Engine.Engine.RenderDevice ModernBake";
 pub const MODERN_TERRAIN_DETAIL: &str = "ini:Engine.Engine.RenderDevice ModernTerrainDetail";
-const MODERN_OFF_BY_DEFAULT: [&str; 1] = [MODERN_AO];
+pub const MODERN_GOD_RAYS: &str = "ini:Engine.Engine.RenderDevice ModernGodRays";
+pub const MODERN_VIGNETTE: &str = "ini:Engine.Engine.RenderDevice ModernVignette";
+pub const MODERN_FILM_GRAIN: &str = "ini:Engine.Engine.RenderDevice ModernFilmGrain";
+pub const MODERN_CHROMATIC_ABERRATION: &str = "ini:Engine.Engine.RenderDevice ModernChromaticAberration";
+pub const MODERN_SATURATION: &str = "ini:Engine.Engine.RenderDevice ModernSaturation";
+pub const MODERN_CONTRAST: &str = "ini:Engine.Engine.RenderDevice ModernContrast";
+pub const MODERN_EXPOSURE: &str = "ini:Engine.Engine.RenderDevice ModernExposure";
+
+/// The slider value that leaves saturation, contrast and exposure as they are.
+pub const NEUTRAL_LEVEL: u8 = 5;
+
+/// Each level key with its value when unset (the High preset) and its top value.
+const LEVELS: [(&str, u8, u8); 16] = [
+    (MODERN_SHADOWS, 3, 4),
+    (MODERN_SHADOW_DISTANCE, 4, 5),
+    (MODERN_LAMP_SHADOWS, 3, 4),
+    (MODERN_CONTACT_SHADOWS, 1, 2),
+    (MODERN_AO, 2, 3),
+    (MODERN_INDIRECT, 2, 2),
+    (MODERN_ANTI_ALIASING, 2, 4),
+    (MODERN_BLOOM, 5, 10),
+    (MODERN_SHARPEN, 4, 10),
+    (MODERN_GOD_RAYS, 5, 10),
+    (MODERN_VIGNETTE, 2, 10),
+    (MODERN_FILM_GRAIN, 0, 10),
+    (MODERN_CHROMATIC_ABERRATION, 0, 10),
+    (MODERN_SATURATION, NEUTRAL_LEVEL, 10),
+    (MODERN_CONTRAST, NEUTRAL_LEVEL, 10),
+    (MODERN_EXPOSURE, NEUTRAL_LEVEL, 10),
+];
+
+const ANTI_ALIASING_MSAA_2X: u8 = 3;
+const ANTI_ALIASING_MSAA_4X: u8 = 4;
 
 /// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
 /// changing.
@@ -173,7 +222,16 @@ impl Settings {
         self.number(DISPLAY_NUMBER, 0.0) as usize
     }
 
+    /// Under modern graphics the anti-aliasing level picks the samples, and ambient occlusion needs them off.
     pub fn msaa_samples(&self) -> u32 {
+        if self.modern_graphics() {
+            return match (self.modern_level(MODERN_AO), self.modern_level(MODERN_ANTI_ALIASING)) {
+                (1.., _) => 1,
+                (_, ANTI_ALIASING_MSAA_2X) => 2,
+                (_, ANTI_ALIASING_MSAA_4X) => 4,
+                _ => 1,
+            };
+        }
         match self.number(MSAA, 1.0) as u32 {
             samples @ (2 | 4 | 8) => samples,
             _ => 1,
@@ -189,9 +247,22 @@ impl Settings {
     }
 
     pub fn modern_effect(&self, query: &str) -> bool {
-        let default = !MODERN_OFF_BY_DEFAULT.contains(&query);
         let text = self.text(query);
-        self.modern_graphics() && if text.trim().is_empty() { default } else { ini_truthy(text) }
+        self.modern_graphics() && (text.trim().is_empty() || ini_truthy(text))
+    }
+
+    pub fn modern_level(&self, query: &str) -> u8 {
+        let Some(&(_, high, top)) = LEVELS.iter().find(|(key, ..)| *key == query) else { return 0 };
+        if !self.modern_graphics() {
+            return 0;
+        }
+        let text = self.text(query).trim();
+        match text.parse::<u8>() {
+            _ if text.is_empty() => high,
+            Ok(level) => level.min(top),
+            Err(_) if ini_truthy(text) => high,
+            Err(_) => 0,
+        }
     }
 }
 
@@ -208,6 +279,7 @@ impl bevy::app::Plugin for DisplayPlugin {
 pub(crate) fn apply_texture_quality(settings: bevy::ecs::system::Res<Settings>) {
     p2_bevy_assets::set_texture_quality(settings.texture_quality());
     p2_bevy_assets::set_terrain_detail(settings.terrain_detail());
+    crate::render::lamps::set_load_light_levels(&settings);
 }
 
 pub fn present_mode(vsync: bool, triple_buffering: bool) -> PresentMode {
@@ -277,27 +349,69 @@ mod tests {
         assert!(!settings.modern_graphics());
     }
 
-    fn effects(settings: &Settings) -> [bool; 8] {
+    fn effects(settings: &Settings) -> [bool; 3] {
         EFFECTS.map(|key| settings.modern_effect(key))
     }
 
-    const EFFECTS: [&str; 8] =
-        [MODERN_SHADOWS, MODERN_CONTACT_SHADOWS, MODERN_AO, MODERN_RELIEF, MODERN_SPECULAR, MODERN_POST, MODERN_BAKE, MODERN_TERRAIN_DETAIL];
+    const EFFECTS: [&str; 3] = [MODERN_RELIEF, MODERN_SPECULAR, MODERN_TERRAIN_DETAIL];
 
     #[test]
-    fn modern_effects_default_on_but_ao() {
+    fn modern_boxes_default_on() {
         let master = |value: &str| Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() });
-        assert_eq!(effects(&master("True")), [true, true, false, true, true, true, true, true]);
-        assert_eq!(effects(&Settings::default()), [false; 8]);
-        assert_eq!(effects(&master("False")), [false; 8]);
+        assert_eq!(effects(&master("True")), [true; 3]);
+        assert_eq!(effects(&Settings::default()), [false; 3]);
+        assert_eq!(effects(&master("False")), [false; 3]);
         let all = |on: &str| Settings::read(|query| if query == MODERN_GRAPHICS { on.to_owned() } else { "True".to_owned() });
-        assert_eq!(effects(&all("False")), [false; 8]);
-        assert_eq!(effects(&all("True")), [true; 8]);
+        assert_eq!(effects(&all("False")), [false; 3]);
+        assert_eq!(effects(&all("True")), [true; 3]);
         for (index, key) in EFFECTS.into_iter().enumerate() {
             let settings = Settings::read(|query| if query == key { "False".to_owned() } else { "True".to_owned() });
-            let mut wanted = [true; 8];
+            let mut wanted = [true; 3];
             wanted[index] = false;
             assert_eq!(effects(&settings), wanted, "{key}");
         }
+    }
+
+    fn with(master: &str, key: &'static str, value: &str) -> Settings {
+        Settings::read(|query| match query {
+            MODERN_GRAPHICS => master.to_owned(),
+            query if query == key => value.to_owned(),
+            _ => String::new(),
+        })
+    }
+
+    #[test]
+    fn modern_levels_read_numbers_with_the_high_preset_as_default() {
+        let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 0, 5, 5, 5]);
+        assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
+        assert_eq!(with("True", MODERN_BLOOM, "7").modern_level(MODERN_BLOOM), 7);
+        assert_eq!(with("True", MODERN_BLOOM, "0").modern_level(MODERN_BLOOM), 0);
+        assert_eq!(with("True", MODERN_BLOOM, "40").modern_level(MODERN_BLOOM), 10);
+        assert_eq!(with("True", MODERN_CONTACT_SHADOWS, "9").modern_level(MODERN_CONTACT_SHADOWS), 2);
+        assert_eq!(with("True", MODERN_AO, "True").modern_level(MODERN_AO), 2);
+        assert_eq!(with("True", MODERN_AO, "False").modern_level(MODERN_AO), 0);
+        assert_eq!(with("True", MODERN_CONTACT_SHADOWS, "True").modern_level(MODERN_CONTACT_SHADOWS), 1);
+        assert_eq!(with("True", MODERN_RELIEF, "3").modern_level(MODERN_RELIEF), 0);
+    }
+
+    #[test]
+    fn msaa_follows_the_anti_aliasing_level_under_modern() {
+        let msaa = |master: &str, ao: &str, aa: &str, retail: &str| {
+            Settings::read(|query| match query {
+                MODERN_GRAPHICS => master.to_owned(),
+                MODERN_AO => ao.to_owned(),
+                MODERN_ANTI_ALIASING => aa.to_owned(),
+                MSAA => retail.to_owned(),
+                _ => String::new(),
+            })
+            .msaa_samples()
+        };
+        assert_eq!(msaa("False", "0", "4", "8"), 8);
+        assert_eq!(msaa("True", "0", "4", "8"), 4);
+        assert_eq!(msaa("True", "0", "3", ""), 2);
+        assert_eq!(msaa("True", "0", "2", "4"), 1);
+        assert_eq!(msaa("True", "1", "4", ""), 1);
+        assert_eq!(msaa("True", "", "4", ""), 1);
     }
 }

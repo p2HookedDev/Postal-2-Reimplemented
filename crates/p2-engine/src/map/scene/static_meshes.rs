@@ -11,7 +11,7 @@ pub(super) struct MeshPlacing<I> {
     pub(super) instance: Option<(I, MeshLighting)>,
     pub(super) placement: Option<Placement>,
     pub(super) follow: Option<FollowActor>,
-    pub(super) movable: bool,
+    pub(super) fixed: Option<Placement>,
     pub(super) only_from: Option<Vec<u8>>,
 }
 
@@ -48,10 +48,14 @@ pub(super) struct StaticParts {
     pub(super) sky_models: Vec<ModelView>,
     pub(super) followers: Vec<MovingModel<FollowActor>>,
     pub(super) collisions: Vec<MeshCollision>,
+    pub(super) lamp_casters: Vec<[[f32; 3]; 3]>,
+    pub(super) lamp_caster_albedos: Vec<[f32; 3]>,
+    pub(super) lamp_masked: HashMap<AssetId<Image>, MaskedCaster>,
     batches: BTreeMap<BatchKey, (SectionView, MeshBatch)>,
     pub(super) lit_actors: usize,
 }
 
+#[expect(clippy::too_many_lines, reason = "one mesh's sections, its lamp casters and every way a placing of it is drawn")]
 fn static_mesh_models(
     game: &mut Game,
     t: &mut PendingAssets,
@@ -106,8 +110,29 @@ fn static_mesh_models(
     let local_box = bounds(mesh.positions.iter().map(|&p| to_bevy(p)));
     let mut unlit: [Vec<(Transform, Option<ZoneCulled>)>; 2] = Default::default();
     let mut shared: Option<Arc<StaticMesh>> = None;
-    for MeshPlacing { transform, instance, placement, follow, movable, only_from } in placements {
+    for MeshPlacing { transform, instance, placement, follow, fixed, only_from } in placements {
         let collision = placement.map(|Placement { location, rotation, scale, pre_pivot }| MeshCollision::new(&mesh, location, rotation, scale, pre_pivot));
+        let (in_sky, in_world) = crate::mesh_view::sky_and_world(&box_zones(level.model, local_box, &transform), level.sky_zone);
+        if let Some(Placement { location, rotation, scale, pre_pivot }) = fixed.filter(|_| in_world) {
+            let built;
+            let placed = if let Some(collision) = &collision {
+                collision
+            } else {
+                built = MeshCollision::new(&mesh, location, rotation, scale, pre_pivot);
+                &built
+            };
+            for (section, view) in base.iter().zip(&views) {
+                if let (AlphaMode::Mask(cutoff @ ..=1.0), Some(image)) = (view.alpha_mode, &view.texture) {
+                    let caster = parts.lamp_masked.entry(image.id()).or_insert_with(|| MaskedCaster { image: image.clone(), cutoff, triangles: Vec::new() });
+                    caster.triangles.extend(masked_triangles(section, &transform));
+                }
+            }
+            for (index, triangle) in placed.triangles().iter().enumerate() {
+                let Some(view) = placed.slot(index).and_then(|slot| views.get(slot as usize)).filter(|view| view.alpha_mode == AlphaMode::Opaque) else { continue };
+                parts.lamp_casters.push(*triangle);
+                parts.lamp_caster_albedos.push(view.texture.as_ref().and_then(|image| t.albedos.get(&image.id())).copied().unwrap_or(GREY_ALBEDO));
+            }
+        }
         let bounds = collision.as_ref().map(MeshCollision::bounds);
         parts.collisions.extend(collision);
         let mirrored = mirrors(&transform);
@@ -118,9 +143,8 @@ fn static_mesh_models(
             (level.environment.mesh_colors(level.model, &mesh, sphere, instance.as_ref(), &lighting), fits, lighting)
         });
         let (lighting, relit): (Option<_>, Option<_>) = lit.map(|(colors, fits, lighting)| (colors, (fits, lighting))).unzip();
-        let (in_sky, in_world) = crate::mesh_view::sky_and_world(&box_zones(level.model, local_box, &transform), level.sky_zone);
-        if !movable && in_sky {
-            parts.sky_models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone: None });
+        if fixed.is_some() && in_sky {
+            parts.sky_models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone: None, casts: false });
             if !in_world {
                 continue;
             }
@@ -142,7 +166,7 @@ fn static_mesh_models(
             .filter(|_| !level.model.leaves.is_empty())
             .map(|(min, max)| ZoneCulled { zones: p2_collision::box_zones(level.model, min, max), min: min.into(), max: max.into(), only_from: only_from.clone() });
         if only_from.is_some() {
-            parts.models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone });
+            parts.models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone, casts: true });
             continue;
         }
         let colors = lighting.as_deref().map(lighting_colors);
@@ -155,14 +179,14 @@ fn static_mesh_models(
         }
         if blended.contains(&true) {
             match lighting {
-                Some(lighting) => parts.models.push(ModelView { sections: sections(t, Some(&lighting), false, mirrored, &|i| blended[i]), instances: vec![transform], zone }),
+                Some(lighting) => parts.models.push(ModelView { sections: sections(t, Some(&lighting), false, mirrored, &|i| blended[i]), instances: vec![transform], zone, casts: true }),
                 None => unlit[usize::from(mirrored)].push((transform, zone)),
             }
         }
     }
     for (mirrored, unlit) in unlit.into_iter().enumerate().filter(|(_, unlit)| !unlit.is_empty()) {
         let sections = sections(t, None, false, mirrored == 1, &|i| blended[i]);
-        parts.models.extend(unlit.into_iter().map(|(transform, zone)| ModelView { sections: sections.clone(), instances: vec![transform], zone }));
+        parts.models.extend(unlit.into_iter().map(|(transform, zone)| ModelView { sections: sections.clone(), instances: vec![transform], zone, casts: true }));
     }
     true
 }
@@ -185,12 +209,12 @@ pub(super) fn resolve_mesh_paths(
         let skins = skins.iter().map(|skin| skin.as_deref().and_then(&mut export).unwrap_or((id, 0))).collect();
         let actors = actors
             .into_iter()
-            .map(|MeshPlacing { transform, instance, placement, follow, movable, only_from }| {
+            .map(|MeshPlacing { transform, instance, placement, follow, fixed, only_from }| {
                 let instance = instance.map(|(path, lighting)| {
                     let reference = path.and_then(|path| export(&path)).filter(|&(p, _)| p == id).map(|(_, reference)| reference);
                     (reference, lighting)
                 });
-                MeshPlacing { transform, instance, placement, follow, movable, only_from }
+                MeshPlacing { transform, instance, placement, follow, fixed, only_from }
             })
             .collect::<Vec<_>>();
         placements.entry((mesh, skins)).or_default().extend(actors);
@@ -229,7 +253,7 @@ pub(super) fn static_models(
     for (view, batch) in batches.into_values() {
         let mut mesh = batch.into_mesh();
         let chunks = crate::render::world_pass::chunks_of(&mut mesh);
-        parts.models.push(ModelView { sections: vec![SectionView { mesh: t.add_mesh(mesh), chunks, ..view }], instances: vec![Transform::IDENTITY], zone: None });
+        parts.models.push(ModelView { sections: vec![SectionView { mesh: t.add_mesh(mesh), chunks, ..view }], instances: vec![Transform::IDENTITY], zone: None, casts: true });
     }
     (parts, missing, merged)
 }

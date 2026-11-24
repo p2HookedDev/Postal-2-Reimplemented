@@ -20,6 +20,7 @@ const LAYER_BINDINGS_SHADER: Handle<Shader> = uuid_handle!("c61e0a3f-7d52-4b9e-8
 const MODERN_SHADER: Handle<Shader> = uuid_handle!("4e9b7c21-0a6f-4d3e-b852-91c7f0e3a6d4");
 const COLOR_SHADER: Handle<Shader> = uuid_handle!("9d3c6a57-2e1b-4f80-a7c4-5b0e8d91f236");
 const PROJECTOR_SHADER: Handle<Shader> = uuid_handle!("b7e2f05c-8a31-4d96-9c4b-2f6d1e8a7c53");
+const TONE_CURVE_SHADER: Handle<Shader> = uuid_handle!("2c8f6e14-d93a-4b07-8e51-a6b40f7d2c93");
 
 pub(crate) struct ShaderLibraryPlugin;
 
@@ -35,6 +36,7 @@ impl Plugin for ShaderLibraryPlugin {
             (MODERN_SHADER, Shader::from_wesl(include_str!("modern.wesl"), "p2_engine/modern.wesl")),
             (COLOR_SHADER, Shader::from_wesl(include_str!("color.wesl"), "p2_engine/color.wesl")),
             (PROJECTOR_SHADER, Shader::from_wesl(include_str!("projector.wesl"), "p2_engine/projector.wesl")),
+            (TONE_CURVE_SHADER, Shader::from_wesl(include_str!("tone_curve.wesl"), "p2_engine/tone_curve.wesl")),
         ]);
     }
 }

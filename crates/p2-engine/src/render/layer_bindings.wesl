@@ -9,6 +9,7 @@ import bevy_pbr::render::{
 };
 import package::p2_engine::shader_layers::{detail, glow, specular};
 import package::p2_engine::color::{to_display, to_linear};
+import package::p2_engine::modern::sky_mask;
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_cube};
 @if(BINDLESS)
@@ -163,7 +164,7 @@ fn post_lighting(pbr_input: pbr_types::PbrInput, color: vec4<f32>) -> vec4<f32> 
     }
     let out = main_pass_post_lighting_processing(pbr_input, color);
     if !premultiplied(pbr_input.material.flags) {
-        return out;
+        return vec4(out.rgb, sky_mask(pbr_input.material.flags, out.a));
     }
     let fog = main_pass_post_lighting_processing(pbr_input, vec4(0.0, 0.0, 0.0, color.a)).rgb;
     return vec4(out.rgb - (1.0 - color.a) * fog, out.a);

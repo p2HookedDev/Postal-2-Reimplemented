@@ -1,45 +1,52 @@
-//! Modern graphics option, off by default and followed at runtime. One realtime sun casts only dynamic
-//! objects; shaders darken the baked sun only where the sun mask has it and such an object blocks it.
+//! Modern graphics option, off by default and followed at runtime. No baked light shows: a real-time sun with shadow
+//! cascades, the map's other suns as fills and the eye's zone ambient light the world.
 
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::fxaa::Fxaa;
+use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Asset, AssetEvent, Assets};
-use bevy::camera::Camera3d;
+use bevy::camera::{Camera, Camera3d, CameraOutputMode, ClearColorConfig};
+use bevy::camera::Hdr;
 use bevy::camera::visibility::RenderLayers;
 use bevy::color::{Color, LinearRgba};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
-use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, MessageReader, Or, Query, Res, ResMut, SystemSet, With};
+use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, MessageReader, Mut, Or, Query, Res, ResMut, SystemSet, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::ecs::world::EntityWorldMut;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLight};
+use bevy::light::{AmbientLight, CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLight, DirectionalLightShadowMap, ShadowFilteringMethod};
 use bevy::log::info;
-use bevy::math::Vec3;
 use bevy::material::AlphaMode;
+use bevy::math::{Quat, Vec3};
 use bevy::mesh::Mesh3d;
-use bevy::pbr::{ContactShadows, ExtendedMaterial, MaterialExtension, MeshMaterial3d, ScreenSpaceAmbientOcclusion, StandardMaterial};
-use bevy::post_process::bloom::{Bloom, BloomPrefilter};
+use bevy::pbr::{ContactShadows, ExtendedMaterial, MaterialExtension, MeshMaterial3d, MeshPipelineKey, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, StandardMaterial};
+use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::render::occlusion_culling::OcclusionCulling;
-use bevy::camera::Hdr;
+use bevy::render::render_resource::{BlendState, RenderPipelineDescriptor};
+use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_math::Vector;
-use p2_render_cpu::{HardwareLight, MeshLight};
+use p2_render_cpu::{HardwareLight, LE_SUNLIGHT, MeshLight};
 
-use crate::render::actor_light::{ActorLitMaterial, HardwareLighting};
-use crate::components::FollowBone;
+use crate::components::{CanvasDrawn, FollowActor, FollowBone, OVERLAY_LAYERS, SceneView};
+use crate::display::{
+    MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS, MODERN_SHARPEN,
+    MODERN_SPECULAR, Settings,
+};
+use crate::level_collision::LevelCollision;
+use crate::mesh_view::{NoSunCast, SKY_LAYER};
+use crate::render::tone::ToneCamera;
+use crate::render::actor_light::{ActorLitMaterial, HardwareLighting, LightEnvironment, settle_step};
 use crate::render::blended::{OpaqueDecals, TerrainLayerMaterial};
-use p2_render_cpu::LE_SUNLIGHT;
-use crate::display::{MODERN_AO, MODERN_CONTACT_SHADOWS, MODERN_POST, MODERN_RELIEF, MODERN_SHADOWS, MODERN_SPECULAR, Settings};
 use crate::render::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::render::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::render::particle_material::ParticleMaterial;
-use crate::components::{CanvasDrawn, FollowActor, OVERLAY_LAYERS};
-use crate::shown_scene::ShownScene;
-use crate::components::SceneView;
-use crate::render::sun_mask::{SunMask, sun_mask};
+use crate::render::sun_cache::{SunCachePlugin, SunCacheStale, follow_sun};
 use crate::render::terrain_material::TerrainMaterial;
+use crate::render::world_pass::WorldCasts;
+use crate::shown_scene::ShownScene;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ModernGraphicsSystems {
@@ -50,7 +57,9 @@ pub struct ModernGraphicsPlugin;
 
 impl Plugin for ModernGraphicsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SunMask>();
+        app.add_plugins(crate::render::lamps::LampsPlugin);
+        app.add_plugins(crate::render::probes::ProbesPlugin);
+        app.add_plugins(SunCachePlugin);
         app.add_systems(
             Update,
             (
@@ -60,9 +69,9 @@ impl Plugin for ModernGraphicsPlugin {
                 follow_flag::<ActorLitMaterial>,
                 follow_flag::<TerrainMaterial>,
                 follow_flag::<TerrainLayerMaterial>,
-                sun_mask,
-                sun_shadows,
-                sun_casters,
+                (sun_shadows, follow_sun).chain(),
+                view_ambient,
+                (watch_props, sun_casters).chain(),
             )
                 .in_set(ModernGraphicsSystems::Apply),
         );
@@ -141,83 +150,195 @@ fn follow_flag<M: ModernFlagged>(settings: Res<Settings>, mut events: MessageRea
     }
 }
 
-/// HDR goes on every 3D camera together: they draw into one shared texture, which only stays shared while they agree. The
-/// post effects go on the view camera only, so each runs once per frame (the first-person weapon, drawn after, is left as
-/// retail draws it). No tone curve either way: values past 1 only feed the bloom ([`bloom`]). Contact shadows bring the
-/// depth prepass; off takes it away again unless the occlusion culling has its own. SSAO is off by default (its
-/// blotches) and turns MSAA off while on (`follow_msaa`). Only what differs is touched.
-fn apply(
+/// The view and sky cameras share the world image only while their HDR agrees. Bloom runs before the tone curve,
+/// anti-aliasing and sharpening after it; the depth prepass stays while the occlusion culling needs it.
+pub fn apply(
     settings: Res<Settings>,
     mut commands: Commands,
-    cameras: Query<
-        (Entity, Has<SceneView>, Has<Hdr>, Has<ContactShadows>, Has<ScreenSpaceAmbientOcclusion>, Has<OcclusionCulling>, Option<&RenderLayers>),
-        With<Camera3d>,
-    >,
+    mut cameras: Query<(Entity, &mut Camera, Has<SceneView>, Has<Hdr>, Has<OcclusionCulling>, Option<&RenderLayers>), With<Camera3d>>,
+    tone: Query<Entity, With<ToneCamera>>,
 ) {
-    let post = settings.modern_effect(MODERN_POST);
-    let contact = settings.modern_effect(MODERN_CONTACT_SHADOWS);
-    for (camera, view, hdr, contact_now, ssao_now, culled, layers) in &cameras {
-        let mut camera = commands.entity(camera);
-        if hdr != post {
-            if !post {
-                camera.remove::<(Hdr, Bloom, Fxaa, ContrastAdaptiveSharpening)>();
-            } else if view {
-                let sharpening = ContrastAdaptiveSharpening { sharpening_strength: 0.45, ..ContrastAdaptiveSharpening::default() };
-                camera.insert((Hdr, bloom(), Fxaa::default(), sharpening));
-            } else {
+    let bloom_level = settings.modern_level(MODERN_BLOOM);
+    let sharpen = settings.modern_level(MODERN_SHARPEN);
+    let contact = settings.modern_level(MODERN_CONTACT_SHADOWS);
+    let ao = settings.modern_level(MODERN_AO);
+    let sun_level = settings.modern_level(MODERN_SHADOWS);
+    commands.insert_resource(DirectionalLightShadowMap { size: sun_quality(sun_level).0 });
+    commands.insert_resource(WorldCasts(sun_level > 0));
+    let sky = RenderLayers::layer(SKY_LAYER);
+    for (entity, mut shown, view, hdr, culled, layers) in &mut cameras {
+        let mut camera = commands.entity(entity);
+        let hdr_wanted = settings.modern_graphics() && (view || layers.is_some_and(|layers| layers.intersects(&sky)));
+        if hdr != hdr_wanted {
+            if hdr_wanted {
                 camera.insert(Hdr);
+            } else {
+                camera.remove::<(Hdr, Bloom)>();
             }
         }
         if !view {
+            if layers.is_some_and(|layers| layers.intersects(&sky)) {
+                camera.insert(if hdr_wanted { sky_view_mark() } else { AmbientLight { affects_lightmapped_meshes: false, ..AmbientLight::default() } });
+            }
             continue;
         }
-        if contact != contact_now {
-            if contact {
-                camera.insert(sun_contact_shadows());
+        // Bevy blends a later camera's frame over the target by its alpha. The view shares the sky's frame, which holds
+        // the sky already, and the alpha there is the rays' mask, so under modern the view's frame replaces the target.
+        let replaces = matches!(shown.output_mode, CameraOutputMode::Write { blend_state: Some(_), .. });
+        if replaces != settings.modern_graphics() {
+            shown.output_mode = if replaces {
+                CameraOutputMode::default()
             } else {
-                camera.remove::<ContactShadows>();
-            }
+                CameraOutputMode::Write { blend_state: Some(BlendState::REPLACE), clear_color: ClearColorConfig::None }
+            };
         }
-        let ssao_wanted = settings.modern_effect(MODERN_AO);
-        if ssao_wanted != ssao_now {
-            if ssao_wanted {
-                camera.insert(ssao());
-            } else {
-                camera.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
-            }
+        if bloom_level > 0 {
+            camera.insert(bloom(bloom_level));
+        } else {
+            camera.remove::<Bloom>();
         }
-        if !contact && !ssao_wanted && !culled {
+        let mut post = commands.entity(tone.single().unwrap_or(entity));
+        if sharpen > 0 {
+            post.insert(ContrastAdaptiveSharpening { sharpening_strength: f32::from(sharpen) / 10.0, ..ContrastAdaptiveSharpening::default() });
+        } else {
+            post.remove::<ContrastAdaptiveSharpening>();
+        }
+        match settings.modern_level(MODERN_ANTI_ALIASING) {
+            1 => post.remove::<Smaa>().insert(Fxaa::default()),
+            2 => post.remove::<Fxaa>().insert(Smaa { preset: SmaaPreset::High }),
+            _ => post.remove::<(Fxaa, Smaa)>(),
+        };
+        let mut camera = commands.entity(entity);
+        if contact > 0 {
+            camera.insert(sun_contact_shadows(contact));
+        } else {
+            camera.remove::<ContactShadows>();
+        }
+        if ao > 0 {
+            camera.insert(ssao(ao));
+        } else {
+            camera.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
+        }
+        if contact == 0 && ao == 0 && !culled {
             camera.remove::<DepthPrepass>();
         }
+        // Above level 1 the world shaders use their own filter; Gaussian is for the actors.
+        camera.insert(if sun_level == 1 { ShadowFilteringMethod::Hardware2x2 } else { ShadowFilteringMethod::Gaussian });
         let current = layers.cloned().unwrap_or_default();
-        let wanted = if settings.modern_effect(MODERN_SHADOWS) || contact { current.clone().with(SUN_VIEW_LAYER) } else { current.clone().without(SUN_VIEW_LAYER) };
+        let wanted = if settings.modern_graphics() { current.clone().with(SUN_VIEW_LAYER) } else { current.clone().without(SUN_VIEW_LAYER) };
         if wanted != current {
             camera.insert(wanted);
         }
     }
 }
 
-fn bloom() -> Bloom {
-    Bloom { intensity: 0.15, prefilter: BloomPrefilter { threshold: 0.85, threshold_softness: 0.3 }, ..Bloom::OLD_SCHOOL }
+const BLOOM_PER_LEVEL: f32 = 0.02;
+
+/// The sky camera's ambient light, which its shaders do not use: the negative alpha tells them to store the sky as
+/// alpha 0, the mask the sun's rays read. Matches `modern.wesl`.
+fn sky_view_mark() -> AmbientLight {
+    AmbientLight { color: Color::LinearRgba(LinearRgba::new(0.0, 0.0, 0.0, -1.0)), brightness: 1.0, affects_lightmapped_meshes: false }
+}
+
+/// Added over the frame through a knee that starts at black: mid tones scatter a little, which is the haze, and bright
+/// light scatters most. With no knee at all the sky and every pale wall spread in full over what stood beside them.
+pub fn bloom(level: u8) -> Bloom {
+    Bloom {
+        intensity: f32::from(level) * BLOOM_PER_LEVEL,
+        low_frequency_boost: 0.7,
+        prefilter: BloomPrefilter { threshold: 0.35, threshold_softness: 1.0 },
+        composite_mode: BloomCompositeMode::Additive,
+        ..Bloom::NATURAL
+    }
 }
 
 /// In Unreal units (about 2 cm each): Bevy's defaults are in metres (0.73 and 0.25), so about 32 and 12 units here (tuned
-/// by eye, unverified). Needs the depth and normal prepasses. Off by default (its blotches).
-fn ssao() -> ScreenSpaceAmbientOcclusion {
-    ScreenSpaceAmbientOcclusion { radius: 32.0, constant_object_thickness: 12.0, ..ScreenSpaceAmbientOcclusion::default() }
+/// by eye, unverified). Needs the depth and normal prepasses.
+fn ssao(level: u8) -> ScreenSpaceAmbientOcclusion {
+    let quality_level = match level {
+        1 => ScreenSpaceAmbientOcclusionQualityLevel::Low,
+        2 => ScreenSpaceAmbientOcclusionQualityLevel::Medium,
+        _ => ScreenSpaceAmbientOcclusionQualityLevel::High,
+    };
+    ScreenSpaceAmbientOcclusion { quality_level, radius: 32.0, constant_object_thickness: 12.0 }
 }
 
 #[derive(Component)]
 pub struct SunShadow;
 
-/// The layer the view camera adds while the sun shadows are on, shared by the sun so the view sees it while the sun
-/// keeps its own casters (Bevy: a light's casters are the meshes sharing a layer with it). No mesh is on it.
+#[derive(Component)]
+struct FillSun;
+
+/// Kept apart from [`PropMotion`] so its change detection fires only when the answer changes.
+#[derive(Component, PartialEq)]
+pub struct StillProp(pub bool);
+
+/// A placed mesh casts with the static world, cached, once it has stood still this long, and with the movers while it moves.
+const PROP_SETTLE_SECONDS: f32 = 2.0;
+const MAP_LOAD_PROPS: usize = 50;
+
+#[derive(Component)]
+pub struct PropMotion {
+    translation: Vec3,
+    rotation: Quat,
+    last_moved: f32,
+    settled_before: bool,
+}
+
+fn watch_props(
+    time: Res<Time>,
+    settings: Res<Settings>,
+    stale: Res<SunCacheStale>,
+    mut commands: Commands,
+    new: Query<(Entity, &FollowActor, &Transform), (Added<FollowActor>, Without<FollowBone>)>,
+    mut props: Query<(&Transform, &mut PropMotion, &mut StillProp)>,
+) {
+    if settings.modern_level(MODERN_SHADOWS) == 0 {
+        return;
+    }
+    let now = time.elapsed_secs();
+    // A map's props arrive together and belong in every level. One spawned in play is too small for the coarse ones.
+    let map_loading = new.iter().count() > MAP_LOAD_PROPS;
+    for (entity, follow, transform) in &new {
+        if follow.skeletal.is_none() {
+            let motion = PropMotion { translation: transform.translation, rotation: transform.rotation, last_moved: now, settled_before: !map_loading };
+            commands.entity(entity).try_insert((motion, StillProp(false)));
+        }
+    }
+    for (transform, mut motion, mut still) in &mut props {
+        if settle(transform, &mut motion, &mut still, now) {
+            stale.mark();
+        }
+    }
+}
+
+/// Whether it has just settled for the first time: that draws it into every level, a door's later swings only the near ones.
+fn settle(transform: &Transform, motion: &mut PropMotion, still: &mut Mut<StillProp>, now: f32) -> bool {
+    if transform.translation != motion.translation || transform.rotation != motion.rotation {
+        motion.translation = transform.translation;
+        motion.rotation = transform.rotation;
+        motion.last_moved = now;
+        still.set_if_neq(StillProp(false));
+    } else if now - motion.last_moved > PROP_SETTLE_SECONDS {
+        still.set_if_neq(StillProp(true));
+        return !std::mem::replace(&mut motion.settled_before, true);
+    }
+    false
+}
+
+/// The layer the view camera adds while modern graphics are on, shared by the sun and fills so the view sees them while
+/// the sun keeps its own casters (Bevy: a light's casters are the meshes sharing a layer with it). No mesh is on it.
 /// Layers 0 to 6 are the view, overlay, sky and gamma ones (`mesh_view.rs`, `gamma.rs`).
 pub const SUN_VIEW_LAYER: usize = 7;
 
-/// The layer [`sun_casters`] adds to every dynamic object's mesh in the world: the sun's only casters. No camera sees
-/// it, and no static world mesh is ever on it, so the static world never casts (its shadows are baked).
+/// The layer [`sun_casters`] adds to every solid mesh in the world: the sun's casters. No camera sees it.
 pub const CASTER_LAYER: usize = 8;
+
+/// The layer it adds to moving objects only.
+pub const MOVER_LAYER: usize = 9;
+
+/// The layer it adds to every other caster: the static world.
+pub const STATIC_CASTER_LAYER: usize = 10;
 
 pub(crate) fn brightest_sun<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, level_brightness: f32) -> Option<(MeshLight, HardwareLight)> {
     let strength = |light: &HardwareLight| light.color.iter().sum::<f32>();
@@ -235,10 +356,8 @@ pub(crate) fn brightest_sun<'a>(lights: impl IntoIterator<Item = &'a MeshLight>,
         })
 }
 
-/// The colour is what the baked light held of it, so the shaders take off exactly the baked sun. At illuminance 1 (Bevy
-/// premultiplies the colour by it; on a surface Bevy's own PBR lights, 1 lux is about a thousandth: invisible). The depth
-/// bias is in world units (Unreal units are about 2 cm, Bevy's default 0.02 is far too small; tuned by eye, unverified);
-/// the normal bias a little over Bevy's 1.8, against acne on actors (unverified).
+/// Shaders read the colour as is, at illuminance 1; Bevy's own PBR lights take about a thousandth of it. The biases (world
+/// units, tuned by eye, unverified) serve the actors' shadow lookup; the world's filter has its own.
 fn sun_light(color: [f32; 3], shadows: bool, contact: bool) -> DirectionalLight {
     let [r, g, b] = color;
     DirectionalLight {
@@ -252,9 +371,14 @@ fn sun_light(color: [f32; 3], shadows: bool, contact: bool) -> DirectionalLight 
     }
 }
 
+/// A light's colour is stored in display space and doubled when drawn, so its linear light is that doubled and squared.
+pub(crate) fn linear_light(color: [f32; 3]) -> [f32; 3] {
+    color.map(|channel| 4.0 * channel * channel)
+}
+
 /// In Unreal units: rays of 48 units (Bevy's 0.3 m is about 15), depth texels 16 units thick (tuned by eye, unverified).
-fn sun_contact_shadows() -> ContactShadows {
-    ContactShadows { linear_steps: 16, thickness: 16.0, length: 48.0 }
+fn sun_contact_shadows(level: u8) -> ContactShadows {
+    ContactShadows { linear_steps: if level > 1 { 16 } else { 8 }, thickness: 16.0, length: 48.0 }
 }
 
 fn sun_place(direction: Vec3) -> Transform {
@@ -265,41 +389,106 @@ fn sun_place(direction: Vec3) -> Transform {
 /// A map without a sun still gets contact shadows: the key light's side stands for it, and its black light adds nothing.
 const NO_SUN_DIRECTION: Vec3 = Vec3::new(-0.458088, -0.814379, -0.356291);
 
-fn sun_cascades() -> CascadeShadowConfig {
+/// By the sun's shadow level: the side of every directional shadow map, the movers' cascades (two or more, as a sun with
+/// one cascade reads as a cached level) and the static world's cached levels. Level 0 draws no shadow map.
+pub(crate) fn sun_quality(level: u8) -> (usize, usize, usize) {
+    match level {
+        0 | 1 => (1024, 2, 3),
+        2 => (2048, 2, 3),
+        3 => (2048, 3, 4),
+        _ => (4096, 3, 4),
+    }
+}
+
+/// In Unreal units, by the shadow distance level 1 to 5: the movers' reach and the outermost cached level's half width.
+const SHADOW_REACH: [f32; 5] = [2048.0, 4096.0, 8192.0, 16384.0, 32768.0];
+const FIRST_CASCADE_FAR: f32 = 400.0;
+
+/// Also what `modern.wesl` tells the sun from the fills by while it draws no shadow map.
+const SUN_OVERLAP: f32 = 0.1;
+
+pub(crate) fn shadow_reach(level: u8) -> f32 {
+    SHADOW_REACH[usize::from(level.clamp(1, 5) - 1)]
+}
+
+fn sun_cascades(sun_level: u8, distance_level: u8) -> CascadeShadowConfig {
     CascadeShadowConfigBuilder {
-        num_cascades: WORLD_CASCADES,
+        num_cascades: sun_quality(sun_level).1,
         minimum_distance: 1.0,
-        maximum_distance: 4000.0,
-        first_cascade_far_bound: 600.0,
-        overlap_proportion: 0.2,
+        maximum_distance: shadow_reach(distance_level),
+        first_cascade_far_bound: FIRST_CASCADE_FAR,
+        overlap_proportion: SUN_OVERLAP,
     }
     .build()
 }
 
-const WORLD_CASCADES: usize = 4;
+/// With the sun and the later cached levels this stays inside Bevy's ten directional lights.
+const MAX_FILL_SUNS: usize = 4;
+
+/// Suns this close in direction light the same way: maps stack several on one direction, and their light adds up.
+const SAME_SUN_COS: f32 = 0.99452;
+
+/// The map's still suns grouped by direction, each group's colours summed as retail's baked light sums them. The
+/// shadowed sun's group is first when there is one, then the strongest others.
+fn sun_groups(environment: &LightEnvironment, sun: Option<&(MeshLight, HardwareLight)>) -> Vec<(Vector, [f32; 3])> {
+    let strength = |light: &MeshLight| light.color(environment.level_brightness).iter().sum::<f32>();
+    let mut candidates: Vec<&MeshLight> = environment.lights.values().filter(|light| light.effect == LE_SUNLIGHT && !light.dynamic).collect();
+    candidates.sort_by(|a, b| {
+        strength(b).total_cmp(&strength(a)).then_with(|| <[f32; 3]>::from(a.location).partial_cmp(&<[f32; 3]>::from(b.location)).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    let mut groups: Vec<(Vector, [f32; 3])> = sun.map(|(light, _)| (light.rotation.vector(), [0.0; 3])).into_iter().collect();
+    for light in candidates {
+        let (along, color) = (light.rotation.vector(), light.color(environment.level_brightness));
+        match groups.iter_mut().find(|(other, _)| other.dot(along) > SAME_SUN_COS) {
+            Some((_, sum)) => sum.iter_mut().zip(color).for_each(|(sum, channel)| *sum += channel),
+            None => groups.push((along, color)),
+        }
+    }
+    groups
+}
+
+/// The shadowed sun's linear colour: every sun on its direction together.
+pub(crate) fn sun_color(environment: &LightEnvironment) -> [f32; 3] {
+    let Some(sun) = environment.sun.as_ref() else { return [0.0; 3] };
+    let own = sun.0.color(environment.level_brightness);
+    let summed = sun_groups(environment, Some(sun)).first().map_or(own, |&(_, sum)| sum);
+    // A sun that is not in the list of lights still shines.
+    linear_light(if summed.iter().sum::<f32>() > 0.0 { summed } else { own })
+}
+
+pub(crate) fn fill_suns(environment: &LightEnvironment, sun: Option<&(MeshLight, HardwareLight)>) -> Vec<(Vec3, [f32; 3])> {
+    sun_groups(environment, sun)
+        .into_iter()
+        .skip(usize::from(sun.is_some()))
+        .take(MAX_FILL_SUNS)
+        .map(|(along, color)| (Vec3::from(p2_bevy_assets::to_bevy(along)), linear_light(color)))
+        .collect()
+}
 
 fn sun_shadows(
     settings: Res<Settings>,
     shown: Option<Res<ShownScene>>,
     mut commands: Commands,
-    mut suns: Query<(Entity, &mut DirectionalLight, &mut Transform), With<SunShadow>>,
-    mut logged: Local<Option<[f32; 3]>>,
+    mut suns: Query<(Entity, &mut DirectionalLight, &mut Transform, &mut CascadeShadowConfig), With<SunShadow>>,
+    fills: Query<Entity, With<FillSun>>,
+    mut last_fills: Local<Vec<(Vec3, [f32; 3])>>,
 ) {
-    let (shadows, contact) = (settings.modern_effect(MODERN_SHADOWS), settings.modern_effect(MODERN_CONTACT_SHADOWS));
-    let environment = shown.as_deref().and_then(|shown| shown.lighting.as_deref()).filter(|_| shadows || contact);
+    let environment = shown.as_deref().and_then(|shown| shown.lighting.as_deref()).filter(|_| settings.modern_graphics());
     let Some(environment) = environment else {
-        for (entity, ..) in &suns {
+        for entity in suns.iter().map(|(entity, ..)| entity).chain(&fills) {
             commands.entity(entity).despawn();
         }
-        *logged = None;
+        last_fills.clear();
         return;
     };
     let sun = environment.sun.as_ref();
-    let color = sun.map_or([0.0; 3], |(light, _)| light.color(environment.level_brightness));
+    let sun_level = settings.modern_level(MODERN_SHADOWS);
+    let color = sun_color(environment);
     let place = sun_place(sun.map_or(NO_SUN_DIRECTION, |(_, hardware)| Vec3::from(p2_bevy_assets::to_bevy(hardware.direction))));
-    let wanted = sun_light(color, shadows && sun.is_some(), contact);
+    let wanted = sun_light(color, sun_level > 0 && sun.is_some(), settings.modern_level(MODERN_CONTACT_SHADOWS) > 0);
+    let cascades = sun_cascades(sun_level, settings.modern_level(MODERN_SHADOW_DISTANCE));
     let mut found = false;
-    for (entity, mut current, mut transform) in &mut suns {
+    for (entity, mut current, mut transform, mut config) in &mut suns {
         if std::mem::replace(&mut found, true) {
             commands.entity(entity).despawn();
             continue;
@@ -307,48 +496,118 @@ fn sun_shadows(
         if current.color != wanted.color || current.contact_shadows_enabled != wanted.contact_shadows_enabled || current.shadow_maps_enabled != wanted.shadow_maps_enabled {
             *current = wanted;
         }
+        if config.bounds != cascades.bounds {
+            *config = cascades.clone();
+        }
         transform.set_if_neq(place);
     }
     if !found {
-        let layers = RenderLayers::from_layers(&[SUN_VIEW_LAYER, CASTER_LAYER]);
-        commands.spawn((SunShadow, wanted, place, sun_cascades(), layers));
+        let layers = RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER]);
+        commands.spawn((SunShadow, wanted, place, cascades, layers));
     }
-    let Some((light, _)) = sun else { return };
-    let key = <[f32; 3]>::from(light.location);
-    if *logged != Some(key) {
-        let suns = environment.lights.values().filter(|light| light.effect == LE_SUNLIGHT).count();
-        let [r, g, b] = color;
-        info!("modern sun shadows: {suns} sun lights in the map, the brightest at ({}, {}, {}) colour ({r:.2}, {g:.2}, {b:.2})", key[0], key[1], key[2]);
-        *logged = Some(key);
+    let new_fills = fill_suns(environment, sun);
+    if *last_fills != new_fills {
+        for entity in &fills {
+            commands.entity(entity).despawn();
+        }
+        for &(along, [r, g, b]) in &new_fills {
+            let config = CascadeShadowConfig { overlap_proportion: 0.0, ..CascadeShadowConfig::default() };
+            let light = DirectionalLight { color: Color::LinearRgba(LinearRgba::rgb(r, g, b)), illuminance: 1.0, shadow_maps_enabled: false, affects_lightmapped_mesh_diffuse: false, ..DirectionalLight::default() };
+            commands.spawn((FillSun, light, config, sun_place(along), RenderLayers::layer(SUN_VIEW_LAYER)));
+        }
+        *last_fills = new_fills;
     }
 }
 
-type Dynamic = Or<(With<FollowActor>, With<FollowBone>)>;
+/// Retail snaps a zone's ambient at a zone crossing; ours fades, as the zone fog does.
+const ZONE_AMBIENT_BLEND_SECONDS: f32 = 0.35;
+
+/// The zone the eye is in lights every surface with its ambient, under a roof or not. In display light, as `modern.wesl`
+/// adds it; the alpha carries the probe grid's spacing, 0 without one.
+pub fn view_ambient(
+    time: Res<Time>,
+    settings: Res<Settings>,
+    shown: Option<Res<ShownScene>>,
+    level: Res<LevelCollision>,
+    probes: Option<Res<crate::render::probes::ProbeAtlas>>,
+    mut cameras: Query<(&SceneView, &mut AmbientLight)>,
+) {
+    let environment = shown.as_deref().and_then(|shown| Some((shown, shown.lighting.as_deref()?))).filter(|_| settings.modern_graphics());
+    let step = settle_step(time.delta_secs(), ZONE_AMBIENT_BLEND_SECONDS);
+    for (view, mut ambient) in &mut cameras {
+        let wanted = match environment {
+            Some((shown, environment)) => {
+                let position = p2_bevy_assets::to_bevy(view.position - shown.origin);
+                let zone = level.model().map_or(0, |model| p2_collision::point_zone(model, position.into()));
+                let [r, g, b] = environment.zone_ambients.get(usize::from(zone)).copied().unwrap_or_default();
+                let target = LinearRgba::new(r, g, b, probes.as_ref().map_or(0.0, |probes| probes.spacing));
+                let color = if ambient.brightness == 1.0 { blend_ambient(ambient.color.to_linear(), target, step) } else { target };
+                AmbientLight { color: Color::LinearRgba(color), brightness: 1.0, affects_lightmapped_meshes: false }
+            }
+            None => AmbientLight { affects_lightmapped_meshes: false, ..AmbientLight::default() },
+        };
+        if ambient.color != wanted.color || ambient.brightness != wanted.brightness {
+            *ambient = wanted;
+        }
+    }
+}
+
+fn blend_ambient(shown: LinearRgba, target: LinearRgba, t: f32) -> LinearRgba {
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    let blended = LinearRgba::new(mix(shown.red, target.red), mix(shown.green, target.green), mix(shown.blue, target.blue), target.alpha);
+    let near = [blended.red - target.red, blended.green - target.green, blended.blue - target.blue].iter().all(|d| d.abs() < 1.0 / 512.0);
+    if near { target } else { blended }
+}
+
+/// Bevy's shadow pass takes the material's cull mode, and a level's faces look into its empty space: from the sun's side
+/// a sealed room's roof is a back face. Only directional shadow views have this key.
+pub(crate) fn cast_both_sides(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
+    if key.contains(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO) {
+        descriptor.primitive.cull_mode = None;
+    }
+}
 
 fn sun_casters(
     settings: Res<Settings>,
+    stale: Res<SunCacheStale>,
     mut on_before: Local<bool>,
     mut commands: Commands,
-    all: Query<Entity, (With<Mesh3d>, Dynamic)>,
+    all: Query<Entity, With<Mesh3d>>,
     changed: Query<
         Entity,
         (
             With<Mesh3d>,
-            Dynamic,
-            Or<(Added<Mesh3d>, Changed<RenderLayers>, Added<CanvasDrawn>, Changed<MeshMaterial3d<MeshLitMaterial>>, Changed<MeshMaterial3d<ActorLitMaterial>>, Changed<MeshMaterial3d<StandardMaterial>>)>,
+            Or<(
+                Added<Mesh3d>,
+                Changed<StillProp>,
+                Changed<RenderLayers>,
+                Added<CanvasDrawn>,
+                Changed<MeshMaterial3d<LightmappedMaterial>>,
+                Changed<MeshMaterial3d<MeshLitMaterial>>,
+                Changed<MeshMaterial3d<ActorLitMaterial>>,
+                Changed<MeshMaterial3d<StandardMaterial>>,
+            )>,
         ),
     >,
 ) {
-    let on = settings.modern_effect(MODERN_SHADOWS);
+    let on = settings.modern_level(MODERN_SHADOWS) > 0;
     let flipped = std::mem::replace(&mut *on_before, on) != on;
     if !on && !flipped {
         return;
     }
     let mut retag = |entity: Entity| {
+        let stale = stale.clone();
         commands.entity(entity).queue_silenced(move |mut entity: EntityWorldMut| {
             let current = entity.get::<RenderLayers>().cloned().unwrap_or_default();
-            let wanted = caster_layers(&current, on && !entity.contains::<CanvasDrawn>() && !is_see_through(&entity));
+            let casts = on && !entity.contains::<CanvasDrawn>() && !entity.contains::<NoSunCast>() && !is_see_through(&entity);
+            let still = entity.get::<StillProp>().is_some_and(|still| still.0);
+            let mover = (entity.contains::<FollowActor>() || entity.contains::<FollowBone>()) && !still;
+            let wanted = caster_layers(&current, casts, mover);
             if wanted != current {
+                let cached = RenderLayers::layer(STATIC_CASTER_LAYER);
+                if wanted.intersects(&cached) != current.intersects(&cached) {
+                    stale.mark_near();
+                }
                 entity.insert(wanted);
             }
         });
@@ -360,8 +619,7 @@ fn sun_casters(
     }
 }
 
-/// Glass, fading and additive surfaces let the sun through; an opaque shadow from them cuts a hard shape out of a soft
-/// baked sun patch. Masked ones keep casting, with their holes.
+/// Glass, fading and additive surfaces let the sun through; masked ones keep casting, with their holes.
 fn see_through_mode(mode: AlphaMode) -> bool {
     match mode {
         AlphaMode::Opaque | AlphaMode::AlphaToCoverage => false,
@@ -389,163 +647,13 @@ fn is_see_through(entity: &EntityWorldMut) -> bool {
             .is_some_and(see_through_mode)
 }
 
-fn caster_layers(layers: &RenderLayers, casts: bool) -> RenderLayers {
-    let world = layers.intersects(&RenderLayers::layer(0)) && !layers.intersects(&RenderLayers::from_layers(&OVERLAY_LAYERS));
-    if casts && world { layers.clone().with(CASTER_LAYER) } else { layers.clone().without(CASTER_LAYER) }
+fn caster_layers(layers: &RenderLayers, casts: bool, mover: bool) -> RenderLayers {
+    let world = layers.intersects(&RenderLayers::from_layers(&[0, CASTER_LAYER])) && !layers.intersects(&RenderLayers::from_layers(&OVERLAY_LAYERS));
+    let casts = casts && world;
+    let on_layer = |layers: RenderLayers, layer: usize, wanted: bool| if wanted { layers.with(layer) } else { layers.without(layer) };
+    let tagged = on_layer(on_layer(layers.clone(), CASTER_LAYER, casts), MOVER_LAYER, casts && mover);
+    on_layer(tagged, STATIC_CASTER_LAYER, casts && !mover)
 }
 
 #[cfg(test)]
-mod tests {
-    use bevy::ecs::message::Messages;
-    use bevy::ecs::system::RunSystemOnce;
-    use bevy::ecs::world::World;
-    use bevy::pbr::StandardMaterial;
-
-    use super::*;
-    use crate::render::blended::TerrainLayer;
-    use crate::display::MODERN_GRAPHICS;
-    use crate::render::terrain_material::TerrainLayers;
-
-    #[test]
-    fn every_material_kind_follows_the_setting() {
-        let mut world = World::new();
-        let base = StandardMaterial::default;
-        let mut lightmapped = Assets::<LightmappedMaterial>::default();
-        let bsp = lightmapped.add(LightmappedMaterial { base: base(), extension: BakedLight::default() });
-        let mut meshes = Assets::<MeshLitMaterial>::default();
-        let mesh = meshes.add(MeshLitMaterial { base: base(), extension: DynamicLit::default() });
-        let mut actors = Assets::<ActorLitMaterial>::default();
-        let actor = actors.add(ActorLitMaterial { base: base(), extension: HardwareLighting::default() });
-        let mut terrain = Assets::<TerrainMaterial>::default();
-        let ground = terrain.add(TerrainMaterial { base: base(), extension: TerrainLayers::default() });
-        let mut terrain_layers = Assets::<TerrainLayerMaterial>::default();
-        let layer = terrain_layers.add(TerrainLayerMaterial { base: base(), extension: TerrainLayer::default() });
-        world.insert_resource(lightmapped);
-        world.insert_resource(meshes);
-        world.insert_resource(actors);
-        world.insert_resource(terrain);
-        world.insert_resource(terrain_layers);
-        world.init_resource::<Messages<AssetEvent<LightmappedMaterial>>>();
-        world.init_resource::<Messages<AssetEvent<MeshLitMaterial>>>();
-        world.init_resource::<Messages<AssetEvent<ActorLitMaterial>>>();
-        world.init_resource::<Messages<AssetEvent<TerrainMaterial>>>();
-        world.init_resource::<Messages<AssetEvent<TerrainLayerMaterial>>>();
-        let mut flags = |on: bool| {
-            let value = if on { "True" } else { "False" };
-            world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() }));
-            world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
-            world.run_system_once(follow_flag::<MeshLitMaterial>).unwrap();
-            world.run_system_once(follow_flag::<ActorLitMaterial>).unwrap();
-            world.run_system_once(follow_flag::<TerrainMaterial>).unwrap();
-            world.run_system_once(follow_flag::<TerrainLayerMaterial>).unwrap();
-            [
-                world.resource::<Assets<LightmappedMaterial>>().get(&bsp).unwrap().extension.layers.detail.z > 0.5,
-                world.resource::<Assets<MeshLitMaterial>>().get(&mesh).unwrap().extension.layers.detail.z > 0.5,
-                world.resource::<Assets<ActorLitMaterial>>().get(&actor).unwrap().extension.layers.detail.z > 0.5,
-                world.resource::<Assets<TerrainMaterial>>().get(&ground).unwrap().extension.params.count.y == 1,
-                world.resource::<Assets<TerrainLayerMaterial>>().get(&layer).unwrap().extension.layers.detail.z > 0.5,
-            ]
-        };
-        assert_eq!(flags(true), [true; 5]);
-        assert_eq!(flags(false), [false; 5]);
-        assert_eq!(flags(true), [true; 5]);
-    }
-
-    #[test]
-    fn every_material_gets_the_flag_once() {
-        let mut world = World::new();
-        let mut materials = Assets::<LightmappedMaterial>::default();
-        let ids: Vec<_> = (0..3).map(|_| materials.add(LightmappedMaterial { base: StandardMaterial::default(), extension: BakedLight::default() })).collect();
-        world.insert_resource(materials);
-        world.init_resource::<Messages<AssetEvent<LightmappedMaterial>>>();
-        world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
-        world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
-        let bits = modern_flag(world.resource::<Settings>());
-        assert!(bits & MODERN_ON != 0);
-        let materials = world.resource::<Assets<LightmappedMaterial>>();
-        assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| material.flag() == bits)));
-    }
-
-    #[test]
-    fn the_modern_flag_holds_each_effect_and_round_trips() {
-        let settings = |master: &str, relief: &str, specular: &str| {
-            Settings::read(|query| match query {
-                MODERN_GRAPHICS => master.to_owned(),
-                MODERN_RELIEF => relief.to_owned(),
-                MODERN_SPECULAR => specular.to_owned(),
-                _ => String::new(),
-            })
-        };
-        assert_eq!(modern_flag(&settings("False", "False", "False")), 0);
-        assert_eq!(modern_flag(&settings("True", "", "")), MODERN_ON);
-        assert_eq!(modern_flag(&settings("True", "False", "True")), MODERN_ON | NO_RELIEF);
-        assert_eq!(modern_flag(&settings("True", "True", "False")), MODERN_ON | NO_GLOSS);
-        assert_eq!(modern_flag(&settings("True", "False", "False")), MODERN_ON | NO_RELIEF | NO_GLOSS);
-        for bits in 0..8u8 {
-            let flag = f32::from(bits);
-            assert_eq!(u32::from(bits), (flag.max(0.0) + 0.5) as u32);
-        }
-    }
-
-    fn light(effect: p2_render_cpu::LightEffect, brightness: f32, x: f32) -> MeshLight {
-        MeshLight { light_type: p2_render_cpu::LightType(1), effect, brightness, location: Vector::from([x, 0.0, 0.0]), ..MeshLight::default() }
-    }
-
-    #[test]
-    fn the_brightest_sun_is_picked_and_none_without_sun() {
-        let lights = [light(p2_render_cpu::LightEffect(0), 255.0, 1.0), light(LE_SUNLIGHT, 64.0, 2.0), light(LE_SUNLIGHT, 200.0, 3.0), light(LE_SUNLIGHT, 100.0, 4.0)];
-        let (picked, sun) = brightest_sun(&lights, 1.0).expect("a sun");
-        assert_eq!(<[f32; 3]>::from(picked.location), [3.0, 0.0, 0.0]);
-        assert_eq!(sun.kind, p2_render_cpu::HardwareKind::Directional);
-        let baked = picked.color(1.0);
-        assert!((sun.color[0] - 0.875 * baked[0]).abs() < 1e-6);
-        assert!(brightest_sun(&lights[..1], 1.0).is_none());
-        assert!(brightest_sun(&[] as &[MeshLight], 1.0).is_none());
-    }
-
-    #[test]
-    fn casters_carry_the_caster_layer_only_in_the_world() {
-        let world = RenderLayers::layer(0);
-        let tagged = RenderLayers::from_layers(&[0, CASTER_LAYER]);
-        assert!(caster_layers(&world, true) == tagged);
-        assert!(caster_layers(&tagged, true) == tagged);
-        assert!(caster_layers(&tagged, false) == world);
-        let overlay = RenderLayers::layer(OVERLAY_LAYERS[0]);
-        assert!(caster_layers(&overlay, true) == overlay);
-        let sky = RenderLayers::layer(crate::components::SKY_LAYER);
-        assert!(caster_layers(&sky, true) == sky);
-        let view = RenderLayers::from_layers(&[0, SUN_VIEW_LAYER]);
-        assert!(!view.intersects(&RenderLayers::layer(CASTER_LAYER)));
-        assert!(!RenderLayers::from_layers(&OVERLAY_LAYERS).intersects(&RenderLayers::from_layers(&[SUN_VIEW_LAYER, CASTER_LAYER])));
-    }
-
-    #[test]
-    fn see_through_surfaces_do_not_cast() {
-        for mode in [AlphaMode::Blend, AlphaMode::Premultiplied, AlphaMode::Add, AlphaMode::Multiply, AlphaMode::Mask(2.0)] {
-            assert!(see_through_mode(mode));
-        }
-        for mode in [AlphaMode::Opaque, AlphaMode::Mask(0.5)] {
-            assert!(!see_through_mode(mode));
-        }
-    }
-
-    #[test]
-    fn only_dynamic_world_meshes_cast() {
-        let settings = |on: &'static str| Settings::read(move |query| if query == MODERN_GRAPHICS { on.to_owned() } else { String::new() });
-        let mut world = World::new();
-        world.insert_resource(settings("True"));
-        let follow = FollowActor { actor: p2_vm::ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };
-        let floor = world.spawn(Mesh3d::default()).id();
-        let prop = world.spawn((Mesh3d::default(), follow)).id();
-        let weapon = world.spawn((Mesh3d::default(), follow, RenderLayers::layer(OVERLAY_LAYERS[0]))).id();
-        let hud = world.spawn((Mesh3d::default(), follow, CanvasDrawn(0))).id();
-        let system = world.register_system(sun_casters);
-        world.run_system(system).unwrap();
-        let casts = |world: &World, entity: Entity| world.get::<RenderLayers>(entity).is_some_and(|layers| layers.intersects(&RenderLayers::layer(CASTER_LAYER)));
-        assert!(casts(&world, prop));
-        assert!(!casts(&world, floor) && !casts(&world, weapon) && !casts(&world, hud));
-        world.insert_resource(settings("False"));
-        world.run_system(system).unwrap();
-        assert!(!casts(&world, prop));
-    }
-}
+mod tests;

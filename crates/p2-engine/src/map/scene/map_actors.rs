@@ -105,7 +105,8 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
         };
         let instance = (!actor.lighting.unlit).then_some((actor.instance, lighting));
         // Movers are not level collision: retail particles trace only the level and its static geometry.
-        let placement = (actor.blocks && !actor.movable).then_some(Placement { location: actor.location, rotation: actor.rotation, scale: actor.scale, pre_pivot: actor.pre_pivot });
+        let fixed = (!actor.movable).then_some(Placement { location: actor.location, rotation: actor.rotation, scale: actor.scale, pre_pivot: actor.pre_pivot });
+        let placement = fixed.filter(|_| actor.blocks);
         // Merged sections take every untagged projector and no tagged one: a model of its own carries the actor's own answer
         // (`Session::update_projections`).
         let aimed_at = matches!(vm.store.get(actor.object, p2_vm::Prop::Tag), Some(p2_vm::Value::Name(tag)) if project_tags.contains(&tag));
@@ -117,7 +118,7 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
         let only_from = actor.forced_zone_tag.as_ref().map(|tag| {
             (0..=u8::MAX).filter(|&zone| zone_tags.get(usize::from(zone)).is_some_and(|zone_tag| zone_tag.as_ref() == Some(tag))).collect::<Vec<_>>()
         });
-        mesh_paths.entry((actor.static_mesh, actor.skins)).or_default().push(MeshPlacing { transform, instance, placement, follow, movable: actor.movable, only_from });
+        mesh_paths.entry((actor.static_mesh, actor.skins)).or_default().push(MeshPlacing { transform, instance, placement, follow, fixed, only_from });
     }
     for &object in &zone_actors {
         zone_fogs.push(object.and_then(|object| zone_fog(&vm, object)));

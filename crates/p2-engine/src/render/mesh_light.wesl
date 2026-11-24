@@ -6,8 +6,11 @@ import bevy_pbr::{
     },
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, mesh_target, project};
-import package::p2_engine::dynamic_light::{dynamic_light, dynamic_light_relief};
-import package::p2_engine::modern::{base_relief, is_modern, key_shading, static_occlusion, to_eye};
+import package::p2_engine::dynamic_light::dynamic_light;
+import package::p2_engine::modern::{
+    allows_gloss, ambient_occlusion, base_relief, has_sun, is_modern, is_see_through, lamp_light, modern_glass, modern_surface, sun_seen,
+    surface_of, with_light,
+};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 @if(BINDLESS)
@@ -36,18 +39,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     color.a *= in.color.a;
     var light = in.color.rgb;
     let normal = normalize(pbr_input.world_normal);
-    if is_modern(layers.detail.z) {
-        let position = pbr_input.world_position;
-        let relief = base_relief(in, pbr_input, normal, layers.specular.x, layers.detail.z);
-        let key = key_shading(normal, relief, position.xyz);
-        let lights = dynamic_light_relief(position, relief, to_eye(position.xyz), ranges);
-        light *= static_occlusion(position.xyz, normal, pbr_input.frag_coord.xy);
-        let baked = key.x * to_display(light) / 2.0;
-        let lit = to_linear(2.0 * min(baked + lights.diffuse, vec3(1.0)));
-        if layers.blend.x == 0.0 {
-            color = vec4(color.rgb * lit + key.y * light + lights.specular, color.a);
+    if is_modern(layers.detail.z) && has_sun() {
+        let position = pbr_input.world_position.xyz;
+        let seen = sun_seen(pbr_input.world_position, normal, pbr_input.frag_coord.xy);
+        let bumped = base_relief(in, pbr_input, normal, layers.detail.z);
+        let darken = layers.blend.x != 0.0;
+        let gloss = allows_gloss(layers.detail.z) && !darken;
+        let material_surface = surface_of(0.0);
+        let lamps = lamp_light(in, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface);
+        let occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
+        let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);
+        if darken {
+            let white = modern_surface(vec3(1.0), position, bumped, seen, occlusion, gloss, lamps, material_surface);
+            color = vec4(lit_color(layers, color.rgb, with_light(white, vec3(1.0), dynamic)), color.a);
+        } else if is_see_through(pbr_input.material.flags) {
+            let glass = modern_glass(color, position, bumped, seen, occlusion, gloss, lamps, material_surface);
+            color = vec4(with_light(glass.rgb, color.rgb, dynamic), glass.a);
         } else {
-            color = vec4(lit_color(layers, color.rgb, lit), color.a);
+            let lit = modern_surface(color.rgb, position, bumped, seen, occlusion, gloss, lamps, material_surface);
+            color = vec4(with_light(lit, color.rgb, dynamic), color.a);
         }
     } else {
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);

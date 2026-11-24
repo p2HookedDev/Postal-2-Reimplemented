@@ -1,5 +1,6 @@
 pub use crate::components::{CanvasDrawn, FollowActor, OVERLAY_LAYERS, SKY_LAYER};
 pub use crate::shown_scene::ShownScene;
+pub use crate::level_collision::{LevelAlbedos, LevelCollision, StaticCollision};
 pub use crate::components::{ActorModel, SceneView};
 pub(crate) use crate::components::CanvasLayer;
 use std::collections::HashMap;
@@ -58,8 +59,7 @@ use crate::render::mesh_light::{DynamicLit, MeshLitMaterial};
 use crate::render::modern::{CASTER_LAYER, SunShadow};
 use crate::render::shader_layers::{Layers, ShaderLayers};
 use crate::render::terrain_material::{TerrainLayers, TerrainMaterial, TerrainPassLayer};
-use crate::display::{MODERN_AO, Settings};
-use crate::level_collision::{LevelCollision, StaticCollision};
+use crate::display::Settings;
 use p2_render_cpu::{AntiportalActor, Plane, VisibleZones, ZonePortals};
 use p2_vm::ObjectId;
 mod sections;
@@ -82,6 +82,7 @@ pub use restyle::{SwitchedLook, restyle_switched};
 #[cfg(test)]
 use zone_culling::{follower_zones, layers_by_zone};
 pub(crate) use zone_culling::{bounds, merged_box, sky_and_world};
+pub use zone_culling::{NoSunCast, SeenWithin};
 
 pub struct MeshViewPlugin;
 
@@ -159,11 +160,11 @@ fn steady_decal_order(settings: Option<ResMut<GlobalClusterSettings>>) {
     }
 }
 
-/// The 3D cameras draw into one target, so they must agree. Off unless set, as Bevy's default 4× costs every pass (the
+/// The cameras, 2D ones included, draw into one target, so they must agree. Off unless set, as Bevy's default 4× costs every pass (the
 /// depth prepass included); a host without settings (the asset viewer) keeps it off. Ambient occlusion needs it off.
-fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera3d>>) {
+fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera>>) {
     let Some(settings) = settings.filter(|settings| settings.is_changed()) else { return };
-    let wanted = if settings.modern_effect(MODERN_AO) { Msaa::Off } else { Msaa::from_samples(settings.msaa_samples()) };
+    let wanted = Msaa::from_samples(settings.msaa_samples());
     for mut msaa in &mut cameras {
         msaa.set_if_neq(wanted);
     }
@@ -173,6 +174,8 @@ pub struct ModelView {
     pub sections: Vec<SectionView>,
     pub instances: Vec<Transform>,
     pub zone: Option<ZoneCulled>,
+    /// Into the sun's shadow, when drawn by the world pass and solid.
+    pub casts: bool,
 }
 
 /// Things placed while the game runs (particles, coronas): their draws join the sky camera, the view or both by the
@@ -210,6 +213,7 @@ pub struct Scene {
     pub actors: Vec<MovingModel<FollowActor>>,
     pub attachments: Vec<MovingModel<FollowBone>>,
     pub lighting: Option<Arc<LightEnvironment>>,
+    pub light_bakes: Option<Arc<crate::render::lamps::LightBakes>>,
     pub antiportals: Vec<AntiportalActor>,
     pub light_maps: Vec<Option<Handle<Image>>>,
 }
@@ -293,7 +297,8 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
     commands.spawn((
         Camera3d::default(),
         plain_output(),
-        Camera { is_active: false, ..Default::default() },
+        // Below 0, where the tone pass draws the finished world image before the canvas layers.
+        Camera { is_active: false, order: -1, ..Default::default() },
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
         Transform::default(),
         SceneView::default(),
@@ -308,7 +313,7 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         Camera3d::default(),
         plain_output(),
         AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
-        Camera { is_active: false, order: -1, ..Default::default() },
+        Camera { is_active: false, order: -2, ..Default::default() },
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
         Transform::default(),
         SkyCamera { position: None },
@@ -381,7 +386,7 @@ fn apply_change(
         }
         return;
     };
-    let Scene { models, center, radius, sky, start, collision, fogs, decals, actors, attachments, lighting, antiportals, light_maps } = *scene;
+    let Scene { models, center, radius, sky, start, collision, fogs, decals, actors, attachments, lighting, light_bakes, antiportals, light_maps } = *scene;
     let sky_zone = sky.as_ref().map(|sky| sky.zone);
     let (sky, sky_models) = sky.map_or((None, Vec::new()), |sky| (Some((sky.position - center, sky.rotation)), sky.models));
     for mut sky_camera in &mut skies {
@@ -390,7 +395,7 @@ fn apply_change(
     let portals = collision.as_ref().map(|collision| Arc::new(ZonePortals::new(&collision.model, antiportals)));
     let start = start.map(|(position, yaw)| (position - center, yaw));
     *level = LevelCollision(collision.map(Arc::new));
-    *shown = ShownScene { fogs, volume_fog: None, origin: -center, portals, lighting, radius, start, light_maps, sky_zone };
+    *shown = ShownScene { fogs, volume_fog: None, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone };
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }
@@ -437,6 +442,7 @@ fn apply_change(
                         let placement = WorldPlacement {
                             world_from_local: Transform::from_translation(-center).compute_affine() * instance.compute_affine(),
                             chunks: chunks.clone(),
+                            casts: model.casts,
                             zone: model.zone.as_ref().filter(|zone| zone.zones.len() == 1).map(|zone| zone.zones[0]),
                         };
                         world.add(mesh, material, lightmap.as_ref().map(|lightmap| &lightmap.image), placement);
@@ -449,6 +455,9 @@ fn apply_change(
                     }
                     if in_sky {
                         entity.insert(RenderLayers::layer(SKY_LAYER));
+                    }
+                    if !model.casts {
+                        entity.insert(NoSunCast);
                     }
                     if let Some(sort_node) = sort_node {
                         entity.insert(*sort_node);

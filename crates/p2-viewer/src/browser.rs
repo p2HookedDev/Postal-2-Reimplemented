@@ -359,7 +359,7 @@ fn show_static_mesh(open: &OpenPackage, index: usize, library: &mut Library, roo
         Ok(_) => format!(", {textured} textured"),
         Err(e) => format!(" (no textures: {e})"),
     };
-    show_model(&mut t.scene, ModelView { sections, instances: vec![Transform::IDENTITY], zone: None }, min, max);
+    show_model(&mut t.scene, ModelView { sections, instances: vec![Transform::IDENTITY], zone: None, casts: true }, min, max);
     Ok(format!("{status}{textures}"))
 }
 
@@ -398,7 +398,7 @@ fn show_skeletal_mesh(open: &OpenPackage, index: usize, library: &mut Library, r
         }
         None => String::new(),
     };
-    show_model(&mut t.scene, ModelView { sections, instances: vec![placement], zone: None }, min, max);
+    show_model(&mut t.scene, ModelView { sections, instances: vec![placement], zone: None, casts: true }, min, max);
     Ok(format!("{status}, {textured} textured{playing}"))
 }
 
@@ -419,6 +419,7 @@ fn show_model(t: &mut SceneTargets, model: ModelView, min: Vec3, max: Vec3) {
         actors: Vec::new(),
         attachments: Vec::new(),
         lighting: None,
+        light_bakes: None,
         antiportals: Vec::new(),
         light_maps: Vec::new(),
     })));

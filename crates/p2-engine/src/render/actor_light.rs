@@ -9,10 +9,10 @@ use bevy::ecs::system::SystemParam;
 use bevy::time::Time;
 use bevy::math::{Vec3, Vec4};
 use bevy::image::Image;
-use bevy::mesh::{Mesh, Mesh3d};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MeshMaterial3d, StandardMaterial};
+use bevy::mesh::{Mesh, Mesh3d, MeshVertexBufferLayoutRef};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MeshMaterial3d, StandardMaterial};
 use bevy::reflect::Reflect;
-use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::{Shader, ShaderRef};
 use p2_math::{Rotator, Vector};
 use p2_assets::{Model, SkeletalMesh, StaticMesh, StaticMeshInstance, uv_matrix};
@@ -23,12 +23,16 @@ use p2_vm::ObjectId;
 use crate::render::mesh_light::MeshLitMaterial;
 use crate::mesh_view::set_specular_uv;
 use crate::components::{CanvasDrawn, OVERLAY_LAYERS};
+use crate::display::Settings;
 use crate::shown_scene::ShownScene;
-use crate::level_collision::LevelCollision;
+use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::render::shader_layers::{Layers, ShaderLayers};
 use crate::render::shaders::add_material;
 
 pub use p2_render_cpu::MAX_HARDWARE_LIGHTS;
+
+mod view_model;
+pub use view_model::view_model_lighting;
 
 pub const DEFAULT_MAX_LIGHTS: u8 = 4;
 
@@ -133,6 +137,8 @@ pub type ActorLitMaterial = ExtendedMaterial<StandardMaterial, HardwareLighting>
 pub struct HardwareLighting {
     pub lighting: SkinnedLighting,
     pub layers: ShaderLayers,
+    /// 1 when the overlay camera draws it: no tone pass follows that camera, so under modern the shader applies the curve.
+    pub overlay: u32,
     #[texture(101)]
     #[sampler(102)]
     pub detail: Option<Handle<Image>>,
@@ -147,7 +153,7 @@ pub struct HardwareLighting {
 impl HardwareLighting {
     pub fn new(lighting: SkinnedLighting, layers: &Layers) -> Self {
         let [detail, specular, flat_specular] = layers.images();
-        Self { lighting, layers: layers.params, detail, specular, flat_specular }
+        Self { lighting, layers: layers.params, overlay: 0, detail, specular, flat_specular }
     }
 }
 
@@ -155,11 +161,12 @@ impl HardwareLighting {
 pub struct ActorShading {
     pub lighting: SkinnedLighting,
     pub layers: ShaderLayers,
+    pub overlay: u32,
 }
 
 impl From<&HardwareLighting> for ActorShading {
     fn from(extension: &HardwareLighting) -> Self {
-        Self { lighting: extension.lighting, layers: extension.layers }
+        Self { lighting: extension.lighting, layers: extension.layers, overlay: extension.overlay }
     }
 }
 
@@ -204,6 +211,16 @@ impl HardwareLightUniform {
 const ACTOR_LIGHT_SHADER: Handle<Shader> = uuid_handle!("6d0f2c8e-4b71-4a39-9e15-c2a7f3b80d64");
 
 impl MaterialExtension for HardwareLighting {
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        crate::render::modern::cast_both_sides(descriptor, key.mesh_key);
+        Ok(())
+    }
+
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(ACTOR_LIGHT_SHADER)
     }
@@ -245,11 +262,12 @@ pub struct ActorFrame {
 pub struct ActorLightCache {
     lit: Option<ActorPlace>,
     vertices_lit_at: f32,
+    view_model: bool,
 }
 
 impl Default for ActorLightCache {
     fn default() -> Self {
-        Self { lit: None, vertices_lit_at: f32::MIN }
+        Self { lit: None, vertices_lit_at: f32::MIN, view_model: false }
     }
 }
 
@@ -378,6 +396,7 @@ pub(crate) struct ActorLightFrame<'w> {
     shown: Res<'w, ShownScene>,
     collision: Res<'w, LevelCollision>,
     time: Res<'w, Time>,
+    settings: Option<Res<'w, Settings>>,
 }
 
 #[derive(SystemParam)]
@@ -390,8 +409,10 @@ pub(crate) struct ActorLightAssets<'w> {
 
 struct RelightWorld<'a> {
     environment: &'a LightEnvironment,
+    level: &'a StaticCollision,
     model: &'a Model,
     origin: Vec3,
+    modern: bool,
 }
 
 struct StartingMaterial<'a> {
@@ -418,8 +439,9 @@ pub(crate) fn light_actors(
     canvases: Query<(), With<CanvasDrawn>>,
     mut buffers: Local<LightActorBuffers>,
 ) {
-    let (Some(environment), Some(model)) = (frames.shown.lighting.as_deref(), frames.collision.model()) else { return };
-    let world = RelightWorld { environment, model, origin: frames.shown.origin };
+    let (Some(environment), Some(level)) = (frames.shown.lighting.as_deref(), frames.collision.0.as_deref()) else { return };
+    let modern = frames.settings.as_deref().is_some_and(Settings::modern_graphics);
+    let world = RelightWorld { environment, level, model: &level.model, origin: frames.shown.origin, modern };
     let step = settle_step(frames.time.delta_secs(), LIGHT_SETTLE_SECONDS);
     let now = frames.time.elapsed_secs();
     let LightActorBuffers { colors, hud_bases } = &mut *buffers;
@@ -435,7 +457,8 @@ pub(crate) fn light_actors(
     }
     let overlay_layers = RenderLayers::from_layers(&OVERLAY_LAYERS);
     for (entity, mut lit, mut cache, mut fade, own, mesh, standard, vertex_lit, canvas, layers) in &mut models {
-        let base = (!canvas && layers.is_some_and(|layers| layers.intersects(&overlay_layers)))
+        let overlay = layers.is_some_and(|layers| layers.intersects(&overlay_layers));
+        let base = (!canvas && overlay)
             .then_some(own.base)
             .flatten()
             .and_then(|base| hud_bases.get(&base).copied());
@@ -445,7 +468,13 @@ pub(crate) fn light_actors(
         }
         let vertices = matches!(lit.shading, Shading::Vertices { .. });
         let last = cache.lit.or(lit.baked);
-        let unmoved = last.is_some_and(|at| !moved((at.location, at.rotation), (frame.location, frame.rotation), vertices) && at.glow == frame.glow);
+        // Modern reads neither hardware lights nor vertex colours; the stale cache makes retail relight a moved actor.
+        if modern && !overlay && last.is_some() && (vertices || fade.material.is_some()) {
+            continue;
+        }
+        let view_model = modern && overlay;
+        let unmoved = cache.view_model == view_model
+            && last.is_some_and(|at| !moved((at.location, at.rotation), (frame.location, frame.rotation), vertices) && at.glow == frame.glow);
         let still = unmoved && !colors.contains_key(&lit.actor);
         if still && !fade.settling {
             continue;
@@ -458,13 +487,14 @@ pub(crate) fn light_actors(
             if !relight_vertices(&lit, frame, &mesh.0, &world, colors, &mut assets.meshes) {
                 continue;
             }
-        } else if let Some(handle) = relight_tint(&lit, &mut fade, still, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
+        } else if let Some(handle) = relight_tint(&lit, &mut fade, still, overlay, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
             commands
                 .entity(entity)
                 .remove::<(MeshMaterial3d<StandardMaterial>, MeshMaterial3d<MeshLitMaterial>)>()
                 .insert(MeshMaterial3d(handle));
         }
         cache.lit = Some(frame);
+        cache.view_model = view_model;
     }
 }
 
@@ -505,9 +535,10 @@ fn relight_vertices(lit: &ActorLit, frame: ActorPlace, target: &Handle<Mesh>, wo
 }
 
 #[expect(clippy::too_many_arguments, reason = "the parts of one actor's light state and of the frame")]
-fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, frame: ActorPlace, step: f32, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
+fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, overlay: bool, frame: ActorPlace, step: f32, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
     let target = match fade.target {
         Some(target) if still => target,
+        _ if world.modern && overlay => view_model_lighting(world.environment, world.level, world.origin, frame.location),
         _ => world.environment.skinned_lighting(world.model, frame.location, lit.radius, frame.glow, lit.max_lights, world.origin),
     };
     fade.target = Some(target);
@@ -515,15 +546,18 @@ fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, frame: A
         let vertex_lit = start.vertex_lit.and_then(|m| assets.mesh_lit.get(&m.0));
         let base = start.standard.and_then(|s| assets.materials.get(&s.0)).or_else(|| vertex_lit.map(|m| &m.base));
         let base = lit.layers.lit(base.cloned().unwrap_or_default());
-        let handle = assets.lit_materials.add(ActorLitMaterial { base, extension: HardwareLighting::new(target, &lit.layers) });
+        let handle = assets.lit_materials.add(ActorLitMaterial { base, extension: HardwareLighting { overlay: u32::from(overlay), ..HardwareLighting::new(target, &lit.layers) } });
         fade.material = Some(handle.clone());
         return Some(handle);
     };
-    let drawn = assets.lit_materials.get(handle).map(|m| m.extension.lighting);
-    let stepped = fade_step(drawn, fade.shown, target, step);
+    let drawn = assets.lit_materials.get(handle).map(|m| (m.extension.lighting, m.extension.overlay));
+    let stepped = fade_step(drawn.map(|(lighting, _)| lighting), fade.shown, target, step);
     fade.shown = Some(stepped.shown);
-    if stepped.write && let Some(mut material) = assets.lit_materials.get_mut(handle) {
+    // A weapon gets its overlay layer after its material is made, and the shader picks its light by this.
+    let overlay = u32::from(overlay);
+    if (stepped.write || drawn.is_some_and(|(_, drawn)| drawn != overlay)) && let Some(mut material) = assets.lit_materials.get_mut(handle) {
         material.extension.lighting = stepped.shown;
+        material.extension.overlay = overlay;
     }
     fade.settling = !stepped.arrived;
     None

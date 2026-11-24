@@ -24,12 +24,15 @@ fn an_actor_is_lit_from_the_frame_on_its_entity() {
     let mut world = bevy::ecs::world::World::new();
     let environment = LightEnvironment { lights: FxHashMap::default(), zone_ambients: vec![[0.5; 3]; 3], level_brightness: 1.0, sun: None, terrain: Vec::new() };
     world.insert_resource(ShownScene { lighting: Some(Arc::new(environment)), ..ShownScene::default() });
-    let collision = crate::level_collision::StaticCollision {
+    let collision = StaticCollision {
         model: crate::mesh_view::tests::two_zones(),
         hulls: p2_collision::BspHulls::default(),
         terrains: Vec::new(),
         meshes: Vec::new(),
         mesh_set: p2_collision::MeshSet::default(),
+        lamp_casters: Vec::new(),
+        lamp_masked: Vec::new(),
+        albedos: crate::level_collision::LevelAlbedos::default(),
     };
     world.insert_resource(LevelCollision(Some(Arc::new(collision))));
     world.init_resource::<Time>();

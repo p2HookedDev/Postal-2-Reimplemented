@@ -65,7 +65,7 @@ properties!(
     OverlayYPos, OverlayStyle, PathList, End, RouteCache, bBlocked, bCanCrouch, MaxFallSpeed, ExtraCost, RouteDist,
     bCanWalk, NextNode, HomeNodeLists, PathNodeList, Buoyancy, bWaterVolume, bBounceVelocity, CullTag, FluidFriction, bNoPhysicalLadder,
     LadderSpeed, bTrailerSameRotation, bTrailerPrePivot, Inventory, bTravel, ForceType,
-    bOwnerNoSee, bOnlyOwnerSee, bDynamicLight,
+    bOwnerNoSee, bOnlyOwnerSee, bDynamicLight, bSpecialLit,
     LightType, LightBrightness, LightHue, LightSaturation, LightRadius, LightCone, LightPeriod, LightPhase, LightEffect, bCorona,
     noise1spot, noise1time, noise1loudness, noise2spot, noise2time, noise2loudness,
     SubtitleManager, SubSound, InvalidSounds, PendingSounds, InvalidTime,

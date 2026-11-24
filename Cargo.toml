@@ -16,7 +16,6 @@ p2-bevy-assets = { path = "crates/p2-bevy-assets" }
 p2-script = { path = "crates/p2-script" }
 p2-vm = { path = "crates/p2-vm" }
 p2-collision = { path = "crates/p2-collision" }
-p2-bake = { path = "crates/p2-bake" }
 p2-engine = { path = "crates/p2-engine" }
 p2-particles = { path = "crates/p2-particles" }
 p2-render-cpu = { path = "crates/p2-render-cpu" }
@@ -106,8 +105,6 @@ opt-level = 3
 [profile.dev.package.p2-script]
 opt-level = 3
 [profile.dev.package.p2-collision]
-opt-level = 3
-[profile.dev.package.p2-bake]
 opt-level = 3
 [profile.dev.package.p2-assets]
 opt-level = 3

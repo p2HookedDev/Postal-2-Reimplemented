@@ -1,9 +1,9 @@
 # P2Modern: the Modern Graphics menu package
 
-Our own UnrealScript package that adds a "Modern Graphics" row to the Options menu and a page of checkboxes for
-the modern graphics (master switch, sun shadows, contact shadows, ambient occlusion, surface relief, generated
-specular, bloom and sharpening, relit world, rounded terrain). It is our code, not retail's; it uses only the stock Shell
-menu helpers, so it looks like the retail pages.
+Our own UnrealScript package that adds a "Modern Graphics" row to the Options menu and three pages for the modern
+graphics: a main page (master switch, quality preset), "Shadows and lighting" and "Image and effects", with combos,
+sliders and boxes. It is our code, not retail's; it uses only the stock Shell menu helpers (`AddComboBox`,
+`AddSlider`, `AddCheckbox`), so it looks like the retail pages.
 
 ## Classes
 
@@ -12,10 +12,24 @@ menu helpers, so it looks like the retail pages.
 - `ModernMenuMain` extends retail `Shell.MenuMain`: adds the POSTAL 4 banner, or the Paradise Lost one when POSTAL 4
   is owned, without retail's Steam build check. The host answers `SteamOwnsGame` / `SteamOwnsDLC` from Steam's
   installed apps.
-- `ModernMenuGraphics` extends `Shell.ShellMenuCW`: one checkbox per render device key. Each reads with
-  `get ini:Engine.Engine.RenderDevice <Key>` on open and writes `set ini:Engine.Engine.RenderDevice <Key> True|False`
-  on change. Keys: `ModernGraphics` (master), `ModernShadows`, `ModernContactShadows`, `ModernAO`, `ModernRelief`,
-  `ModernSpecular`, `ModernPost`, `ModernBake`, `ModernTerrainDetail`. Effect boxes are disabled and grey while the master is off.
+- `ModernMenuPage` extends `Shell.ShellMenuCW`: the shared base. Each row is one render device key, read with
+  `get ini:Engine.Engine.RenderDevice <Key>` on open (empty reads as the High preset value, old `True` / `False` as
+  High / 0) and written with `set ini:Engine.Engine.RenderDevice <Key> <Value>` on change: combos and sliders write a
+  number, boxes `True|False`. A row changed by hand also writes `ModernPreset 4` (Custom). While the master is off
+  every row is grey, and a change is undone.
+- `ModernMenuGraphics` extends `ModernMenuPage`: the main page. `ModernGraphics` box (master), `ModernPreset` combo
+  (0 Low, 1 Medium, 2 High, 3 Ultra, 4 Custom; Low to Ultra write every level key of the preset), rows that open the
+  three pages below, Back.
+- `ModernMenuLighting` extends `ModernMenuPage`: `ModernSunShadows` (0 Off to 4 Ultra), `ModernShadowDistance`
+  (slider 1 to 5), `ModernLampShadows` (0 Off to 4 Ultra), `ModernContactShadows` (0 Off, 1 Low, 2 High), `ModernAO`
+  (0 Off to 3 High), `ModernIndirect` (0 Off, 1 Low, 2 High), `ModernTerrainDetail` box.
+- `ModernMenuImage` extends `ModernMenuPage`: `ModernAntiAliasing` (0 Off, 1 FXAA, 2 SMAA, 3 MSAA 2x, 4 MSAA 4x),
+  `ModernBloom` and `ModernSharpen` (sliders 0 to 10), `ModernRelief` and `ModernSpecular` boxes.
+- `ModernMenuEffects` extends `ModernMenuPage`: sliders 0 to 10 for `ModernGodRays`, `ModernVignette`,
+  `ModernFilmGrain`, `ModernChromaticAberration` (0 off) and `ModernSaturation`, `ModernContrast`, `ModernExposure`
+  (5 neutral). No preset writes them, and changing one keeps the preset.
+
+`ModernBake` keeps its key but has no row. Values and presets: `crates/p2-host/src/display.rs`.
 
 ## Building
 

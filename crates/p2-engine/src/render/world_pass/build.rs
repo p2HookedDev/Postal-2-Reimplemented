@@ -91,6 +91,7 @@ pub(super) fn build(world: &mut World, draws: &WorldDraws) -> Option<Built> {
                 index_format,
                 mask,
                 lightmapped: lightmap_slab.is_some(),
+                casts: false,
                 first_draw: 0,
                 draws: 0,
                 mesh_group,
@@ -98,6 +99,7 @@ pub(super) fn build(world: &mut World, draws: &WorldDraws) -> Option<Built> {
             chunk_lists.push(Vec::new());
             buckets.len() - 1
         });
+        buckets[bucket].casts |= casts_shadow(section, alpha_mode);
         chunk_lists[bucket].extend((0..section.chunks.len()).map(|chunk| (index, chunk)));
 
         let metadata_index = allocator.mesh_metadata_slice(&section.mesh).map(|slice| slice.range.start);
@@ -222,6 +224,7 @@ fn clear_phases(world: &mut World) {
     clear::<AlphaMask3d>(world);
     clear::<Opaque3dPrepass>(world);
     clear::<AlphaMask3dPrepass>(world);
+    clear::<Shadow>(world);
 }
 
 pub(super) fn rebuild_if_stale(world: &mut World) {
@@ -243,7 +246,9 @@ pub(super) fn rebuild_if_stale(world: &mut World) {
             world.despawn(bucket.entity);
         }
         clear_phases(world);
-        world.resource_mut::<WorldPass>().queued.clear();
+        let mut pass = world.resource_mut::<WorldPass>();
+        pass.queued.clear();
+        pass.shadow_queued.clear();
     }
     if draws.sections.is_empty() {
         return;
@@ -262,6 +267,7 @@ pub(super) fn rebuild_if_stale(world: &mut World) {
     let mut pass = world.resource_mut::<WorldPass>();
     pass.built = Some(built);
     pass.queued.clear();
+    pass.shadow_queued.clear();
     pass.waited_frames = 0;
 }
 

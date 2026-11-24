@@ -125,6 +125,8 @@ fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobal
     commands.spawn((
         PrimaryEguiContext,
         Camera2d,
+        // Every camera on the window has the same sample count: 2D cameras on one target share a depth texture.
+        bevy::render::view::Msaa::Off,
         RenderLayers::none(),
         Camera {
             // After the 3D view (0), the HUD's actors and canvas layers (1 to 8) and the gamma ramp (9).

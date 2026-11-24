@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::modern::STATIC_CASTER_LAYER;
 
 pub(crate) fn merged_box((min, max): ([f32; 3], [f32; 3]), (low, high): ([f32; 3], [f32; 3])) -> ([f32; 3], [f32; 3]) {
     ([0, 1, 2].map(|k| min[k].min(low[k])), [0, 1, 2].map(|k| max[k].max(high[k])))
@@ -65,16 +66,17 @@ pub(super) fn walk_view(transform: &Transform, projection: &Projection, origin: 
 }
 
 /// Scenes without BSP portals, and a view outside the world, show everything. While the modern sun casts ([`SunShadow`]),
-/// a dynamic object with a sun caster mesh ([`CASTER_LAYER`]) within the sun's last cascade stays shown:
+/// a moving sun caster ([`CASTER_LAYER`]) in the last cascade and every static one ([`STATIC_CASTER_LAYER`]) stay shown:
 /// `Visibility::Hidden` takes a mesh out of the shadow pass too, so its shadow popped in and out with the view.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn zone_visibility(
+    mut commands: Commands,
     shown: Res<ShownScene>,
     collision: Res<LevelCollision>,
     cameras: Query<(&Transform, &Projection), With<SceneView>>,
     suns: Query<&CascadeShadowConfig, With<SunShadow>>,
     layers: Query<&RenderLayers>,
-    mut culled: Query<(Entity, &ZoneCulled, &mut Visibility, Option<&Children>)>,
+    mut culled: Query<(Entity, &ZoneCulled, &mut Visibility, Option<&Children>, Option<&SeenWithin>, Has<CastsUnseen>)>,
     mut shadow_only: ResMut<ShadowOnly>,
     mut world_seen: ResMut<WorldSeenZones>,
     mut walk: bevy::ecs::system::Local<VisibleZones>,
@@ -108,14 +110,24 @@ fn zone_visibility(
     world_seen.set_if_neq(WorldSeenZones(seen_bits));
     let sun = eye_seen.zip(suns.iter().next().and_then(|config| config.bounds.last().copied()));
     let caster = RenderLayers::layer(CASTER_LAYER);
+    let cached_caster = RenderLayers::layer(STATIC_CASTER_LAYER);
     let only_shadows = std::sync::Mutex::new(Vec::new());
-    culled.par_iter_mut().for_each(|(root, zone, mut visibility, children)| {
+    let unseen_flips = std::sync::Mutex::new(Vec::new());
+    culled.par_iter_mut().for_each(|(root, zone, mut visibility, children, within, unseen_caster)| {
         let forced = forced_shown(zone.only_from.as_deref(), view_zone);
-        let seen = forced && zone.zones.iter().any(|&z| Some(z) == shown.sky_zone || seen.sees(z, zone.min.into(), zone.max.into()));
-        let drawn = seen
-            || (forced
-                && sun.is_some_and(|(eye, reach)| sun_reaches(eye, reach, zone))
-                && children.is_some_and(|children| children.iter().any(|&child| layers.get(child).is_ok_and(|l| l.intersects(&caster)))));
+        let near = within.is_none_or(|within| eye_seen.is_none_or(|eye| in_reach(eye, zone, within.0)));
+        let seen = forced && near && zone.zones.iter().any(|&z| Some(z) == shown.sky_zone || seen.sees(z, zone.min.into(), zone.max.into()));
+        let own = layers.get(root).ok();
+        let casts_on = |layer: &RenderLayers| {
+            own.is_some_and(|own| own.intersects(layer)) || children.is_some_and(|children| children.iter().any(|&child| layers.get(child).is_ok_and(|l| l.intersects(layer))))
+        };
+        let drawn = seen || (forced && sun.is_some_and(|(eye, reach)| casts_on(&cached_caster) || (sun_reaches(eye, reach, zone) && casts_on(&caster))));
+        let casts_unseen = drawn && !seen && own.is_some_and(|own| own.intersects(&caster));
+        if casts_unseen != unseen_caster
+            && let Ok(mut flips) = unseen_flips.lock()
+        {
+            flips.push((root, casts_unseen));
+        }
         if drawn
             && !seen
             && let Ok(mut roots) = only_shadows.lock()
@@ -125,7 +137,21 @@ fn zone_visibility(
         visibility.set_if_neq(if drawn { Visibility::Inherited } else { Visibility::Hidden });
     });
     shadow_only.0.extend(only_shadows.into_inner().unwrap_or_default());
+    for (root, casts_unseen) in unseen_flips.into_inner().unwrap_or_default() {
+        commands.entity(root).queue_silenced(move |mut entity: bevy::ecs::world::EntityWorldMut| {
+            let layers = entity.get::<RenderLayers>().cloned().unwrap_or_default();
+            if casts_unseen {
+                entity.insert((layers.without(0), CastsUnseen));
+            } else {
+                entity.insert(layers.with(0)).remove::<CastsUnseen>();
+            }
+        });
+    }
 }
+
+/// A caster in a zone the eye cannot see: off the view's layer but still on the sun's, so it keeps casting.
+#[derive(Component)]
+struct CastsUnseen;
 
 /// Sets the draws under a moving actor, a particle actor or a corona to the sky camera's layer, the view's or both,
 /// when its zones change or a draw joins it (a particle pool grows).
@@ -181,4 +207,30 @@ pub(super) fn forced_shown(only_from: Option<&[u8]>, view_zone: Option<u8>) -> b
 pub(super) fn sun_reaches(eye: [f32; 3], reach: f32, zone: &ZoneCulled) -> bool {
     let gap = |k: usize| eye[k].max(zone.min[k]).min(zone.max[k]) - eye[k];
     gap(0).powi(2) + gap(1).powi(2) + gap(2).powi(2) <= reach * reach
+}
+
+/// In Unreal units, from the eye to the middle of its `ZoneCulled` box: past this it is hidden, whatever its zone.
+#[derive(Component)]
+pub struct SeenWithin(pub f32);
+
+fn in_reach(eye: [f32; 3], zone: &ZoneCulled, within: f32) -> bool {
+    let mid = |axis: usize| 0.5 * (zone.min[axis] + zone.max[axis]);
+    let d = [eye[0] - mid(0), eye[1] - mid(1), eye[2] - mid(2)];
+    d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= within * within
+}
+
+/// Left out of the sun's casters: grass and the like come in thousands of instances, and would be in every cascade.
+#[derive(Component)]
+pub struct NoSunCast;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reach_is_measured_to_the_middle_of_the_box() {
+        let zone = ZoneCulled { zones: Vec::new(), min: [90.0, 0.0, 0.0], max: [110.0, 0.0, 0.0], only_from: None };
+        assert!(in_reach([0.0; 3], &zone, 100.0));
+        assert!(!in_reach([0.0; 3], &zone, 99.0));
+    }
 }

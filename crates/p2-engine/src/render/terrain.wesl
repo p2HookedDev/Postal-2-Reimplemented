@@ -12,9 +12,10 @@ import bevy_pbr::{
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
 import package::p2_engine::color::{to_display, to_linear};
+import package::p2_engine::dynamic_light::dynamic_light;
 import package::p2_engine::modern::{
-    LUMINANCE, MODERN_ON, NO_GLOSS, NO_RELIEF, allowed_relief, key_shading,
-    masked_sun_visibility, no_relief, relief_from, static_occlusion, sun_highlight, sun_shadowed,
+    LUMINANCE, MODERN_ON, NO_GLOSS, NO_RELIEF, ambient_occlusion, has_sun, lamp_light, modern_surface, no_lamps, relief_from, relief_shows,
+    sky_mask, sun_seen, surface_of, with_light,
 };
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
@@ -150,14 +151,11 @@ fn layer_alpha(in: VertexOutput, k: u32, uv: vec2<f32>, gx: vec2<f32>, gy: vec2<
 
 @fragment
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
-    // The vertex colour is the lighting, applied per layer below (no lighting: the texture as is, 2 × 0.5); its alpha
-    // the sun mask (1 where the bake's sun reached; modern graphics only).
+    // The vertex colour is the retail lighting, applied per layer below (no lighting: the texture as is, 2 × 0.5).
     var input = vertex_output;
     var light = vec3(0.5);
-    var mask = 0.0;
     @if(VERTEX_COLORS) {
         light = input.color.rgb;
-        mask = input.color.a;
         input.color = vec4(1.0);
     }
     var pbr_input = pbr_input_from_standard_material(input, is_front);
@@ -172,18 +170,20 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
 
     let terrain = params(vertex_output);
     let count = min(terrain.count.x, MAX_LAYERS);
-    let modern = (terrain.count.y & MODERN_ON) != 0u;
+    let modern = (terrain.count.y & MODERN_ON) != 0u && has_sun();
     let normal = normalize(pbr_input.world_normal);
-    var sun_seen = 1.0;
-    var linear_light = vec3(0.0);
-    if modern {
-        sun_seen = masked_sun_visibility(mask, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
-        light = sun_shadowed(light, mask, sun_seen, normal);
-        light *= static_occlusion(pbr_input.world_position.xyz, normal, pbr_input.frag_coord.xy);
-        linear_light = to_linear(2.0 * min(light, vec3(1.0)));
-    }
     let ranges = cluster_ranges(pbr_input);
-    var shine = vec3(0.0);
+    let gloss = (terrain.count.y & NO_GLOSS) == 0u;
+    var seen = vec3(0.0, 1.0, 1.0);
+    var occlusion = 1.0;
+    var lamps = no_lamps();
+    var dynamic = vec3(0.0);
+    if modern {
+        seen = sun_seen(vertex_output.world_position, normal, pbr_input.frag_coord.xy);
+        occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
+        lamps = lamp_light(vertex_output, position, normal, pbr_input.frag_coord.xy, ranges, gloss, surface_of(0.0));
+        dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
+    }
     var color = vec3(0.0);
     var texture = vec3(0.0);
     for (var k = 0u; k < count; k += 1u) {
@@ -200,39 +200,34 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         if alpha <= 0.0 {
             continue;
         }
-        var layer_light = light;
-        if modern {
-            var relief = no_relief(normal);
-            if (terrain.count.y & (NO_RELIEF | NO_GLOSS)) != (NO_RELIEF | NO_GLOSS) {
-                let size = layer_size(vertex_output, k);
+        var bumped = normal;
+        if modern && (terrain.count.y & NO_RELIEF) == 0u {
+            let size = layer_size(vertex_output, k);
+            if relief_shows(position, gx, gy, size) {
                 let step = max(1.0 / size, max(abs(gx), abs(gy)));
                 let l = dot(layer_texture(vertex_output, k, uv - vec2(step.x, 0.0), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
                 let r = dot(layer_texture(vertex_output, k, uv + vec2(step.x, 0.0), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
                 let t = dot(layer_texture(vertex_output, k, uv - vec2(0.0, step.y), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
                 let b = dot(layer_texture(vertex_output, k, uv + vec2(0.0, step.y), gx * mip_scale, gy * mip_scale).rgb, LUMINANCE);
-                let slope = vec2(r - l, b - t) / 2.0;
-                relief = allowed_relief(
-                    relief_from(normal, position, position_dx, position_dy, gx, gy, size, slope, dot(texel.rgb, LUMINANCE)),
-                    normal,
-                    terrain.count.y,
-                );
+                bumped = relief_from(normal, position, position_dx, position_dy, gx, gy, size, vec2(r - l, b - t) / 2.0);
             }
-            let key = key_shading(normal, relief, position);
-            layer_light = key.x * light;
-            let sun = sun_highlight(relief, mask, sun_seen, position, normal);
-            shine = mix(shine, key.y * linear_light + sun, alpha);
         }
         pbr_input.material.base_color = vec4(texel.rgb, 1.0);
         apply_decals(&pbr_input, ranges);
-        let lit = min(to_display(pbr_input.material.base_color.rgb) * 2.0 * layer_light, vec3(1.0));
-        color = mix(color, to_linear(lit), alpha);
+        if modern {
+            let lit = modern_surface(pbr_input.material.base_color.rgb, position, bumped, seen, occlusion, gloss, lamps, surface_of(0.0));
+            color = mix(color, with_light(lit, pbr_input.material.base_color.rgb, dynamic), alpha);
+        } else {
+            let lit = min(to_display(pbr_input.material.base_color.rgb) * 2.0 * light, vec3(1.0));
+            color = mix(color, to_linear(lit), alpha);
+        }
         texture = mix(texture, pbr_input.material.base_color.rgb, alpha);
     }
-    color += shine;
     let projected = project(pbr_input, ranges, texture, vec4(color, 1.0), TARGET_TERRAIN);
     pbr_input.material.base_color = projected;
 
     var out: FragmentOutput;
-    out.color = main_pass_post_lighting_processing(pbr_input, projected);
+    let fogged = main_pass_post_lighting_processing(pbr_input, projected);
+    out.color = vec4(fogged.rgb, sky_mask(pbr_input.material.flags, fogged.a));
     return out;
 }

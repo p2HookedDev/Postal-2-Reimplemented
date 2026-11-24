@@ -253,6 +253,7 @@ pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight>
         radius: vm.store.float_of(actor, Prop::LightRadius),
         cone: vm.store.byte_of(actor, Prop::LightCone),
         dynamic: vm.store.flag_of(actor, Prop::bDynamicLight),
+        special_lit: vm.store.flag_of(actor, Prop::bSpecialLit),
     })
 }
 

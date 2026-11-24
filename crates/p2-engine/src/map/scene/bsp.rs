@@ -48,6 +48,8 @@ pub(super) struct BspParts {
     pub(super) min: Vec3,
     pub(super) max: Vec3,
     pub(super) atlases: Vec<Option<Handle<Image>>>,
+    pub(super) masked_casters: Vec<MaskedCaster>,
+    pub(super) material_albedos: FxHashMap<i32, [f32; 3]>,
 }
 
 pub(super) fn bsp_models(
@@ -69,6 +71,8 @@ pub(super) fn bsp_models(
     let (min, max) = points.fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)));
     let (mut textured, mut lit) = (0, 0);
     let mut drawn = Vec::new();
+    let mut masked_casters = Vec::new();
+    let mut material_albedos = FxHashMap::default();
     for (BspKey { in_sky, material, atlas, flags, zones, .. }, polygons) in groups {
         let (in_sky, material, atlas, flags) = (*in_sky, *material, *atlas, *flags);
         let mut found = texture(game, t, id, material);
@@ -81,6 +85,13 @@ pub(super) fn bsp_models(
             state.two_sided |= flags & poly_flags::TWO_SIDED != 0;
         }
         textured += polygons.len() * usize::from(found.is_some());
+        if let Some(albedo) = found.as_ref().and_then(|found| t.albedos.get(&found.image.id())) {
+            material_albedos.insert(material, *albedo);
+        }
+        let masked = found.as_ref().filter(|_| !in_sky).and_then(|found| match crate::mesh_view::alpha_mode(&found.state) {
+            AlphaMode::Mask(cutoff @ ..=1.0) => Some((found.image.clone(), cutoff)),
+            _ => None,
+        });
         let lightmap = atlas.and_then(|atlas| atlases.get(atlas).cloned().flatten());
         lit += polygons.len() * usize::from(lightmap.is_some());
         let size = found.as_ref().and_then(|found| t.image_size(&found.image)).unwrap_or(UVec2::splat(128));
@@ -93,15 +104,18 @@ pub(super) fn bsp_models(
         }
         for (bsp_node, polygons) in parts {
             let mut mesh = model_polygons_to_mesh(polygons.iter().map(|(p, uvs)| (*p, uvs.as_deref())), scale);
+            if let Some((image, cutoff)) = &masked {
+                masked_casters.push(MaskedCaster { image: image.clone(), cutoff: *cutoff, triangles: masked_triangles(&mesh, &Transform::IDENTITY) });
+            }
             let zone = zones.clone().zip(bounds(polygons.iter().flat_map(|(p, _)| p.positions.iter().copied())));
             let zone = zone.map(|(zones, (min, max))| ZoneCulled { zones, min, max, only_from: None });
             let chunks = if zone.is_none() { crate::render::world_pass::chunks_of(&mut mesh) } else { None };
             let section = SectionView::textured(t.add_mesh(mesh), found.clone());
             let section = SectionView { no_scene_lights: true, lightmap: lightmap.clone().filter(|_| !section.fullbright), chunks, bsp_node, ..section };
-            drawn.push((in_sky, ModelView { sections: vec![section], instances: vec![Transform::IDENTITY], zone }));
+            drawn.push((in_sky, ModelView { sections: vec![section], instances: vec![Transform::IDENTITY], zone, casts: !in_sky }));
         }
     }
     let (sky_bsp, bsp): (Vec<_>, Vec<_>) = drawn.into_iter().partition(|(in_sky, _)| *in_sky);
     let strip = |models: Vec<(bool, ModelView)>| models.into_iter().map(|(_, model)| model).collect::<Vec<_>>();
-    BspParts { models: strip(bsp), sky_models: strip(sky_bsp), textured, lit, min, max, atlases }
+    BspParts { models: strip(bsp), sky_models: strip(sky_bsp), textured, lit, min, max, atlases, masked_casters, material_albedos }
 }
