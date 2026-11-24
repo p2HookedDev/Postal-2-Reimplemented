@@ -288,6 +288,7 @@ mod tests {
             color: [255; 4],
             uv: [0.0, 0.0, 1.0, 1.0],
             blend: None,
+            serial: 0,
         };
         let sprites = [sprite([0.0; 3].into(), [0.0, 0.0, 2.0].into(), [0.0, 2.0, 0.0].into()), sprite([50.0, -20.0, 7.0].into(), [1.0, 1.0, 3.0].into(), [-2.0, 1.5, 0.0].into())];
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -309,6 +310,7 @@ mod tests {
             color: [10, 128, 200, 77],
             uv: [0.25, 0.5, 0.5, 0.75],
             blend,
+            serial: 0,
         };
         for sprite in [sprite(None), sprite(Some(([0.5, 0.5, 0.75, 0.75], 200)))] {
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -351,7 +353,7 @@ mod tests {
         let mesh_centre = Vec3::from(grid.get_aabb().expect("bounds").center);
         assert_eq!(mesh_centre, Vec3::from(sprite_grid(64).get_aabb().expect("bounds").center));
         let location: Vector = [50.0, -20.0, 7.0].into();
-        let sprite = SpriteParticle { location, previous: location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None };
+        let sprite = SpriteParticle { location, previous: location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None, serial: 0 };
         let boxes = [(Vec3::new(100.0, -20.0, 7.0), Vec3::new(300.0, 40.0, 9.0)), (Vec3::new(-900.0, 5.0, -60.0), Vec3::new(-850.0, 25.0, -10.0))];
         let mut sort_centres = Vec::new();
         for (min, max) in boxes {
@@ -374,7 +376,7 @@ mod tests {
     #[test]
     fn sprite_records_keep_their_place_on_a_moved_grid() {
         let location: Vector = [50.0, -20.0, 7.0].into();
-        let sprite = SpriteParticle { location, previous: location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None };
+        let sprite = SpriteParticle { location, previous: location, size: [2.0; 2], up: [0.0; 3].into(), right: [0.0; 3].into(), color: [255; 4], uv: [0.0; 4], blend: None, serial: 0 };
         let grid_at = Vec3::new(40.0, 3.0, -9.0);
         let record = sprite_record(&sprite, grid_at);
         let centre = Vec3::new(f32::from_bits(record[0]), f32::from_bits(record[1]), f32::from_bits(record[2]));

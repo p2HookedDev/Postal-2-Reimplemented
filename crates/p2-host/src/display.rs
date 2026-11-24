@@ -128,6 +128,8 @@ pub const QUERIES: &[&str] = &[
     MODERN_LIQUID_FLOW,
     MODERN_FIRE_VOLUMES,
     MODERN_VOLUMETRIC_FOG,
+    MODERN_GPU_PARTICLES,
+    MODERN_TESSELLATION,
     MODERN_PHOTO_ACTIVE,
     MODERN_PHOTO_FOV,
     MODERN_PHOTO_FOCUS,
@@ -208,6 +210,8 @@ pub const MODERN_BOUNCE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernBoun
 pub const MODERN_LIQUID_FLOW: &str = "ini:Engine.Engine.RenderDevice ModernLiquidFlow";
 pub const MODERN_FIRE_VOLUMES: &str = "ini:Engine.Engine.RenderDevice ModernFireVolumes";
 pub const MODERN_VOLUMETRIC_FOG: &str = "ini:Engine.Engine.RenderDevice ModernVolumetricFog";
+pub const MODERN_GPU_PARTICLES: &str = "ini:Engine.Engine.RenderDevice ModernGpuParticles";
+pub const MODERN_TESSELLATION: &str = "ini:Engine.Engine.RenderDevice ModernTessellation";
 /// Set by the photo mode script while it is open. The photo rows stand in only for rows that act without a reload, so
 /// opening it changes `Settings` but reloads nothing and leaves the player's rows as saved.
 pub const MODERN_PHOTO_ACTIVE: &str = "ini:Engine.Engine.RenderDevice ModernPhotoActive";
@@ -247,7 +251,7 @@ const PHOTO_FOV_LEAST: u8 = 10;
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 49] = [
+const LEVELS: [(&str, u8, u8); 51] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
@@ -285,6 +289,8 @@ const LEVELS: [(&str, u8, u8); 49] = [
     (MODERN_LIQUID_FLOW, 1, 1),
     (MODERN_FIRE_VOLUMES, 0, 0),
     (MODERN_VOLUMETRIC_FOG, 0, 0),
+    (MODERN_GPU_PARTICLES, 5, 10),
+    (MODERN_TESSELLATION, 1, 1),
     (MODERN_PHOTO_ACTIVE, 0, 1),
     (MODERN_PHOTO_FOV, 0, 150),
     (MODERN_PHOTO_FOCUS, 0, 36),
@@ -423,6 +429,7 @@ impl bevy::app::Plugin for DisplayPlugin {
 pub fn apply_texture_quality(settings: bevy::ecs::system::Res<Settings>) {
     p2_bevy_assets::set_texture_quality(settings.texture_quality());
     p2_bevy_assets::set_terrain_detail(settings.terrain_detail());
+    p2_bevy_assets::set_character_smoothing(settings.modern_level(MODERN_TESSELLATION));
 }
 
 pub fn present_mode(vsync: bool, triple_buffering: bool) -> PresentMode {
@@ -526,9 +533,9 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 0, 0, 1, 0, 0, 5, 1, 0, 0, 0, 0, 5, 5, 5, 2, 5, 5, 0, 4, 5, 0]);
         let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
-        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 0, 0, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]);
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 0, 0, 1, 0, 0, 10, 1, 1, 99, 36, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
         assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 0);
         assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);

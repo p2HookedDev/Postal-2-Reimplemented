@@ -518,7 +518,9 @@ impl Session {
         particles.particle_emitters.clear();
         particles.born.clear();
         particles.born_meshes.clear();
+        particles.blasts.clear();
         t.particle_frame.born.clear();
+        t.particle_frame.blasts.clear();
         t.particle_frame.born_meshes.clear();
         t.particle_frame.level = t.particle_frame.level.wrapping_add(1);
         *t.fluids = Fluids::default();

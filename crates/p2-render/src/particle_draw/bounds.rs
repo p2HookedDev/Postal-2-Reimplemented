@@ -75,6 +75,7 @@ mod tests {
             color: [255; 4],
             uv: [0.0, 0.0, 1.0, 1.0],
             blend: None,
+            serial: 0,
         };
         let mut meshes = [sprite(0.0), sprite(100.0)].map(|s| {
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -103,6 +104,7 @@ mod tests {
             color: [255; 4],
             uv: [0.0, 0.0, 1.0, 1.0],
             blend: None,
+            serial: 0,
         };
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         fill_sprites(&mut mesh, &[puddle]);

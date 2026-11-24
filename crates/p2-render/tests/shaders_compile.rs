@@ -11,7 +11,7 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 17] = [
+const ENTRIES: [(&str, &[&str]); 18] = [
     ("actor_light", &[]),
     ("actor_light", &["VISIBILITY_RANGE_DITHER"]),
     ("mesh_light", &["VISIBILITY_RANGE_DITHER"]),
@@ -27,6 +27,7 @@ const ENTRIES: [(&str, &[&str]); 17] = [
     ("lamp_fog", &[]),
     ("bounce", &[]),
     ("fire_volume", &[]),
+    ("gpu_particles", &[]),
     ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS"]),
     ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS", "ACTOR_SHADING"]),
 ];

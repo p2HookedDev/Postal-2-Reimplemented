@@ -78,7 +78,8 @@ fn swept_bounds(start: Vector, end: Vector, extent: Vector) -> (Vector, Vector) 
     ([0, 1, 2].map(|i| start[i].min(end[i]) - extent[i]).into(), [0, 1, 2].map(|i| start[i].max(end[i]) + extent[i]).into())
 }
 
-fn overlaps(min: Vector, max: Vector, tri: &[[f32; 3]; 3]) -> bool {
+/// Whether the triangle's own box reaches into the box from `min` to `max`.
+pub fn triangle_reaches(min: Vector, max: Vector, tri: &[[f32; 3]; 3]) -> bool {
     (0..3).all(|i| tri.iter().any(|p| p[i] >= min[i]) && tri.iter().any(|p| p[i] <= max[i]))
 }
 
@@ -94,7 +95,7 @@ fn mesh_first_hit(mesh: &MeshCollision, start: Vector, delta: Vector, extent: Ve
     let mut first: Option<(f32, usize, Vector)> = None;
     mesh.tree.any(min, max, |triangle| {
         let tri = mesh.triangles[triangle];
-        if overlaps(min, max, &tri)
+        if triangle_reaches(min, max, &tri)
             && let Some((time, normal)) = box_triangle(start, delta, extent, tri)
             && first.is_none_or(|(best, lowest, _)| time.total_cmp(&best).then(triangle.cmp(&lowest)).is_lt())
         {
@@ -110,7 +111,7 @@ pub fn mesh_box_overlaps<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>
     meshes.into_iter().filter(|mesh| mesh.touches(min, max)).any(|mesh| {
         mesh.tree.any(min, max, |triangle| {
             let tri = mesh.triangles[triangle];
-            overlaps(min, max, &tri) && box_overlaps_triangle(center, extent, tri)
+            triangle_reaches(min, max, &tri) && box_overlaps_triangle(center, extent, tri)
         })
     })
 }
@@ -121,7 +122,7 @@ pub fn terrain_box_check(terrain: &Terrain, start: Vector, end: Vector, extent: 
     crate::terrain_first_hit(terrain, start, end, [extent.x, extent.y], 0.0, |triangle| {
         let tri = triangle.map(|i| terrain.vertices[i]);
         let front = crate::terrain_front(terrain, tri.map(Vector::from), delta);
-        if front && overlaps(min, max, &tri) { box_triangle(start, delta, extent, tri) } else { None }
+        if front && triangle_reaches(min, max, &tri) { box_triangle(start, delta, extent, tri) } else { None }
     })
 }
 
@@ -193,7 +194,7 @@ mod tests {
         for (start, end) in crate::tests::test_segments(1500) {
             let (min, max) = swept_bounds(start, end, extent);
             let delta = end - start;
-            let scanned = mesh.triangles().iter().filter(|tri| overlaps(min, max, tri)).filter_map(|&tri| box_triangle(start, delta, extent, tri));
+            let scanned = mesh.triangles().iter().filter(|tri| triangle_reaches(min, max, tri)).filter_map(|&tri| box_triangle(start, delta, extent, tri));
             let scan = nearest(scanned, start, end);
             assert_eq!(mesh_box_check([&mesh], start, end, extent), scan, "{start:?} -> {end:?}");
             hits += usize::from(scan.is_some());
@@ -233,7 +234,7 @@ mod tests {
                 for triangle in terrain.quad_triangles(x, y) {
                     let tri = triangle.map(|i| terrain.vertices[i]);
                     if crate::terrain_front(terrain, tri.map(Vector::from), delta)
-                        && overlaps(min, max, &tri)
+                        && triangle_reaches(min, max, &tri)
                         && let Some(hit) = box_triangle(start, delta, extent, tri)
                     {
                         hits.push(hit);

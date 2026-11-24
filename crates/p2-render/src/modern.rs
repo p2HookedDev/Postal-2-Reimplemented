@@ -18,7 +18,7 @@ use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::{resource_changed, resource_exists_and_changed};
 use bevy::ecs::world::EntityWorldMut;
-use bevy::light::{AmbientLight, CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLight, DirectionalLightShadowMap, ShadowFilteringMethod};
+use bevy::light::{AmbientLight, CascadeShadowConfig, CascadeShadowConfigBuilder, Cascades, DirectionalLight, DirectionalLightShadowMap, ShadowFilteringMethod, SimulationLightSystems};
 use bevy::log::info;
 use bevy::material::AlphaMode;
 use bevy::math::{Quat, Vec3};
@@ -74,6 +74,10 @@ impl Plugin for ModernGraphicsPlugin {
                 (watch_props, sun_casters).chain(),
             )
                 .in_set(ModernGraphicsSystems::Apply),
+        );
+        app.add_systems(
+            PostUpdate,
+            sun_view_cascades.after(SimulationLightSystems::UpdateDirectionalLightCascades).before(SimulationLightSystems::UpdateLightFrusta),
         );
         // Before the frame's asset events go out, so a new material reaches the GPU once, with its flag.
         app.add_systems(
@@ -525,6 +529,15 @@ fn sun_shadows(
             commands.spawn((FillSun, light, config, sun_place(along), RenderLayers::layer(SUN_VIEW_LAYER)));
         }
         last_fills.clone_from(&map.fills);
+    }
+}
+
+/// Only the scene camera shares a layer with the sun, so the other cameras' cascades would be culled for nothing.
+fn sun_view_cascades(mut suns: Query<&mut Cascades, With<SunShadow>>, views: Query<(), With<SceneView>>) {
+    for mut cascades in &mut suns {
+        if cascades.cascades.keys().any(|&camera| !views.contains(camera)) {
+            cascades.cascades.retain(|&camera, _| views.contains(camera));
+        }
     }
 }
 

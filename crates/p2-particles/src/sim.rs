@@ -83,6 +83,7 @@ struct Particle {
     stopped: bool,
     fresh: bool,
     subdivision: i32,
+    serial: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,6 +101,8 @@ pub struct SpriteParticle {
     pub right: Vector,
     pub color: [u8; 4],
     pub uv: [f32; 4],
+    /// The emitter's count of particles when this one was spawned, from 1: a higher one than any seen is newborn.
+    pub serial: u32,
     /// `BlendBetweenSubdivisions`: the next frame's rectangle and the blend factor (0..=255). The engine writes the
     /// factor into the vertex alpha in place of the particle's alpha.
     pub blend: Option<([f32; 4], u8)>,
@@ -132,6 +135,7 @@ pub struct ParticleEmitter {
     inactive: bool,
     inactive_time: f32,
     beam_points: BeamPoints,
+    spawned: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

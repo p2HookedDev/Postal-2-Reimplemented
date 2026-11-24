@@ -32,6 +32,18 @@ impl StaticCollision {
         let mesh = self.mesh_set.line_check_at(&self.meshes, start, end).map(|(hit, ..)| hit);
         bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
     }
+
+    /// Whether light gets from `from` to `to`: the sky's backdrop surfaces let it through, and what stands before
+    /// them still blocks.
+    pub fn light_passes(&self, from: Vector, to: Vector) -> bool {
+        let reach = match p2_collision::line_check_node(&self.model, from, to) {
+            None => 1.0,
+            Some((hit, node)) if node.is_some_and(|node| p2_collision::is_sky(&self.model, node)) => hit.time,
+            Some(_) => return false,
+        };
+        !self.terrains.iter().any(|terrain| terrain_line_check(terrain, from, to, Sides::Both).is_some_and(|hit| hit.time < reach))
+            && self.mesh_set.line_check_at(&self.meshes, from, to).is_none_or(|(hit, ..)| hit.time >= reach)
+    }
 }
 
 /// Mean texture colours in linear light.

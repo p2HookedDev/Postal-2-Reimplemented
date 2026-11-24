@@ -354,6 +354,8 @@ pub struct EmitterActor {
     pub meshes: Vec<Option<String>>,
     pub name: String,
     pub puddle: bool,
+    /// An explosion's `ExplosionRadius` and `ExplosionMag`, when the scripts gave it both.
+    pub blast: Option<(f32, f32)>,
 }
 
 pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<EmitterActor> {
@@ -382,7 +384,9 @@ pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Emitter
     let settings = vm.read_ordered(actor, "EmitterSettings", |get| {
         EmitterSettings::from_lookup(|name: &str| get(name).as_ref().map(property_value))
     });
-    Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone(), puddle: vm.store.is_a(actor, Kind::FluidPuddle) })
+    let (radius, force) = (vm.store.float_of(actor, "ExplosionRadius"), vm.store.float_of(actor, "ExplosionMag"));
+    let blast = (radius > 0.0 && force > 0.0).then_some((radius, force));
+    Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone(), puddle: vm.store.is_a(actor, Kind::FluidPuddle), blast })
 }
 
 pub fn emitter_properties(vm: &Vm<impl LoaderRef>, emitter: ObjectId) -> EmitterProperties {

@@ -49,6 +49,7 @@ impl ParticleEmitter {
             all_particles_dead: false,
             inactive: false,
             inactive_time: 0.0,
+            spawned: 0,
             warmed_up: false,
             other_index: 0,
             initial_delay: 0.0,

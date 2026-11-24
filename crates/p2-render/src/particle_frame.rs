@@ -22,10 +22,21 @@ pub struct DrawnParticles {
     pub born: Vec<EmitterLook>,
     /// The mesh emitters whose model was built since the last frame drawn, once each.
     pub born_meshes: Vec<MeshEmitterLook>,
+    /// The pushes the game gave since the last frame drawn, once each.
+    pub blasts: Vec<Blast>,
     /// Bevy coordinates relative to the world's origin, as the particles.
     pub eye: Vec3,
     /// Changed when a map is left: the drawing side drops what it keeps.
     pub level: u32,
+}
+
+/// What an explosion or a shot's impact does to loose pieces around it, in Unreal units and axes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Blast {
+    pub at: Vector,
+    pub radius: f32,
+    /// The speed it gives a piece at its middle, in Unreal units a second; none at `radius`.
+    pub push: f32,
 }
 
 /// A slot is a place, not an identity: `parent` says whose particles it holds this frame.

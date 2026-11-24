@@ -12,7 +12,7 @@ pub use extent::{BspHulls, box_check, point_check, point_solid};
 pub use reach::light_zones;
 pub use primitive::{Primitive, pull_back, pull_back_units, segment_cylinder, world_to_local};
 pub use tree::TriangleTree;
-pub use sweep::{box_overlaps_triangle, mesh_box_check, mesh_box_overlaps, terrain_box_check};
+pub use sweep::{box_overlaps_triangle, mesh_box_check, mesh_box_overlaps, terrain_box_check, triangle_reaches};
 /// `NF_NotCsg | NF_IsNew`: nodes with these flags do not divide solid from empty space.
 const NOT_CSG: u8 = 0x21;
 const MAX_TREE_DEPTH: usize = 2048;

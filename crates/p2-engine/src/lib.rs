@@ -60,7 +60,7 @@ impl bevy::app::Plugin for FrameOrderPlugin {
             // Bounce light gathers and scales the frame's colour, so the light added in front of surfaces comes after it.
             render_app.configure_sets(
                 Core3d,
-                (MainPassExtraSystems::Bounce, MainPassExtraSystems::FireVolume, MainPassExtraSystems::LampFog)
+                (MainPassExtraSystems::Bounce, MainPassExtraSystems::FireVolume, MainPassExtraSystems::LampFog, MainPassExtraSystems::GpuParticles)
                     .chain()
                     .in_set(Core3dSystems::MainPass)
                     .after(main_opaque_pass_3d)

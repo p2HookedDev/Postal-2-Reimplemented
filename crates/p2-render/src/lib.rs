@@ -35,7 +35,9 @@ pub(crate) mod reflections;
 pub(crate) mod screen_pass;
 pub(crate) mod bounce;
 pub mod coronas;
+pub mod debris;
 pub mod fire_volume;
+pub mod gpu_particles;
 pub mod fluids;
 pub(crate) mod temporal_aa;
 pub(crate) mod fade_in;
@@ -51,6 +53,7 @@ pub enum MainPassExtraSystems {
     Bounce,
     FireVolume,
     LampFog,
+    GpuParticles,
 }
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -88,7 +91,7 @@ impl bevy::app::Plugin for RetailRenderPlugin {
             world_pass::WorldPassPlugin,
             sampler_refresh::SamplerRefreshPlugin,
         ));
-        app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin));
+        app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin, gpu_particles::GpuParticlesPlugin, debris::DebrisPlugin));
         app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin, wet::WetPlugin));
     }
 }

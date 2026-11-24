@@ -168,6 +168,18 @@ impl World {
         }
     }
 
+    /// Rapier puts the body to sleep once it has moved slower than `speed` (Unreal units a second) and turned slower
+    /// than `spin` (radians a second) for `seconds`.
+    pub fn set_sleep(&mut self, id: BodyId, speed: f32, spin: f32, seconds: f32) {
+        let length_unit = self.parameters.length_unit;
+        if let Some(body) = self.bodies.get_mut(id.0) {
+            let activation = body.activation_mut();
+            activation.normalized_linear_threshold = speed / length_unit;
+            activation.angular_threshold = spin;
+            activation.time_until_sleep = seconds;
+        }
+    }
+
     pub fn set_gravity_scale(&mut self, id: BodyId, scale: f32) {
         if self.bodies.get(id.0).is_some_and(|body| body.gravity_scale() != scale)
             && let Some(body) = self.bodies.get_mut(id.0)

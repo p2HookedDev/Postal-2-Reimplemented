@@ -230,14 +230,7 @@ fn lamp_reaches(level: &StaticCollision, origin: Vec3, lamp_at: Vec3, middle: Ve
     if distance <= LAMP_CLEARANCE {
         return true;
     }
-    let to = from + to_lamp * (1.0 - LAMP_CLEARANCE / distance);
-    let reach = match p2_collision::line_check_node(model, from, to) {
-        None => 1.0,
-        Some((hit, node)) if node.is_some_and(|node| p2_collision::is_sky(model, node)) => hit.time,
-        Some(_) => return false,
-    };
-    !level.terrains.iter().any(|terrain| p2_collision::terrain_line_check(terrain, from, to, p2_collision::Sides::Both).is_some_and(|hit| hit.time < reach))
-        && level.mesh_set.line_check_at(&level.meshes, from, to).is_none_or(|(hit, ..)| hit.time >= reach)
+    level.light_passes(from, from + to_lamp * (1.0 - LAMP_CLEARANCE / distance))
 }
 
 /// A square of `level`, else the largest smaller one free; a held square stays while no larger one is free.

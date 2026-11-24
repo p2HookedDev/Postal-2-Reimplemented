@@ -141,6 +141,11 @@ pub fn draw_particles(
 }
 
 impl ParticleDraws {
+    /// The light the actor's lit sprites take this frame, in display light.
+    pub(crate) fn light_of(&self, parent: Entity) -> Option<Vec3> {
+        self.actors.get(&parent).map(|actor| actor.light.header()[0])
+    }
+
     fn add_emitter(&mut self, look: EmitterLook, assets: &mut ParticleAssets, commands: &mut Commands) {
         let EmitterLook { parent, order, image, props, name, fogless } = look;
         let grid = (!matches!(props.kind, EmitterKind::Strip | EmitterKind::Beam)).then_some(SpriteGrid { quads: MIN_QUADS, first: None });

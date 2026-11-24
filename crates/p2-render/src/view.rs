@@ -68,7 +68,9 @@ mod animated_materials;
 mod restyle;
 mod fog;
 mod zone_culling;
+mod mover_sight;
 mod shown;
+pub use mover_sight::{MoverSightPlugin, MoversSeen};
 pub use sections::spawn_actor_sections;
 use materials::{SectionMaterials, scene_section_material};
 pub use materials::{ActorLook, ActorMaterialCache, ActorMaterials, SectionMaterial, vertex_lit};
@@ -124,7 +126,7 @@ impl Plugin for MeshViewPlugin {
                 Update,
                 (SceneViewSystems::Place, SceneViewSystems::Fog, SceneViewSystems::Zones, SceneViewSystems::Light).chain().in_set(MeshViewSystems::Camera),
             )
-            .add_plugins((camera::ViewCameraPlugin, fog::FogPlugin, zone_culling::ZoneCullingPlugin));
+            .add_plugins((camera::ViewCameraPlugin, fog::FogPlugin, zone_culling::ZoneCullingPlugin, MoverSightPlugin));
     }
 }
 

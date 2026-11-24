@@ -3,7 +3,7 @@ use bevy::mesh::Mesh;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use p2_assets::{SkeletalMesh, StaticMesh, read_skeletal_mesh};
 use p2_bevy_assets::library::{Game, export_reference};
-use p2_bevy_assets::{skeletal_mesh_to_meshes, skin_bind, static_mesh_to_meshes};
+use p2_bevy_assets::{character_smoothing, skeletal_mesh_to_meshes, skin_bind, smoothed_skeletal_mesh, static_mesh_to_meshes};
 use p2_package::PackageId;
 
 use super::SceneAssets;
@@ -54,6 +54,13 @@ pub fn skeletal_sections<S: SceneAssets>(
 
 const MAX_JOINTS: usize = 256;
 
+/// The drawn meshes of a skeletal model, one a section. A mesh skinned on the CPU gets the retail mesh's points written
+/// into them, so only a GPU skinned one is smoothed.
+pub fn skeletal_draw_meshes(mesh: &SkeletalMesh, gpu_skin: bool, smoothing: u8) -> Vec<(Mesh, u16)> {
+    let smoothed = (gpu_skin && smoothing > 0).then(|| smoothed_skeletal_mesh(mesh)).flatten();
+    skeletal_mesh_to_meshes(smoothed.as_ref().unwrap_or(mesh), gpu_skin)
+}
+
 pub fn skeletal_mesh_sections<S: SceneAssets>(
     game: &mut Game,
     t: &mut S,
@@ -68,7 +75,7 @@ pub fn skeletal_mesh_sections<S: SceneAssets>(
         let (inverse, bind) = skin_bind(mesh);
         Skin { inverse_bindposes: t.add_bindposes(SkinnedMeshInverseBindposes::from(inverse)), bind: bind.into() }
     });
-    let sections = skeletal_mesh_to_meshes(mesh, gpu_skin.is_some())
+    let sections = skeletal_draw_meshes(mesh, gpu_skin.is_some(), character_smoothing())
         .into_iter()
         .map(|(section, material)| {
             let handle = t.add_mesh(section);

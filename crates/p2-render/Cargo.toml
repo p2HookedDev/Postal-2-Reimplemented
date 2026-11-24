@@ -20,6 +20,7 @@ p2-vm.workspace = true
 p2-collision.workspace = true
 p2-host.workspace = true
 p2-particles.workspace = true
+p2-physics.workspace = true
 p2-render-cpu.workspace = true
 
 [dev-dependencies]

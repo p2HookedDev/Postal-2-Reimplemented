@@ -3,7 +3,8 @@ use super::*;
 /// With pipelined rendering, time waiting for the GPU falls in the render stage.
 pub struct StageTimingPlugin;
 
-const MAIN_STAGES: [&str; 6] = ["transforms", "bounds and frusta", "camera culling", "clusters", "cascades and frusta", "light visibility"];
+/// `present` is what the game hands the frame before Bevy moves anything: our own systems and the commands they queue.
+const MAIN_STAGES: [&str; 7] = ["present", "transforms", "bounds and frusta", "camera culling", "clusters", "cascades and frusta", "light visibility"];
 const UPDATE_STAGES: [&str; 2] = ["whole update", "wait for render thread and extract"];
 /// The window's next frame is taken in the view stage, which waits there while the GPU is behind.
 const RENDER_STAGES: [&str; 8] = ["wait for main and extract", "assets and views", "specialize", "views and the wait for a frame", "queue", "sort and prepare", "bind groups", "render"];
@@ -293,6 +294,8 @@ impl Plugin for StageTimingPlugin {
         use bevy::camera::visibility::VisibilitySystems as Visibility;
         use bevy::light::SimulationLightSystems as Light;
         use bevy::transform::TransformSystems;
+        use crate::play::PlaySystems;
+        use p2_render::view::SceneViewSystems;
         use bevy::render::RenderSystems as Stage;
         let clocks = StageClocks::default();
         let render_clock = RenderStageClock(clocks.render.clone());
@@ -307,13 +310,14 @@ impl Plugin for StageTimingPlugin {
         app.add_systems(
             PostUpdate,
             (
-                main_mark::<-1>.before(TransformSystems::Propagate),
-                main_mark::<0>.after(TransformSystems::Propagate).before(Visibility::CalculateBounds).before(Visibility::UpdateFrusta).before(Visibility::VisibilityPropagate),
-                main_mark::<1>.after(Visibility::CalculateBounds).after(Visibility::UpdateFrusta).after(Visibility::VisibilityPropagate).before(Visibility::CheckVisibility),
-                main_mark::<2>.after(Visibility::CheckVisibility).after(CameraUpdateSystems).before(Light::AssignLightsToClusters),
-                main_mark::<3>.after(Light::AssignLightsToClusters).before(Light::UpdateDirectionalLightCascades),
-                main_mark::<4>.after(Light::UpdateLightFrusta).before(Light::CheckLightVisibility),
-                main_mark::<5>.after(Light::CheckLightVisibility),
+                main_mark::<-1>.before(PlaySystems::Present),
+                main_mark::<0>.after(PlaySystems::Present).after(SceneViewSystems::Overlays).before(TransformSystems::Propagate),
+                main_mark::<1>.after(TransformSystems::Propagate).before(Visibility::CalculateBounds).before(Visibility::UpdateFrusta).before(Visibility::VisibilityPropagate),
+                main_mark::<2>.after(Visibility::CalculateBounds).after(Visibility::UpdateFrusta).after(Visibility::VisibilityPropagate).before(Visibility::CheckVisibility),
+                main_mark::<3>.after(Visibility::CheckVisibility).after(CameraUpdateSystems).before(Light::AssignLightsToClusters),
+                main_mark::<4>.after(Light::AssignLightsToClusters).before(Light::UpdateDirectionalLightCascades),
+                main_mark::<5>.after(Light::UpdateLightFrusta).before(Light::CheckLightVisibility),
+                main_mark::<6>.after(Light::CheckLightVisibility),
             ),
         );
         let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) else { return };

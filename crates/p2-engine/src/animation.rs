@@ -34,6 +34,7 @@ mod attachments;
 mod drawn_pose;
 mod foot_placement;
 mod hit_reaction;
+mod tessellation;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AnimationSystems {
@@ -48,6 +49,7 @@ impl Plugin for AnimationPlugin {
             .init_resource::<Poses>()
             .add_plugins(foot_placement::FootPlacementPlugin)
             .add_plugins(hit_reaction::HitReactionPlugin)
+            .add_plugins(tessellation::TessellationPlugin)
             .add_systems(Update, (animate, pose_joints, follow_bones, place_attached).chain().in_set(AnimationSystems::Pose))
             .add_systems(
                 PostUpdate,

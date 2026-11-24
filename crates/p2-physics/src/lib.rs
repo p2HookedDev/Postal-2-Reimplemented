@@ -210,9 +210,13 @@ pub struct World {
 
 impl World {
     pub fn new(gravity: p2_math::Vector) -> Self {
+        Self::with_threads(gravity, std::thread::available_parallelism().map_or(2, |cores| cores.get() / 4).clamp(2, 4))
+    }
+
+    /// A world of a few bodies gains nothing from more than one thread.
+    pub fn with_threads(gravity: p2_math::Vector, threads: usize) -> Self {
         let parameters = IntegrationParameters { length_unit: UNITS_PER_METER, ..IntegrationParameters::default() };
         let mut pipeline = PhysicsPipeline::new();
-        let threads = std::thread::available_parallelism().map_or(2, |cores| cores.get() / 4).clamp(2, 4);
         pipeline.configure_thread_pool(threads).ok();
         Self {
             gravity: to_rapier(gravity),

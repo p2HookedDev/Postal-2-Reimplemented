@@ -149,6 +149,8 @@ impl ParticleEmitter {
         }
         let (start_spin, spins_per_second) = start_spins(props, rng);
         let subdivision = random_subdivision(props, rng);
+        self.spawned = self.spawned.wrapping_add(1);
+        let serial = self.spawned;
         let p = self.particles.get_mut(index)?;
         *p = Particle {
             location,
@@ -169,6 +171,7 @@ impl ParticleEmitter {
             stopped: false,
             fresh,
             subdivision,
+            serial,
         };
         Some((age, max_lifetime))
     }

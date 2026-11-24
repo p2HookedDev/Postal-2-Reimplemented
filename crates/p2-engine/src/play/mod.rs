@@ -46,7 +46,7 @@ use crate::actors::{
 use p2_render::components::FollowBone;
 use p2_render::canvas::{Overlay, OverlayTitle};
 use p2_render::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
-use p2_render::view::ShadowOnly;
+use p2_render::view::{MoversSeen, ShadowOnly};
 use p2_host::frame_times::{FrameTimes, VmProfile, end_frame};
 
 pub(crate) mod photo;
@@ -374,6 +374,7 @@ struct DrawnActors<'w, 's> {
     attached: Query<'w, 's, (Entity, &'static FollowBone, Option<&'static ChildOf>)>,
     cameras: Query<'w, 's, (&'static Camera, &'static VisibleEntities)>,
     shadow_only: Res<'w, ShadowOnly>,
+    movers: Res<'w, MoversSeen>,
 }
 
 /// Not `ViewVisibility`, which the sun's shadow cascades set too: retail draws no such shadows, so the modern graphics
@@ -455,11 +456,12 @@ fn look_ahead(play: Res<Play>, input: Res<PlayerInput>, mut play_cameras: PlayCa
 }
 
 fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, backlog: &mut InputBacklog, times: &FrameTimes, step: f32, canvas: HudCanvas) -> Job {
-    let DrawnActors { models, attached, cameras: drawing_cameras, shadow_only } = drawn;
+    let DrawnActors { models, attached, cameras: drawing_cameras, shadow_only, movers } = drawn;
     world.followed.clear();
     world.visible.clear();
     // An inactive camera keeps the list it last had, so only the active ones count.
-    let meshes: Vec<&[Entity]> = drawing_cameras.iter().filter(|(camera, _)| camera.is_active).map(|(_, seen)| seen.get(TypeId::of::<Mesh3d>())).collect();
+    let mut meshes: Vec<&[Entity]> = drawing_cameras.iter().filter(|(camera, _)| camera.is_active).map(|(_, seen)| seen.get(TypeId::of::<Mesh3d>())).collect();
+    meshes.push(&movers.drawn);
     let drew = |entity, parent: Option<&ChildOf>| camera_drew(&meshes, &shadow_only.0, entity, parent.map(ChildOf::parent));
     let mut frame = world.spare.take().unwrap_or_default();
     let JobBuffers { mut held, mut followed, visible: mut seen, mut casting, mut placed, mut watched } = std::mem::take(&mut frame.job_buffers);

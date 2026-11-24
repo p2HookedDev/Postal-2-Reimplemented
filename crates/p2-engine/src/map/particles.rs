@@ -6,7 +6,7 @@ use super::*;
 use super::fluids::camera_view;
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
 use crate::emitter_changes::apply_command;
-use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook, OCCLUSION_MARGIN};
+use p2_render::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, MeshEmitterLook, OCCLUSION_MARGIN};
 use p2_render::level_collision::StaticCollision;
 mod mesh_particles;
 mod sprites;
@@ -97,6 +97,38 @@ pub struct Particles {
     pub(super) waiting_coronas: Vec<CoronaActor>,
     pub(super) born: Vec<EmitterLook>,
     pub(super) born_meshes: Vec<MeshEmitterLook>,
+    pub(super) blasts: Vec<Blast>,
+}
+
+/// A hit's reach in Unreal units and its push in Unreal units a second.
+const SHOT: (f32, f32) = (48.0, 450.0);
+const SWING: (f32, f32) = (80.0, 600.0);
+/// The effects the scripts spawn where a hit lands; a kick's or a swing's first, since a shot's name begins theirs.
+const IMPACTS: [(&str, (f32, f32)); 10] = [
+    ("SmokeHitPuffMelee", SWING),
+    ("SmokeHitPuffSledge", SWING),
+    ("SmokeHitPuff", SHOT),
+    ("SparkHit", SHOT),
+    ("DirtClods", SHOT),
+    ("DustHitPuff", SHOT),
+    ("PistolPuff", SHOT),
+    ("EDPistolPuff", SHOT),
+    ("PickupHitPuff", SHOT),
+    ("BloodImpact", SHOT),
+];
+/// An explosion's momentum over the mass the scripts' people have gives the speed at its middle, kept under what
+/// would throw a piece out of the level.
+const PUSHED_MASS: f32 = 100.0;
+const PUSH_MOST: f32 = 1500.0;
+
+/// The push an emitter actor stands for: an explosion's own reach and force, or a hit's by its class.
+fn blast_of(name: &str, explosion: Option<(f32, f32)>, at: Vector) -> Option<Blast> {
+    if let Some((radius, force)) = explosion {
+        return Some(Blast { at, radius, push: (force / PUSHED_MASS).min(PUSH_MOST) });
+    }
+    let class = name.rsplit('.').next().unwrap_or(name);
+    let &(_, (radius, push)) = IMPACTS.iter().find(|(impact, _)| class.starts_with(impact))?;
+    Some(Blast { at, radius, push })
 }
 
 impl Session {
@@ -106,7 +138,7 @@ impl Session {
         }
         let Some(game) = open_game(&mut self.library, self.map_system.as_deref()) else { return };
         for (actor, emitter) in emitters {
-            let (objects, emitter_meshes, name) = (emitter.objects, emitter.meshes, emitter.name);
+            let (objects, emitter_meshes, name, blast) = (emitter.objects, emitter.meshes, emitter.name, emitter.blast);
             let fogless = emitter.settings.disable_fogging;
             let parent = t.commands.spawn((MapScoped, Transform::from_translation(origin), Visibility::default())).id();
             let mut draws = Vec::new();
@@ -143,6 +175,12 @@ impl Session {
             }
             let started = std::time::Instant::now();
             let at = t.play.world().and_then(|world| world.tick_place(actor)).map(|(location, _)| location.map(|c| c.round()));
+            if let Some(at) = at
+                && let Some(blast) = blast_of(&name, blast, at)
+                && !t.particles.blasts.iter().any(|held| held.at == blast.at)
+            {
+                t.particles.blasts.push(blast);
+            }
             bevy::log::info!(target: "p2_engine::particles", "added {name} at {at:?}: {}", draws.iter().map(|draw| draw.name.as_str()).collect::<Vec<_>>().join("; "));
             t.times.add("spawned: emitters: log", started);
             let started = std::time::Instant::now();
@@ -282,6 +320,7 @@ pub(super) fn present_particles(mut t: ParticleParams) {
 
 fn update_particles(t: &mut ParticleParams) {
     t.drawn.born.append(&mut t.particles.born);
+    t.drawn.blasts.append(&mut t.particles.blasts);
     t.drawn.born_meshes.append(&mut t.particles.born_meshes);
     let step = t.play.world_mut().map_or(0.0, PlayWorld::take_step);
     if let Some(world) = t.play.world_mut() {

@@ -90,6 +90,16 @@ pub fn terrain_detail() -> usize {
     TERRAIN_DETAIL.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static CHARACTER_SMOOTHING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn set_character_smoothing(level: u8) {
+    CHARACTER_SMOOTHING.store(level, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn character_smoothing() -> u8 {
+    CHARACTER_SMOOTHING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

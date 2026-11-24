@@ -19,6 +19,7 @@ function CreateMenuContents()
 	AddLevelSlider(2, "ModernSharpen", 0, 10, 4);
 	AddBox(3, "ModernRelief");
 	AddBox(4, "ModernSpecular");
+	AddBox(5, "ModernTessellation");
 	AddBack();
 	LoadRows();
 }
@@ -39,10 +40,12 @@ defaultproperties
 	Labels(2)="Sharpening"
 	Labels(3)="Bump mapping"
 	Labels(4)="Specular highlights"
+	Labels(5)="Tessellation"
 
 	Helps(0)="Smooths jagged edges; FXAA is fastest, SMAA sharper, MSAA costs the most."
 	Helps(1)="A glow around bright lights."
 	Helps(2)="Makes the picture crisper."
 	Helps(3)="Walls and floors catch the light with bumps taken from their textures."
 	Helps(4)="Surfaces shine by their material: metal, tile, wood, cloth and skin differ."
+	Helps(5)="Rounds the outlines of people and animals."
 }
