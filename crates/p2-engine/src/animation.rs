@@ -234,12 +234,18 @@ const POSED_AT_ONCE: usize = 16;
 #[derive(Default)]
 struct PoseScratch {
     times: Vec<f32>,
+    generation: u64,
 }
+
+/// Inserted by a host that shows maps without playing them: with no world, each mesh loops its chosen sequence.
+#[derive(Resource, Default)]
+pub struct FreeRunPoses;
 
 enum PoseWork<'a> {
     Keep,
     Ragdoll(std::borrow::Cow<'a, [p2_assets::pose::Frame]>),
     Channels(&'a ActorPose, usize),
+    Reference,
     Free,
 }
 
@@ -310,6 +316,18 @@ fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elap
             item.channel_scratch = channel_pose;
             Some(pose)
         }
+        PoseWork::Reference => {
+            const REFERENCE: Option<u64> = Some(0);
+            if item.last_pose == REFERENCE {
+                return None;
+            }
+            item.last_pose = REFERENCE;
+            let local: Vec<LocalBone> = item.mesh.bones.iter().map(|bone| (bone.orientation, bone.position)).collect();
+            let mut pose = Vec::new();
+            let factors = &item.bone_scales;
+            scaled_bone_matrices_into(&item.parents, &local, |bone| factors.get(bone).copied().unwrap_or(1.0), &mut pose);
+            Some(pose)
+        }
         PoseWork::Free => {
             let sequence = item.animation.sequences.get(item.sequence)?;
             Some(item.bone_pose(elapsed * sequence.rate))
@@ -321,17 +339,18 @@ fn pose_channels(pose: &ActorPose) -> impl Iterator<Item = (&ChannelPose, f32, &
     pose.base.iter().map(|channel| (channel, 1.0, "")).chain(pose.blends.iter().map(|(channel, alpha, bone)| (channel, *alpha, &**bone)))
 }
 
-fn pose_work<'a>(item: &AnimatedMesh, world: Option<&'a PlayWorld>, shown_times: &mut Vec<f32>) -> PoseWork<'a> {
+/// An actor that has never played an animation stands in its reference pose, as retail's does.
+fn pose_work<'a>(item: &AnimatedMesh, world: &'a PlayWorld, shown_times: &mut Vec<f32>) -> PoseWork<'a> {
     let Some(actor) = item.actor else { return PoseWork::Keep };
-    if let Some(bones) = world.and_then(|world| world.shown_ragdoll(actor)) {
+    if let Some(bones) = world.shown_ragdoll(actor) {
         return PoseWork::Ragdoll(bones);
     }
-    match world.map_or(Some(None), |world| world.pose(actor)) {
+    match world.pose(actor) {
         None => PoseWork::Keep,
-        Some(None) => PoseWork::Free,
+        Some(None) => PoseWork::Reference,
         Some(Some(pose)) => {
             let from = shown_times.len();
-            shown_times.extend(pose_channels(pose).enumerate().map(|(index, (channel, ..))| world.map_or(channel.time, |world| world.shown.channel_time(actor, index, channel))));
+            shown_times.extend(pose_channels(pose).enumerate().map(|(index, (channel, ..))| world.shown.channel_time(actor, index, channel)));
             PoseWork::Channels(pose, from)
         }
     }
@@ -339,10 +358,7 @@ fn pose_work<'a>(item: &AnimatedMesh, world: Option<&'a PlayWorld>, shown_times:
 
 pub(crate) fn first_joints(item: &mut AnimatedMesh, world: &PlayWorld) -> Option<Arc<[Transform]>> {
     let mut shown_times = Vec::new();
-    let work = pose_work(item, Some(world), &mut shown_times);
-    if matches!(work, PoseWork::Free) {
-        return None;
-    }
+    let work = pose_work(item, world, &mut shown_times);
     let bones = pose_mesh(item, &work, &shown_times, 0.0)?;
     item.last_pose = None;
     Some(bones.into_iter().map(joint_transform).collect())
@@ -352,9 +368,9 @@ fn animate(
     time: Res<Time>,
     mut animated: ResMut<Animated>,
     play: Res<Play>,
+    free_run: Option<Res<FreeRunPoses>>,
     mut poses: ResMut<Poses>,
     mut times: ResMut<FrameTimes>,
-    mut generation: Local<u64>,
     mut scratch: Local<PoseScratch>,
 ) {
     let started = std::time::Instant::now();
@@ -370,8 +386,8 @@ fn animate(
             _ => true,
         });
     }
-    if *generation != play.generation() {
-        *generation = play.generation();
+    if scratch.generation != play.generation() {
+        scratch.generation = play.generation();
         poses.names.clear();
         poses.aliases.clear();
         let live: FxHashSet<ObjectId> = animated.0.iter().filter_map(|item| item.actor).collect();
@@ -386,7 +402,15 @@ fn animate(
     }
     let shown_times = &mut scratch.times;
     shown_times.clear();
-    let work: Vec<PoseWork> = animated.0.iter().map(|item| pose_work(item, world, shown_times)).collect();
+    let work: Vec<PoseWork> = animated
+        .0
+        .iter()
+        .map(|item| match world {
+            Some(world) => pose_work(item, world, shown_times),
+            None if free_run.is_some() && item.actor.is_some() => PoseWork::Free,
+            None => PoseWork::Keep,
+        })
+        .collect();
     let (shown_times, elapsed) = (&*shown_times, time.elapsed_secs());
     let mut posed: Vec<Option<Vec<Mat4>>> = Vec::new();
     posed.resize_with(work.len(), || None);
@@ -517,5 +541,37 @@ mod tests {
         blend_local(&mut blended, &over, 0.5, &[false, true]);
         assert_eq!(blended[0], base[0]);
         assert_eq!(blended[1].1, [5.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn an_actor_without_animation_stands_in_its_reference_pose() {
+        use p2_assets::Bone;
+        let bone = |parent, position| Bone { name: 0, parent, num_children: 0, orientation: [0.0, 0.0, 0.0, 1.0], position };
+        let mesh = SkeletalMesh {
+            materials: Vec::new(),
+            scale: Vector::new(1.0, 1.0, 1.0),
+            origin: Vector::ZERO,
+            rot_origin: Rotator::ZERO,
+            positions: Vec::new(),
+            influences: Vec::new(),
+            influence_starts: Vec::new(),
+            wedges: Vec::new(),
+            indices: Vec::new(),
+            sections: Vec::new(),
+            bones: vec![bone(0, [0.0; 3]), bone(0, [10.0, 0.0, 0.0])],
+            default_animation: 0,
+            attach_aliases: Vec::new(),
+        };
+        let walk = MeshAnimation { version: 0, bones: Vec::new(), sequences: Vec::new() };
+        let mut item = AnimatedMesh::new(Vec::new(), Arc::new(mesh), Arc::new(walk), 0, |i| format!("b{i}"), |i| format!("b{i}"));
+        let actor = ObjectId::from_index(1);
+        item.actor = Some(actor);
+        let mut world = PlayWorld::with_actors([]);
+        world.read_pose(actor, None);
+        let mut times = Vec::new();
+        let work = pose_work(&item, &world, &mut times);
+        let bones = pose_mesh(&mut item, &work, &times, 1.0).expect("the first frame poses");
+        assert!(bones[1].abs_diff_eq(item.inverse_bind[1].inverse(), 1e-5), "{}", bones[1]);
+        assert!(pose_mesh(&mut item, &work, &times, 2.0).is_none(), "an unchanged pose is not posed again");
     }
 }

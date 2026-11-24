@@ -96,6 +96,10 @@ impl PlayWorld {
     pub(crate) fn present_step(&mut self, step: f32) {
         self.frame.step = step;
     }
+
+    pub(crate) fn read_pose(&mut self, actor: ObjectId, pose: Option<ActorPose>) {
+        self.frame.poses.insert(actor, pose);
+    }
 }
 
 pub struct PlayWorld {

@@ -236,7 +236,7 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
             app.init_resource::<OldPoses>().add_systems(Update, (walk, old_animate, old_pose_joints).chain());
         }
         Layout::New => {
-            app.init_resource::<p2_engine::play::Play>().add_plugins((AnimationPlugin, p2_engine::FrameOrderPlugin)).add_systems(Update, walk.before(p2_render::view::MeshViewSystems::Camera));
+            app.init_resource::<p2_engine::play::Play>().init_resource::<p2_engine::animation::FreeRunPoses>().add_plugins((AnimationPlugin, p2_engine::FrameOrderPlugin)).add_systems(Update, walk.before(p2_render::view::MeshViewSystems::Camera));
         }
     }
     let world = app.world_mut();

@@ -21,7 +21,7 @@ use p2_script::Source;
 
 use crate::ViewerState;
 use crate::controls::ViewerInput;
-use p2_engine::animation::{Animated, AnimationSystems};
+use p2_engine::animation::{Animated, AnimationSystems, FreeRunPoses};
 use p2_host::game_dir_form::GameDirForm;
 use p2_bevy_assets::library::Library;
 use p2_engine::map::{
@@ -61,7 +61,8 @@ pub enum AssetBrowserSystems {
 
 impl Plugin for AssetBrowserPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<FreeRunPoses>()
+            .add_systems(
             EguiPrimaryContextPass,
             ui.in_set(AssetBrowserSystems::Ui).before(MapSystems::Paint).run_if(in_state(ViewerState::Browse)),
         )

@@ -38,7 +38,7 @@ impl bevy::app::Plugin for FrameOrderPlugin {
             .configure_sets(Update, map::MapSystems::CoronaPlaces.in_set(play::PlaySystems::Placed).before(p2_render::coronas::CoronaSystems))
             .configure_sets(Update, p2_render::coronas::CoronaSystems.in_set(play::PlaySystems::Placed))
             .configure_sets(Update, p2_render::modern::ModernGraphicsSystems::Apply.after(MeshViewSystems::Camera))
-            // Without a world the poses fall back to the viewer's free run; a load keeps the last frame instead.
+            // A load keeps the last frame: hit reactions and foot placement must not move a frozen pose either.
             .configure_sets(Update, animation::AnimationSystems::Pose.after(MeshViewSystems::Camera).run_if(map::not_loading))
             .configure_sets(Update, p2_render::RenderFollowSystems.after(MeshViewSystems::Apply))
             .configure_sets(PostUpdate, p2_render::view::SceneViewSystems::Overlays.after(play::PlaySystems::Present))
