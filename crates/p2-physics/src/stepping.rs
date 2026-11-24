@@ -121,9 +121,14 @@ impl World {
                 self.bodies.get(handle)?.colliders().iter().filter_map(|&c| colliders.get(c)).filter_map(swept).reduce(|a, b| a.merged(&b))
             })
             .collect();
+        self.wake_in(&reach);
+    }
+
+    pub(crate) fn wake_in(&mut self, reach: &[Aabb]) {
         if reach.is_empty() {
             return;
         }
+        let colliders = &self.colliders;
         let near: Vec<RigidBodyHandle> = self
             .bodies
             .iter()

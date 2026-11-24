@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use p2_assets::{KMeshProps, read_kmesh_props, read_static_mesh};
 use p2_package::Package;
-use p2_physics::{BodyId, BodyParams, Impact, Shape, World};
+use p2_physics::{BodyId, BodyParams, Impact, Shape, StaticId, World};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use p2_math::{Rotator, Vector, quat_to_rotator, rotator_to_quat};
@@ -40,6 +40,7 @@ pub(crate) struct Karma {
     failed: FxHashSet<ObjectId>,
     meshes: ObjectTable<Option<Arc<MeshShape>>>,
     movers: FxHashMap<ObjectId, Option<Body>>,
+    statics: FxHashMap<ObjectId, Vec<StaticId>>,
 }
 
 impl Karma {
@@ -282,19 +283,76 @@ impl<L: LoaderRef> Vm<L> {
                 self.diagnostics.log.push(format!("Karma level geometry: {e}"));
             }
         }
-        for points in self.karma_blocking_hulls() {
-            if let Err(e) = world.add_static_hull(&points) {
-                self.diagnostics.log.push(format!("Karma blocking volume: {e}"));
-            }
-        }
-        for (shape, location, rotation) in self.karma_static_shapes() {
-            if let Err(e) = world.add_static_shape(&shape, location, rotation) {
-                self.diagnostics.log.push(format!("Karma static mesh: {e}"));
-            }
-        }
         self.karma.world = Some(world);
-        self.karma.movers = self.actors().filter(|&a| self.store.is_a(a, crate::Kind::Mover) && !self.store.is_deleted(a)).map(|a| (a, None)).collect();
+        let models: Vec<ObjectId> = self
+            .actors()
+            .filter(|&a| !self.store.is_deleted(a) && (self.store.is_a(a, crate::Kind::Mover) || self.store.flag_of(a, Prop::bBlockKarma)))
+            .collect();
+        for actor in models {
+            self.karma_update_model(actor);
+        }
         self.profile_phase("load: karma world", phase);
+    }
+
+    /// As retail, any actor with `bBlockKarma` has a Karma model, except that pawns get none here. A static one is
+    /// level geometry; a mover or other non-static one is a kinematic body that follows the actor.
+    fn karma_update_model(&mut self, actor: ObjectId) {
+        if let Some(ids) = self.karma.statics.remove(&actor)
+            && let Some(world) = &mut self.karma.world
+        {
+            for id in ids {
+                world.remove_static(id);
+            }
+        }
+        let volume = self.store.is_a(actor, crate::Kind::BlockingVolume);
+        if self.store.is_a(actor, crate::Kind::Pawn) {
+            return;
+        }
+        if !volume && (self.store.is_a(actor, crate::Kind::Mover) || !self.store.flag_of(actor, Prop::bStatic)) {
+            if let Some(Some(body)) = self.karma.movers.insert(actor, None)
+                && let Some(world) = &mut self.karma.world
+            {
+                world.remove_body(body.id);
+            }
+            return;
+        }
+        if !self.store.flag_of(actor, Prop::bBlockKarma) || matches!(self.store.physics_of(actor), Some(EPhysics::Karma | EPhysics::KarmaRagDoll)) {
+            return;
+        }
+        let added: Vec<_> = if volume {
+            let Some(points) = self.karma_blocking_hull(actor) else { return };
+            let Some(world) = &mut self.karma.world else { return };
+            vec![world.add_static_hull(&points)]
+        } else {
+            if self.store.object_of(actor, Prop::StaticMesh).is_none() {
+                return;
+            }
+            let Some((shapes, location, rotation)) = self.karma_placed_shapes(actor, WithoutProps::Skip) else { return };
+            let Some(world) = &mut self.karma.world else { return };
+            shapes.iter().map(|shape| world.add_static_shape(shape, location, rotation)).collect()
+        };
+        let mut ids = Vec::new();
+        for result in added {
+            match result {
+                Ok(id) => ids.push(id),
+                Err(e) => self.diagnostics.log.push(format!("Karma static model {}: {e}", self.store.object(actor).path)),
+            }
+        }
+        if !ids.is_empty() {
+            self.karma.statics.insert(actor, ids);
+        }
+    }
+
+    fn karma_follower_blocks(&self, actor: ObjectId) -> bool {
+        if self.store.is_deleted(actor) {
+            return false;
+        }
+        if self.store.is_a(actor, crate::Kind::Mover) {
+            return self.store.flag_of(actor, Prop::bCollideActors) && self.store.flag_of(actor, Prop::bBlockActors);
+        }
+        self.store.flag_of(actor, Prop::bBlockKarma)
+            && self.store.object_of(actor, Prop::StaticMesh).is_some()
+            && !matches!(self.store.physics_of(actor), Some(EPhysics::Karma | EPhysics::KarmaRagDoll))
     }
 
     fn karma_gravity(&mut self) {
@@ -315,7 +373,7 @@ impl<L: LoaderRef> Vm<L> {
         let movers: Vec<ObjectId> = self.karma.movers.keys().copied().collect();
         for mover in movers {
             let deleted = self.store.is_deleted(mover);
-            let blocks = !deleted && self.store.flag_of(mover, Prop::bCollideActors) && self.store.flag_of(mover, Prop::bBlockActors);
+            let blocks = self.karma_follower_blocks(mover);
             let (location, rotation) = (self.store.vector(mover, Prop::Location), self.store.rotator_of(mover, Prop::Rotation));
             let body = match (self.karma.movers.get(&mover).copied().flatten(), blocks) {
                 (Some(body), false) => {
@@ -351,8 +409,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn karma_mover_spawned(&mut self, actor: ObjectId) {
-        if self.karma.world.is_some() && self.store.is_a(actor, crate::Kind::Mover) {
-            self.karma.movers.entry(actor).or_insert(None);
+        if self.karma.world.is_some() && (self.store.is_a(actor, crate::Kind::Mover) || self.store.flag_of(actor, Prop::bBlockKarma)) {
+            self.karma_update_model(actor);
         }
     }
 
@@ -360,7 +418,8 @@ impl<L: LoaderRef> Vm<L> {
     fn karma_mover_body(&mut self, mover: ObjectId) -> Option<Body> {
         let path = self.store.object(mover).path.clone();
         let shapes = if self.store.flag_of(mover, Prop::bBlockKarma) {
-            self.karma_placed_shapes(mover, WithoutProps::Hull)
+            let without_props = if self.store.is_a(mover, crate::Kind::Mover) { WithoutProps::Hull } else { WithoutProps::Skip };
+            self.karma_placed_shapes(mover, without_props)
         } else {
             self.body_triangles(mover).filter(|(triangles, _)| !triangles.is_empty()).map(|(triangles, placement)| {
                 (vec![Shape::Mesh(triangles)], placement.location, matrix_to_quat(placement.rotation.axes().map(Vector::from)))
@@ -404,27 +463,14 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    fn karma_static_shapes(&mut self) -> Vec<(Shape, Vector, [f32; 4])> {
-        let actors: Vec<ObjectId> = self
-            .actors()
-            .filter(|&a| !self.store.is_deleted(a) && self.store.flag_of(a, Prop::bStatic) && self.store.flag_of(a, Prop::bBlockKarma))
-            .filter(|&a| self.draw_type_of(a) == Some(crate::enums::EDrawType::StaticMesh))
-            .collect();
-        let mut placed = Vec::new();
-        for actor in actors {
-            let Some((shapes, location, rotation)) = self.karma_placed_shapes(actor, WithoutProps::Skip) else { continue };
-            placed.extend(shapes.into_iter().map(|shape| (shape, location, rotation)));
-        }
-        placed
-    }
-
-    /// As retail, never by triangles: `KPhysicsProps` shapes with simple collision, otherwise one convex hull.
-    /// A brush is one hull of its corners, so a concave brush is filled in.
+    /// As retail, never by triangles and chosen by the `StaticMesh` set, whatever the draw type: `KPhysicsProps`
+    /// shapes with simple collision, otherwise one convex hull. A brush is one hull of its corners, so a concave
+    /// brush is filled in.
     fn karma_placed_shapes(&mut self, actor: ObjectId, without_props: WithoutProps) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
         let placement = self.drawn_placement(actor);
         let place = |p: &[f32; 3]| placement.in_body(*p);
-        let shapes = if self.draw_type_of(actor) == Some(crate::enums::EDrawType::StaticMesh) {
-            let mesh = self.store.object_of(actor, Prop::StaticMesh).and_then(|mesh| self.karma_mesh(mesh))?;
+        let shapes = if let Some(mesh) = self.store.object_of(actor, Prop::StaticMesh) {
+            let mesh = self.karma_mesh(mesh)?;
             match (mesh.use_simple_collision, &mesh.props) {
                 (true, Some(props)) => shapes::mesh_shapes(Some(props), (mesh.min, mesh.max), placement.scale, placement.pre_pivot),
                 (true, None) if without_props == WithoutProps::Skip => return None,
@@ -490,7 +536,13 @@ impl<L: LoaderRef> Vm<L> {
         }
         match native {
             Native::KSetBlockKarma => {
-                self.store.set(this, Prop::bBlockKarma, Value::Bool(args.first().is_some_and(crate::interp::truthy)));
+                let block = bool_arg(args, 0);
+                if block != self.store.flag_of(this, Prop::bBlockKarma) && !self.store.is_a(this, crate::Kind::KConstraint) {
+                    self.store.set(this, Prop::bBlockKarma, Value::Bool(block));
+                    if self.karma.world.is_some() {
+                        self.karma_update_model(this);
+                    }
+                }
             }
             Native::KEnableCollision | Native::KDisableCollision => {
                 let other = match args.first() {

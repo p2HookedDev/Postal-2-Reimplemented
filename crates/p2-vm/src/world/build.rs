@@ -98,20 +98,12 @@ impl<L: LoaderRef> Vm<L> {
         meshes
     }
 
-    /// As retail, every actor with `bBlockKarma` gets its own Karma model, without draw scale for a
-    /// `BlockingVolume`. A `KarmaBlockingVolume` does not collide or block, and traces skip it.
-    pub(crate) fn karma_blocking_hulls(&mut self) -> Vec<Vec<[f32; 3]>> {
-        let volumes: Vec<ObjectId> = self
-            .actors()
-            .filter(|&a| !self.store.is_deleted(a) && self.store.is_a(a, Kind::BlockingVolume) && self.store.flag_of(a, Prop::bBlockKarma))
-            .collect();
-        let mut hulls = Vec::new();
-        for volume in volumes {
-            let Some(model) = self.store.object_of(volume, Prop::Brush).and_then(|brush| self.brush_model(brush)) else { continue };
-            let (location, pre_pivot) = (self.store.vector(volume, Prop::Location), self.store.vector(volume, Prop::PrePivot));
-            let axes = self.store.rotator_of(volume, Prop::Rotation).axes();
-            hulls.push(brush_corners(&model).map(|p| [0, 1, 2].map(|c| location[c] + (0..3).map(|k| axes[k][c] * (p[k] - pre_pivot[k])).sum::<f32>())).collect());
-        }
-        hulls
+    /// As retail, a `BlockingVolume`'s Karma model is one hull of its brush, without draw scale. A
+    /// `KarmaBlockingVolume` does not collide or block, and traces skip it.
+    pub(crate) fn karma_blocking_hull(&mut self, volume: ObjectId) -> Option<Vec<[f32; 3]>> {
+        let model = self.store.object_of(volume, Prop::Brush).and_then(|brush| self.brush_model(brush))?;
+        let (location, pre_pivot) = (self.store.vector(volume, Prop::Location), self.store.vector(volume, Prop::PrePivot));
+        let axes = self.store.rotator_of(volume, Prop::Rotation).axes();
+        Some(brush_corners(&model).map(|p| [0, 1, 2].map(|c| location[c] + (0..3).map(|k| axes[k][c] * (p[k] - pre_pivot[k])).sum::<f32>())).collect())
     }
 }

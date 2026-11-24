@@ -1,13 +1,23 @@
 use rapier3d::prelude::*;
 
 use crate::{
-    BodyId, BodyParams, Contacts, Error, LEVEL_FRICTION, LEVEL_RESTITUTION, Shape, World, body_collider, body_pair, collider, from_rapier,
-    level_contact, pose, to_rapier, vectors, with_material,
+    BodyId, BodyParams, Contacts, Error, LEVEL_FRICTION, LEVEL_RESTITUTION, MOVER_REACH, Shape, StaticId, World, body_collider, body_pair,
+    collider, from_rapier, level_contact, pose, to_rapier, vectors, with_material,
 };
 
 impl World {
-    fn add_level(&mut self, collider: ColliderBuilder) {
-        self.level.push(self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION)));
+    fn add_level(&mut self, collider: ColliderBuilder) -> StaticId {
+        let handle = self.colliders.insert(with_material(collider, LEVEL_FRICTION, LEVEL_RESTITUTION));
+        self.level.push(handle);
+        StaticId(handle)
+    }
+
+    /// Wakes what rested on the collider.
+    pub fn remove_static(&mut self, id: StaticId) {
+        let Some(reach) = self.colliders.get(id.0).map(|c| c.compute_aabb().loosened(MOVER_REACH)) else { return };
+        self.level.retain(|&h| h != id.0);
+        self.colliders.remove(id.0, &mut self.islands, &mut self.bodies, &mut self.soft_bodies, true);
+        self.wake_in(&[reach]);
     }
 
     /// A triangle's front is the side its corners run counter-clockwise from.
@@ -21,17 +31,15 @@ impl World {
         Ok(())
     }
 
-    pub fn add_static_hull(&mut self, points: &[[f32; 3]]) -> Result<(), Error> {
+    pub fn add_static_hull(&mut self, points: &[[f32; 3]]) -> Result<StaticId, Error> {
         let points = vectors(points);
         let collider = ColliderBuilder::convex_hull(&points).ok_or_else(|| Error::Mesh(format!("no convex hull of {} points", points.len())))?;
-        self.add_level(collider);
-        Ok(())
+        Ok(self.add_level(collider))
     }
 
-    pub fn add_static_shape(&mut self, shape: &Shape, location: p2_math::Vector, rotation: [f32; 4]) -> Result<(), Error> {
+    pub fn add_static_shape(&mut self, shape: &Shape, location: p2_math::Vector, rotation: [f32; 4]) -> Result<StaticId, Error> {
         let Some(collider) = collider(shape) else { return Err(Error::Mesh("no convex hull".to_owned())) };
-        self.add_level(collider.position(pose(location, rotation)));
-        Ok(())
+        Ok(self.add_level(collider.position(pose(location, rotation))))
     }
 
     pub fn add_body(&mut self, params: &BodyParams) -> BodyId {

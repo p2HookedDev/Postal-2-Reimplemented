@@ -101,6 +101,9 @@ pub struct BodyParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BodyId(RigidBodyHandle);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StaticId(ColliderHandle);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Impact {
     pub body: BodyId,
@@ -283,6 +286,23 @@ mod tests {
         let (steps, owed) = steps_owed(STEP * 2.6);
         assert!(steps == 2 && (owed - STEP * 0.6).abs() < 1e-6, "{steps} {owed}");
         assert_eq!(steps_owed(2.0), (MAX_STEPS, 0.0));
+    }
+
+    #[test]
+    fn a_removed_static_drops_what_rested_on_it() {
+        let mut world = World::new([0.0, 0.0, -950.0].into());
+        let corners: Vec<[f32; 3]> = [-200.0f32, 200.0].into_iter().flat_map(|x| [-200.0f32, 200.0].into_iter().flat_map(move |y| [-20.0f32, 0.0].map(|z| [x, y, z]))).collect();
+        let floor = world.add_static_hull(&corners).unwrap();
+        let body = world.add_body(&crate_box([0.0, 0.0, 40.0].into()));
+        for _ in 0..240 {
+            world.step(STEP);
+        }
+        assert!(world.pose(body).unwrap().0.z > 0.0);
+        world.remove_static(floor);
+        for _ in 0..60 {
+            world.step(STEP);
+        }
+        assert!(world.pose(body).unwrap().0.z < -20.0);
     }
 
     #[test]
