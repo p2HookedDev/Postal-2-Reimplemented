@@ -12,6 +12,7 @@ pub struct Hud {
     /// Loading frames show it again: the engine does not clear the screen.
     pub(super) last_hud: Arc<[CanvasItem]>,
     pub(super) progress_bar_read: bool,
+    pub(super) boot_cover: Option<BootCover>,
     painted_at: Option<std::time::Instant>,
     first_reads_left: std::time::Duration,
 }
@@ -40,6 +41,30 @@ impl Hud {
         let found = read(self);
         self.first_reads_left = self.first_reads_left.saturating_sub(started.elapsed());
         Some(found)
+    }
+}
+
+/// Seconds: how long the first map stays black once shown if its scene has not started, and the fade after.
+const COVER_HOLD: f32 = 1.0;
+const COVER_FADE: f32 = 0.5;
+
+/// The first map comes in from black: covered while it loads, faded in once its scene runs.
+#[derive(Default)]
+pub(super) struct BootCover {
+    shown: f32,
+    faded: Option<f32>,
+}
+
+impl BootCover {
+    /// The opacity after `seconds` more of the shown map; 0 once the cover is gone.
+    pub(super) fn opacity(&mut self, seconds: f32, scene_started: bool) -> f32 {
+        self.shown += seconds;
+        match &mut self.faded {
+            Some(faded) => *faded += seconds,
+            None if scene_started || self.shown >= COVER_HOLD => self.faded = Some(0.0),
+            None => {}
+        }
+        self.faded.map_or(1.0, |faded| (1.0 - faded / COVER_FADE).max(0.0))
     }
 }
 
@@ -136,5 +161,27 @@ impl CanvasSource for LibraryReads<'_> {
             let ahead = hud.hud_assets.fonts.remove(path);
             ahead.or_else(|| read_hud_font(open_game(&mut session.library, session.map_system.as_deref())?, path, |image| images.add(image)))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cover_holds_until_the_scene_starts_then_fades() {
+        let mut cover = BootCover::default();
+        assert_eq!(cover.opacity(0.1, false), 1.0);
+        assert_eq!(cover.opacity(0.1, true), 1.0);
+        assert!((cover.opacity(COVER_FADE / 2.0, true) - 0.5).abs() < 1e-5);
+        assert_eq!(cover.opacity(COVER_FADE, false), 0.0);
+    }
+
+    #[test]
+    fn a_scene_that_never_starts_still_fades_after_the_hold() {
+        let mut cover = BootCover::default();
+        assert_eq!(cover.opacity(COVER_HOLD / 2.0, false), 1.0);
+        assert_eq!(cover.opacity(COVER_HOLD / 2.0, false), 1.0);
+        assert_eq!(cover.opacity(COVER_FADE, false), 0.0);
     }
 }

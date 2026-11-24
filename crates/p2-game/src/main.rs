@@ -55,7 +55,13 @@ fn run() {
     let system = known_game_dir().and_then(|root| system_ini(&root).ok()).unwrap_or_default();
     let settings = display::load_settings();
     let start = Display::read(|section, key| settings.get(section, key).or_else(|| system.get(section, key)).map(str::to_owned));
-    let mut window = Window { title: "POSTAL 2".into(), present_mode: display::present_mode(start.vsync, start.triple_buffering && start.window.fullscreen), ..Default::default() };
+    // Shown once it has drawn, so the system's blank window never flashes white.
+    let mut window = Window {
+        title: "POSTAL 2".into(),
+        present_mode: display::present_mode(start.vsync, start.triple_buffering && start.window.fullscreen),
+        visible: false,
+        ..Default::default()
+    };
     display::apply_window(&mut window, &start.window, None, start.display);
 
     p2_engine::play::init_script_stacks();
@@ -66,6 +72,7 @@ fn run() {
     let mut app = App::new();
     // Never the timed, event-woken updates Bevy runs a window without focus on: every mouse event then makes a frame
     // of its own between the timed ones, and what moves on screen jitters.
+    app.insert_resource(bevy::camera::ClearColor(bevy::color::Color::BLACK));
     app.insert_resource(bevy::winit::WinitSettings { focused_mode: bevy::winit::UpdateMode::Continuous, unfocused_mode: bevy::winit::UpdateMode::Continuous });
     app.add_plugins((
         DefaultPlugins
@@ -103,6 +110,7 @@ impl Plugin for GamePlugin {
                 input::read_player_input.in_set(PlaySystems::Input).run_if(in_state(GameState::Playing)),
                 apply_display.after(PlaySystems::Tick),
                 log_frame_times,
+                show_window,
             ),
         )
         .add_systems(
@@ -139,6 +147,14 @@ fn apply_display(
     let mode = display::present_mode(settings.flag(display::USE_VSYNC), fullscreen && settings.flag(display::USE_TRIPLE_BUFFERING));
     if window.present_mode != mode {
         window.present_mode = mode;
+    }
+}
+
+const FRAMES_BEFORE_SHOWN: u32 = 3;
+
+fn show_window(mut window: Single<&mut Window, With<PrimaryWindow>>, frames: Res<bevy::diagnostic::FrameCount>) {
+    if !window.visible && frames.0 >= FRAMES_BEFORE_SHOWN {
+        window.visible = true;
     }
 }
 

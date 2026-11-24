@@ -546,9 +546,16 @@ fn publish_frame_lights(play: Res<Play>, frame: ResMut<p2_render::bsp_light::Fra
     p2_render::bsp_light::FrameLights::publish(frame, play.world().map_or(&[][..], |world| world.dynamic_lights()));
 }
 
-fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts::FrameFacts>, mut culls: Local<FxHashMap<ObjectId, f32>>) {
+fn publish_frame_facts(play: Res<Play>, facts: ResMut<p2_render::frame_facts::FrameFacts>, mut culls: Local<FxHashMap<ObjectId, f32>>) {
+    // A load keeps the last frame on screen, so its facts stay and only time stops.
     let Some(world) = play.world() else {
-        facts.set_if_neq(p2_render::frame_facts::FrameFacts::default());
+        if !facts.paused {
+            let facts = facts.into_inner();
+            facts.paused = true;
+            facts.game_step = 0.0;
+            facts.person_hits.clear();
+            facts.fluid_hits.clear();
+        }
         return;
     };
     let facts = facts.into_inner();

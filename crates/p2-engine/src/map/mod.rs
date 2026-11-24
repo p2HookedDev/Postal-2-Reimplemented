@@ -298,6 +298,10 @@ fn despawn_map_scoped(world: &mut bevy::ecs::world::World) {
     }
 }
 
+pub(crate) fn not_loading(session: Option<Res<Session>>) -> bool {
+    session.is_none_or(|session| session.loading().is_none())
+}
+
 pub(crate) fn map_shown(session: Option<Res<Session>>, play: Option<Res<Play>>) -> bool {
     session.is_some_and(|session| session.loading().is_none()) && play.is_some_and(|play| play.world().is_some())
 }

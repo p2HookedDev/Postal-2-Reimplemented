@@ -141,11 +141,9 @@ impl Simulation {
             .take_commands(|command| matches!(command, HostCommand::Travel(_)))
             .filter_map(|command| if let HostCommand::Travel(url) = command { Some(url) } else { None })
             .last();
-        if frame.travel.is_none() {
-            let started = Instant::now();
-            self.draw_hud(&mut frame, job.canvas, job.step);
-            frame.times.push(("hud scripts", started.elapsed()));
-        }
+        let started = Instant::now();
+        self.draw_hud(&mut frame, job.canvas, job.step);
+        frame.times.push(("hud scripts", started.elapsed()));
         let started = Instant::now();
         self.read_after_hud(&mut frame, &job.watched, job.forces);
         frame.times.push(("vm read after hud", started.elapsed()));

@@ -17,6 +17,7 @@ pub(super) struct CanvasTargets<'w, 's> {
     commands: Commands<'w, 's>,
     hud: ResMut<'w, Hud>,
     painter: ResMut<'w, p2_render::canvas::CanvasPainter>,
+    time: Res<'w, bevy::time::Time<bevy::time::Real>>,
 }
 
 pub(super) fn paint_map_canvas(area: Res<CanvasArea>, mut session: ResMut<Session>, mut contexts: EguiContexts, mut t: CanvasTargets) -> bevy::ecs::error::Result {
@@ -39,6 +40,9 @@ fn frame(session: &mut Session, ctx: &egui::Context, rect: egui::Rect, contexts:
     // engine's frame buffer; its canvas actors belong to the level left.
     if t.play.world().is_some_and(|world| !world.presented()) {
         let items = Arc::clone(&t.hud.last_hud);
+        if t.hud.boot_cover.is_some() {
+            paint_cover(ctx, rect, egui::Order::Background, 1.0);
+        }
         paint_items(session, ctx, rect, &items, contexts, t);
         t.painter.paint_progress(ctx, rect, 1.0);
         t.times.add("hud paint", started);
@@ -54,8 +58,22 @@ fn frame(session: &mut Session, ctx: &egui::Context, rect: egui::Rect, contexts:
     if !items.is_empty() {
         t.painter.paint_canvas(ctx, rect, &items, &mut t.view, &mut source, &mut stores);
     }
+    let scene_started = t.play.world().is_some_and(PlayWorld::cutscene);
+    if let Some(cover) = &mut t.hud.boot_cover {
+        let opacity = cover.opacity(t.time.delta_secs(), scene_started);
+        if opacity > 0.0 {
+            paint_cover(ctx, rect, egui::Order::Tooltip, opacity);
+        } else {
+            t.hud.boot_cover = None;
+        }
+    }
     t.times.add("hud paint", started);
     t.hud.last_hud = items;
+}
+
+fn paint_cover(ctx: &egui::Context, rect: egui::Rect, order: egui::Order, opacity: f32) {
+    let shapes = ctx.layer_painter(egui::LayerId::new(order, "cover".into())).with_clip_rect(rect);
+    shapes.rect_filled(rect, 0.0, egui::Color32::from_black_alpha((opacity * 255.0) as u8));
 }
 
 fn paint_items(session: &mut Session, ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], contexts: &mut EguiContexts, t: &mut CanvasTargets) {
@@ -66,6 +84,10 @@ fn paint_items(session: &mut Session, ctx: &egui::Context, rect: egui::Rect, ite
 fn loading_frame(session: &mut Session, ctx: &egui::Context, rect: egui::Rect, progress: f32, contexts: &mut EguiContexts, t: &mut CanvasTargets) {
     t.play.set_canvas_size([rect.width(), rect.height()]);
     t.view.hide_canvas_layers();
+    if session.map().is_none() {
+        t.hud.boot_cover.get_or_insert_default();
+        paint_cover(ctx, rect, egui::Order::Background, 1.0);
+    }
     let items = Arc::clone(&t.hud.last_hud);
     paint_items(session, ctx, rect, &items, contexts, t);
     if !std::mem::replace(&mut t.hud.progress_bar_read, true) {
