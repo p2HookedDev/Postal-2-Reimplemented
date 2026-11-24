@@ -80,6 +80,16 @@ pub fn texture_quality() -> TextureQuality {
     *QUALITY.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+static TERRAIN_DETAIL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+pub fn set_terrain_detail(per_quad: usize) {
+    TERRAIN_DETAIL.store(per_quad.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn terrain_detail() -> usize {
+    TERRAIN_DETAIL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -258,20 +258,26 @@ pub(super) fn terrain_models(
             let placements = terrain.decorations(layer, &terrain.vertices, &maps);
             decorations.push(DecorationLayer { mesh: layer.static_mesh, placements, in_sky, zone });
         }
-        let normals = terrain.vertex_normals();
-        let alpha_uvs: Vec<[f32; 2]> = (0..terrain.vertices.len()).map(|i| terrain.alpha_uv(i)).collect();
+        let detail = p2_bevy_assets::terrain_detail();
+        let drawn = terrain.subdivided(detail);
+        let normals = drawn.vertex_normals();
+        let alpha_uv = |at: usize, side: usize| (at as f32 / detail as f32 + 0.5) / side as f32;
+        let alpha_uvs: Vec<[f32; 2]> =
+            (0..drawn.vertices.len()).map(|i| [alpha_uv(i % drawn.width, terrain.width), alpha_uv(i / drawn.width, terrain.height)]).collect();
         let surface = TerrainSurface {
-            terrain: &terrain,
+            terrain: &drawn,
             normals: &normals,
             alpha_uvs: &alpha_uvs,
-            lighting: (!terrain.vertex_colors.is_empty()).then_some(terrain.vertex_colors.as_slice()),
+            lighting: (!drawn.vertex_colors.is_empty()).then_some(drawn.vertex_colors.as_slice()),
         };
         let layers = terrain_layers(game, t, texture, id, &surface);
-        let size = terrain.sector_size.max(1);
-        let (quads_x, quads_y) = (terrain.width.saturating_sub(1), terrain.height.saturating_sub(1));
+        let sector = terrain.sector_size.max(1);
+        // Sectors are whole: a heightmap side that is no multiple of the sector size loses its last quads.
+        let quads = |side: usize| (side / sector * sector).saturating_sub(1) * detail;
+        let (quads_x, quads_y, size) = (quads(terrain.width), quads(terrain.height), sector * detail);
         for y0 in (0..quads_y).step_by(size) {
             for x0 in (0..quads_x).step_by(size) {
-                let terrain = &terrain;
+                let terrain = &drawn;
                 let triangles: Vec<[usize; 3]> = (y0..(y0 + size).min(quads_y))
                     .flat_map(|y| (x0..(x0 + size).min(quads_x)).flat_map(move |x| terrain.quad_triangles(x, y)))
                     .collect();

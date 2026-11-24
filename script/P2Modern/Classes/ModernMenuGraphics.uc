@@ -4,10 +4,10 @@ class ModernMenuGraphics extends ShellMenuCW;
 
 const KeyPath = "ini:Engine.Engine.RenderDevice";
 
-var UWindowCheckbox     Boxes[8];
-var string              Keys[8];
-var localized string    Labels[8];
-var localized string    Helps[8];
+var UWindowCheckbox     Boxes[9];
+var string              Keys[9];
+var localized string    Labels[9];
+var localized string    Helps[9];
 
 var localized string    TitleText;
 var localized string    BackHelp;
@@ -102,6 +102,7 @@ defaultproperties
 	Keys(5)="ModernSpecular"
 	Keys(6)="ModernPost"
 	Keys(7)="ModernBake"
+	Keys(8)="ModernTerrainDetail"
 
 	Labels(0)="Modern graphics"
 	Labels(1)="Sun shadows"
@@ -111,6 +112,7 @@ defaultproperties
 	Labels(5)="Generated specular"
 	Labels(6)="Bloom and sharpening"
 	Labels(7)="Relit world"
+	Labels(8)="Rounded terrain"
 
 	Helps(0)="Turns all the new graphics on or off. Off gives the original look."
 	Helps(1)="Characters and moving objects shade sunlit ground and window patches."
@@ -120,6 +122,7 @@ defaultproperties
 	Helps(5)="Shine on surfaces, made from their own textures."
 	Helps(6)="A glow around bright light, smoother edges and a sharper picture."
 	Helps(7)="Relights each level for finer shadows and bounced light. The first visit takes a while."
+	Helps(8)="Hills and slopes are drawn as smooth curves instead of flat facets. Applies when a level loads."
 
 	DimTextColor=(R=110,G=110,B=110,A=255)
 

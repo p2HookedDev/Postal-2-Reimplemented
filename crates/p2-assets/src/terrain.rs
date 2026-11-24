@@ -98,27 +98,96 @@ impl Terrain {
             .collect()
     }
 
-    pub fn alpha_uv(&self, index: usize) -> [f32; 2] {
-        let (x, y) = (index % self.width.max(1), index / self.width.max(1));
-        [(x as f32 + 0.5) / self.width as f32, (y as f32 + 0.5) / self.height as f32]
+    /// For drawing only: not retail, and not the surface anything collides with.
+    pub fn subdivided(&self, n: usize) -> Self {
+        let (w, h) = (self.width, self.height);
+        if n < 2 || w < 2 || h < 2 || self.vertices.len() != w * h {
+            return self.clone();
+        }
+        let height = |x: isize, y: isize| self.vertices[y.clamp(0, h as isize - 1) as usize * w + x.clamp(0, w as isize - 1) as usize][2];
+        let curve = |[a, b, c, d]: [f32; 4], t: f32| {
+            0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t * t + (3.0 * b - a - 3.0 * c + d) * t * t * t)
+        };
+        let curved = |x: usize, y: usize| {
+            let inside = x > 0 && y > 0 && x < w - 1 && y < h - 1;
+            let shown = [(1, 1), (0, 1), (1, 0), (0, 0)].iter().all(|&(dx, dy)| inside && self.quad_visible(x - dx, y - dy));
+            if shown { 1.0 } else { 0.0 }
+        };
+        let bilinear = |[c00, c10, c01, c11]: [f32; 4], tx: f32, ty: f32| (c00 + (c10 - c00) * tx) * (1.0 - ty) + (c01 + (c11 - c01) * tx) * ty;
+        let (fine_w, fine_h) = ((w - 1) * n + 1, (h - 1) * n + 1);
+        let mut vertices = Vec::with_capacity(fine_w * fine_h);
+        let mut vertex_colors = Vec::with_capacity(if self.vertex_colors.is_empty() { 0 } else { fine_w * fine_h });
+        let mut bits = [&self.quad_visibility, &self.edge_turn].map(|coarse| vec![0_i32; if coarse.is_empty() { 0 } else { (fine_w * fine_h).div_ceil(32) }]);
+        for fy in 0..fine_h {
+            let qy = (fy / n).min(h - 2);
+            let ty = (fy - qy * n) as f32 / n as f32;
+            for fx in 0..fine_w {
+                let qx = (fx / n).min(w - 2);
+                let tx = (fx - qx * n) as f32 / n as f32;
+                let quad = qy * w + qx;
+                let corners = [quad, quad + 1, quad + w, quad + w + 1];
+                let [z00, z10, z01, z11] = corners.map(|i| self.vertices[i][2]);
+                let flat = match (bit(&self.edge_turn, quad), tx + ty < 1.0, tx > ty) {
+                    (true, true, _) => z00 + tx * (z10 - z00) + ty * (z01 - z00),
+                    (true, false, _) => z11 + (1.0 - tx) * (z01 - z11) + (1.0 - ty) * (z10 - z11),
+                    (false, _, true) => z00 + tx * (z10 - z00) + ty * (z11 - z10),
+                    (false, _, false) => z00 + ty * (z01 - z00) + tx * (z11 - z01),
+                };
+                let (x, y) = (qx as isize, qy as isize);
+                let rows = [-1, 0, 1, 2].map(|j| curve([-1, 0, 1, 2].map(|i| height(x + i, y + j)), tx));
+                let weight = bilinear([curved(qx, qy), curved(qx + 1, qy), curved(qx, qy + 1), curved(qx + 1, qy + 1)], tx, ty);
+                let [x0, y0, _] = self.vertices[quad];
+                let [x1, y1, _] = self.vertices[quad + w + 1];
+                vertices.push([x0 + (x1 - x0) * tx, y0 + (y1 - y0) * ty, flat + (curve(rows, ty) - flat) * weight]);
+                if !self.vertex_colors.is_empty() {
+                    let channel = |c: usize| bilinear(corners.map(|i| f32::from(self.vertex_colors[i][c])), tx, ty).round() as u8;
+                    vertex_colors.push([0, 1, 2, 3].map(channel));
+                }
+                let fine = fy * fine_w + fx;
+                for (bits, coarse) in bits.iter_mut().zip([&self.quad_visibility, &self.edge_turn]) {
+                    if bit(coarse, quad) && !bits.is_empty() {
+                        bits[fine / 32] |= 1 << (fine % 32);
+                    }
+                }
+            }
+        }
+        let [quad_visibility, edge_turn] = bits;
+        Self {
+            width: fine_w,
+            height: fine_h,
+            scale: Vector::new(self.scale.x / n as f32, self.scale.y / n as f32, self.scale.z),
+            vertices,
+            vertex_colors,
+            quad_visibility,
+            edge_turn,
+            sector_size: self.sector_size * n,
+            ..self.clone()
+        }
     }
 
-    /// Cross product of the steps across a vertex along rows and columns (one-sided at the edges); up for
-    /// a positive `TerrainScale`, down when `Inverted`. The engine's exact neighbours are (unverified).
     pub fn vertex_normals(&self) -> Vec<[f32; 3]> {
-        let (w, h) = (self.width.max(1), self.height.max(1));
-        let at = |x: usize, y: usize| self.vertices.get(y * w + x).copied().map_or(Vector::ZERO, Vector::from);
+        let (w, h) = (self.width, self.height);
+        if self.vertices.len() != w * h {
+            return Vec::new();
+        }
+        let face = |a: usize, b: usize, c: usize| {
+            let [a, b, c] = [a, b, c].map(|i| Vector::from(self.vertices[i]));
+            (b - a).cross(c - a).safe_normal()
+        };
+        let mut sums = vec![Vector::ZERO; self.vertices.len()];
+        for y in 0..h.saturating_sub(1) {
+            for x in 0..w.saturating_sub(1) {
+                let quad = y * w + x;
+                let (v00, v10, v01, v11) = (quad, quad + 1, quad + w, quad + w + 1);
+                let normal =
+                    if bit(&self.edge_turn, quad) { face(v00, v10, v01) + face(v01, v10, v11) } else { face(v00, v10, v11) + face(v00, v11, v01) };
+                for corner in [v00, v10, v01, v11] {
+                    sums[corner] += normal;
+                }
+            }
+        }
         let sign = if self.inverted { -1.0 } else { 1.0 };
-        (0..self.vertices.len())
-            .map(|i| {
-                let (x, y) = (i % w, i / w);
-                let along = at((x + 1).min(w - 1), y) - at(x.saturating_sub(1), y);
-                let across = at(x, (y + 1).min(h - 1)) - at(x, y.saturating_sub(1));
-                let n = along.cross(across);
-                let length = n.dot(n).sqrt();
-                if length > 0.0 { <[f32; 3]>::from(n).map(|c| c * sign / length) } else { [0.0, 0.0, sign] }
-            })
-            .collect()
+        sums.into_iter().map(|sum| (sum.safe_normal() * sign).into()).collect()
     }
 }
 
@@ -282,6 +351,33 @@ mod tests {
         assert!(terrain(|_, _| 0.0).vertex_normals().iter().all(|&n| n == [0.0, 0.0, 1.0]));
         let inverted = Terrain { inverted: true, ..terrain(|_, _| 0.0) };
         assert!(inverted.vertex_normals().iter().all(|&n| n == [0.0, 0.0, -1.0]));
+    }
+
+    #[test]
+    fn subdivision_keeps_the_vertices_and_rounds_between_them() {
+        let bump = |x: f32, y: f32| if (x, y) == (2.0, 2.0) { 8.0 } else { 0.0 };
+        let vertices = (0..25).map(|i| ((i % 5) as f32, (i / 5) as f32)).map(|(x, y)| [x, y, bump(x, y)]).collect();
+        let coarse = Terrain { width: 5, height: 5, vertices, ..terrain(|_, _| 0.0) };
+        let fine = coarse.subdivided(2);
+        assert_eq!((fine.width, fine.height, fine.sector_size), (9, 9, 32));
+        for (i, vertex) in coarse.vertices.iter().enumerate() {
+            assert_eq!(fine.vertices[(i / 5) * 2 * 9 + (i % 5) * 2], *vertex);
+        }
+        let flat_middle = 4.0;
+        assert!(fine.vertices[4 * 9 + 3][2] > flat_middle, "{:?}", fine.vertices[4 * 9 + 3]);
+        assert_eq!(coarse.subdivided(1).vertices, coarse.vertices);
+    }
+
+    #[test]
+    fn subdivision_leaves_the_quads_around_a_hole_flat() {
+        let vertices: Vec<[f32; 3]> = (0..25).map(|i| ((i % 5) as f32, (i / 5) as f32)).map(|(x, y)| [x, y, x * x]).collect();
+        let mut quad_visibility = vec![-1_i32];
+        quad_visibility[0] &= !(1 << (5 + 1));
+        let holed = Terrain { width: 5, height: 5, vertices, quad_visibility, ..terrain(|_, _| 0.0) };
+        let fine = holed.subdivided(2);
+        assert!(!fine.quad_visible(2, 2) && !fine.quad_visible(3, 3) && fine.quad_visible(4, 2));
+        assert_eq!(fine.vertices[2 * 9 + 3][2], 2.5);
+        assert_eq!(fine.vertices[4][2], 4.0);
     }
 
     #[test]

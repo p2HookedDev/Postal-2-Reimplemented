@@ -96,6 +96,7 @@ pub const QUERIES: &[&str] = &[
     MODERN_SPECULAR,
     MODERN_POST,
     MODERN_BAKE,
+    MODERN_TERRAIN_DETAIL,
     MSAA,
 ];
 
@@ -130,6 +131,7 @@ pub const MODERN_RELIEF: &str = "ini:Engine.Engine.RenderDevice ModernRelief";
 pub const MODERN_SPECULAR: &str = "ini:Engine.Engine.RenderDevice ModernSpecular";
 pub const MODERN_POST: &str = "ini:Engine.Engine.RenderDevice ModernPost";
 pub const MODERN_BAKE: &str = "ini:Engine.Engine.RenderDevice ModernBake";
+pub const MODERN_TERRAIN_DETAIL: &str = "ini:Engine.Engine.RenderDevice ModernTerrainDetail";
 const MODERN_OFF_BY_DEFAULT: [&str; 1] = [MODERN_AO];
 
 /// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
@@ -182,6 +184,10 @@ impl Settings {
         self.flag(MODERN_GRAPHICS)
     }
 
+    pub fn terrain_detail(&self) -> usize {
+        if self.modern_effect(MODERN_TERRAIN_DETAIL) { 3 } else { 1 }
+    }
+
     pub fn modern_effect(&self, query: &str) -> bool {
         let default = !MODERN_OFF_BY_DEFAULT.contains(&query);
         let text = self.text(query);
@@ -201,6 +207,7 @@ impl bevy::app::Plugin for DisplayPlugin {
 
 pub(crate) fn apply_texture_quality(settings: bevy::ecs::system::Res<Settings>) {
     p2_bevy_assets::set_texture_quality(settings.texture_quality());
+    p2_bevy_assets::set_terrain_detail(settings.terrain_detail());
 }
 
 pub fn present_mode(vsync: bool, triple_buffering: bool) -> PresentMode {
@@ -270,25 +277,25 @@ mod tests {
         assert!(!settings.modern_graphics());
     }
 
-    fn effects(settings: &Settings) -> [bool; 7] {
+    fn effects(settings: &Settings) -> [bool; 8] {
         EFFECTS.map(|key| settings.modern_effect(key))
     }
 
-    const EFFECTS: [&str; 7] =
-        [MODERN_SHADOWS, MODERN_CONTACT_SHADOWS, MODERN_AO, MODERN_RELIEF, MODERN_SPECULAR, MODERN_POST, MODERN_BAKE];
+    const EFFECTS: [&str; 8] =
+        [MODERN_SHADOWS, MODERN_CONTACT_SHADOWS, MODERN_AO, MODERN_RELIEF, MODERN_SPECULAR, MODERN_POST, MODERN_BAKE, MODERN_TERRAIN_DETAIL];
 
     #[test]
     fn modern_effects_default_on_but_ao() {
         let master = |value: &str| Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() });
-        assert_eq!(effects(&master("True")), [true, true, false, true, true, true, true]);
-        assert_eq!(effects(&Settings::default()), [false; 7]);
-        assert_eq!(effects(&master("False")), [false; 7]);
+        assert_eq!(effects(&master("True")), [true, true, false, true, true, true, true, true]);
+        assert_eq!(effects(&Settings::default()), [false; 8]);
+        assert_eq!(effects(&master("False")), [false; 8]);
         let all = |on: &str| Settings::read(|query| if query == MODERN_GRAPHICS { on.to_owned() } else { "True".to_owned() });
-        assert_eq!(effects(&all("False")), [false; 7]);
-        assert_eq!(effects(&all("True")), [true; 7]);
+        assert_eq!(effects(&all("False")), [false; 8]);
+        assert_eq!(effects(&all("True")), [true; 8]);
         for (index, key) in EFFECTS.into_iter().enumerate() {
             let settings = Settings::read(|query| if query == key { "False".to_owned() } else { "True".to_owned() });
-            let mut wanted = [true; 7];
+            let mut wanted = [true; 8];
             wanted[index] = false;
             assert_eq!(effects(&settings), wanted, "{key}");
         }
