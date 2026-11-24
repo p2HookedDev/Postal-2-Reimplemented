@@ -83,6 +83,7 @@ fn prop_pipeline(cache: &PipelineCache, layouts: &Layouts, layout: &MeshVertexBu
     };
     let buffer = layout.0.get_layout(&attributes).ok()?;
     let shader_defs: Vec<ShaderDefVal> = if emulated { vec![EMULATION.into()] } else { Vec::new() };
+    // No culling, as every prop material gives a directional shadow view through `cast_both_sides`.
     Some(cache.queue_render_pipeline(RenderPipelineDescriptor {
         label: Some("sun level prop".into()),
         layout: groups,

@@ -583,6 +583,8 @@ fn publish_frame_facts(play: Res<Play>, mut facts: ResMut<p2_render::frame_facts
     }
     facts.person_hits.clear();
     facts.person_hits.extend_from_slice(world.person_hits());
+    facts.fluid_hits.clear();
+    facts.fluid_hits.extend_from_slice(world.fluid_hits());
     facts.level_time = world.level_time();
     facts.glows.clear();
     facts.glows.extend_from_slice(world.glows());

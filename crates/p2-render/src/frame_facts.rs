@@ -2,7 +2,7 @@ use bevy::ecs::prelude::Resource;
 use bevy::math::Vec3;
 use p2_math::{Rotator, Vector};
 use p2_render_cpu::LightEffect;
-use p2_vm::{ObjectId, PersonHit};
+use p2_vm::{FluidHit, ObjectId, PersonHit};
 use rustc_hash::FxHashMap;
 use crate::scene::ZoneFog;
 
@@ -20,6 +20,7 @@ pub struct FrameFacts {
     /// Moves on whenever `cull_distances` changes, so a reader can tell without comparing the map.
     pub cull_version: u32,
     pub person_hits: Vec<PersonHit>,
+    pub fluid_hits: Vec<FluidHit>,
     /// The level's clock in game seconds: it stands while the game is paused.
     pub level_time: f32,
     pub glows: Vec<GlowSource>,

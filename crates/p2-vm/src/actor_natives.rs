@@ -1,7 +1,7 @@
 use p2_math::{Rotator, Vector};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::enums::EPhysics;
+use crate::enums::{EPhysics, FluidType};
 use crate::native_id::Native;
 use crate::interp::{int, truthy};
 use crate::natives::{float_arg, given, int_arg, object_arg, optional_float, rot3, vec3};
@@ -74,6 +74,26 @@ pub struct FluidPling {
     pub radius: f32,
 }
 
+/// A `CheckForFluidHit` the scripts ran on a feeder: where its stream met static geometry, in world space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FluidHit {
+    pub feeder: ObjectId,
+    pub kind: FluidType,
+    pub at: Vector,
+    pub normal: Vector,
+    /// The tick's seconds the script handed the call.
+    pub seconds: f32,
+    /// The feeder's `QuantityPerHit`.
+    pub quantity: f32,
+}
+
+const MOST_KEPT_FLUID_HITS: usize = 256;
+
+/// `args`: the call's `StartLoc`, `EndLoc`, `HitVel`, `GroundHit`, `HitNormal` and `DeltaTime`.
+fn fluid_hit(feeder: ObjectId, kind: FluidType, quantity: f32, args: &[Value; 6]) -> FluidHit {
+    FluidHit { feeder, kind, at: vec3(args.get(3)), normal: vec3(args.get(4)), seconds: float_arg(args, 5), quantity }
+}
+
 /// A `TakeDamage` on a pawn, living or dead, as the script was handed it; `at` and `momentum` in world space.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PersonHit {
@@ -97,6 +117,8 @@ pub struct ActorFx {
     pub plings: Vec<FluidPling>,
     /// Drained by the host each tick.
     pub person_hits: Vec<PersonHit>,
+    /// Drained by the host each tick.
+    pub fluid_hits: Vec<FluidHit>,
     com_offsets: FxHashMap<ObjectId, Vector>,
     inertia: FxHashMap<ObjectId, [Vector; 2]>,
     lods: FxHashMap<ObjectId, Vec<(f32, Option<ObjectId>)>>,
@@ -118,6 +140,15 @@ impl ActorFx {
 }
 
 impl<L: LoaderRef> Vm<L> {
+    pub(crate) fn fluid_hit_seen(&mut self, feeder: ObjectId, args: &[Value; 6]) {
+        // A host that never drains the list (a test, the viewer) must not let it grow.
+        let Some(kind) = FluidType::from_byte(self.store.byte_of(feeder, Prop::MyType)).filter(|_| self.actor_fx.fluid_hits.len() < MOST_KEPT_FLUID_HITS) else {
+            return;
+        };
+        let quantity = self.store.float_of(feeder, Prop::QuantityPerHit);
+        self.actor_fx.fluid_hits.push(fluid_hit(feeder, kind, quantity, args));
+    }
+
     pub fn projector_actors(&mut self) -> Option<FxHashSet<ObjectId>> {
         let actors: FxHashSet<ObjectId> =
             self.actor_fx.projected.iter().filter(|&&(projector, actor)| !self.store.is_deleted(projector) && !self.store.is_deleted(actor)).map(|&(_, actor)| actor).collect();
@@ -524,6 +555,15 @@ fn screen_to_near_plane(pixel: [f32; 2], size: [f32; 2], fov: f32, rotation: Rot
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fluid_hit_is_where_the_script_says_the_ground_was() {
+        let at = |x: f32| Value::Vector(Vector::new(x, 2.0, 3.0));
+        let args = [at(10.0), at(20.0), at(30.0), at(40.0), Value::Vector(Vector::new(0.0, 0.0, 1.0)), Value::Float(0.25)];
+        let hit = fluid_hit(ObjectId(9), FluidType::Urine, 0.5, &args);
+        let expected = FluidHit { feeder: ObjectId(9), kind: FluidType::Urine, at: Vector::new(40.0, 2.0, 3.0), normal: Vector::new(0.0, 0.0, 1.0), seconds: 0.25, quantity: 0.5 };
+        assert_eq!(hit, expected);
+    }
 
     #[test]
     fn attach_takes_accepting_static_meshes_with_the_tag() {

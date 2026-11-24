@@ -134,6 +134,10 @@ impl<L: LoaderRef> Vm<L> {
             let hit = std::array::from_fn(|k| hit_arg(&*self, &args, k, function.params[k]));
             self.bullet_hole(function, hit)?;
         }
+        if function.hook == Some(ScriptHook::FluidHit) && let Some(feeder) = this {
+            let hit: [Value; 6] = std::array::from_fn(|k| hit_arg(&*self, &args, k, function.params[k]));
+            self.fluid_hit_seen(feeder, &hit);
+        }
         self.script.script_depth += 1;
         let started = self.function_enter();
         let mut result = run(self, function, this, class, args);

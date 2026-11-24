@@ -24,17 +24,17 @@ use bevy::shader::{Shader, ShaderRef};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_bevy_assets::{to_bevy, unreal_to_bevy};
-use p2_host::display::{MODERN_GPU_PARTICLES, Settings};
+use p2_host::display::{MODERN_GPU_PARTICLES, Settings, modern_on, modern_turned_off};
 use p2_math::Vector;
 use p2_physics::{BodyId, BodyParams, Contacts, Shape, World};
 use rustc_hash::FxHashMap;
 
 use crate::frame_facts::FrameFacts;
-use crate::gpu_particles::{GpuParticleSystems, next_unit};
+use crate::gpu_particles::GpuParticleSystems;
 use crate::level_collision::{LevelCollision, LevelTriangles};
 use crate::particle_draw::ParticleDrawSystems;
 use crate::particle_frame::{Blast, DrawnParticles};
-use crate::screen_pass::modern_level;
+use crate::particle_throw::next_unit;
 use crate::shaders::add_shaders;
 use crate::slot_buffer::SlotBuffer;
 
@@ -90,7 +90,11 @@ impl Plugin for DebrisPlugin {
         // After the droplets' thrower: it hands over this frame's pieces, and the hits' pushes come before it.
         app.init_resource::<PieceBirths>().insert_resource(debris).add_systems(
             PostUpdate,
-            (start_pieces, move_pieces).chain().in_set(DebrisSystems).in_set(ParticleDrawSystems).after(GpuParticleSystems),
+            (
+                (start_pieces.run_if(modern_on(MODERN_GPU_PARTICLES)), (|mut debris: ResMut<Debris>| debris.clear()).run_if(modern_turned_off(MODERN_GPU_PARTICLES))),
+                move_pieces,
+            )
+                .chain().in_set(DebrisSystems).in_set(ParticleDrawSystems).after(GpuParticleSystems),
         );
     }
 }
@@ -621,7 +625,7 @@ fn spark_color(tint: Vec3, age: f32) -> Color {
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn start_pieces(
     mut commands: Commands,
-    settings: Option<Res<Settings>>,
+    settings: Res<Settings>,
     drawn: Option<Res<DrawnParticles>>,
     level: Option<Res<LevelCollision>>,
     facts: Res<FrameFacts>,
@@ -630,10 +634,10 @@ fn start_pieces(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DebrisTint>>>,
 ) {
-    let setting = modern_level(settings.as_deref(), MODERN_GPU_PARTICLES);
+    let setting = settings.modern_level(MODERN_GPU_PARTICLES);
     let map = drawn.as_deref().map_or(0, |drawn| drawn.level);
     let debris = &mut *debris;
-    if setting == 0 || map != debris.map {
+    if map != debris.map {
         debris.clear();
         debris.map = map;
     }
@@ -641,7 +645,7 @@ fn start_pieces(
     if let Some(drawn) = drawn.as_deref() {
         debris.eye = drawn.eye;
     }
-    if let Some(collision) = level.as_deref().and_then(|level| level.0.clone()).filter(|_| setting > 0) {
+    if let Some(collision) = level.as_deref().and_then(|level| level.0.clone()) {
         // Taken when the map is first seen, not at its first break, so the break's frame is not the long one.
         if debris.triangles.as_ref().is_none_or(|held| !held.holds(&collision)) {
             debris.triangles = Some(LevelTriangles::new(collision));

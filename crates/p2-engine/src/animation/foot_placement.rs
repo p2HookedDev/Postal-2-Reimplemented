@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bevy::app::{App, Plugin, Update};
-use bevy::ecs::prelude::{Local, Res, ResMut};
+use bevy::ecs::prelude::{Res, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::{Mat4, Quat, Vec3};
 use bevy::time::Time;
@@ -12,11 +12,11 @@ use p2_assets::pose::subtree;
 use p2_bevy_assets::rotator_matrix;
 use p2_math::Vector;
 use p2_vm::ObjectId;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
-use super::drawn_pose::{keep_for_game, mesh_place, posed_origin, restore, turn_about};
-use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate, pose_joints};
-use p2_host::display::{MODERN_FOOT_PLACEMENT, Settings};
+use super::drawn_pose::{Layer, apply_layers, base_pose, mesh_place, posed_origin, turn_about};
+use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate};
+use p2_host::display::{MODERN_FOOT_PLACEMENT, modern_on, modern_turned_off};
 use p2_render::level_collision::{LevelCollision, StaticCollision};
 use crate::play::Play;
 
@@ -39,7 +39,16 @@ pub(super) struct FootPlacementPlugin;
 
 impl Plugin for FootPlacementPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, place_feet.after(animate).before(pose_joints).in_set(AnimationSystems::Pose));
+        app.init_resource::<Feet>().add_systems(
+            Update,
+            (
+                place_feet.run_if(modern_on(MODERN_FOOT_PLACEMENT)),
+                (|mut feet: ResMut<Feet>, mut poses: ResMut<Poses>| feet.layer.drop_all(&mut poses)).run_if(modern_turned_off(MODERN_FOOT_PLACEMENT)),
+            )
+                .after(animate)
+                .before(apply_layers)
+                .in_set(AnimationSystems::Pose),
+        );
     }
 }
 
@@ -67,51 +76,55 @@ const REST: Shown = ([0.0; 2], [Vec3::Z; 2]);
 struct Person {
     mesh: Arc<SkeletalMesh>,
     rig: Option<Rig>,
-    animated: Vec<Mat4>,
     place: Mat4,
     shown: Shown,
-    applied: Option<Shown>,
     /// What was shown when a ragdoll took the body, and the game seconds since.
     handed: Option<(Shown, f32)>,
 }
 
 impl Person {
-    fn new(item: &AnimatedMesh, bones: &[Mat4]) -> Self {
-        Self { mesh: Arc::clone(&item.mesh), rig: leg_rig(item), animated: bones.to_vec(), place: Mat4::IDENTITY, shown: REST, applied: None, handed: None }
+    fn new(item: &AnimatedMesh) -> Self {
+        Self { mesh: Arc::clone(&item.mesh), rig: leg_rig(item), place: Mat4::IDENTITY, shown: REST, handed: None }
     }
 }
 
-#[derive(Default)]
+#[derive(Resource, Default)]
 pub(super) struct Feet {
-    people: FxHashMap<ObjectId, Person>,
+    layer: Layer<Person>,
     visited: FxHashSet<ObjectId>,
     drawn: FxHashSet<ObjectId>,
     drawn_before: FxHashSet<ObjectId>,
-    generation: u64,
+}
+
+impl Feet {
+    pub(super) fn apply(&self, actor: ObjectId, bones: &mut [Mat4]) -> bool {
+        if let Some(person) = self.layer.people.get(&actor)
+            && let Some(rig) = &person.rig
+            && person.shown != REST
+        {
+            rig.apply(bones, person.place, person.shown);
+            return true;
+        }
+        false
+    }
 }
 
 pub(super) fn place_feet(
     time: Res<Time>,
-    settings: Option<Res<Settings>>,
     play: Res<Play>,
     collision: Option<Res<LevelCollision>>,
     animated: Res<Animated>,
     mut poses: ResMut<Poses>,
-    mut feet: Local<Feet>,
+    mut feet: ResMut<Feet>,
 ) {
     let poses = &mut *poses;
     let feet = &mut *feet;
-    let on = settings.is_some_and(|settings| settings.modern_level(MODERN_FOOT_PLACEMENT) > 0);
     let statics = collision.as_ref().and_then(|collision| collision.0.as_deref());
-    let (true, Some(world), Some(statics)) = (on, play.world(), statics) else {
-        for (actor, person) in feet.people.drain() {
-            restore(poses, actor, person.animated);
-        }
+    let (Some(world), Some(statics)) = (play.world(), statics) else {
+        feet.layer.drop_all(poses);
         return;
     };
-    if feet.generation != play.generation() {
-        feet.generation = play.generation();
-        feet.people.clear();
+    if feet.layer.restarted(play.generation()) {
         feet.drawn.clear();
     }
     std::mem::swap(&mut feet.drawn, &mut feet.drawn_before);
@@ -132,35 +145,32 @@ pub(super) fn place_feet(
             feet.drawn.insert(actor);
         }
         let placed = if cutscene || !drawn { None } else { mesh_place(world, item, actor).filter(near) };
-        let known = feet.people.contains_key(&actor);
+        let known = feet.layer.people.contains_key(&actor);
         if placed.is_none() && !known {
             continue;
         }
         // Someone coming into view is first seen corrected; one already seen eases into it.
         let snap = !known && !feet.drawn_before.contains(&actor);
-        let Some(bones) = poses.bones.get_mut(&actor) else {
-            feet.people.remove(&actor);
+        let Some(pose) = base_pose(poses, actor) else {
+            feet.layer.people.remove(&actor);
             continue;
         };
         let fresh = poses.changed.contains(&actor);
-        let person = feet.people.entry(actor).or_insert_with(|| Person::new(item, bones));
+        let person = feet.layer.people.entry(actor).or_insert_with(|| Person::new(item));
+        let before = person.shown;
         if !Arc::ptr_eq(&person.mesh, &item.mesh) {
-            *person = Person::new(item, bones);
-        }
-        if fresh {
-            person.animated.clone_from(bones);
-            person.applied = None;
+            *person = Person::new(item);
         }
         let Some(rig) = &person.rig else {
             if placed.is_none() {
-                feet.people.remove(&actor);
+                feet.layer.people.remove(&actor);
             }
             continue;
         };
         let target = match placed {
             Some(place) => {
                 person.place = place;
-                rig.targets(&person.animated, place, statics)
+                rig.targets(pose, place, statics)
             }
             None => REST,
         };
@@ -174,25 +184,15 @@ pub(super) fn place_feet(
             None if snap => target,
             None => ease(person.shown, target, blend),
         };
-        let shown = person.shown;
-        let rest = shown == REST;
-        if person.applied != Some(shown) {
-            person.applied = Some(shown);
-            if !rest {
-                keep_for_game(&mut poses.animated, actor, &person.animated);
-                bones.clone_from(&person.animated);
-                rig.apply(bones, person.place, shown);
-                poses.changed.insert(actor);
-            } else if !fresh {
-                bones.clone_from(&person.animated);
-                poses.changed.insert(actor);
-            }
+        let rest = person.shown == REST;
+        if person.shown != before || (fresh && !rest) {
+            poses.relayer.insert(actor);
         }
         if rest && placed.is_none() {
-            feet.people.remove(&actor);
+            feet.layer.people.remove(&actor);
         }
     }
-    feet.people.retain(|actor, _| poses.bones.contains_key(actor));
+    feet.layer.people.retain(|actor, _| poses.bones.contains_key(actor));
 }
 
 fn leg_rig(item: &AnimatedMesh) -> Option<Rig> {

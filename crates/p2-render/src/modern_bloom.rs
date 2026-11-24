@@ -19,7 +19,7 @@ use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::{
     AddressMode, BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, BufferId,
     CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState, ColorWrites, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d, FilterMode,
-    FragmentState, PipelineCache, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType,
+    FragmentState, PipelineCache, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerDescriptor, ShaderStages, ShaderType,
     SpecializedRenderPipeline, SpecializedRenderPipelines, StorageTextureAccess, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureId,
     TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension, TextureViewId, binding_types,
 };
@@ -30,7 +30,7 @@ use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 
-use crate::screen_pass::{PassUniforms, ViewBindGroups};
+use crate::screen_pass::{PassUniforms, ViewBindGroups, filtered_texture_and_sampler};
 use crate::shaders::add_shaders;
 
 const BLOOM_SHADER: Handle<Shader> = uuid_handle!("3b8e5d27-a6c1-4f94-8d02-7e1c9a54b6f3");
@@ -133,20 +133,19 @@ pub struct BloomPipeline {
 }
 
 fn init_bloom_pipeline(mut commands: Commands, render_device: Res<RenderDevice>, pipeline_cache: Res<PipelineCache>, fullscreen: Res<FullscreenShader>) {
-    let sampled = || binding_types::texture_2d(TextureSampleType::Float { filterable: true });
-    let filtering = || binding_types::sampler(SamplerBindingType::Filtering);
+    let (sampled, filtering) = filtered_texture_and_sampler();
     let step = || binding_types::uniform_buffer::<BloomStep>(true);
     let written = || binding_types::texture_storage_2d(BLOOM_FORMAT, StorageTextureAccess::WriteOnly);
     let down_layout =
-        BindGroupLayoutDescriptor::new("bloom downsample", &BindGroupLayoutEntries::sequential(ShaderStages::COMPUTE, (sampled(), filtering(), step(), written())));
+        BindGroupLayoutDescriptor::new("bloom downsample", &BindGroupLayoutEntries::sequential(ShaderStages::COMPUTE, (sampled, filtering, step(), written())));
     let up_layout = BindGroupLayoutDescriptor::new(
         "bloom upsample",
         &BindGroupLayoutEntries::sequential(
             ShaderStages::COMPUTE,
-            (sampled(), filtering(), step(), written(), binding_types::texture_2d(TextureSampleType::Float { filterable: false })),
+            (sampled, filtering, step(), written(), binding_types::texture_2d(TextureSampleType::Float { filterable: false })),
         ),
     );
-    let composite_layout = BindGroupLayoutDescriptor::new("bloom composite", &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (sampled(), filtering(), step())));
+    let composite_layout = BindGroupLayoutDescriptor::new("bloom composite", &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (sampled, filtering, step())));
     let sampler = render_device.create_sampler(&SamplerDescriptor {
         min_filter: FilterMode::Linear,
         mag_filter: FilterMode::Linear,

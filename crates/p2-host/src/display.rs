@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use bevy::ecs::prelude::{Local, Res};
 use bevy::math::UVec2;
 use bevy::window::{Monitor, MonitorSelection, PresentMode, VideoModeSelection, Window, WindowMode};
 use p2_bevy_assets::TextureQuality;
@@ -430,7 +431,7 @@ impl bevy::app::Plugin for DisplayPlugin {
     }
 }
 
-pub fn apply_texture_quality(settings: bevy::ecs::system::Res<Settings>) {
+pub fn apply_texture_quality(settings: Res<Settings>) {
     p2_bevy_assets::set_texture_quality(settings.texture_quality());
     p2_bevy_assets::set_terrain_detail(settings.terrain_detail());
     p2_bevy_assets::set_character_smoothing(settings.modern_level(MODERN_TESSELLATION));
@@ -456,9 +457,64 @@ pub fn video_modes() -> &'static [p2_vm::VideoMode] {
     VIDEO_MODES.get().map_or(&[], Vec::as_slice)
 }
 
+pub fn modern_on(key: &'static str) -> impl FnMut(Option<Res<Settings>>) -> bool {
+    move |settings: Option<Res<Settings>>| settings.is_some_and(|settings| settings.modern_level(key) > 0)
+}
+
+/// A run condition true on the one frame the feature goes from on to off, for the system that undoes its work.
+pub fn modern_turned_off(key: &'static str) -> impl FnMut(Option<Res<Settings>>, Local<bool>) -> bool {
+    move |settings: Option<Res<Settings>>, mut was_on: Local<bool>| {
+        let on = settings.is_some_and(|settings| settings.modern_level(key) > 0);
+        std::mem::replace(&mut *was_on, on) && !on
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(bevy::ecs::resource::Resource, Default)]
+    struct Ran {
+        work: u32,
+        undo: u32,
+    }
+
+    #[test]
+    fn a_feature_works_while_on_and_undoes_once_when_turned_off() {
+        use bevy::ecs::prelude::ResMut;
+        use bevy::ecs::schedule::IntoScheduleConfigs;
+        let mut app = bevy::app::App::new();
+        app.init_resource::<Ran>().add_systems(
+            bevy::app::Update,
+            (
+                (|mut ran: ResMut<Ran>| ran.work += 1).run_if(modern_on(MODERN_WOUNDS)),
+                (|mut ran: ResMut<Ran>| ran.undo += 1).run_if(modern_turned_off(MODERN_WOUNDS)),
+            ),
+        );
+        let ran = |app: &bevy::app::App| {
+            let ran = app.world().resource::<Ran>();
+            (ran.work, ran.undo)
+        };
+        app.update();
+        assert_eq!(ran(&app), (0, 0));
+        app.insert_resource(with("True", MODERN_WOUNDS, "1"));
+        app.update();
+        app.update();
+        assert_eq!(ran(&app), (2, 0));
+        app.insert_resource(with("True", MODERN_WOUNDS, "0"));
+        app.update();
+        app.update();
+        assert_eq!(ran(&app), (2, 1));
+        app.insert_resource(with("False", MODERN_WOUNDS, "1"));
+        app.update();
+        assert_eq!(ran(&app), (2, 1));
+        app.insert_resource(with("True", MODERN_WOUNDS, "1"));
+        app.update();
+        app.world_mut().remove_resource::<Settings>();
+        app.update();
+        app.update();
+        assert_eq!(ran(&app), (3, 2));
+    }
 
     #[test]
     fn display_from_the_viewport_manager_and_render_device() {

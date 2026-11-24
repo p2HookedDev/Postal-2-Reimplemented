@@ -35,6 +35,7 @@ const DEPTH_SURFACE_SHADER: Handle<Shader> = uuid_handle!("f05b9d36-2c7e-4a81-b4
 const SUN_LEVELS_SHADER: Handle<Shader> = uuid_handle!("9b2e6d41-c58a-4f17-a3d0-6e8f1b47c925");
 const SKY_VIEW_SHADER: Handle<Shader> = uuid_handle!("3e7d1a96-b24c-4f58-8d0e-c71a5f92b630");
 const SKY_VERTEX_SHADER: Handle<Shader> = uuid_handle!("6c1f8e24-a937-4b0d-9e52-d84b07a3f619");
+const LIQUID_LOOK_SHADER: Handle<Shader> = uuid_handle!("e5a19c37-48d2-4b6f-9c03-7d1e62b8f4a0");
 
 pub(crate) struct ShaderLibraryPlugin;
 
@@ -65,6 +66,7 @@ impl Plugin for ShaderLibraryPlugin {
             (SUN_LEVELS_SHADER, Shader::from_wesl(include_str!("sun_levels.wesl"), "p2_render/sun_levels.wesl")),
             (SKY_VIEW_SHADER, Shader::from_wesl(include_str!("sky_view.wesl"), "p2_render/sky_view.wesl")),
             (SKY_VERTEX_SHADER, Shader::from_wesl(include_str!("sky_vertex.wesl"), "p2_render/sky_vertex.wesl")),
+            (LIQUID_LOOK_SHADER, Shader::from_wesl(include_str!("liquid_look.wesl"), "p2_render/liquid_look.wesl")),
         ]);
     }
 }

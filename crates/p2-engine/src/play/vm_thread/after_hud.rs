@@ -215,6 +215,7 @@ impl Simulation {
             .collect();
         frame.plings.append(&mut self.vm.actor_fx.plings);
         frame.person_hits.append(&mut self.vm.actor_fx.person_hits);
+        frame.fluid_hits.append(&mut self.vm.actor_fx.fluid_hits);
         frame.projector_actors = self.vm.projector_actors();
         let vm = &self.vm;
         for command in commands {

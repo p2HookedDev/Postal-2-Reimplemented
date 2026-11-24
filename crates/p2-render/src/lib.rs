@@ -18,6 +18,7 @@ pub mod material_class;
 pub(crate) mod lamp_size;
 pub mod particle_draw;
 pub mod particle_frame;
+pub(crate) mod particle_throw;
 pub mod particle_material;
 pub mod probes;
 pub(crate) mod sampler_refresh;

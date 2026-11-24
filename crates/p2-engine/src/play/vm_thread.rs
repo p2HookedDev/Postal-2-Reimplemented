@@ -43,6 +43,7 @@ pub struct VmFrame {
     pub(super) level_time: f32,
     pub(super) plings: Vec<p2_vm::FluidPling>,
     pub(super) person_hits: Vec<p2_vm::PersonHit>,
+    pub(super) fluid_hits: Vec<p2_vm::FluidHit>,
     pub(super) fluid_touchers: Vec<(ObjectId, Vec<p2_particles::FluidToucher>)>,
     pub(super) corona_blocked: Vec<ObjectId>,
     pub(super) material_switches: Vec<(String, Option<String>)>,
@@ -157,6 +158,7 @@ impl VmFrame {
         self.material_switches.clear();
         self.plings.clear();
         self.person_hits.clear();
+        self.fluid_hits.clear();
         self.fluid_touchers.clear();
         self.corona_blocked.clear();
         self.movies.clear();

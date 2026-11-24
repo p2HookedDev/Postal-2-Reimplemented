@@ -35,7 +35,7 @@ use strips::{empty_quads, fill_beams, fill_smooth_strip, fill_strip};
 
 pub mod bounds;
 pub(crate) mod fire;
-mod light;
+pub(crate) mod light;
 mod mesh_particles;
 pub mod sprites;
 pub(crate) mod strips;

@@ -142,7 +142,7 @@ impl MaterialAtlas for SunLevelAtlas {
     const SLOT: MaterialSlot = MaterialSlot::DepthMap;
 
     fn wanted(&self) -> Option<Handle<Image>> {
-        self.image.clone()
+        self.image.as_ref().cloned()
     }
 }
 

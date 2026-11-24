@@ -264,7 +264,7 @@ fn terrain_near(terrain: &Terrain, min: [f32; 3], max: [f32; 3]) -> Vec<[[f32; 3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu_particles::next_unit;
+    use crate::particle_throw::next_unit;
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
     use bevy::render::render_resource::{Extent3d, TextureDimension};

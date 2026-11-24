@@ -2,18 +2,17 @@
 //! drawn pose after the animation and before skinning. Nothing the game reads changes.
 
 use bevy::app::{App, Plugin, Update};
-use bevy::ecs::prelude::{Local, Res, ResMut};
+use bevy::ecs::prelude::{Res, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::{Mat4, Quat, Vec3};
 use bevy::time::Time;
 use p2_assets::pose::subtree;
 use p2_vm::{ObjectId, PersonHit};
-use rustc_hash::FxHashMap;
 
-use super::drawn_pose::{keep_for_game, mesh_place, posed_origin, restore, turn_about};
-use super::foot_placement::{SIDES, place_feet};
-use super::{Animated, AnimatedMesh, AnimationSystems, Poses, pose_joints};
-use p2_host::display::{MODERN_HIT_REACTIONS, Settings};
+use super::drawn_pose::{Layer, apply_layers, base_pose, mesh_place, posed_origin, turn_about};
+use super::foot_placement::{Feet, SIDES, place_feet};
+use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate};
+use p2_host::display::{MODERN_HIT_REACTIONS, Settings, modern_on, modern_turned_off};
 use crate::play::{Play, PlayWorld};
 
 /// A natural frequency of 16 per second at three quarters of critical damping: settled in about 0.45 seconds.
@@ -39,7 +38,16 @@ pub(super) struct HitReactionPlugin;
 
 impl Plugin for HitReactionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, flinch.after(place_feet).before(pose_joints).in_set(AnimationSystems::Pose));
+        app.init_resource::<Flinches>().add_systems(
+            Update,
+            (
+                flinch.run_if(modern_on(MODERN_HIT_REACTIONS)).after(place_feet),
+                (|mut flinches: ResMut<Flinches>, mut poses: ResMut<Poses>| flinches.layer.drop_all(&mut poses)).run_if(modern_turned_off(MODERN_HIT_REACTIONS)),
+            )
+                .after(animate)
+                .before(apply_layers)
+                .in_set(AnimationSystems::Pose),
+        );
     }
 }
 
@@ -87,63 +95,58 @@ struct Bone {
     spring: Spring,
 }
 
+#[derive(Default)]
 struct Flinch {
-    /// The pose without the flinch.
-    base: Vec<Mat4>,
     /// By bone index, so a parent turns before its children.
     bones: Vec<Bone>,
     age: f32,
 }
 
-#[derive(Default)]
-struct Flinches {
-    people: FxHashMap<ObjectId, Flinch>,
-    generation: u64,
+#[derive(Resource, Default)]
+pub(super) struct Flinches {
+    layer: Layer<Flinch>,
+    strength: f32,
+}
+
+impl Flinches {
+    pub(super) fn apply(&self, actor: ObjectId, bones: &mut [Mat4]) -> bool {
+        let Some(person) = self.layer.people.get(&actor) else { return false };
+        turn_bones(bones, &person.bones, self.strength);
+        true
+    }
 }
 
 fn flinch(
     time: Res<Time>,
-    settings: Option<Res<Settings>>,
+    settings: Res<Settings>,
     play: Res<Play>,
     animated: Res<Animated>,
+    feet: Res<Feet>,
     mut poses: ResMut<Poses>,
-    mut flinches: Local<Flinches>,
+    mut flinches: ResMut<Flinches>,
 ) {
     let poses = &mut *poses;
     let flinches = &mut *flinches;
-    let level = settings.map_or(0, |settings| settings.modern_level(MODERN_HIT_REACTIONS));
-    let (true, Some(world)) = (level > 0, play.world()) else {
-        for (actor, person) in flinches.people.drain() {
-            restore(poses, actor, person.base);
-        }
+    let Some(world) = play.world() else {
+        flinches.layer.drop_all(poses);
         return;
     };
-    if flinches.generation != play.generation() {
-        flinches.generation = play.generation();
-        flinches.people.clear();
-    }
-    if flinches.people.is_empty() && world.person_hits().is_empty() {
+    flinches.layer.restarted(play.generation());
+    if flinches.layer.people.is_empty() && world.person_hits().is_empty() {
         return;
     }
-    let strength = f32::from(level) / 10.0;
-    // A body that became a ragdoll keeps its flinch while it settles: cutting it would jump the first ragdoll frame.
-    flinches.people.retain(|actor, person| {
-        let Some(bones) = poses.bones.get(actor) else { return false };
-        if poses.changed.contains(actor) {
-            person.base.clone_from(bones);
-        }
-        true
-    });
+    let strength = f32::from(settings.modern_level(MODERN_HIT_REACTIONS)) / 10.0;
+    flinches.strength = strength;
     for hit in world.person_hits().iter().filter(|hit| hit.alive) {
         let Some(item) = animated.0.iter().find(|item| item.actor == Some(hit.person)) else { continue };
-        let known = flinches.people.get(&hit.person).map(|person| &person.base);
-        let Some(bones) = known.or_else(|| poses.bones.get(&hit.person)) else { continue };
-        let kicks = kicks(world, item, bones, hit, strength);
+        let Some(base) = base_pose(poses, hit.person) else { continue };
+        let mut standing = base.clone();
+        feet.apply(hit.person, &mut standing);
+        let kicks = kicks(world, item, &standing, hit, strength);
         if kicks.is_empty() {
             continue;
         }
-        let base = bones.clone();
-        let person = flinches.people.entry(hit.person).or_insert_with(|| Flinch { base, bones: Vec::new(), age: 0.0 });
+        let person = flinches.layer.people.entry(hit.person).or_default();
         person.age = 0.0;
         for (index, speed, share) in kicks {
             let at = person.bones.binary_search_by_key(&index, |bone| bone.index).unwrap_or_else(|at| {
@@ -156,25 +159,18 @@ fn flinch(
         }
     }
     let seconds = world.game_seconds(time.delta_secs());
-    flinches.people.retain(|&actor, person| {
+    // A body that became a ragdoll keeps its flinch while it settles: cutting it would jump the first ragdoll frame.
+    flinches.layer.people.retain(|&actor, person| {
         person.age += seconds;
         person.bones.iter_mut().for_each(|bone| bone.spring.step(seconds, strength * bone.share));
-        let Some(bones) = poses.bones.get_mut(&actor) else { return false };
-        let fresh = poses.changed.contains(&actor);
-        if person.age > LIFE || person.bones.iter().all(|bone| bone.spring.settled()) {
-            if !fresh {
-                *bones = std::mem::take(&mut person.base);
-                poses.changed.insert(actor);
-            }
+        if !poses.bones.contains_key(&actor) {
             return false;
         }
-        if seconds > 0.0 || fresh {
-            keep_for_game(&mut poses.animated, actor, bones);
-            bones.clone_from(&person.base);
-            turn_bones(bones, &person.bones, strength);
-            poses.changed.insert(actor);
+        let settled = person.age > LIFE || person.bones.iter().all(|bone| bone.spring.settled());
+        if settled || seconds > 0.0 || poses.changed.contains(&actor) {
+            poses.relayer.insert(actor);
         }
-        true
+        !settled
     });
 }
 

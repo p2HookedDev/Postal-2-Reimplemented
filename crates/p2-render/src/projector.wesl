@@ -27,6 +27,8 @@ const FB_ALPHA_MODULATE: u32 = 3u;
 const FB_TRANSLUCENT: u32 = 4u;
 const FB_DARKEN: u32 = 5u;
 const FB_BRIGHTEN: u32 = 6u;
+// Ours, used by no game projector: a pool of liquid, lit by the light already on the floor under it.
+const FB_LIQUID: u32 = 7u;
 // The alpha test bit; `AlphaRef` in bits 22..30.
 const ALPHA_TEST: u32 = 0x200000u;
 // What a surface is, for the projector's targets (tag bits 16..21, `ProjectorActor::targets`): its shader passes one.
@@ -124,6 +126,19 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
     var drawn = false;
     while clustered_decal_iterator_next(&iterator) {
         let wound = (iterator.tag & WOUND) != 0u && surface == 0u;
+        if (iterator.tag & (PROJECTOR | 0x7u)) == (PROJECTOR | FB_LIQUID) {
+            if iterator.base_color_texture_index >= 0 && pbr_input.world_normal.y > 0.5 {
+                let pool = decal_texel(iterator.base_color_texture_index, iterator.uv);
+                if !drawn {
+                    base = to_display(texture);
+                    frame = to_display(color.rgb);
+                    drawn = true;
+                }
+                let light = color.rgb / max(texture, vec3(0.02));
+                frame = mix(frame, to_display(min(light * pool.rgb, vec3(1.0))), pool.a);
+            }
+            continue;
+        }
         if (iterator.tag & PROJECTOR) == 0u || iterator.base_color_texture_index < 0 || ((iterator.tag & surface & TARGETS) == 0u && !wound) {
             continue;
         }

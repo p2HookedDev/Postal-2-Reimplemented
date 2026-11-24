@@ -1,13 +1,63 @@
-//! What the pose corrections share. They change the drawn pose in `Poses::bones` only; the game is told about bones
-//! from the animation's own pose, kept in `Poses::animated` before the first change.
+//! What the pose layers share. A layer changes the drawn pose in `Poses::bones` only, on top of the animation's own
+//! pose, which `Poses::animated` keeps while a change is drawn: the game is told about bones from that one.
 
+use bevy::ecs::prelude::{Res, ResMut};
 use bevy::math::{Mat4, Quat, Vec3};
 use p2_vm::ObjectId;
 use rustc_hash::FxHashMap;
 
+use super::foot_placement::Feet;
+use super::hit_reaction::Flinches;
 use super::{AnimatedMesh, Poses};
 use p2_render::components::FollowActor;
 use crate::play::PlayWorld;
+
+/// A layer's people. A layer marks in `Poses::relayer` each actor whose change it altered or whose pose was made again.
+pub(super) struct Layer<T> {
+    pub(super) people: FxHashMap<ObjectId, T>,
+    generation: u64,
+}
+
+impl<T> Default for Layer<T> {
+    fn default() -> Self {
+        Self { people: FxHashMap::default(), generation: 0 }
+    }
+}
+
+impl<T> Layer<T> {
+    pub(super) fn drop_all(&mut self, poses: &mut Poses) {
+        poses.relayer.extend(self.people.drain().map(|(actor, _)| actor));
+    }
+
+    /// A new game reuses ids for other actors: the old people are forgotten without putting their pose back.
+    pub(super) fn restarted(&mut self, generation: u64) -> bool {
+        let restarted = std::mem::replace(&mut self.generation, generation) != generation;
+        if restarted {
+            self.people.clear();
+        }
+        restarted
+    }
+}
+
+/// The animation's own pose: the kept one while a change is drawn, else the drawn one.
+pub(super) fn base_pose(poses: &Poses, actor: ObjectId) -> Option<&Vec<Mat4>> {
+    poses.animated.get(&actor).or_else(|| poses.bones.get(&actor))
+}
+
+/// Feet before the flinch: the flinch turns a body that stands on its planted feet.
+pub(super) fn apply_layers(feet: Res<Feet>, flinches: Res<Flinches>, mut poses: ResMut<Poses>) {
+    let Poses { bones, animated, changed, relayer, .. } = &mut *poses;
+    for actor in relayer.drain() {
+        let Some(pose) = bones.get_mut(&actor) else { continue };
+        let base = keep_for_game(animated, actor, pose);
+        pose.clone_from(base);
+        let feet_planted = feet.apply(actor, pose);
+        if !flinches.apply(actor, pose) && !feet_planted {
+            animated.remove(&actor);
+        }
+        changed.insert(actor);
+    }
+}
 
 /// The mesh's frame in the world for a person the script animates and no ragdoll holds.
 pub(super) fn mesh_place(world: &PlayWorld, item: &AnimatedMesh, actor: ObjectId) -> Option<Mat4> {
@@ -21,23 +71,13 @@ pub(super) fn mesh_place(world: &PlayWorld, item: &AnimatedMesh, actor: ObjectId
     follow.mesh_matrix(location, rotation)
 }
 
-/// Called before writing a corrected pose over `pose`: while no copy is kept, `pose` is still the animation's.
-pub(super) fn keep_for_game(animated: &mut FxHashMap<ObjectId, Vec<Mat4>>, actor: ObjectId, pose: &[Mat4]) {
-    animated.entry(actor).or_insert_with(|| pose.to_vec());
+/// Called before writing a changed pose over `pose`: while no copy is kept, `pose` is still the animation's.
+fn keep_for_game<'a>(animated: &'a mut FxHashMap<ObjectId, Vec<Mat4>>, actor: ObjectId, pose: &[Mat4]) -> &'a Vec<Mat4> {
+    animated.entry(actor).or_insert_with(|| pose.to_vec())
 }
 
 pub(super) fn told_bone(animated: &FxHashMap<ObjectId, Vec<Mat4>>, actor: ObjectId, bone: usize, drawn: Mat4) -> Mat4 {
     animated.get(&actor).and_then(|pose| pose.get(bone)).copied().unwrap_or(drawn)
-}
-
-/// Puts `pose` back unless the animation posed the actor again this frame.
-pub(super) fn restore(poses: &mut Poses, actor: ObjectId, pose: Vec<Mat4>) {
-    if !poses.changed.contains(&actor)
-        && let Some(bones) = poses.bones.get_mut(&actor)
-    {
-        *bones = pose;
-        poses.changed.insert(actor);
-    }
 }
 
 pub(super) fn posed_origin(bones: &[Mat4], bone: usize) -> Option<Vec3> {
@@ -62,7 +102,7 @@ mod tests {
         let mut kept = FxHashMap::default();
         assert_eq!(told_bone(&kept, actor, 0, corrected), corrected);
         keep_for_game(&mut kept, actor, &[animated]);
-        keep_for_game(&mut kept, actor, &[corrected]);
+        assert_eq!(keep_for_game(&mut kept, actor, &[corrected]), &[animated]);
         assert_eq!(told_bone(&kept, actor, 0, corrected), animated);
         assert_eq!(told_bone(&kept, actor, 5, corrected), corrected);
     }
@@ -73,5 +113,20 @@ mod tests {
         turn_about(&mut bones, &[false, true], Vec3::ZERO, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
         assert_eq!(bones[0], Mat4::IDENTITY);
         assert!(bones[1].w_axis.truncate().distance(Vec3::new(0.0, -10.0, 0.0)) < 1e-4, "{}", bones[1]);
+    }
+
+    #[test]
+    fn a_restart_forgets_the_people_and_a_drop_marks_them_for_the_step() {
+        let (one, two) = (ObjectId::from_index(1), ObjectId::from_index(2));
+        let mut layer = Layer::<()>::default();
+        layer.people.insert(one, ());
+        assert!(!layer.restarted(0));
+        assert!(layer.restarted(1));
+        assert!(layer.people.is_empty());
+        layer.people.insert(two, ());
+        let mut poses = Poses::default();
+        layer.drop_all(&mut poses);
+        assert!(layer.people.is_empty());
+        assert!(poses.relayer.contains(&two) && !poses.relayer.contains(&one));
     }
 }

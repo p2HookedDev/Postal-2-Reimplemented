@@ -1,59 +1,36 @@
 //! Modern graphics: our own liquids. The scripts still decide where a stream lands, where puddles and trails lie and
-//! what burns; with `MODERN_LIQUIDS` above 0 the stream is a GPU particle stream and its surface is drawn in screen
-//! space in place of the scripts' strip and droplet sprites.
+//! what burns; with `MODERN_LIQUIDS` above 0 streams, spurts and drips are simulated in world space against the level
+//! and drawn in place of the scripts' strip and droplet sprites, and what lands pools on the floor.
 
 use bevy::app::{App, Plugin};
-use bevy::ecs::prelude::Resource;
-use bevy::ecs::schedule::{IntoScheduleConfigs, SystemSet};
-use bevy::render::render_resource::Buffer;
-use bevy::render::RenderApp;
-use bevy::core_pipeline::schedule::Core3d;
+use bevy::ecs::message::Message;
+use bevy::math::Vec3;
+use p2_vm::FluidType;
 
-use crate::MainPassExtraSystems;
+pub mod air_draw;
+pub mod drops;
+pub mod pool_draw;
+pub mod pools;
+pub mod stream_ribbon;
+pub mod world;
 
-pub mod deposits;
-pub mod stream;
-pub mod surface;
-
-/// Words of one `LiquidParticle` in `liquid_stream.wesl`: place and radius, velocity and the `LIQUID_*` bits word.
-pub const LIQUID_PARTICLE_WORDS: usize = 8;
-/// The low four bits of the bits word: the `FluidType` byte.
-pub const LIQUID_KIND_MASK: u32 = 0xF;
-/// Set once the particle lies on a surface.
-pub const LIQUID_LANDED: u32 = 1 << 4;
-pub const LIQUID_BURNING: u32 = 1 << 5;
-/// Set on a puddle's or trail's blob: a thin film on the surface under it rather than a landed drop.
-pub const LIQUID_DEPOSIT: u32 = 1 << 7;
-
-/// The render world's liquid particles, stepped by `stream` and drawn by `surface`. Absent while no liquid lives.
-#[derive(Resource)]
-pub struct LiquidParticles {
-    pub buffer: Buffer,
-    pub capacity: u32,
-    /// Particles from the start of `buffer` the surface pass draws; 0 draws nothing.
-    pub live: u32,
-}
-
-/// The render world's puddle and trail blobs, drawn by `surface` with the stream. Absent while there are none.
-#[derive(Resource)]
-pub struct LiquidDeposits {
-    pub buffer: Buffer,
-    pub count: u32,
-}
-
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum LiquidPassSystems {
-    Step,
-    Surface,
+/// Liquid that reached a surface this frame; drops and stream ends write it, the pools pour it in.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct LiquidLanding {
+    /// Bevy coordinates relative to the world's origin.
+    pub at: Vec3,
+    /// The surface's normal there, of length 1.
+    pub normal: Vec3,
+    pub kind: FluidType,
+    /// In the pools' unit of volume.
+    pub volume: f32,
 }
 
 pub struct LiquidsPlugin;
 
 impl Plugin for LiquidsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((stream::LiquidStreamPlugin, deposits::LiquidDepositsPlugin, surface::LiquidSurfacePlugin));
-        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.configure_sets(Core3d, (LiquidPassSystems::Step, LiquidPassSystems::Surface).chain().in_set(MainPassExtraSystems::Liquids));
-        }
+        app.add_message::<LiquidLanding>();
+        app.add_plugins((world::LiquidWorldPlugin, pool_draw::PoolDrawPlugin, air_draw::AirLiquidsPlugin));
     }
 }

@@ -60,7 +60,7 @@ use std::sync::Arc;
 use p2_package::flags::{RF_LOAD_FOR_ANY, RF_LOAD_FOR_GAME};
 use p2_package::{Loader, Package, PackageId};
 use rustc_hash::{FxHashMap, FxHashSet};
-pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidPling, MovieState, NEAR_CLIPPING_PLANE, PersonHit};
+pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidHit, FluidPling, MovieState, NEAR_CLIPPING_PLANE, PersonHit};
 pub use canvas::{CanvasItem, call_slots};
 pub use enums::{ERenderStyle, FluidType};
 pub use input::PlayerView;

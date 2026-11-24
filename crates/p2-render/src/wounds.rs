@@ -1,7 +1,7 @@
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::Handle;
 use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, Resource, With, Without};
+use bevy::ecs::prelude::{Commands, Component, Entity, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
 use bevy::light::{ClusteredDecal, SimulationLightSystems};
@@ -14,7 +14,7 @@ use p2_vm::ObjectId;
 use rustc_hash::FxHashMap;
 
 use crate::components::{FollowActor, MapScoped};
-use p2_host::display::{MODERN_DECAL_AGING, MODERN_WOUNDS, Settings};
+use p2_host::display::{MODERN_DECAL_AGING, MODERN_WOUNDS, modern_on, modern_turned_off};
 use crate::frame_facts::FrameFacts;
 
 /// Blood drying in projector tag bits 3..7 (the frame buffer blend keeps bits 0..3); `projector.wesl` reads the same.
@@ -69,7 +69,12 @@ impl Plugin for WoundsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Wounds>().init_resource::<WoundSplats>().add_systems(
             PostUpdate,
-            (present_wounds.in_set(WoundsSystems), age_decals.in_set(WoundsSystems), place_wounds.after(TransformSystems::Propagate).before(SimulationLightSystems::AssignLightsToClusters)),
+            (
+                present_wounds.run_if(modern_on(MODERN_WOUNDS)).in_set(WoundsSystems),
+                drop_wounds.run_if(modern_turned_off(MODERN_WOUNDS)).in_set(WoundsSystems),
+                age_decals.run_if(modern_on(MODERN_DECAL_AGING)).in_set(WoundsSystems),
+                restore_decal_tags.run_if(modern_turned_off(MODERN_DECAL_AGING)).in_set(WoundsSystems),
+                place_wounds.after(TransformSystems::Propagate).before(SimulationLightSystems::AssignLightsToClusters)),
         );
     }
 }
@@ -139,7 +144,7 @@ fn place_wounds(wounds: Res<Wounds>, joints: Query<&GlobalTransform, Without<Clu
 /// Each hit on a person that pushes it (a shot or a blow, not fire or a splash) leaves one of the game's wall blood
 /// decals on the bone nearest it, each wound its own size and turn.
 pub fn present_wounds(
-    (settings, facts, splats): (Option<Res<Settings>>, Res<FrameFacts>, Res<WoundSplats>),
+    (facts, splats): (Res<FrameFacts>, Res<WoundSplats>),
     mut wounds: ResMut<Wounds>,
     mut commands: Commands,
     skins: Query<(&FollowActor, &SkinnedMesh)>,
@@ -147,14 +152,6 @@ pub fn present_wounds(
     mut decals: Query<&mut ClusteredDecal>,
 ) {
     let wounds = &mut *wounds;
-    if settings.is_none_or(|settings| settings.modern_level(MODERN_WOUNDS) == 0) {
-        for wound in wounds.bodies.drain().flat_map(|(_, body)| body) {
-            if let Ok(mut decal) = commands.get_entity(wound.decal) {
-                decal.despawn();
-            }
-        }
-        return;
-    }
     if !facts.in_play {
         return;
     }
@@ -201,6 +198,14 @@ pub fn present_wounds(
     }
 }
 
+fn drop_wounds(mut wounds: ResMut<Wounds>, mut commands: Commands) {
+    for wound in wounds.bodies.drain().flat_map(|(_, body)| body) {
+        if let Ok(mut decal) = commands.get_entity(wound.decal) {
+            decal.despawn();
+        }
+    }
+}
+
 /// A spawned projector's decal: `tag` is the one `projector_tag` made, `life` the seconds the script gave it to live
 /// when it attached.
 #[derive(Component)]
@@ -222,17 +227,8 @@ fn is_blood(texture: &str) -> bool {
     texture.to_ascii_lowercase().contains("blood")
 }
 
-/// Ages count only while the setting is on and the game runs; switched off, every tag goes back to its own.
-fn age_decals(settings: Option<Res<Settings>>, facts: Res<FrameFacts>, mut decals: Query<(&mut ClusteredDecal, &mut DecalAge)>, mut aged: Local<bool>) {
-    if settings.is_none_or(|settings| settings.modern_level(MODERN_DECAL_AGING) == 0) {
-        if std::mem::take(&mut *aged) {
-            for (mut decal, age) in &mut decals {
-                decal.tag = age.tag;
-            }
-        }
-        return;
-    }
-    *aged = true;
+/// Ages count only while the setting is on and the game runs.
+fn age_decals(facts: Res<FrameFacts>, mut decals: Query<(&mut ClusteredDecal, &mut DecalAge)>) {
     let step = facts.step();
     for (mut decal, mut age) in &mut decals {
         age.age += step;
@@ -240,6 +236,12 @@ fn age_decals(settings: Option<Res<Settings>>, facts: Res<FrameFacts>, mut decal
         if decal.tag != tag {
             decal.tag = tag;
         }
+    }
+}
+
+fn restore_decal_tags(mut decals: Query<(&mut ClusteredDecal, &DecalAge)>) {
+    for (mut decal, age) in &mut decals {
+        decal.tag = age.tag;
     }
 }
 
@@ -322,7 +324,7 @@ mod tests {
     fn a_frames_game_step_ages_a_decals_tag() {
         let mut app = App::new();
         let on = |query: &str| if [p2_host::display::MODERN_GRAPHICS, MODERN_DECAL_AGING].contains(&query) { "1".to_owned() } else { String::new() };
-        app.insert_resource(Settings::read(on)).insert_resource(FrameFacts { game_step: 4.5, ..FrameFacts::default() }).add_systems(PostUpdate, age_decals);
+        app.insert_resource(p2_host::display::Settings::read(on)).insert_resource(FrameFacts { game_step: 4.5, ..FrameFacts::default() }).add_systems(PostUpdate, age_decals.run_if(modern_on(MODERN_DECAL_AGING)));
         let decal = app.world_mut().spawn((ClusteredDecal::default(), DecalAge::new(3, 5.0, "Effects.Scorch.BulletHole"))).id();
         app.update();
         assert_ne!(aged_tag(3, 5.0, 4.5, None), 3);

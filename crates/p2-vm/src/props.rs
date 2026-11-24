@@ -87,7 +87,7 @@ properties!(
     FluidHeightScale, FluidSpeed, FluidDamping, FluidNoiseFrequency, FluidNoiseStrength, UTiles, UOffset, VTiles, VOffset,
     AlphaCurveScale, AlphaHeightScale, AlphaMax, RippleVelocityFactor, WarmUpTime, UpdateRate, ClampBitmap, FluidInfo,
     Frequency, Phase, Strength,
-    MyType, bOnFire,
+    MyType, bOnFire, QuantityPerHit,
 );
 
 /// Every property the host reads to draw an actor: its frame, its look and a restyle. A write that changes one moves

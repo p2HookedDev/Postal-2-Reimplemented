@@ -13,7 +13,10 @@ use bevy::ecs::system::EntityCommands;
 use bevy::math::UVec2;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::diagnostic::RecordDiagnostics;
+use bevy::render::render_resource::encase;
 use bevy::render::render_resource::encase::internal::WriteInto;
+use bevy::render::render_resource::binding_types;
+use bevy::render::render_resource::{BindGroupLayoutEntryBuilder, SamplerBindingType, TextureSampleType};
 use bevy::render::render_resource::{
     BindGroup, DynamicUniformBuffer, Extent3d, Operations, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, ShaderType, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView,
@@ -73,6 +76,12 @@ pub fn follow_view_pass<T: Component + PartialEq>(mut view: EntityCommands, show
     }
 }
 
+/// `value` laid out as WGSL lays it out; empty only when memory runs out.
+pub(crate) fn shader_bytes<T: ShaderType + WriteInto + ?Sized>(value: &T) -> Vec<u8> {
+    let mut bytes = encase::StorageBuffer::new(Vec::new());
+    bytes.write(value).map(|()| bytes.into_inner()).unwrap_or_default()
+}
+
 #[derive(Resource)]
 pub struct PassUniforms<T: ShaderType + WriteInto + Send + Sync + 'static>(pub DynamicUniformBuffer<T>);
 
@@ -121,10 +130,6 @@ impl<K: PartialEq> ViewBindGroups<K> {
         &cached.get_or_insert_with(|| (key, make())).1
     }
 
-    /// Drops the view's group, and with it what the group kept alive.
-    pub fn forget(&mut self, view: Entity) {
-        self.0.remove(&view);
-    }
 }
 
 fn half_size(full: UVec2) -> UVec2 {
@@ -210,6 +215,11 @@ impl HalfThenFull<'_> {
         }
         span.end(ctx.command_encoder());
     }
+}
+
+/// A filtered colour texture and the sampler that filters it, as a pass's bind group reads them.
+pub(crate) fn filtered_texture_and_sampler() -> (BindGroupLayoutEntryBuilder, BindGroupLayoutEntryBuilder) {
+    (binding_types::texture_2d(TextureSampleType::Float { filterable: true }), binding_types::sampler(SamplerBindingType::Filtering))
 }
 
 #[cfg(test)]

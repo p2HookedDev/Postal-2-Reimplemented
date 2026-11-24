@@ -60,6 +60,10 @@ impl PlayWorld {
         if self.fresh { &self.frame.person_hits } else { &[] }
     }
 
+    pub fn fluid_hits(&self) -> &[p2_vm::FluidHit] {
+        if self.fresh { &self.frame.fluid_hits } else { &[] }
+    }
+
     pub fn take_plings(&mut self) -> Vec<p2_vm::FluidPling> {
         std::mem::take(&mut self.frame.plings)
     }

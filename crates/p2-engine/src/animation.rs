@@ -50,7 +50,7 @@ impl Plugin for AnimationPlugin {
             .add_plugins(foot_placement::FootPlacementPlugin)
             .add_plugins(hit_reaction::HitReactionPlugin)
             .add_plugins(tessellation::TessellationPlugin)
-            .add_systems(Update, (animate, pose_joints, follow_bones, place_attached).chain().in_set(AnimationSystems::Pose))
+            .add_systems(Update, (animate, drawn_pose::apply_layers, pose_joints, follow_bones, place_attached).chain().in_set(AnimationSystems::Pose))
             .add_systems(
                 PostUpdate,
                 skinned_bounds.in_set(VisibilitySystems::CalculateBounds).after(TransformSystems::Propagate).after(calculate_bounds),
@@ -70,6 +70,8 @@ struct Poses {
     joints: FxHashMap<ObjectId, Vec<(usize, Entity)>>,
     slots: FxHashMap<ObjectId, Vec<(p2_vm::NameId, usize, Mat4)>>,
     moved: FxHashSet<ObjectId>,
+    /// Actors whose drawn pose the layers redo this frame from the animation's own.
+    relayer: FxHashSet<ObjectId>,
     /// The animation's own pose of an actor whose drawn pose in `bones` was corrected since it was last posed: what
     /// the game is told about bones. Dropped whenever the actor is posed again.
     animated: FxHashMap<ObjectId, Vec<Mat4>>,

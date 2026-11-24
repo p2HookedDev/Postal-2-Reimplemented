@@ -16,7 +16,7 @@ use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferId,
     BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, PipelineCache, RenderPipelineDescriptor,
-    ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
+    ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::texture::{CachedTexture, TextureCache};
@@ -34,7 +34,8 @@ use crate::frame_facts::FrameFacts;
 use crate::particle_draw::ParticleDraws;
 use crate::particle_frame::DrawnParticles;
 use crate::screen_pass::{
-    HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, modern_level, tag_pass_views,
+    HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, modern_level, shader_bytes,
+    tag_pass_views,
 };
 use crate::shaders::{add_libraries, add_shaders};
 
@@ -44,7 +45,6 @@ const MARCHED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 const MAX_VOLUMES: usize = 8;
 /// In Unreal units (about 2 cm each): a fire farther from the eye stays sprites.
 const REACH: f32 = 2048.0;
-const VOLUME_WORDS: usize = 12;
 
 /// Adds the marched flame light, whose alpha is 0, to the frame and keeps the frame's alpha, the sun rays' mask.
 const OVER: BlendState = BlendState {
@@ -147,18 +147,33 @@ fn follow_fires(
     }
 }
 
-/// `Fires` in `fire_volume.wesl`: the volumes, then their count, the march's steps and noise octaves, and the seconds.
-fn fires_bytes(fires: &FireVolumes) -> Vec<u8> {
-    let mut words: Vec<u32> = Vec::with_capacity(MAX_VOLUMES * VOLUME_WORDS + 4);
-    for fire in fires.volumes.iter().take(MAX_VOLUMES) {
-        words.extend(fire.centre.extend(0.0).to_array().map(f32::to_bits));
-        words.extend(fire.half.extend(0.0).to_array().map(f32::to_bits));
-        words.extend(fire.tint.to_array().map(f32::to_bits));
+/// `Volume` in `fire_volume.wesl`.
+#[derive(ShaderType, Clone, Copy, Default)]
+struct Volume {
+    centre: Vec4,
+    extent: Vec4,
+    tint: Vec4,
+}
+
+/// `Fires` in `fire_volume.wesl`.
+#[derive(ShaderType)]
+struct Fires {
+    volumes: [Volume; MAX_VOLUMES],
+    count: u32,
+    steps: u32,
+    octaves: u32,
+    seconds: f32,
+}
+
+fn fires_of(fires: &FireVolumes) -> Fires {
+    let volume = |fire: &FireBox| Volume { centre: fire.centre.extend(0.0), extent: fire.half.extend(0.0), tint: fire.tint };
+    Fires {
+        volumes: std::array::from_fn(|at| fires.volumes.get(at).map(volume).unwrap_or_default()),
+        count: u32::try_from(fires.volumes.len().min(MAX_VOLUMES)).unwrap_or(0),
+        steps: fires.quality.steps,
+        octaves: fires.quality.octaves,
+        seconds: fires.seconds,
     }
-    words.resize(MAX_VOLUMES * VOLUME_WORDS, 0);
-    let count = u32::try_from(fires.volumes.len().min(MAX_VOLUMES)).unwrap_or(0);
-    words.extend([count, fires.quality.steps, fires.quality.octaves, fires.seconds.to_bits()]);
-    words.into_iter().flat_map(u32::to_le_bytes).collect()
 }
 
 #[derive(Resource)]
@@ -238,7 +253,7 @@ fn prepare_fire_views(
             continue;
         };
         let marched = half_texture(&mut texture_cache, &render_device, "fire volume", MARCHED_FORMAT, size);
-        let bytes = fires_bytes(fires);
+        let bytes = shader_bytes(&fires_of(fires));
         let fires = match prepared {
             Some(prepared) => {
                 render_queue.write_buffer(&prepared.fires, 0, &bytes);
@@ -311,14 +326,12 @@ mod tests {
     }
 
     #[test]
-    fn the_uniform_has_room_for_every_volume_and_counts_only_those_sent() {
+    fn the_uniform_counts_only_the_volumes_it_holds() {
+        Fires::assert_uniform_compat();
         let fire = FireBox { centre: Vec3::ONE, half: Vec3::splat(2.0), tint: Vec4::ONE };
         let fires = FireVolumes { quality: Quality { steps: 16, octaves: 3 }, seconds: 1.5, volumes: vec![fire; MAX_VOLUMES + 3] };
-        let bytes = fires_bytes(&fires);
-        assert_eq!(bytes.len(), (MAX_VOLUMES * VOLUME_WORDS + 4) * 4);
-        let count_at = MAX_VOLUMES * VOLUME_WORDS * 4;
-        assert_eq!(bytes[count_at..count_at + 4], (MAX_VOLUMES as u32).to_le_bytes());
-        let empty = FireVolumes { volumes: Vec::new(), ..fires };
-        assert_eq!(fires_bytes(&empty).len(), bytes.len());
+        assert_eq!(fires_of(&fires).count, MAX_VOLUMES as u32);
+        assert_eq!(fires_of(&fires).volumes[MAX_VOLUMES - 1].extent, Vec4::new(2.0, 2.0, 2.0, 0.0));
+        assert_eq!(fires_of(&FireVolumes { volumes: Vec::new(), ..fires }).count, 0);
     }
 }
