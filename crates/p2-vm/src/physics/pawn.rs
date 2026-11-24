@@ -130,12 +130,18 @@ impl<L: LoaderRef> Vm<L> {
                 }
             }
         }
+        if self.store.flag_of(pawn, Prop::bWantsToDeathCrawl) && !self.store.flag_of(pawn, Prop::bIsDeathCrawling) {
+            self.death_crawl(pawn)?;
+        }
         self.start_new_physics(pawn, delta, 0)?;
         if self.store.is_deleted(pawn) {
             return Ok(());
         }
         if self.store.flag_of(pawn, Prop::bIsCrouched) && !self.store.flag_of(pawn, Prop::bWantsToCrouch) {
             self.uncrouch(pawn)?;
+        }
+        if self.store.flag_of(pawn, Prop::bIsDeathCrawling) && !self.store.flag_of(pawn, Prop::bWantsToDeathCrawl) {
+            self.end_death_crawl(pawn)?;
         }
         if let Some(controller) = self.store.object_of(pawn, Prop::Controller) {
             let timer = self.store.float_of(controller, Prop::MoveTimer) - delta;
@@ -182,9 +188,10 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn uncrouch(&mut self, pawn: ObjectId) -> Result<(), Error> {
-        let Some(class) = self.store.object(pawn).class else { return Ok(()) };
-        let default = |vm: &Self, name: Prop| vm.store.default_value(class, name).as_ref().map_or(0.0, float);
-        let (radius, height) = (default(self, Prop::CollisionRadius), default(self, Prop::CollisionHeight));
+        if self.store.object(pawn).class.is_none() {
+            return Ok(());
+        }
+        let (radius, height) = self.default_collision_size(pawn);
         let (crouch_radius, crouch_height) = self.store.collision_size(pawn);
         let adjust = height - crouch_height;
         let location = self.store.vector(pawn, Prop::Location);
@@ -203,6 +210,70 @@ impl<L: LoaderRef> Vm<L> {
         self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
         self.store.set(pawn, Prop::bIsCrouched, Value::Bool(false));
         self.event(pawn, crate::states::Event::EndCrouch, [Value::Float(adjust)])
+    }
+
+    /// The flat cylinder of a pawn crawling on the ground; a crouch is dropped first without raising the pawn.
+    fn death_crawl(&mut self, pawn: ObjectId) -> Result<(), Error> {
+        let crawl = (self.store.float_of(pawn, Prop::DeathCrawlRadius), self.store.float_of(pawn, Prop::DeathCrawlHeight));
+        if self.store.collision_size(pawn) == crawl {
+            return Ok(());
+        }
+        if self.store.flag_of(pawn, Prop::bIsCrouched) {
+            self.store.set(pawn, Prop::bIsCrouched, Value::Bool(false));
+            self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
+            let standing = self.default_collision_size(pawn);
+            self.set_collision_size(pawn, standing);
+        }
+        let (radius, height) = self.store.collision_size(pawn);
+        self.set_collision_size(pawn, crawl);
+        let adjust = height - crawl.1;
+        let lowered = self.store.vector(pawn, Prop::Location) - Vector::new(0.0, 0.0, adjust);
+        if (radius < crawl.0 || height < crawl.1) && self.blocked_at(pawn, lowered) {
+            self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
+            self.set_collision_size(pawn, (radius, height));
+            return Ok(());
+        }
+        self.far_move_actor(pawn, lowered, crate::Encroachment::Checked)?;
+        self.store.set(pawn, Prop::bIsDeathCrawling, Value::Bool(true));
+        self.set_vector(pawn, Prop::PrePivot, [0.0, 0.0, adjust].into());
+        self.event(pawn, crate::states::Event::StartDeathCrawl, [Value::Float(adjust)])
+    }
+
+    fn end_death_crawl(&mut self, pawn: ObjectId) -> Result<(), Error> {
+        if self.store.flag_of(pawn, Prop::bIsCrouched) {
+            return Ok(());
+        }
+        let crawl = self.store.collision_size(pawn);
+        let standing = self.default_collision_size(pawn);
+        let adjust = standing.1 - crawl.1;
+        self.set_collision_size(pawn, standing);
+        let raised = self.store.vector(pawn, Prop::Location) + Vector::new(0.0, 0.0, adjust);
+        if self.blocked_at(pawn, raised) || !self.far_move_actor(pawn, raised, crate::Encroachment::Checked)? {
+            self.set_collision_size(pawn, crawl);
+            return Ok(());
+        }
+        self.store.set(pawn, Prop::bIsDeathCrawling, Value::Bool(false));
+        self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
+        self.event(pawn, crate::states::Event::EndDeathCrawl, [Value::Float(adjust)])
+    }
+
+    fn default_collision_size(&self, pawn: ObjectId) -> (f32, f32) {
+        let Some(class) = self.store.object(pawn).class else { return self.store.collision_size(pawn) };
+        let default = |name: Prop| self.store.default_value(class, name).as_ref().map_or(0.0, float);
+        (default(Prop::CollisionRadius), default(Prop::CollisionHeight))
+    }
+
+    fn set_collision_size(&mut self, pawn: ObjectId, (radius, height): (f32, f32)) {
+        self.store.set(pawn, Prop::CollisionRadius, Value::Float(radius));
+        self.store.set(pawn, Prop::CollisionHeight, Value::Float(height));
+    }
+
+    fn blocked_at(&mut self, pawn: ObjectId, at: Vector) -> bool {
+        let from = self.store.vector(pawn, Prop::Location);
+        self.set_vector(pawn, Prop::Location, at);
+        let blocked = self.encroached(pawn).is_some();
+        self.set_vector(pawn, Prop::Location, from);
+        blocked
     }
 
     pub(super) fn start_new_physics(&mut self, pawn: ObjectId, delta: f32, iterations: u32) -> Result<(), Error> {

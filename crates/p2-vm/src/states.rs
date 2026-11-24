@@ -120,9 +120,11 @@ pub(crate) enum Event {
     PostNetBeginPlay,
     PreSaveGame,
     PostSaveGame,
+    StartDeathCrawl,
+    EndDeathCrawl,
 }
 
-pub(crate) const EVENT_NAMES: [&str; 87] = [
+pub(crate) const EVENT_NAMES: [&str; 89] = [
     "Tick", "Timer", "PlayerTick", "Touch", "UnTouch", "Bump", "HitWall", "Landed", "Falling", "BeginState", "EndState",
     "BaseChange", "Attach", "Detach", "AnimEnd", "EndedRotation", "EncroachingOn", "EncroachedBy", "UpdateEyeHeight",
     "MayFall", "NotifyBump", "NotifyLanded", "NotifyHitWall", "Destroyed", "GainedChild", "LostChild", "HearNoise",
@@ -135,7 +137,7 @@ pub(crate) const EVENT_NAMES: [&str; 87] = [
     "ActorEntered", "ActorLeavingVolume", "PhysicsVolumeChange", "ActorEnteredVolume", "PawnLeavingVolume",
     "NotifyPhysicsVolumeChange", "PawnEnteredVolume", "NotifyHeadVolumeChange", "HeadVolumeChange", "SeePlayer",
     "SeeMonster", "Spawned", "PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState", "PostNetBeginPlay",
-    "PreSaveGame", "PostSaveGame",
+    "PreSaveGame", "PostSaveGame", "StartDeathCrawl", "EndDeathCrawl",
 ];
 
 pub trait EventKey {
@@ -612,7 +614,7 @@ mod event_tests {
             PreClientTravel, ActorLeaving, ZoneChange, ActorEntered, ActorLeavingVolume, PhysicsVolumeChange,
             ActorEnteredVolume, PawnLeavingVolume, NotifyPhysicsVolumeChange, PawnEnteredVolume, NotifyHeadVolumeChange,
             HeadVolumeChange, SeePlayer, SeeMonster, Spawned, PreBeginPlay, BeginPlay, PostBeginPlay, SetInitialState,
-            PostNetBeginPlay, PreSaveGame, PostSaveGame,
+            PostNetBeginPlay, PreSaveGame, PostSaveGame, StartDeathCrawl, EndDeathCrawl,
         ];
         assert_eq!(all.len(), EVENT_NAMES.len());
         for (index, event) in all.into_iter().enumerate() {
