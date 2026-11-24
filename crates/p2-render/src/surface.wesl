@@ -42,6 +42,10 @@ struct ModernLight {
 }
 
 const POOL_REFLECTANCE: f32 = 0.02;
+// A pool is never smoother than this, and its highlight never brighter than this in display light squared: a mirror's
+// highlight of a lamp or the sun spikes far past the frame's range and blooms over the screen.
+const POOL_LEAST_ROUGHNESS: f32 = 0.06;
+const POOL_SHINE_LIMIT: f32 = 16.0;
 
 // A special-lit surface takes only special lights, wet or dry. The pool's reflectance is negated as a material class's
 // is: it changes how the surface shines, while its colour comes from `wet_color`.
@@ -50,7 +54,7 @@ fn pooled_surface(surface: vec3<f32>, pool: Pool) -> vec3<f32> {
     if wet <= 0.0 || surface.z > 0.5 {
         return surface;
     }
-    return vec3(mix(surface.x, pool.roughness, wet), surface.y * (1.0 - wet), -mix(abs(surface.z), POOL_REFLECTANCE, wet));
+    return vec3(mix(surface.x, max(pool.roughness, POOL_LEAST_ROUGHNESS), wet), surface.y * (1.0 - wet), -mix(abs(surface.z), POOL_REFLECTANCE, wet));
 }
 
 // The sun sees `normal`, the lamps light `bumped`, or the liquid's surface where `pool` stands.
@@ -85,12 +89,13 @@ fn shade_surface(incoming: ModernLight, layers: ShaderLayers, color: vec4<f32>, 
     return vec4(add_dynamic(layers, lit, wet, darken, dynamic), color.a);
 }
 
-// `modern_surface` with the pool's sheen on the highlight and the reflection.
+// `modern_surface` with the pool's sheen on the highlight and the reflection, and the light it gives off.
 fn pooled_surface_lit(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, incoming: ModernLight) -> vec3<f32> {
     let display = to_display(color);
     let around = view_around(normal, incoming.lamps, incoming.surface);
     let lit = surface_light(display * display, position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, around);
-    return to_linear(sqrt(max(lit.matte + lit.shine * incoming.pool.sheen, vec3(0.0))));
+    let shine = select(lit.shine, min(lit.shine * incoming.pool.sheen, vec3(POOL_SHINE_LIMIT)), incoming.pool.wet > 0.0);
+    return to_linear(sqrt(max(lit.matte + shine, vec3(0.0)))) + incoming.pool.glow;
 }
 
 // The texture under twice the light in display space, clamped to 1 as the frame buffer clamps it.

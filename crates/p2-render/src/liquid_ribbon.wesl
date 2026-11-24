@@ -1,67 +1,222 @@
-// A stream's ribbon, widened to face the eye and traced as a round tube across its width: true normals, and the
-// thickness light passes through. Its swell and its lumps run down the stream with the flow.
+// A stream. A thin jet is a round tube: an eight-sided shell around its arc, shaded as the round jet inside it so it
+// keeps its shape seen from any side, down its length too. A paste is a sheet of ropes widened to face the eye, torn
+// and lumpy. Every shape on them is fixed to the moving liquid, so it runs down the stream with the flow.
 
-import package::p2_render::liquid_look::{AirIn, AirOut, TAU, air_shade, pixel_units};
+import package::p2_render::liquid_look::{AirIn, AirOut, SHAPE_TUBE, TAU, air_shade, hash1, is_puke, noise1, noise2, optics_of, pixel_units, puke_pour, puke_pour_sampler, surface_of, texture_lod, textured_surface};
 import bevy_pbr::render::{
     mesh_view_bindings::{view, globals},
     view_transformations::position_world_to_clip,
 };
 
-// The varicose swell's depth and its wavelength in radii, the flow's speed in Unreal units a second, and how much
-// lumps vary the thickness.
-const SWELL: f32 = 0.18;
-const SWELL_RADII: f32 = 9.0;
+// How far the shell stands out of the round jet: an octagon's sides cut a circle by 1 / cos(TAU / 16).
+const TUBE_ROOM: f32 = 1.09;
+// A jet pinches into beads about nine radii apart (Plateau-Rayleigh) over the last share of its arc. A bead fills
+// this share of the gap and swells to this many radii; the thread between them thins to this, then breaks.
+const BEADS_FROM: f32 = 0.85;
+const BEADS_FULL: f32 = 0.9;
+const BEAD_RADII: f32 = 9.0;
+const BEAD_SHARE: f32 = 0.55;
+const BEAD_PEAK: f32 = 1.35;
+const NECK: f32 = 0.35;
+// A bead's mean radius over its gap, which it blurs into once it moves more than a part of the gap a frame.
+const BEAD_MEAN: f32 = 0.75;
+// The faint ripple: how much it tilts the normal, and its wavelength in radii.
+const RIPPLE: f32 = 0.12;
+const RIPPLE_RADII: f32 = 14.0;
+// The least sine of the angle between the eye and a jet it sees end on, which caps the depth through it.
+const END_ON: f32 = 0.12;
+
+// The sheet scrolls at this many Unreal units a second.
 const FLOW_SPEED: f32 = 60.0;
-const LUMPS: f32 = 0.25;
+// The share of its arc where a sheet starts to tear.
+const TEAR_START: f32 = 0.3;
+// Side ropes: their width against the sheet's, the radii they drift apart by the end, and their wandering.
+const STRAND_WIDTH: f32 = 0.45;
+const DIVERGE: f32 = 3.0;
+const WANDER: f32 = 1.5;
+const WANDER_RADII: f32 = 30.0;
+// How much of the sheet holes eat at its end, and how much bumps tilt its normal.
+const HOLES: f32 = 0.6;
+const BUMPS: f32 = 0.5;
+// Side ropes show only where a gush swells the sheet past this, so a paste's trickle between gushes is one thin rope.
+const ROPES_FROM: f32 = 0.7;
+// The game's puke pour strip runs across the stream and repeats every this many radii along it (unverified: its
+// orientation in the retail strip).
+const POUR_RADII: f32 = 8.0;
 
-fn hash(x: f32) -> f32 {
-    return fract(sin(x * 12.9898) * 43758.5453);
+// How much of a pattern this many units long a frame's flow moves across: 0 while it moves less than a quarter of it,
+// 1 once it moves half of it, when it would strobe instead of flow.
+fn blurred(speed: f32, units: f32) -> f32 {
+    return smoothstep(0.25, 0.5, speed * globals.delta_time / max(units, 1e-4));
 }
 
-fn flow_noise(x: f32) -> f32 {
-    let cell = floor(x);
-    let t = fract(x);
-    return mix(hash(cell), hash(cell + 1.0), t * t * (3.0 - 2.0 * t));
-}
-
-@vertex
-fn vertex(in: AirIn) -> AirOut {
-    let to_eye = normalize(view.world_position.xyz - in.center);
-    var side = cross(in.way, to_eye);
-    if dot(side, side) < 1e-8 {
-        side = cross(vec3(0.0, 1.0, 0.0), to_eye);
-    }
-    side = normalize(side);
-    let half = max(in.look.x * (1.0 + SWELL), pixel_units(in.center));
-    let world = in.center + side * (in.corner.x * half);
+fn tube_vertex(in: AirIn) -> AirOut {
+    let share = in.light.w;
+    let r = length(in.way);
+    let radial = in.way / max(r, 1e-6);
+    let room = TUBE_ROOM * mix(1.0, BEAD_PEAK, smoothstep(BEADS_FROM - 0.1, BEADS_FROM, share));
+    let world = in.center + radial * max(r * room, 1.5 * pixel_units(in.center));
     var out: AirOut;
     out.position = position_world_to_clip(world);
     out.world = world;
-    out.side = side;
-    out.up = in.way;
-    out.local = vec2(in.corner.x * half, in.corner.y);
+    out.side = radial;
+    out.up = in.axis.xyz;
+    out.local = vec2(r, in.corner.y);
     out.light = in.light.rgb;
     out.look = in.look;
+    out.half = vec2(share, 0.0);
+    out.axis = vec4(in.center, in.axis.w);
     return out;
 }
 
-@fragment
-fn fragment(in: AirOut) -> @location(0) vec4<f32> {
-    let radius = in.look.x;
-    let flow = in.local.y - globals.time * FLOW_SPEED;
-    let r = radius * (1.0 + SWELL * sin(TAU * flow / (SWELL_RADII * radius)));
+fn tube_fragment(in: AirOut, front: bool) -> vec4<f32> {
+    // The shell's far side would shade the same jet again.
+    if !front {
+        discard;
+    }
+    let along_axis = normalize(in.up);
+    let to_eye = normalize(view.world_position.xyz - in.world);
+    let across_eye = to_eye - along_axis * dot(to_eye, along_axis);
+    let seen_side = length(across_eye);
+    var s = cross(along_axis, to_eye);
+    if dot(s, s) < 1e-8 {
+        s = in.side;
+    }
+    s = normalize(s);
+    let x = dot(in.world - in.axis.xyz, s);
+    let r0 = in.look.x;
+    let speed = in.axis.w;
+    let share = saturate(in.half.x);
+    let flow = in.local.y - globals.time * speed;
+    let gap = BEAD_RADII * r0;
+    let phase = (fract(flow / gap) - 0.5) / (0.5 * BEAD_SHARE);
+    let neck = NECK * (1.0 - smoothstep(0.93, 0.99, share));
+    let beaded = mix(max(BEAD_PEAK * sqrt(max(1.0 - phase * phase, 0.0)), neck), BEAD_MEAN, blurred(speed, gap));
+    let r = in.local.x * mix(1.0, beaded, smoothstep(BEADS_FROM, BEADS_FULL, share)) * saturate((1.0 - share) * 40.0);
     let pixel = pixel_units(in.world);
     let drawn = max(r, pixel);
-    let x = in.local.x;
-    // A stream thinner than a pixel is drawn one pixel wide, as faint as its width.
+    // A jet thinner than a pixel is drawn one pixel wide, as faint as its width.
     let cover = saturate((drawn - abs(x)) / pixel) * min(1.0, r / pixel);
     if cover <= 0.0 {
         discard;
     }
-    let across = clamp(x / drawn, -1.0, 1.0);
-    let h = sqrt(1.0 - across * across);
+    let a = clamp(x / drawn, -1.0, 1.0);
+    let h = sqrt(1.0 - a * a);
+    let facing = select(to_eye, across_eye / max(seen_side, 1e-6), seen_side > 1e-4);
+    let wave = RIPPLE_RADII * r0;
+    let ripple = RIPPLE * (1.0 - blurred(speed, wave)) * (0.6 * sin(TAU * flow / wave) + 0.4 * sin(TAU * flow / (0.43 * wave) + 1.7));
+    let n = normalize(s * a + facing * h + along_axis * (ripple * h));
+    // The path through a round jet: its chord across, longer as the jet is seen more end on.
+    let thickness = 2.0 * r * h / max(seen_side, END_ON);
+    let surface = surface_of(in.look.y, vec2(x, flow) / max(r0, 1e-4));
+    return air_shade(in.world, n, thickness, in.look, in.light, in.position, cover, in.look.w, surface);
+}
+
+fn strand_radius(radius: f32, strand: f32) -> f32 {
+    return select(radius * STRAND_WIDTH * (0.75 + 0.5 * hash1(strand)), radius, strand < 0.5);
+}
+
+// The way's length is how much a gush swells the sheet there: the main rope by all of it, the side ropes by less.
+fn strand_swell(grown: f32, strand: f32) -> f32 {
+    return select(sqrt(grown), grown, strand < 0.5);
+}
+
+// The widest a ragged edge swells, against the rope's radius.
+fn widest(ragged: f32) -> f32 {
+    return 1.15 * (1.0 + 0.8 * ragged);
+}
+
+fn sheet_vertex(in: AirIn) -> AirOut {
+    let strand = abs(in.corner.x) - 1.0;
+    let edge = sign(in.corner.x);
+    let share = in.light.w;
+    let to_eye = normalize(view.world_position.xyz - in.center);
+    let length_of_way = length(in.way);
+    let grown = select(1.0, length_of_way, length_of_way > 1e-6);
+    let way = in.way / grown;
+    var side = cross(way, to_eye);
+    if dot(side, side) < 1e-8 {
+        side = cross(vec3(0.0, 1.0, 0.0), to_eye);
+    }
+    side = normalize(side);
+    let flow = in.corner.y - globals.time * FLOW_SPEED;
+    // Side ropes lean left and right in turn and wander with the flow, apart more toward the end.
+    let lean = select(-1.0, 1.0, (u32(strand) & 1u) == 1u) * (0.6 + 0.8 * hash1(strand + 0.5));
+    let wander = noise1(flow / (in.look.x * WANDER_RADII) + strand * 5.0) - 0.5;
+    let drift = select(0.0, in.look.x * grown * (DIVERGE * lean * share * share + WANDER * wander * share), strand > 0.5);
+    let center = in.center + side * drift;
+    let half = max(strand_radius(in.look.x, strand) * strand_swell(grown, strand) * widest(optics_of(in.look.y).ragged), pixel_units(center));
+    let world = center + side * (edge * half);
+    var out: AirOut;
+    out.position = position_world_to_clip(world);
+    out.world = world;
+    out.side = side;
+    out.up = way;
+    out.local = vec2(edge * half, in.corner.y);
+    out.light = in.light.rgb;
+    out.look = in.look;
+    out.half = vec2(share, grown);
+    out.seed = strand;
+    return out;
+}
+
+fn sheet_fragment(in: AirOut) -> vec4<f32> {
+    let ragged = optics_of(in.look.y).ragged;
+    let strand = in.seed;
+    let share = saturate(in.half.x);
+    let radius = strand_radius(in.look.x, strand);
+    let flow = in.local.y - globals.time * FLOW_SPEED;
+    let along = flow / radius + strand * 37.0;
+    let x = in.local.x;
+    let across = x / radius;
+    let right = select(0.0, 1.0, x > 0.0);
+    let wobble = 0.65 * noise1(along * 0.3 + right * 19.0) + 0.35 * noise1(along * 1.1 + right * 7.0);
+    let grown = in.half.y;
+    let r = radius * strand_swell(grown, strand) * (1.0 + ragged * (wobble - 0.5) * (0.6 + share)) * saturate((1.0 - share) * 40.0);
+
+    let pixel = pixel_units(in.world);
+    let drawn = max(r, pixel);
+    // A sheet thinner than a pixel is drawn one pixel wide, as faint as its width.
+    var cover = saturate((drawn - abs(x)) / pixel) * min(1.0, r / pixel);
+    cover *= select(1.0, smoothstep(ROPES_FROM, 1.0, grown), strand > 0.5);
+    // Tears long along the flow eat holes and leave tendrils, the edges first.
+    let tear = 0.65 * noise2(vec2(across * 2.2, along * 0.22)) + 0.35 * noise2(vec2(across * 5.0, along * 0.6) + 3.7);
+    let eat = HOLES * (0.4 + 0.6 * ragged) * smoothstep(TEAR_START, 1.0, share);
+    let edge = saturate(abs(x) / max(r, 1e-4));
+    let threshold = eat * (0.4 + 0.9 * edge * edge);
+    cover *= smoothstep(threshold - 0.12, threshold - 0.02, tear);
+    var surface = surface_of(in.look.y, vec2(across, along));
+    if is_puke(in.look.y) && textureDimensions(puke_pour).x > 1u {
+        let side = vec2<f32>(textureDimensions(puke_pour));
+        let lod = max(texture_lod(side.x, 2.0 * radius, pixel), texture_lod(side.y, POUR_RADII * radius, pixel));
+        let texel = textureSampleLevel(puke_pour, puke_pour_sampler, vec2(saturate(x / max(r, 1e-4) * 0.5 + 0.5), fract(along / POUR_RADII)), lod);
+        cover *= smoothstep(0.05, 0.5, texel.a);
+        surface = textured_surface(surface, in.look.y, texel.rgb, 1.0);
+    }
+    if cover <= 0.0 {
+        discard;
+    }
+    let a = clamp(x / drawn, -1.0, 1.0);
+    let h = sqrt(1.0 - a * a);
     let to_eye = normalize(view.world_position.xyz - in.world);
-    let n = normalize(in.side * across + to_eye * h);
-    let thickness = 2.0 * r * h * (1.0 - LUMPS + 2.0 * LUMPS * flow_noise(flow / radius));
-    return air_shade(in.world, n, thickness, in.look, in.light, in.position, cover, in.look.w);
+    let bumped = vec2(across * 1.6, along * 0.8);
+    let bump = vec2(noise2(bumped + 5.3), noise2(bumped + 9.1)) - 0.5;
+    let n = normalize(in.side * a + to_eye * h + (in.side * bump.x + in.up * bump.y) * (BUMPS * (0.3 + ragged) * h));
+    return air_shade(in.world, n, 2.0 * r * h, in.look, in.light, in.position, cover, in.look.w, surface);
+}
+
+@vertex
+fn vertex(in: AirIn) -> AirOut {
+    if abs(in.look.z - SHAPE_TUBE) < 0.5 {
+        return tube_vertex(in);
+    }
+    return sheet_vertex(in);
+}
+
+@fragment
+fn fragment(in: AirOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if abs(in.look.z - SHAPE_TUBE) < 0.5 {
+        return tube_fragment(in, front);
+    }
+    return sheet_fragment(in);
 }

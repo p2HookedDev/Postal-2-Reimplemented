@@ -1,65 +1,43 @@
-// Drops in the air as quads facing the eye: a bead, a falling drop as an uneven capsule stretched by its motion over
-// the frame, a hanging drip with its neck, and the ring a hard landing leaves, lying on the surface.
+// Drops in the air as quads facing the eye: a falling drop as a teardrop stretched along its motion. A ragged liquid's
+// edge wobbles by the drop's own seed, so no two read as the same dot.
 
-import package::p2_render::liquid_look::{AirIn, AirOut, SHAPE_CROWN, SHAPE_HANG, air_shade, pixel_units};
+import package::p2_render::liquid_look::{AirIn, AirOut, TAU, air_shade, is_puke, noise1, optics_of, pixel_units, puke_splat, puke_splat_sampler, surface_of, texture_lod, textured_surface};
 import bevy_pbr::render::{
     mesh_view_bindings::view,
     view_transformations::position_world_to_clip,
 };
 
-// The longest streak in radii; a falling drop's tail and a drip's neck against its radius; a drip's length in radii
-// when it lets go.
+// A falling drop's streak, longest and shortest, in radii, and how its tail tapers.
 const MOST_STREAK: f32 = 4.0;
-const TAIL: f32 = 0.7;
-const NECK: f32 = 0.35;
-const HANG_STRETCH: f32 = 0.6;
-// A crown's ring reaches this many radii, this wide, its normal tilted out this much.
-const CROWN_SPREAD: f32 = 4.0;
-const CROWN_WIDTH: f32 = 0.6;
-const CROWN_TILT: f32 = 0.6;
-// Unreal units a crown floats over its surface.
-const CROWN_LIFT: f32 = 0.05;
-
-fn crown_ring(radius: f32, age: f32) -> f32 {
-    return radius * (1.0 + (CROWN_SPREAD - 1.0) * age);
-}
+const LEAST_STREAK: f32 = 0.8;
+const TAIL_POW: f32 = 0.6;
+// How much a ragged liquid's edge wobbles, and the width the quad leaves for it, against the radius.
+const WOBBLE: f32 = 0.4;
+const ROOM: f32 = 1.25;
 
 @vertex
 fn vertex(in: AirIn) -> AirOut {
     let radius = max(in.look.x, pixel_units(in.center));
+    // The axis runs from the tail to the front, back along the fall.
+    let speed = length(in.way);
+    let toward = select(vec3(0.0, -1.0, 0.0), in.way / max(speed, 1e-6), speed > 1e-6);
+    let axis = toward * clamp(speed, LEAST_STREAK * in.look.x, MOST_STREAK * in.look.x);
+    let to_eye = normalize(view.world_position.xyz - in.center);
+    let flat = axis - to_eye * dot(axis, to_eye);
+    let up = normalize(select(flat, cross(to_eye, vec3(1.0, 0.0, 0.0)), dot(flat, flat) < 1e-8));
+    let side = normalize(cross(up, to_eye));
+    let half_length = length(flat) * 0.5;
     var out: AirOut;
-    var world: vec3<f32>;
-    if in.look.z == SHAPE_CROWN {
-        let n = normalize(in.way);
-        let t = normalize(select(cross(n, vec3(1.0, 0.0, 0.0)), cross(n, vec3(0.0, 0.0, 1.0)), abs(n.x) > 0.9));
-        let reach = crown_ring(radius, in.look.w) + radius * CROWN_WIDTH;
-        out.local = in.corner * reach;
-        world = in.center + n * CROWN_LIFT + (t * out.local.x + cross(n, t) * out.local.y);
-        out.side = t;
-        out.up = n;
-    } else {
-        // The capsule's axis runs from its tail to its front: back along a fall, up to where a drip hangs from.
-        var axis = in.way;
-        if in.look.z == SHAPE_HANG {
-            axis = vec3(0.0, 1.0, 0.0) * (in.look.x * HANG_STRETCH * min(in.look.w, 1.0));
-        }
-        let streak = length(axis);
-        axis *= min(streak, MOST_STREAK * in.look.x) / max(streak, 1e-6);
-        let to_eye = normalize(view.world_position.xyz - in.center);
-        let flat = axis - to_eye * dot(axis, to_eye);
-        let up = normalize(select(flat, cross(to_eye, vec3(1.0, 0.0, 0.0)), dot(flat, flat) < 1e-8));
-        let side = normalize(cross(up, to_eye));
-        let half_length = length(flat) * 0.5;
-        out.half = vec2(radius, half_length);
-        out.local = vec2(in.corner.x * radius, in.corner.y * (half_length + radius));
-        world = in.center - axis * 0.5 + side * out.local.x + up * out.local.y;
-        out.side = side;
-        out.up = up;
-    }
+    out.half = vec2(radius, half_length);
+    out.local = vec2(in.corner.x * radius * ROOM, in.corner.y * (half_length + radius));
+    let world = in.center - axis * 0.5 + side * out.local.x + up * out.local.y;
+    out.side = side;
+    out.up = up;
     out.position = position_world_to_clip(world);
     out.world = world;
     out.light = in.light.rgb;
     out.look = in.look;
+    out.seed = in.light.w;
     return out;
 }
 
@@ -70,36 +48,41 @@ fn fragment(in: AirOut) -> @location(0) vec4<f32> {
     // A drop smaller than a pixel is drawn one pixel wide, as faint as its area, so far drops do not flicker.
     let area = min(1.0, in.look.x / pixel);
     let to_eye = normalize(view.world_position.xyz - in.world);
-    var cover: f32;
-    var n: vec3<f32>;
-    var thickness: f32;
-    if in.look.z == SHAPE_CROWN {
-        let width = max(radius * CROWN_WIDTH * (1.0 - in.look.w), pixel);
-        let d = length(in.local);
-        let off = (d - crown_ring(radius, in.look.w)) / width;
-        cover = saturate(1.0 - abs(off)) * (1.0 - in.look.w);
-        let radial = (in.side * in.local.x + cross(in.up, in.side) * in.local.y) / max(d, 1e-4);
-        n = normalize(in.up + radial * (off * CROWN_TILT));
-        thickness = width * cover;
+    let seed = in.seed;
+    let s = in.local.y;
+    let x = in.local.x;
+    var w: f32;
+    // Minus the width times its slope along the axis: how far the normal tilts toward the front.
+    var lean: f32;
+    if s >= in.half.y {
+        let ahead = s - in.half.y;
+        w = sqrt(max(radius * radius - ahead * ahead, 0.0));
+        lean = ahead;
     } else {
-        let s = in.local.y;
-        let u = clamp(s / max(in.half.y + radius, 1e-4), -1.0, 1.0);
-        var profile = mix(TAIL, 1.0, u * 0.5 + 0.5);
-        if in.look.z == SHAPE_HANG {
-            profile = mix(1.0, NECK, smoothstep(0.0, 1.0, u));
-        }
-        let r = radius * profile;
-        let cap = max(abs(s) - in.half.y, 0.0);
-        let width = sqrt(max(r * r - cap * cap, 0.0));
-        let x = in.local.x;
-        cover = saturate((width - abs(x)) / pixel);
-        let z = sqrt(max(width * width - x * x, 0.0));
-        n = normalize(in.side * x + in.up * (sign(s) * cap) + to_eye * max(z, 1e-4));
-        thickness = 2.0 * z;
+        let span = 2.0 * in.half.y + radius;
+        let t = max((s + in.half.y + radius) / span, 1e-4);
+        w = radius * pow(t, TAIL_POW);
+        lean = -radius * radius * TAIL_POW * pow(t, 2.0 * TAIL_POW - 1.0) / span;
     }
-    cover *= area * area;
+    let right = select(0.0, 9.0, x > 0.0);
+    w *= 1.0 + optics_of(in.look.y).ragged * WOBBLE * (noise1(s / radius * 1.3 + seed * 41.0 + right) - 0.5);
+    let cover = saturate((w - abs(x)) / pixel) * area * area;
     if cover <= 0.0 {
         discard;
     }
-    return air_shade(in.world, n, thickness, in.look, in.light, in.position, cover, 0.0);
+    let z = sqrt(max(w * w - x * x, 0.0));
+    let n = normalize(in.side * x + in.up * lean + to_eye * max(z, 1e-4));
+    var surface = surface_of(in.look.y, in.local / radius + vec2(seed * 31.0));
+    // A puke drop is coloured by the game's splat sprite laid over its quad, turned by its seed.
+    if is_puke(in.look.y) && textureDimensions(puke_splat).x > 1u {
+        let extent = vec2(radius * ROOM, in.half.y + radius);
+        let turn = seed * TAU;
+        let p = in.local / (2.0 * extent);
+        let uv = vec2(cos(turn) * p.x - sin(turn) * p.y, sin(turn) * p.x + cos(turn) * p.y) + 0.5;
+        let side = vec2<f32>(textureDimensions(puke_splat));
+        let lod = texture_lod(max(side.x, side.y), 2.0 * min(extent.x, extent.y), pixel);
+        let texel = textureSampleLevel(puke_splat, puke_splat_sampler, fract(uv), lod);
+        surface = textured_surface(surface, in.look.y, texel.rgb, smoothstep(0.0, 0.3, texel.a));
+    }
+    return air_shade(in.world, n, 2.0 * z, in.look, in.light, in.position, cover, 0.0, surface);
 }

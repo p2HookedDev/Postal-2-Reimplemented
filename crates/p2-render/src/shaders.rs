@@ -4,14 +4,16 @@ use bevy::pbr::{Material, MaterialPlugin, MeshPipelineKey};
 use bevy::render::RenderApp;
 use bevy::render::render_resource::RenderPipelineDescriptor;
 use bevy::shader::{Shader, ShaderDefVal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-/// The `shaders` folder beside the exe; a cargo build that has none reads this crate's own sources.
-static SHADER_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("shaders")));
-    beside.filter(|dir| dir.is_dir()).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")))
-});
+/// `folder` beside the exe; a cargo build that has none reads the one in this crate's own sources.
+fn beside_exe(folder: &str, in_crate: &str) -> PathBuf {
+    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join(folder)));
+    beside.filter(|dir| dir.is_dir()).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join(in_crate))
+}
+
+static SHADER_DIR: LazyLock<PathBuf> = LazyLock::new(|| beside_exe("shaders", "src"));
 
 /// A shader read from the shader folder at start-up; WESL imports reach it as `package::p2_render::<stem>`.
 pub(crate) fn shader_file(name: &str) -> Shader {

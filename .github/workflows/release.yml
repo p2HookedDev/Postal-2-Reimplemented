@@ -33,6 +33,7 @@ jobs:
           Copy-Item script/P2Modern/P2Modern.u dist/P2Reimplemented/Packages/
           New-Item -ItemType Directory -Force dist/P2Reimplemented/shaders | Out-Null
           Copy-Item crates/p2-render/src/*.wesl, crates/p2-render/src/*.wgsl dist/P2Reimplemented/shaders/
+          Copy-Item -Recurse crates/p2-render/textures dist/P2Reimplemented/textures
           Copy-Item $exe, LICENSE, README.md dist/P2Reimplemented/
           Compress-Archive dist/P2Reimplemented "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip"
 

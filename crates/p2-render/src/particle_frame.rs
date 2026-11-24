@@ -77,6 +77,8 @@ pub enum LiquidRole {
     Drip,
     Puddle,
     Trail,
+    /// A trail the scripts slide down a wall under a still aim.
+    Flow,
     /// Droplets bursting where a stream lands.
     Splash,
 }

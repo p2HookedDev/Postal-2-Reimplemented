@@ -58,6 +58,7 @@ struct Source {
 }
 
 const BLOOD: Source = Source { texture: "nathans.Skins.bloodchunks1", sideways: 0.0 };
+const CONCRETE: Source = Source { texture: "nathans.Skins.concrete1", sideways: 0.0 };
 const GLASS: Source = Source { texture: "nathans.Skins.glassshards", sideways: 60.0 };
 const GAME_STEP: f32 = 0.02;
 
@@ -208,10 +209,8 @@ fn a_rigid_shard_thrown_sideways_lands_on_the_level_and_lies_still_to_that_side(
     assert!((later - lying).abs() < 0.5, "the shards still move a second later: column {lying} to {later}");
 }
 
-#[test]
-#[ignore = "needs a GPU"]
-fn a_push_from_the_left_throws_lying_droplets_to_the_right() {
-    let (mut app, frame) = thrown(Under::AFloor, BLOOD);
+fn pushed_from_the_left(source: Source) -> (f32, f32) {
+    let (mut app, frame) = thrown(Under::AFloor, source);
     run_for(&mut app, 3.0);
     let lying = red_middle(&frame).expect("no droplet lies on the floor three seconds after the last was thrown");
     let push = Blast { at: Vector::new(-150.0, -40.0, -6.0), radius: 400.0, push: 120.0, way: Vector::ZERO };
@@ -219,6 +218,19 @@ fn a_push_from_the_left_throws_lying_droplets_to_the_right() {
     app.update();
     app.world_mut().resource_mut::<DrawnParticles>().blasts.clear();
     run_for(&mut app, 2.0);
-    let later = red_middle(&frame).expect("the push threw the droplets out of sight");
+    (lying, red_middle(&frame).expect("the push threw the droplets out of sight"))
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn a_push_from_the_left_throws_lying_droplets_to_the_right() {
+    let (lying, later) = pushed_from_the_left(CONCRETE);
     assert!(later > lying + 4.0, "the droplets lay at column {lying} and lie at {later} after a push from their left");
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn a_push_leaves_a_blood_hits_droplets_where_they_lie() {
+    let (lying, later) = pushed_from_the_left(BLOOD);
+    assert!((later - lying).abs() < 1.0, "a blood hit's droplets moved from column {lying} to {later} under a later push");
 }

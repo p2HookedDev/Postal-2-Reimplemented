@@ -20,8 +20,6 @@ use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::Transform;
 use bevy::render::RenderApp;
 use bevy::render::extract_resource::ExtractResourcePlugin;
-use bevy::render::storage::ShaderBuffer;
-use bevy::asset::RenderAssetUsages;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
@@ -39,8 +37,9 @@ use p2_vm::FluidType;
 
 const SIZE: u32 = 128;
 
-fn is_red([r, g, ..]: [u8; 4]) -> bool {
-    u16::from(r) > u16::from(g) + 30
+/// Blood and puke are both warm against the grey wall, puke yellow rather than red.
+fn is_red([r, _, b, _]: [u8; 4]) -> bool {
+    u16::from(r) > u16::from(b) + 30
 }
 
 fn red_pixels(frame: &Mutex<Vec<u8>>) -> usize {
@@ -93,8 +92,11 @@ fn rendering(eye: Transform, game_step: f32) -> (App, Arc<Mutex<Vec<u8>>>, Entit
 
 fn until_red(app: &mut App, frames: &Mutex<Vec<u8>>) {
     let start = Instant::now();
-    while red_pixels(frames) < 20 {
+    let mut settled = 0;
+    // Drops can draw before the ribbon's pipeline is built, so the frame is taken once every pipeline is.
+    while settled < 4 {
         app.update();
+        settled = if red_pixels(frames) >= 20 && !common::compiling(app) { settled + 1 } else { 0 };
         assert!(start.elapsed() < Duration::from_secs(60), "no liquid was drawn: compiling {}", common::compiling(app));
     }
 }
@@ -141,12 +143,14 @@ fn red_rows(frame: &Mutex<Vec<u8>>) -> Vec<usize> {
 #[ignore = "needs a GPU"]
 fn a_pour_draws_one_unbroken_ribbon_from_its_nozzle_to_its_hit_and_nothing_once_it_stops() {
     let (mut app, frame) = showing(pouring);
-    let rows = red_rows(&frame);
-    let (first, last) = (rows.first().copied().unwrap_or_default(), rows.last().copied().unwrap_or_default());
-    assert_eq!(rows.len(), last - first + 1, "the ribbon has gaps: {rows:?}");
     // Nozzle and hit are 12 units over and under the eye 40 units away; at a 45 degree view, 0.36 of the frame each way.
     let span = (SIZE as f32 * 0.36) as usize;
-    assert!(first <= SIZE as usize / 2 - span + 3 && last + 3 >= SIZE as usize / 2 + span, "the ribbon runs over rows {first} to {last}");
+    let rows = red_rows(&frame);
+    let first = rows.first().copied().unwrap_or_default();
+    // The run of rows from the nozzle down, across the small holes a torn stream has near its end; the scene has no
+    // floor, so what the stream sheds falls on past its hit.
+    let last = rows.windows(2).take_while(|pair| pair[1] - pair[0] <= 3).last().map_or(first, |pair| pair[1]);
+    assert!(first <= SIZE as usize / 2 - span + 3 && last + 3 >= SIZE as usize / 2 + span, "the ribbon runs unbroken over rows {first} to {last}: {rows:?}");
     let liquid = app.world_mut().resource_mut::<DrawnParticles>().actors[0].liquid.as_mut().and_then(|liquid| liquid.pour.as_mut()).map(|pour| pour.flowing = false);
     assert!(liquid.is_some());
     let stopped = Instant::now();
@@ -181,9 +185,8 @@ fn slot_texel(atlas: &[u8], slot: u32, x: i32, y: i32) -> [f32; 4] {
 }
 
 /// Two tiles side by side (slot 0, and slot 1 along +x) over a floor at height 0 that falls along +y by `slope` a
-/// texel and drops by `ledge` past row 64, stepped once a frame; the app, the atlas it last published and the spill
-/// counts it last read back.
-fn layer(slope: f32, ledge: f32) -> (App, Arc<Mutex<Vec<u8>>>, Arc<Mutex<Vec<u8>>>) {
+/// texel, stepped once a frame; the app and the atlas it last published.
+fn layer(slope: f32) -> (App, Arc<Mutex<Vec<u8>>>) {
     let mut app = App::new();
     common::headless_renderer(&mut app);
     app.add_plugins((LayerGpuPlugin, ExtractResourcePlugin::<LayerFrame>::default()));
@@ -196,19 +199,13 @@ fn layer(slope: f32, ledge: f32) -> (App, Arc<Mutex<Vec<u8>>>, Arc<Mutex<Vec<u8>
     world.spawn(Readback::texture(atlas.clone())).observe(move |event: On<ReadbackComplete>| {
         store.lock().expect("lock").clone_from(&event.data);
     });
-    let spills = world.resource_mut::<Assets<ShaderBuffer>>().add(ShaderBuffer::with_size(64 * 256 * 8, RenderAssetUsages::RENDER_WORLD));
-    let counted = Arc::new(Mutex::new(Vec::new()));
-    let store = counted.clone();
-    world.spawn(Readback::buffer(spills.clone())).observe(move |event: On<ReadbackComplete>| {
-        store.lock().expect("lock").clone_from(&event.data);
-    });
-    let floor: Vec<f32> = (0..TEXELS).map(|i| -slope * (i / SIDE as usize) as f32 - if i / SIDE as usize >= 64 { ledge } else { 0.0 }).collect();
+    let floor: Vec<f32> = (0..TEXELS).map(|i| -slope * (i / SIDE as usize) as f32).collect();
     let floors = vec![(0, Arc::new(floor.clone())), (1, Arc::new(floor))];
     let mut slots = vec![LayerSlot::default(); 4];
     (slots[0].around[4], slots[0].around[5], slots[1].around[3], slots[1].around[4]) = (0, 1, 0, 1);
     (slots[1].atlas_x, slots[1].atlas_y) = (SLOT_SIDE, 0);
-    world.insert_resource(LayerFrame { capacity: 4, level: 1, steps: 1, slots, active: vec![0, 1], sources: Vec::new(), cleared: vec![0, 1], floors, atlas: Some(atlas.id()), spills: Some(spills.id()) });
-    (app, frames, counted)
+    world.insert_resource(LayerFrame { capacity: 4, level: 1, steps: 1, slots, active: vec![0, 1], sources: Vec::new(), cleared: vec![0, 1], floors, atlas: Some(atlas.id()) });
+    (app, frames)
 }
 
 /// Holds a blood film over a disc of `radius` texels at texel (x, y) of slot 0, as a script's puddle does; the part
@@ -248,7 +245,7 @@ fn depth(atlas: &[u8], slot: u32, x: i32, y: i32) -> f32 {
 #[test]
 #[ignore = "needs a GPU"]
 fn a_held_pool_is_smooth_across_its_tiles_and_dries_once_let_go() {
-    let (mut app, frames, _) = layer(0.0, 0.0);
+    let (mut app, frames) = layer(0.0);
     hold(&mut app, [120.0, 64.0], 20.0);
     let held = |atlas: &[u8]| (depth(atlas, 0, 120, 64) - FILM).abs() < 0.02 && (depth(atlas, 1, 4, 64) - FILM).abs() < 0.02;
     let atlas = until(&mut app, &frames, "the disc never held its film on both tiles", held);
@@ -268,11 +265,11 @@ fn a_held_pool_is_smooth_across_its_tiles_and_dries_once_let_go() {
 #[test]
 #[ignore = "needs a GPU"]
 fn poured_liquid_runs_downhill_and_keeps_its_film_behind() {
-    let (mut app, frames, _) = layer(0.2, 0.0);
+    let (mut app, frames) = layer(0.2);
     until(&mut app, &frames, "the layer never published its floor", |atlas| slot_texel(atlas, 0, 64, 30)[2] == -6.0);
     {
         let mut frame = app.world_mut().resource_mut::<LayerFrame>();
-        frame.sources = vec![LayerSource { x: 64.0, y: 30.0, radius: 6.0, amount: 600.0, kind: f32::from(FluidType::Urine as u8), adds: 1, ..LayerSource::default() }];
+        frame.sources = vec![LayerSource { x: 64.0, y: 30.0, radius: 6.0, amount: 600.0, kind: f32::from(FluidType::Urine as u8), adds: 1 }];
         (frame.slots[0].first_source, frame.slots[0].sources) = (0, 1);
     }
     app.update();
@@ -287,30 +284,4 @@ fn poured_liquid_runs_downhill_and_keeps_its_film_behind() {
     };
     let atlas = until(&mut app, &frames, "the pour never ran downhill from row 30", |atlas| middle(atlas) > 34.0);
     assert!(depth(&atlas, 0, 64, 30) > 0.1, "where it landed keeps a film: {}", depth(&atlas, 0, 64, 30));
-}
-
-#[test]
-#[ignore = "needs a GPU"]
-fn liquid_running_over_a_ledge_is_counted_for_the_runs_down_its_face() {
-    let (mut app, frames, counted) = layer(0.05, 20.0);
-    until(&mut app, &frames, "the layer never published its floor", |atlas| slot_texel(atlas, 0, 64, 40)[2] == -2.0);
-    let pour = LayerSource { x: 64.0, y: 58.0, radius: 4.0, amount: 400.0, kind: f32::from(FluidType::Urine as u8), adds: 1, ..LayerSource::default() };
-    let start = Instant::now();
-    let cell = 7 * 16 + 8;
-    loop {
-        {
-            let mut frame = app.world_mut().resource_mut::<LayerFrame>();
-            frame.sources = vec![pour];
-            (frame.slots[0].first_source, frame.slots[0].sources) = (0, 1);
-        }
-        app.update();
-        handed_over(&mut app);
-        let counts = counted.lock().expect("lock").clone();
-        let word = |index: usize| counts.get(index * 4..index * 4 + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-        if word(cell * 2) > 0 {
-            assert_eq!(word(cell * 2 + 1), 1 << 3, "it spilt toward +y, over the ledge at row 64");
-            break;
-        }
-        assert!(start.elapsed() < Duration::from_secs(60), "no spill was counted over the ledge");
-    }
 }

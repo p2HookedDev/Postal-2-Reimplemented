@@ -1,5 +1,6 @@
 //! Modern graphics: what a newborn sprite of the scripts' chunks, shards and sparks throws. A chunk throws droplets
-//! for the GPU pool; a shard, a spark and a piece of skull or brain throw rigid pieces instead.
+//! for the GPU pool; a shard, a spark and a piece of skull or brain throw rigid pieces instead. A blood emitter's first
+//! burst also throws a mist puff, fast streaks and a few heavy drops that fly as liquid.
 
 use bevy::asset::Handle;
 use bevy::ecs::entity::Entity;
@@ -9,10 +10,12 @@ use bevy::math::{Vec3, Vec4};
 use p2_bevy_assets::to_bevy;
 use p2_math::Vector;
 use p2_particles::{DirectionUsage, DrawStyle, EmitterProperties, SpriteParticle};
+use p2_vm::FluidType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::debris::{PieceBirth, PieceKind};
-use crate::gpu_particles::{Droplet, TEXTURE_SLOTS, pool_size};
+use crate::gpu_particles::{Droplet, MIST, STREAK, TEXTURE_SLOTS, UNPUSHED, pool_size};
+use crate::liquids::LiquidSpray;
 use crate::particle_frame::DrawnParticles;
 
 /// Past this many emitters the ones whose actor is gone are dropped.
@@ -23,6 +26,35 @@ const LIFE_SPREAD: f32 = 0.6;
 /// A droplet's gravity, in Unreal units a second squared. How a chunk lands matches `RESTITUTION` and `KEEP` in
 /// `gpu_particles.wesl`.
 const DROPLET_GRAVITY: f32 = 800.0;
+
+/// Unreal units in a metre (unverified).
+const METRE: f32 = 52.5;
+/// Newborn sprites in a blood burst that make it as big a hit as the spray gets.
+const BIG_HIT: f32 = 15.0;
+/// A burst whose sprites' mean velocity is less than this share of their mean speed has no way: it is thrown all round.
+const RADIAL: f32 = 0.35;
+/// Ranges below go from a small hit to a big one, or from least to most.
+const MISTS: [f32; 2] = [1.0, 2.0];
+const RADIAL_MISTS: [f32; 2] = [2.0, 4.0];
+const MIST_SECONDS: [f32; 2] = [0.24, 0.3];
+/// A puff's half size at birth; the shader grows it fourfold.
+const MIST_HALF: f32 = 0.05 * METRE;
+const MIST_DRIFT: f32 = 0.5 * METRE;
+const STREAKS: [f32; 2] = [8.0, 40.0];
+const RADIAL_STREAKS: [f32; 2] = [60.0, 120.0];
+/// Half the cone's angle in degrees.
+const CONE: [f32; 2] = [15.0, 10.0];
+const SMALL_HIT_SPEED: [f32; 2] = [2.0 * METRE, 5.0 * METRE];
+const BIG_HIT_SPEED: [f32; 2] = [4.0 * METRE, 9.0 * METRE];
+const STREAK_SECONDS: [f32; 2] = [0.4, 0.8];
+const STREAK_HALF: [f32; 2] = [0.25, 0.5];
+const HEAVY: [f32; 2] = [1.0, 4.0];
+const RADIAL_HEAVY: [f32; 2] = [5.0, 12.0];
+/// A heavy drop's speed against a streak's.
+const HEAVY_SPEED: [f32; 2] = [0.4, 0.7];
+const HEAVY_RADIUS: [f32; 2] = [0.6, 1.2];
+/// Thin blood's linear colour, before the sprite's tint and light.
+const BLOOD: Vec3 = Vec3::new(0.35, 0.02, 0.015);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Throws {
@@ -87,7 +119,7 @@ fn throw_of(throws: Throws) -> Throw {
         Throws::Droplets => CHUNK,
         Throws::Pieces(PieceKind::Flat) => Throw { per_level: 0.8, speed: 200.0, seconds: 30.0, size: [0.5, 1.0], most: 6.0, fling: [0.5, 1.2] },
         Throws::Pieces(PieceKind::Spark) => Throw { per_level: 0.8, speed: 300.0, seconds: 1.0, size: [0.4, 0.7], most: 3.0, fling: [0.5, 1.2] },
-        Throws::Pieces(PieceKind::Lump) => Throw { per_level: 0.5, seconds: 15.0, size: [0.4, 0.8], most: 7.0, fling: [0.8, 1.3], ..CHUNK },
+        Throws::Pieces(PieceKind::Lump | PieceKind::Chunk) => Throw { per_level: 0.5, seconds: 15.0, size: [0.4, 0.8], most: 7.0, fling: [0.8, 1.3], ..CHUNK },
     }
 }
 
@@ -99,6 +131,7 @@ fn droplets_per_sprite(level: u8, throws: Throws) -> u32 {
 struct Source {
     throws: Throws,
     slot: u32,
+    blood: bool,
 }
 
 #[derive(Resource, Default)]
@@ -109,6 +142,8 @@ pub(crate) struct Spawner {
     seen: FxHashMap<(Entity, u32), u32>,
     /// The textures the droplets are drawn with, by slot; an emitter whose texture finds no slot throws nothing.
     pub(crate) textures: Vec<Handle<Image>>,
+    /// Heavy drops thrown since the caller last took them.
+    pub(crate) sprays: Vec<LiquidSpray>,
     seed: u32,
 }
 
@@ -155,6 +190,85 @@ fn droplet(sprite: &SpriteParticle, slot: u32, origin: Vec3, step: f32, light: V
     }
 }
 
+fn between([low, high]: [f32; 2], t: f32) -> f32 {
+    low + (high - low) * t
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Burst {
+    axis: Vec3,
+    radial: bool,
+    /// 0 for a small hit to 1 for a big one.
+    big: f32,
+}
+
+fn burst_of(sprites: &[&SpriteParticle], step: f32) -> Burst {
+    let (mut sum, mut speed) = (Vec3::ZERO, 0.0);
+    for sprite in sprites {
+        let moved = Vec3::from(to_bevy(sprite.location)) - Vec3::from(to_bevy(sprite.previous));
+        let own = if step > 1e-4 { moved / step } else { Vec3::ZERO };
+        (sum, speed) = (sum + own, speed + own.length());
+    }
+    let count = sprites.len() as f32;
+    let big = ((count - 1.0) / BIG_HIT).clamp(0.0, 1.0);
+    if speed < 20.0 * count {
+        return Burst { axis: Vec3::Y, radial: false, big };
+    }
+    Burst { axis: sum.normalize_or(Vec3::Y), radial: sprites.len() >= 4 && sum.length() < RADIAL * speed, big }
+}
+
+/// A way within `degrees` of `axis`, evenly over the cone's cap; 180 is any way.
+fn in_cone(axis: Vec3, degrees: f32, seed: &mut u32) -> Vec3 {
+    let cos = 1.0 - next_unit(seed) * (1.0 - degrees.to_radians().cos());
+    let sin = (1.0 - cos * cos).max(0.0).sqrt();
+    let turn = next_unit(seed) * std::f32::consts::TAU;
+    let (a, b) = axis.any_orthonormal_pair();
+    axis * cos + (a * turn.cos() + b * turn.sin()) * sin
+}
+
+/// Where a blood burst is in the world's coordinates and its colour in linear light.
+struct Hit {
+    at: Vec3,
+    colour: Vec3,
+    burst: Burst,
+    source: u64,
+}
+
+fn spray(hit: &Hit, level: u8, seed: &mut u32, droplets: &mut Vec<Droplet>, heavy: &mut Vec<LiquidSpray>) {
+    let Hit { at, colour, burst, source } = *hit;
+    let big = burst.big;
+    let (cone, mists, streaks, heavies) = if burst.radial { (180.0, RADIAL_MISTS, RADIAL_STREAKS, RADIAL_HEAVY) } else { (between(CONE, big), MISTS, STREAKS, HEAVY) };
+    let speed = [between([SMALL_HIT_SPEED[0], BIG_HIT_SPEED[0]], big), between([SMALL_HIT_SPEED[1], BIG_HIT_SPEED[1]], big)];
+    let (drift, puff) = if burst.radial { (Vec3::ZERO, 2.0) } else { (burst.axis * MIST_DRIFT, 1.0 + big) };
+    for _ in 0..between(mists, big).round() as u32 {
+        let off = Vec3::new(next_unit(seed), next_unit(seed), next_unit(seed)) * 2.0 - Vec3::ONE;
+        droplets.push(Droplet {
+            place: (at + off * MIST_HALF).extend(0.0),
+            velocity: drift.extend(between(MIST_SECONDS, next_unit(seed))),
+            colour: colour.extend(MIST_HALF * puff),
+            rect: Vec4::ZERO,
+            shape: Vec4::new(0.0, MIST, next_unit(seed) * std::f32::consts::TAU, 0.0),
+            rest: Vec4::new(0.0, 0.0, 0.0, UNPUSHED),
+        });
+    }
+    let streaks = (between(streaks, big) * f32::from(level) / 5.0).round().max(1.0) as u32;
+    for _ in 0..streaks {
+        let velocity = in_cone(burst.axis, cone, seed) * between(speed, next_unit(seed));
+        droplets.push(Droplet {
+            place: at.extend(0.0),
+            velocity: velocity.extend(between(STREAK_SECONDS, next_unit(seed))),
+            colour: colour.extend(between(STREAK_HALF, next_unit(seed))),
+            rect: Vec4::ZERO,
+            shape: Vec4::new(0.0, STREAK, 0.0, DROPLET_GRAVITY),
+            rest: Vec4::new(0.0, 0.0, 0.0, UNPUSHED),
+        });
+    }
+    for _ in 0..between(heavies, big).round() as u32 {
+        let velocity = in_cone(burst.axis, cone, seed) * between(speed, next_unit(seed)) * between(HEAVY_SPEED, next_unit(seed));
+        heavy.push(LiquidSpray { at, velocity, radius: between(HEAVY_RADIUS, next_unit(seed)), kind: FluidType::Blood, source });
+    }
+}
+
 impl Spawner {
     fn slot_of(&mut self, image: &Handle<Image>) -> Option<u32> {
         let slot = self.textures.iter().position(|held| held.id() == image.id()).or_else(|| {
@@ -182,13 +296,14 @@ impl Spawner {
             if let Some(throws) = detail_of(&look.name, &look.props)
                 && let Some(slot) = self.slot_of(&look.image)
             {
-                self.sources.insert((look.parent, look.order), Source { throws, slot });
+                let blood = throws == Throws::Droplets && look.name.to_ascii_lowercase().contains("blood");
+                self.sources.insert((look.parent, look.order), Source { throws, slot, blood });
             }
         }
     }
 
     /// `light_at` gives a chunk's or shard's light where its sprite is, in display light; a spark makes its own. A
-    /// sprite that throws pieces puts them in `births`.
+    /// sprite that throws pieces puts them in `births`; a blood burst's heavy drops go to `sprays`.
     pub(crate) fn throw(
         &mut self,
         drawn: &DrawnParticles,
@@ -210,6 +325,19 @@ impl Spawner {
                 self.seen.insert(key, newest);
                 let Some(origin) = origin.filter(|_| eligible) else { continue };
                 let count = droplets_per_sprite(level, source.throws);
+                if source.blood && before == 0 {
+                    let fresh: Vec<&SpriteParticle> = emitter.sprites.iter().filter(|sprite| sprite.serial > before).collect();
+                    if let Some(first) = fresh.first() {
+                        let centre = fresh.iter().map(|sprite| Vec3::from(to_bevy(sprite.location))).sum::<Vec3>() / fresh.len() as f32;
+                        let light = light_at(slot.parent, first.location);
+                        let colour = BLOOD * (sprite_rgb(first) * light).powf(2.2);
+                        let hit = Hit { at: centre + origin, colour, burst: burst_of(&fresh, step), source: slot.parent.to_bits() };
+                        let mut made = Vec::new();
+                        spray(&hit, level, &mut self.seed, &mut made, &mut self.sprays);
+                        let room = cap - newborn.len().min(cap);
+                        newborn.extend(made.into_iter().take(room));
+                    }
+                }
                 for sprite in emitter.sprites.iter().filter(|sprite| sprite.serial > before) {
                     match source.throws {
                         Throws::Pieces(kind) => {
@@ -236,7 +364,11 @@ impl Spawner {
                             let room = count.min((cap - newborn.len().min(cap)) as u32);
                             let light = if room > 0 { light_at(slot.parent, sprite.location) } else { Vec3::ONE };
                             for _ in 0..room {
-                                newborn.push(droplet(sprite, source.slot, origin, step, light, &mut self.seed));
+                                let mut made = droplet(sprite, source.slot, origin, step, light, &mut self.seed);
+                                if source.blood {
+                                    made.rest.w = UNPUSHED;
+                                }
+                                newborn.push(made);
                             }
                         }
                     }
@@ -366,8 +498,8 @@ mod tests {
         let mut images = bevy::asset::Assets::<Image>::default();
         spawner.textures.push(images.add(Image::default()));
         let parent = Entity::PLACEHOLDER;
-        spawner.sources.insert((parent, 0), Source { throws: SHARD, slot: 0 });
-        spawner.sources.insert((parent, 1), Source { throws: Throws::Droplets, slot: 0 });
+        spawner.sources.insert((parent, 0), Source { throws: SHARD, slot: 0, blood: false });
+        spawner.sources.insert((parent, 1), Source { throws: Throws::Droplets, slot: 0, blood: false });
         let emitter = || DrawnEmitter { sprites: vec![rising_sprite()], ..DrawnEmitter::default() };
         let actor = DrawnActor { parent, drawn: true, emitters: vec![emitter(), emitter()], ..DrawnActor::default() };
         let drawn = DrawnParticles { actors: vec![actor], ..DrawnParticles::default() };
@@ -384,7 +516,7 @@ mod tests {
         let mut spawner = Spawner::default();
         let mut images = bevy::asset::Assets::<Image>::default();
         spawner.textures.push(images.add(Image::default()));
-        spawner.sources.insert((Entity::PLACEHOLDER, 0), Source { throws: SPARK, slot: 0 });
+        spawner.sources.insert((Entity::PLACEHOLDER, 0), Source { throws: SPARK, slot: 0, blood: false });
         let emitter = DrawnEmitter { sprites: vec![rising_sprite()], ..DrawnEmitter::default() };
         let actor = DrawnActor { parent: Entity::PLACEHOLDER, drawn: true, emitters: vec![emitter], ..DrawnActor::default() };
         let drawn = DrawnParticles { actors: vec![actor], ..DrawnParticles::default() };
@@ -417,8 +549,41 @@ mod tests {
         let drawn = DrawnParticles { actors: vec![actor], ..DrawnParticles::default() };
         let mut births = Vec::new();
         let droplets = spawner.throw(&drawn, 5, Some(Vec3::ZERO), 0.02, |_, _| Vec3::ONE, &mut births);
-        assert_eq!(droplets.len() as u32, droplets_per_sprite(5, Throws::Droplets), "the blood throws droplets");
+        let chunks = droplets.iter().filter(|droplet| droplet.shape.y == 0.0).count() as u32;
+        assert_eq!(chunks, droplets_per_sprite(5, Throws::Droplets), "the blood throws droplets, its spray besides");
         assert_eq!(births.len() as u32, 2 * droplets_per_sprite(5, HEAD));
         assert!(births.iter().all(|birth| birth.kind == PieceKind::Lump && birth.seconds == throw_of(HEAD).seconds));
+    }
+
+    #[test]
+    fn a_blood_bursts_first_frame_sprays_mist_streaks_and_heavy_drops_once() {
+        let mut spawner = Spawner::default();
+        let mut images = bevy::asset::Assets::<Image>::default();
+        spawner.textures.push(images.add(Image::default()));
+        spawner.sources.insert((Entity::PLACEHOLDER, 0), Source { throws: Throws::Droplets, slot: 0, blood: true });
+        let drawn_with = |serial| {
+            let emitter = DrawnEmitter { sprites: vec![SpriteParticle { serial, ..rising_sprite() }], ..DrawnEmitter::default() };
+            DrawnParticles { actors: vec![DrawnActor { parent: Entity::PLACEHOLDER, drawn: true, emitters: vec![emitter], ..DrawnActor::default() }], ..DrawnParticles::default() }
+        };
+        let droplets = spawner.throw(&drawn_with(1), 5, Some(Vec3::ZERO), 0.02, |_, _| Vec3::ONE, &mut Vec::new());
+        let kinds = |kind: f32| droplets.iter().filter(|droplet| droplet.shape.y == kind).count();
+        assert_eq!((kinds(MIST), kinds(STREAK) as f32), (1, STREAKS[0]));
+        assert!(droplets.iter().filter(|droplet| droplet.shape.y == STREAK).all(|streak| streak.velocity.y > 0.0), "a rising burst sprays upward");
+        assert!(!spawner.sprays.is_empty() && spawner.sprays.iter().all(|drop| drop.kind == FluidType::Blood && drop.velocity.y > 0.0));
+        let taken = std::mem::take(&mut spawner.sprays).len();
+        let later = spawner.throw(&drawn_with(2), 5, Some(Vec3::ZERO), 0.02, |_, _| Vec3::ONE, &mut Vec::new());
+        assert!(taken > 0 && later.iter().all(|droplet| droplet.shape.y == 0.0) && spawner.sprays.is_empty(), "only the first burst sprays");
+    }
+
+    #[test]
+    fn a_burst_with_no_shared_way_is_radial() {
+        let way = |x: f32, y: f32| SpriteParticle { location: Vector::new(x, y, 0.0), previous: Vector::ZERO, ..rising_sprite() };
+        let spread = [way(4.0, 0.0), way(-4.0, 0.0), way(0.0, 4.0), way(0.0, -4.0)];
+        assert!(burst_of(&spread.iter().collect::<Vec<_>>(), 0.02).radial);
+        let rising = [rising_sprite(), rising_sprite(), rising_sprite(), rising_sprite()];
+        let burst = burst_of(&rising.iter().collect::<Vec<_>>(), 0.02);
+        assert!(!burst.radial && burst.axis.y > 0.99);
+        let mut seed = 9;
+        assert!((0..100).all(|_| in_cone(Vec3::Y, 15.0, &mut seed).y >= 15f32.to_radians().cos() - 1e-4));
     }
 }

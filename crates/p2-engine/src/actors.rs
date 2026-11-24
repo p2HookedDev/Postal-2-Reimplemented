@@ -394,6 +394,8 @@ pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Emitter
 fn liquid_role(is_a: impl Fn(Kind) -> bool) -> Option<LiquidRole> {
     Some(if is_a(Kind::FluidPuddle) {
         LiquidRole::Puddle
+    } else if is_a(Kind::FluidFlowTrail) {
+        LiquidRole::Flow
     } else if is_a(Kind::FluidTrail) || is_a(Kind::FluidDripTrail) {
         LiquidRole::Trail
     } else if is_a(Kind::FluidDripFeeder) {
@@ -551,6 +553,7 @@ mod tests {
         let role = |ancestors: &[Kind]| liquid_role(|kind| ancestors.contains(&kind));
         assert_eq!(role(&[Kind::FluidPuddle]), Some(LiquidRole::Puddle));
         assert_eq!(role(&[Kind::FluidTrail]), Some(LiquidRole::Trail));
+        assert_eq!(role(&[Kind::FluidFlowTrail, Kind::FluidTrail]), Some(LiquidRole::Flow));
         assert_eq!(role(&[Kind::FluidDripTrail]), Some(LiquidRole::Trail));
         assert_eq!(role(&[Kind::FluidDripFeeder, Kind::FluidFeeder]), Some(LiquidRole::Drip));
         assert_eq!(role(&[Kind::FluidFeeder]), Some(LiquidRole::Stream));

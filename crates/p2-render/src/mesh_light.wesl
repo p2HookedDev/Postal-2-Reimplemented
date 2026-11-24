@@ -49,6 +49,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         color = vec4(lit_color(layers, select(wet_color(color.rgb, pool), color.rgb, darken), light), color.a);
     }
 }
+@else {
+    if layers.blend.x == 0.0 {
+        color = vec4(wet_color(color.rgb, pool_at(pbr_input, ranges, normalize(pbr_input.world_normal))), color.a);
+    }
+}
     color = apply_layers(in, color, color.a, pbr_input, layers);
     pbr_input.material.base_color = alpha_discard(pbr_input.material.flags, pbr_input.material.alpha_cutoff, color);
     var out: FragmentOutput;

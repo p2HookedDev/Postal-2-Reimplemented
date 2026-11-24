@@ -6,7 +6,6 @@ import bevy_pbr::{
         pbr_fragment::pbr_input_from_standard_material,
         mesh_functions::get_tag,
     },
-    decal::clustered::apply_decals,
 };
 
 @if(PREPASS_PIPELINE)
@@ -29,6 +28,11 @@ import bevy_core_pipeline::oit::draw::oit_draw;
 
 @group(3) @binding(100) var<storage, read> tints: array<vec4<f32>>;
 
+// Only solid pieces (puke chunks) carry vertex colours; their facets are shaded by a light from above, down to this
+// share in shadow, so a lump reads as a lump.
+const SOLID_KEY: vec3<f32> = vec3(0.3, 0.9, 0.3);
+const SOLID_SHADOW: f32 = 0.4;
+
 @fragment
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var in = vertex_output;
@@ -39,13 +43,18 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     pbr_input.material.base_color *= tints[get_tag(in.instance_index)];
 
+@if(VERTEX_COLORS && !PREPASS_PIPELINE) {
+    let lit = SOLID_SHADOW + (1.0 - SOLID_SHADOW) * saturate(dot(normalize(in.world_normal), SOLID_KEY));
+    pbr_input.material.base_color = vec4(pbr_input.material.base_color.rgb * lit, pbr_input.material.base_color.a);
+}
+
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material.flags,
         pbr_input.material.alpha_cutoff,
         pbr_input.material.base_color
     );
 
-    apply_decals(&pbr_input);
+    // No clustered decals: the liquid layer's and the runs' are data, not colour, and would paint a piece lying in them.
 
 @if(PREPASS_PIPELINE)
     let out = deferred_output(in, pbr_input);

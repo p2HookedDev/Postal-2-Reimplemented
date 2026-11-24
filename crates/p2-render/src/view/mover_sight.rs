@@ -60,7 +60,7 @@ fn tag_movers(
         return;
     }
     for entity in &untagged {
-        commands.entity(entity).insert(NoCpuCulling);
+        commands.entity(entity).try_insert(NoCpuCulling);
     }
 }
 

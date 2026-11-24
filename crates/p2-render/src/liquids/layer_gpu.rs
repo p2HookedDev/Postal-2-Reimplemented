@@ -5,7 +5,7 @@ use bevy::app::{App, Plugin};
 use bevy::asset::{Handle, uuid_handle};
 use bevy::ecs::prelude::{Commands, Res, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::math::Vec3;
+use bevy::math::Vec2;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer, BufferDescriptor, BufferId, BufferUsages, CachedComputePipelineId,
@@ -13,7 +13,6 @@ use bevy::render::render_resource::{
     TextureFormat, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{PendingCommandBuffers, RenderDevice, RenderQueue};
-use bevy::render::storage::GpuShaderBuffer;
 use bevy::render::texture::GpuImage;
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
@@ -42,7 +41,8 @@ struct LayerStep {
     drying: f32,
     pull: f32,
     damping: f32,
-    pad: Vec3,
+    seed: u32,
+    pad: Vec2,
 }
 
 pub struct LayerGpuPlugin;
@@ -79,8 +79,9 @@ struct LayerBuffers {
     active: Buffer,
     sources: Buffer,
     current: usize,
+    frames: u32,
     /// A bind group for each water buffer as the one read, and the buffers and atlas they were made with.
-    groups: Option<([BindGroup; 2], [BufferId; 4], TextureViewId)>,
+    groups: Option<([BindGroup; 2], [BufferId; 3], TextureViewId)>,
 }
 
 #[derive(Resource, Default)]
@@ -101,7 +102,6 @@ fn init_layer(mut commands: Commands) {
                 binding_types::storage_buffer_sized(false, None),
                 binding_types::storage_buffer_read_only_sized(false, None),
                 binding_types::texture_storage_2d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
-                binding_types::storage_buffer_sized(false, None),
             ),
         ),
     );
@@ -126,6 +126,7 @@ fn new_buffers(device: &RenderDevice, capacity: u32, level: u32) -> LayerBuffers
         active: buffer(device, "liquid active", 0, storage),
         sources: buffer(device, "liquid sources", 0, storage),
         current: 0,
+        frames: 0,
         groups: None,
     }
 }
@@ -151,7 +152,6 @@ fn step_layer(
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
     images: Res<RenderAssets<GpuImage>>,
-    shader_buffers: Res<RenderAssets<GpuShaderBuffer>>,
     mut pending: ResMut<PendingCommandBuffers>,
 ) {
     let Some(frame) = frame.filter(|frame| frame.capacity > 0 && !frame.active.is_empty()) else { return };
@@ -186,7 +186,8 @@ fn step_layer(
     for (slot, floors) in &frame.floors {
         queue.write_buffer(&buffers.floors, u64::from(*slot) * TEXELS as u64 * FLOOR_BYTES, &floor_bytes(floors));
     }
-    let step = LayerStep { seconds: STEP, film: FILM, drying: DRYING, pull: GRAVITY * TEXEL, damping: DAMPING, pad: Vec3::ZERO };
+    buffers.frames = buffers.frames.wrapping_add(1);
+    let step = LayerStep { seconds: STEP, film: FILM, drying: DRYING, pull: GRAVITY * TEXEL, damping: DAMPING, seed: buffers.frames, pad: Vec2::ZERO };
     queue.write_buffer(&buffers.step, 0, &shader_bytes(&step));
     fill(&device, &queue, &mut buffers.slots, "liquid slots", &shader_bytes(frame.slots.as_slice()));
     fill(&device, &queue, &mut buffers.active, "liquid active", &shader_bytes(frame.active.as_slice()));
@@ -197,13 +198,11 @@ fn step_layer(
         let [hold, pipes, level, publish] = entries.map(|id| cache.get_compute_pipeline(id));
         Some([hold?, pipes?, level?, publish?])
     });
-    let spills = frame.spills.and_then(|id| shader_buffers.get(id));
-    let (Some(atlas), Some(spills), Some([hold, pipes, level, publish])) = (frame.atlas.and_then(|id| images.get(id)), spills, ready) else {
+    let (Some(atlas), Some([hold, pipes, level, publish])) = (frame.atlas.and_then(|id| images.get(id)), ready) else {
         pending.push_encoder(encoder, "liquid layer");
         return;
     };
-    encoder.clear_buffer(&spills.buffer, 0, None);
-    let made_with = [buffers.slots.id(), buffers.active.id(), buffers.sources.id(), spills.buffer.id()];
+    let made_with = [buffers.slots.id(), buffers.active.id(), buffers.sources.id()];
     if buffers.groups.as_ref().is_none_or(|(_, with, view)| *with != made_with || *view != atlas.texture_view.id()) {
         let layout = cache.get_bind_group_layout(&pipelines.layout);
         let group = |read: usize| {
@@ -220,7 +219,6 @@ fn step_layer(
                     buffers.flux.as_entire_binding(),
                     buffers.floors.as_entire_binding(),
                     &atlas.texture_view,
-                    spills.buffer.as_entire_binding(),
                 )),
             )
         };

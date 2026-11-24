@@ -8,6 +8,7 @@ use bevy::asset::{AssetId, Handle, uuid_handle};
 use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::Core3d;
 use bevy::ecs::entity::Entity;
+use bevy::ecs::message::MessageWriter;
 use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::SystemParam;
@@ -39,6 +40,7 @@ use crate::components::SceneView;
 use crate::debris::PieceBirths;
 use crate::frame_facts::FrameFacts;
 use crate::level_collision::LevelCollision;
+use crate::liquids::LiquidSpray;
 use crate::map_lights::MapLights;
 use crate::particle_draw::sprites::lamps_shown;
 use crate::particle_draw::{ParticleDrawSystems, ParticleDraws, draw_particles};
@@ -62,6 +64,11 @@ const PUFF_SUN: f32 = 0.5;
 const LIGHT_LIMIT: f32 = 2.0;
 /// How far a line to the sun is followed, in Unreal units.
 const SUN_REACH: f32 = 30_000.0;
+/// What a droplet is, in its `shape.y`, as `gpu_particles.wesl` has them; 0 is a chunk.
+pub(crate) const STREAK: f32 = 1.0;
+pub(crate) const MIST: f32 = 2.0;
+/// In a droplet's `rest.w`, as `gpu_particles.wesl` has it: a blood hit's droplet, which no later push moves.
+pub(crate) const UNPUSHED: f32 = 1.0;
 /// Seconds the pool is still stepped and drawn after its last droplet should have died.
 const LIFE_MARGIN: f64 = 1.0;
 
@@ -84,6 +91,7 @@ impl Plugin for GpuParticlesPlugin {
         add_libraries(app);
         add_shaders(app, [(DROPLET_SHADER, shader_file("gpu_particles.wesl"))]);
         add_view_pass::<GpuDroplets>(app);
+        app.add_message::<LiquidSpray>();
         app.init_resource::<Spawner>().init_resource::<PieceBirths>().add_systems(
             PostUpdate,
             (
@@ -117,9 +125,9 @@ pub(crate) struct Droplet {
     /// Half size in `w`.
     pub(crate) colour: Vec4,
     pub(crate) rect: Vec4,
-    /// Texture slot, an unused word, turn in radians, gravity.
+    /// Texture slot, what it is (a chunk, `STREAK` or `MIST`), turn in radians, gravity.
     pub(crate) shape: Vec4,
-    /// The normal of the surface it lies on; zero in the air.
+    /// The normal of the surface it lies on, zero in the air; `UNPUSHED` in `w` when no push moves it.
     pub(crate) rest: Vec4,
 }
 
@@ -196,6 +204,7 @@ fn throw_droplets(
     views: Query<(Entity, Has<PassView>, Option<&GpuDroplets>), With<SceneView>>,
     mut spawner: ResMut<Spawner>,
     mut births: ResMut<PieceBirths>,
+    mut sprays: MessageWriter<LiquidSpray>,
     room: RoomLight,
 ) {
     let level = modern_level(settings.as_deref(), MODERN_GPU_PARTICLES);
@@ -207,6 +216,7 @@ fn throw_droplets(
         Some(drawn) if any_view => spawner.throw(drawn, level, facts.in_play.then_some(facts.origin), facts.game_step, light_at, &mut births.0),
         _ => Vec::new(),
     };
+    sprays.write_batch(spawner.sprays.drain(..));
     let seconds = facts.capped_step(time.delta_secs(), 0.1);
     let (pool, map) = (pool_size(level), drawn.as_deref().map_or(0, |drawn| drawn.level));
     let pushes: Vec<Push> = drawn.as_deref().map_or(&[][..], |drawn| &drawn.blasts).iter().take(PUSHES).map(|blast| push_of(blast, facts.origin)).collect();
@@ -508,7 +518,11 @@ mod tests {
         let sprites = include_str!("particle.wesl");
         assert_eq!(shader_const(sprites, "PUFF_SUN") as f32, PUFF_SUN);
         assert_eq!(shader_const(sprites, "LIGHT_LIMIT") as f32, LIGHT_LIMIT);
-        assert_eq!(shader_const(include_str!("gpu_particles.wesl"), "PUSHES"), PUSHES as f64);
+        let droplets = include_str!("gpu_particles.wesl");
+        assert_eq!(shader_const(droplets, "PUSHES"), PUSHES as f64);
+        assert_eq!(shader_const(droplets, "UNPUSHED"), f64::from(UNPUSHED));
+        assert_eq!(shader_const(droplets, "STREAK") as f32, STREAK);
+        assert_eq!(shader_const(droplets, "MIST") as f32, MIST);
     }
 
     #[test]

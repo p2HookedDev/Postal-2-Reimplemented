@@ -1,6 +1,7 @@
 // Detail droplets. `simulate` moves every slot of the pool and bounces it off the depth prepass where it is on screen;
 // `vertex` and `fragment` draw each live slot with its source's texture: a spinning cell that comes to lie on the
-// surface it lands on.
+// surface it lands on. A blood hit's streaks are drawn stretched along their motion and die where they land; its
+// mist is a soft puff that grows and fades.
 
 import bevy_render::view::View;
 import package::p2_render::depth_surface::{eye_distance, normal_at, on_surface, world_at};
@@ -14,7 +15,7 @@ struct Droplet {
     colour: vec4<f32>,
     // The texture's rectangle: the corner at -right, -up, then the corner at +right, +up.
     rect: vec4<f32>,
-    // Texture slot, an unused word, its turn in radians, gravity.
+    // Texture slot, what it is (0 a chunk, `STREAK` or `MIST`), its turn in radians, gravity.
     shape: vec4<f32>,
     // The normal of the surface it lies on; zero in the air.
     rest: vec4<f32>,
@@ -28,6 +29,8 @@ struct Push {
 }
 
 const PUSHES: u32 = 8;
+const STREAK: u32 = 1u;
+const MIST: u32 = 2u;
 
 // `count` slots from `first` on, around the ring, may hold a droplet that lives.
 struct Frame {
@@ -67,6 +70,15 @@ const UNSUPPORTED: f32 = 6.0;
 const LIFT: f32 = 0.4;
 // The most a chunk spins in the air, in radians a second.
 const SPIN: f32 = 10.0;
+const MIST_DRAG: f32 = 6.0;
+// In a droplet's `rest.w`: no explosion or hit pushes it (a blood hit's spray, which would otherwise fly again at every
+// shot into the same body).
+const UNPUSHED: f32 = 1.0;
+// A puff reaches this many times its birth size by half its life.
+const MIST_GROWTH: f32 = 4.0;
+const MIST_ALPHA: f32 = 0.5;
+// A streak's tail reaches back over the way it moved in twice this many seconds.
+const STREAK_SHUTTER: f32 = 0.0167;
 
 fn alive(d: Droplet) -> bool {
     return d.velocity.w > 0.0 && d.place.w < d.velocity.w;
@@ -91,9 +103,12 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let dt = frame.seconds;
+    let kind = u32(d.shape.y);
+    var age = d.place.w + dt;
     // An explosion or a hit near it throws it away from there and as much upward, off what it lay on.
     var pushed = vec3(0.0);
-    for (var i = 0u; i < min(frame.pushes, PUSHES); i++) {
+    let pushes = select(min(frame.pushes, PUSHES), 0u, d.rest.w == UNPUSHED);
+    for (var i = 0u; i < pushes; i++) {
         let off = d.place.xyz - frame.push[i].place.xyz;
         let far = length(off);
         let reach = frame.push[i].place.w;
@@ -108,10 +123,11 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     var v = vec3(0.0);
     var p = d.place.xyz;
     var turn = d.shape.z;
-    var rest = select(d.rest, vec4(0.0), thrown);
+    var rest = select(d.rest, vec4(0.0, 0.0, 0.0, d.rest.w), thrown);
+    var life = d.velocity.w;
     // A droplet only comes to lie once it has stopped, so one lying still has no speed to move it.
     if !was_lying {
-        v = before * exp(-DRAG * dt) - vec3(0.0, d.shape.w * dt, 0.0);
+        v = before * exp(-select(DRAG, MIST_DRAG, kind == MIST) * dt) - vec3(0.0, d.shape.w * dt, 0.0);
         p += v * dt;
         turn += spin_of(slot) * dt;
     }
@@ -127,26 +143,29 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         if was_lying {
             // What it lay on is gone: a door opened, a body moved away.
             if !solid || behind < -UNSUPPORTED {
-                rest = vec4(0.0);
+                rest = vec4(0.0, 0.0, 0.0, d.rest.w);
             }
-        } else if solid {
+        } else if solid && kind != MIST {
             if behind > 0.0 && behind < THICKNESS {
                 let n = normal_at(depth, view.world_from_clip, view.world_position, pixel, size, surface);
                 let into = dot(v, n);
-                if into < 0.0 {
+                if into < 0.0 && kind == STREAK {
+                    life = age;
+                } else if into < 0.0 {
                     let along = (v - into * n) * KEEP;
                     let hop = -into * RESTITUTION;
                     v = along + hop * n;
                     p = on_surface(view.view_from_world, view.world_position, p, surface, n, LIFT);
-                    if length(v) < REST_SPEED {
+                    // A blood hit's droplet comes to rest only on a floor: on a wall or ceiling it falls on.
+                    if length(v) < REST_SPEED && (n.y > 0.5 || d.rest.w != UNPUSHED) {
                         v = vec3(0.0);
-                        rest = vec4(n, 0.0);
+                        rest = vec4(n, d.rest.w);
                     }
                 }
             }
         }
     }
-    pool[slot] = Droplet(vec4(p, d.place.w + dt), vec4(v, d.velocity.w), d.colour, d.rect, vec4(d.shape.xy, turn, d.shape.w), rest);
+    pool[slot] = Droplet(vec4(p, age), vec4(v, life), d.colour, d.rect, vec4(d.shape.xy, turn, d.shape.w), rest);
 }
 
 struct DropletOutput {
@@ -155,6 +174,9 @@ struct DropletOutput {
     // The alpha is how much of the texture's own alpha is kept.
     @location(1) colour: vec4<f32>,
     @location(2) @interpolate(flat) slot: u32,
+    // The quad's own corner, -1 to 1 each way.
+    @location(3) local: vec2<f32>,
+    @location(4) @interpolate(flat) kind: u32,
 }
 
 @vertex
@@ -178,9 +200,26 @@ fn vertex(@builtin(vertex_index) index: u32) -> DropletOutput {
         right = normalize(cross(n, select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(n.y) > 0.9)));
         up = cross(n, right);
     }
-    let offset = (right * turned.x + up * turned.y) * half;
-    out.colour = vec4(d.colour.rgb, 1.0 - smoothstep(0.85, 1.0, age));
+    var offset = (right * turned.x + up * turned.y) * half;
+    var alpha = 1.0 - smoothstep(0.85, 1.0, age);
+    let kind = u32(d.shape.y);
+    if kind == MIST {
+        offset *= 1.0 + (MIST_GROWTH - 1.0) * smoothstep(0.0, 0.5, age);
+        alpha = MIST_ALPHA * (1.0 - age) * (1.0 - age);
+    } else if kind == STREAK {
+        // Its motion across the screen; the head is at its place, the tail behind it.
+        let forward = view.world_from_view[2].xyz;
+        let motion = d.velocity.xyz - forward * dot(d.velocity.xyz, forward);
+        let speed = length(motion);
+        let along = select(up, motion / max(speed, 1e-4), speed > 1e-3);
+        let side = normalize(cross(along, forward));
+        let reach = max(half, speed * STREAK_SHUTTER);
+        offset = side * corner.x * half + along * (corner.y - 1.0) * reach;
+    }
+    out.colour = vec4(d.colour.rgb, alpha);
     out.position = view.clip_from_world * vec4(d.place.xyz + offset, 1.0);
+    out.local = corner;
+    out.kind = kind;
     out.uv = mix(d.rect.xy, d.rect.zw, corner * 0.5 + 0.5);
     out.slot = u32(d.shape.x);
     return out;
@@ -204,6 +243,14 @@ fn fragment(in: DropletOutput) -> @location(0) vec4<f32> {
     // Reversed depth: a smaller value is farther than the scene.
     if in.position.z < textureLoad(depth, vec2<i32>(in.position.xy), 0) {
         discard;
+    }
+    if in.kind == MIST {
+        let a = in.colour.a * (1.0 - smoothstep(0.0, 1.0, dot(in.local, in.local)));
+        return vec4(in.colour.rgb * a, a);
+    }
+    if in.kind == STREAK {
+        let a = in.colour.a * (1.0 - in.local.x * in.local.x) * smoothstep(-1.0, 0.6, in.local.y);
+        return vec4(in.colour.rgb * a, a);
     }
     let sampled = texel(in.slot, in.uv);
     let alpha = sampled.a * in.colour.a;

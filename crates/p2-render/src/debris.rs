@@ -1,6 +1,7 @@
-//! Modern graphics: rigid pieces. The shards of a break, the pieces of a head's explosion and the sparks of an impact
-//! are thrown as rigid bodies that land on the level around them. A shard or a lump falls asleep and lies until a
-//! blast moves it again; a spark bounces and burns out. Pieces share small physics worlds by place; nothing reads them back.
+//! Modern graphics: rigid pieces. The shards of a break, the pieces of a head's explosion, the chunks in a stream of
+//! puke and the sparks of an impact are thrown as rigid bodies that land on the level around them. A shard, a lump or a
+//! chunk falls asleep and lies until a blast moves it again; a spark bounces and burns out. Pieces share small physics
+//! worlds by place; nothing reads them back.
 
 use std::f32::consts::TAU;
 
@@ -56,6 +57,18 @@ const ROOM: f32 = 200.0;
 const THICKNESS: f32 = 2.0;
 /// A lump's box against the quads it is drawn with: the texture's corners are empty.
 const LUMP_BODY: f32 = 0.6;
+/// A chunk's box against its mesh, and its half height against its half width, at least `CHUNK_THICKNESS` Unreal
+/// units; the mesh's top and bottom about its middle, against its half width, and the sides around it.
+const CHUNK_BODY: f32 = 0.8;
+const CHUNK_FLAT: f32 = 0.4;
+const CHUNK_THICKNESS: f32 = 1.0;
+const CHUNK_TOP: f32 = 0.5;
+const CHUNK_BOTTOM: f32 = 0.45;
+const CHUNK_SIDES: usize = 7;
+/// The share of a chunk's facets that are flecks, and the flecks' colours (green, brown, orange, pale) against the
+/// chunk's own, in linear light.
+const FLECK_SHARE: f32 = 0.2;
+const FLECKS: [[f32; 4]; 4] = [[0.5, 0.7, 0.25, 1.0], [0.35, 0.25, 0.18, 1.0], [1.0, 0.6, 0.3, 1.0], [1.15, 1.1, 0.95, 1.0]];
 const SPARK_RADIUS: f32 = 1.0;
 const GRAVITY: f32 = 950.0;
 /// Radians a second, most, about each axis.
@@ -117,6 +130,8 @@ pub(crate) enum PieceKind {
     Flat,
     /// A box as high as it is wide that bounces and rolls, drawn as three crossed quads: a piece of skull or brain.
     Lump,
+    /// A flat, heavy box that hardly bounces, drawn as a solid faceted lump with flecks: a chunk of puke.
+    Chunk,
     /// A small ball that bounces and burns out, drawn as a streak along its motion.
     Spark,
 }
@@ -155,6 +170,17 @@ impl PieceKind {
                 restitution: 0.35,
                 alpha_mode: AlphaMode::Blend,
                 mesh: crossed_quads,
+                tumbles: true,
+            },
+            Self::Chunk => PieceTraits {
+                shape: |half| {
+                    let side = half * CHUNK_BODY;
+                    Shape::Box(Vector::new(side, side, chunk_height(half)))
+                },
+                friction: 0.9,
+                restitution: 0.05,
+                alpha_mode: AlphaMode::Opaque,
+                mesh: chunk,
                 tumbles: true,
             },
             Self::Spark => PieceTraits {
@@ -278,7 +304,7 @@ fn room_under_cap(groups: &mut [Group], parent: Entity, kind: PieceKind, cap: us
 impl Loose {
     fn list_mut(&mut self, kind: PieceKind) -> &mut Vec<Group> {
         match kind {
-            PieceKind::Flat | PieceKind::Lump => &mut self.lying,
+            PieceKind::Flat | PieceKind::Lump | PieceKind::Chunk => &mut self.lying,
             PieceKind::Spark => &mut self.sparks,
         }
     }
@@ -305,7 +331,7 @@ impl Loose {
                 self.end(ended);
                 room
             }
-            PieceKind::Flat | PieceKind::Lump => {
+            PieceKind::Flat | PieceKind::Lump | PieceKind::Chunk => {
                 let own: usize = self.lying.iter().filter(|held| !held.ending && held.parent == parent).map(|held| held.pieces.len()).sum();
                 own < cap / BREAK_SHARE && room_under_cap(&mut self.lying, parent, kind, cap)
             }
@@ -513,7 +539,7 @@ impl Debris {
         };
         piece.body = Some((world, add_piece(held, birth.kind, &piece, birth.velocity, spin)));
         let transform = match birth.kind {
-            PieceKind::Flat | PieceKind::Lump => piece_transform(&piece, birth.kind, origin),
+            PieceKind::Flat | PieceKind::Lump | PieceKind::Chunk => piece_transform(&piece, birth.kind, origin),
             PieceKind::Spark => spark_transform(&piece, *eye, origin),
         };
         piece.entity = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), MeshTag::new(slot), transform, NotShadowCaster, DebrisPiece)).id();
@@ -594,8 +620,57 @@ fn crossed_quads(uv: [f32; 4]) -> Mesh {
     mesh
 }
 
+fn chunk_height(half: f32) -> f32 {
+    (half * CHUNK_FLAT).max(CHUNK_THICKNESS)
+}
+
+/// A small irregular lump with flat facets, flecked in its vertex colours; `uv`'s first word picks its shape.
+fn chunk([shape, ..]: [f32; 4]) -> Mesh {
+    let mut seed = 0x2545_f491 ^ shape.to_bits();
+    let mut unit = || next_unit(&mut seed);
+    let mut ring = |height: f32, width: f32| -> Vec<Vec3> {
+        (0..CHUNK_SIDES)
+            .map(|side| {
+                let turn = (side as f32 + 0.6 * unit()) / CHUNK_SIDES as f32 * TAU;
+                let reach = width * (0.7 + 0.3 * unit());
+                Vec3::new(turn.cos() * reach, height * (0.8 + 0.4 * unit()), turn.sin() * reach)
+            })
+            .collect()
+    };
+    let upper = ring(0.3, 0.7);
+    let lower = ring(-0.2, 1.0);
+    let top = Vec3::new(0.3 * unit() - 0.15, CHUNK_TOP, 0.3 * unit() - 0.15);
+    let bottom = Vec3::new(0.0, -CHUNK_BOTTOM, 0.0);
+    let (mut positions, mut normals, mut colours) = (Vec::new(), Vec::new(), Vec::new());
+    for side in 0..CHUNK_SIDES {
+        let next = (side + 1) % CHUNK_SIDES;
+        let faces = [[top, upper[next], upper[side]], [upper[side], upper[next], lower[next]], [upper[side], lower[next], lower[side]], [bottom, lower[side], lower[next]]];
+        for [a, b, c] in faces {
+            let [b, c] = if (b - a).cross(c - a).dot(a + b + c) < 0.0 { [c, b] } else { [b, c] };
+            let roll = unit();
+            let shade = 0.85 + 0.15 * unit();
+            let colour = if roll < FLECK_SHARE { FLECKS[((roll / FLECK_SHARE * 4.0) as usize).min(3)] } else { [shade, shade, shade, 1.0] };
+            positions.extend([a, b, c].map(|v| v.to_array()));
+            normals.extend([(b - a).cross(c - a).normalize_or_zero().to_array(); 3]);
+            colours.extend([colour; 3]);
+        }
+    }
+    let count = positions.len();
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32, 0.0]; count]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+    mesh.insert_indices(Indices::U16((0..count as u16).collect()));
+    mesh
+}
+
 fn piece_transform(piece: &Piece, kind: PieceKind, origin: Vec3) -> Transform {
-    let high = if kind == PieceKind::Lump { piece.half } else { 1.0 };
+    let high = match kind {
+        PieceKind::Lump => piece.half,
+        PieceKind::Chunk => chunk_height(piece.half) / CHUNK_BOTTOM,
+        PieceKind::Flat | PieceKind::Spark => 1.0,
+    };
     let scale = Vec3::new(piece.half, piece.half, high);
     let place = Vec3::from_array(piece.place.into());
     let mut at = unreal_to_bevy(Mat4::from_scale_rotation_translation(scale, Quat::from_array(piece.rotation).normalize(), place));
@@ -692,9 +767,15 @@ fn move_pieces(
     for group in lying.iter_mut() {
         let left = group.seconds - group.age;
         let alpha = if left < FADE { (left / FADE).max(0.0) } else { 1.0 };
+        // A chunk is solid, so it sinks out of sight through the floor instead of fading.
+        let sinking = group.kind == PieceKind::Chunk && alpha < 1.0;
         for piece in &mut group.pieces {
-            if std::mem::take(&mut piece.stirred) || shifted {
-                place(piece.entity, piece_transform(piece, group.kind, facts.origin));
+            if std::mem::take(&mut piece.stirred) || shifted || sinking {
+                let mut at = piece_transform(piece, group.kind, facts.origin);
+                if sinking {
+                    at.translation.y -= (1.0 - alpha) * 2.0 * chunk_height(piece.half);
+                }
+                place(piece.entity, at);
             }
             tints.set(piece.slot, Color::srgb(piece.tint.x, piece.tint.y, piece.tint.z).with_alpha(alpha).to_linear().to_f32_array());
         }
@@ -733,8 +814,8 @@ mod tests {
     }
 
     #[test]
-    fn a_shard_and_a_lump_land_on_a_floor_and_fall_asleep() {
-        for kind in [PieceKind::Flat, PieceKind::Lump] {
+    fn a_shard_a_lump_and_a_chunk_land_on_a_floor_and_fall_asleep() {
+        for kind in [PieceKind::Flat, PieceKind::Lump, PieceKind::Chunk] {
             let mut world = world_around(FLOOR.to_vec());
             let group = lying_group(kind, Vector::new(0.0, 0.0, 80.0), 30.0);
             let body = add_piece(&mut world, kind, &group.pieces[0], Vector::new(150.0, 0.0, 300.0), Vector::new(5.0, 3.0, 0.0));
@@ -751,6 +832,22 @@ mod tests {
     #[test]
     fn a_lump_is_drawn_on_three_planes() {
         assert_eq!(crossed_quads([0.0, 0.0, 1.0, 1.0]).count_vertices(), 12);
+    }
+
+    #[test]
+    fn a_chunk_is_a_closed_lump_whose_bottom_meets_its_box() {
+        let mesh = chunk([2.0, 0.0, 0.0, 0.0]);
+        assert_eq!(mesh.count_vertices(), CHUNK_SIDES * 4 * 3);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("no positions") };
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!("no normals") };
+        for (corners, normal) in positions.chunks(3).zip(normals.chunks(3)) {
+            let middle = corners.iter().map(|&at| Vec3::from(at)).sum::<Vec3>();
+            assert!(Vec3::from(normal[0]).dot(middle) > 0.0, "a facet faces in");
+        }
+        assert!(positions.iter().all(|at| at[1] >= -CHUNK_BOTTOM && at[1] <= CHUNK_TOP));
+        let piece = lying_group(PieceKind::Chunk, Vector::ZERO, 1.0).pieces[0];
+        let low = piece_transform(&piece, PieceKind::Chunk, Vec3::ZERO).transform_point(Vec3::new(0.0, -CHUNK_BOTTOM, 0.0));
+        assert!((low.y + chunk_height(piece.half)).abs() < 1e-4, "{low}");
     }
 
     #[test]

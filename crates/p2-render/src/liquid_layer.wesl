@@ -1,7 +1,8 @@
-// Liquid on the floors, in world tiles of 128 x 128 texels of 2 Unreal units (`liquids/layer.rs`). Virtual pipes
+// Liquid on the level's surfaces, in tiles of 128 x 128 texels of 2 Unreal units (`liquids/layer.rs`). Virtual pipes
 // between neighbouring texels move what stands above the film downhill; the scripts' puddles hold their film, drops
-// add volume, and everything dries. `publish` writes each tile with a 2-texel apron into the atlas the world's
-// surfaces read (`projector.wesl` `pool_at`).
+// add volume, and everything dries. Fuel burns where the scripts' fire is, the burn runs over connected fuel and
+// leaves scorch. `publish` writes each tile with a 2-texel apron into the atlas the world's surfaces read
+// (`projector.wesl` `pool_at`).
 
 const SIDE: i32 = 128;
 const TEXELS: u32 = 16384u;
@@ -18,14 +19,32 @@ const SHARE_SCALE: f32 = 0.98;
 const BLOOD: f32 = 3.0;
 const PUKE: f32 = 4.0;
 const BLOODY_PUKE: f32 = 5.0;
+const GAS: f32 = 1.0;
+const URINE: f32 = 2.0;
+const BLOODY_URINE: f32 = 7.0;
+const NAPALM: f32 = 8.0;
+// A texel's fire rides in the kind channel's whole part above the kind, as (heat * 32 + scorch) * KINDS, heat and
+// scorch each in whole steps up to LEVELS. `publish` hands it to the surfaces in the speed channel as FIRE_BASE plus
+// heat * 32 plus scorch, whole numbers a half float holds exactly.
+const KINDS: f32 = 16.0;
+const LEVELS: f32 = 31.0;
+const FIRE_BASE: f32 = 1024.0;
+// Fuel thinner than this does not burn. A burning texel lights a neighbour holding fuel, which comes to full heat in
+// about 1 / SPREAD seconds, a little faster or slower by place: the front runs about 50 units a second. Burning takes
+// BURN depth a second (napalm a share of it), chars to full soot in 1 / CHAR seconds, glows on for 1 / DIE seconds
+// once the fuel is gone, and the scorch fades over SCORCH_LIFE seconds.
+const FUEL: f32 = 0.02;
+const SPREAD: f32 = 45.0;
+const BURN: f32 = 0.1;
+const NAPALM_BURN: f32 = 0.4;
+const CHAR: f32 = 0.6;
+const DIE: f32 = 3.0;
+const SCORCH_LIFE: f32 = 40.0;
+// `adds` in a source: bit 0 when it adds volume, bit 1 when the scripts' fire burns on it.
+const ADDS: u32 = 1u;
+const BURNING: u32 = 2u;
 // Puke is a paste: it stands this deep before it flows.
 const PASTE_FILM: f32 = 0.8;
-// A neighbour whose floor lies this far below is over a lip: what flows there spills, and is counted for the runs down
-// the face under it (`liquids/layer.rs` `lips`), per cell of 8 x 8 texels, in thousandths of a unit of volume.
-const LEDGE: f32 = 6.0;
-const SPILL_CELL: u32 = 8u;
-const SPILL_CELLS: u32 = 256u;
-const SPILL_SCALE: f32 = 1000.0;
 
 // `LayerStep` in `liquids/layer_gpu.rs`.
 struct Step {
@@ -35,7 +54,9 @@ struct Step {
     // Gravity times a pipe's section over its length: the flow a second gained per unit of height difference.
     pull: f32,
     damping: f32,
-    pad: vec3<f32>,
+    // Changes every frame: where the fire's slow changes round up or down.
+    seed: u32,
+    pad: vec2<f32>,
 }
 
 // `LayerSlot` in `liquids/layer_gpu.rs`.
@@ -49,7 +70,7 @@ struct Slot {
     atlas_y: u32,
 }
 
-// `LayerSource` in `liquids/layer_gpu.rs`: in the slot's texels the middle and the radius; `amount` the depth a hold
+// `LayerSource` in `liquids/layer.rs`: in the slot's texels the middle and the radius; `amount` the depth a hold
 // keeps or the volume a drop adds.
 struct Source {
     x: f32,
@@ -58,7 +79,11 @@ struct Source {
     amount: f32,
     kind: f32,
     adds: u32,
-    pad: vec2<f32>,
+}
+
+// How much of the texel `rel` texels from a source's middle its disc covers, with a soft edge a texel wide.
+fn cover_of(source: Source, rel: vec2<f32>) -> f32 {
+    return saturate(source.radius - length(rel) + 0.5);
 }
 
 @group(0) @binding(0) var<uniform> step: Step;
@@ -70,11 +95,10 @@ struct Source {
 @group(0) @binding(5) var<storage, read_write> water_out: array<vec2<f32>>;
 // Outflow a second to -x, +x, -y, +y, two halves a word.
 @group(0) @binding(6) var<storage, read_write> flux: array<vec2<u32>>;
-// In Bevy height (Unreal z from the world's origin), `WALL` and above where liquid cannot go.
+// In Bevy height (Unreal z from the world's origin), `WALL` and above where liquid cannot go. A plane tile holds its
+// face's one offset along the plane's normal instead, so its liquid levels as on a flat floor and never runs down.
 @group(0) @binding(7) var<storage, read> floors: array<f32>;
 @group(0) @binding(8) var atlas: texture_storage_2d<rgba16float, write>;
-// Per slot and cell: the volume spilt over lips this frame, and the ways it went as bits.
-@group(0) @binding(9) var<storage, read_write> spills: array<atomic<u32>>;
 
 // A private var, as only memory may be indexed by a value known at run time.
 var<private> WAYS: array<vec2<i32>, 4> = array<vec2<i32>, 4>(vec2(-1, 0), vec2(1, 0), vec2(0, -1), vec2(0, 1));
@@ -96,7 +120,29 @@ fn outflow(i: u32) -> vec4<f32> {
 }
 
 fn kind_of(w: vec2<f32>) -> f32 {
-    return floor(w.y);
+    let whole = floor(w.y);
+    return whole - KINDS * floor(whole / KINDS);
+}
+
+// The texel's heat and scorch, in whole steps.
+fn fire_of(w: vec2<f32>) -> vec2<f32> {
+    let code = floor(floor(w.y) / KINDS);
+    let heat = floor(code / 32.0);
+    return vec2(heat, code - heat * 32.0);
+}
+
+fn burns(kind: f32) -> bool {
+    return kind == GAS || kind == NAPALM;
+}
+
+fn pcg(v: u32) -> u32 {
+    let s = v * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+fn unit_of(h: u32) -> f32 {
+    return f32(h >> 8u) / 16777216.0;
 }
 
 fn share_of(w: vec2<f32>) -> f32 {
@@ -107,11 +153,14 @@ fn film_of(kind: f32) -> f32 {
     return select(step.film, PASTE_FILM, kind == PUKE || kind == BLOODY_PUKE);
 }
 
-fn packed(depth: f32, kind: f32, share: f32) -> vec2<f32> {
+// `fire` in steps, rounded down after adding `dither` in [0, 1): a slow change still happens on average.
+fn packed(depth: f32, kind: f32, share: f32, fire: vec2<f32>, dither: f32) -> vec2<f32> {
+    let q = clamp(floor(fire + dither), vec2(0.0), vec2(LEVELS));
+    let code = (q.x * 32.0 + q.y) * KINDS;
     if depth <= EMPTY {
-        return vec2(0.0);
+        return vec2(0.0, code);
     }
-    return vec2(depth, kind + saturate(share) * SHARE_SCALE);
+    return vec2(depth, code + kind + saturate(share) * SHARE_SCALE);
 }
 
 struct Here {
@@ -138,30 +187,39 @@ fn hold(@builtin(global_invocation_id) id: vec3<u32>) {
     var depth = w.x;
     var kind = kind_of(w);
     var share = share_of(w);
+    var fire = fire_of(w);
     let middle = vec2(f32(at.x), f32(at.y)) + 0.5;
     for (var k = 0u; k < slot.sources; k++) {
         let source = sources[slot.first_source + k];
-        let cover = saturate(source.radius - distance(middle, vec2(source.x, source.y)) + 0.5);
+        let cover = cover_of(source, middle - vec2(source.x, source.y));
         if cover <= 0.0 {
             continue;
         }
         var added = 0.0;
-        if source.adds != 0u {
+        if (source.adds & ADDS) != 0u {
             added = source.amount * cover / (3.14159265 * max(source.radius * source.radius, 1.0) * AREA);
         } else {
             added = max(source.amount * cover - depth, 0.0);
         }
-        if added <= 0.0 {
-            continue;
+        if added > 0.0 {
+            let blood = select(0.0, 1.0, source.kind == BLOOD);
+            share = (share * depth + blood * added) / (depth + added);
+            if added > depth {
+                kind = source.kind;
+            }
+            depth += added;
         }
-        let blood = select(0.0, 1.0, source.kind == BLOOD);
-        share = (share * depth + blood * added) / (depth + added);
-        if added > depth {
-            kind = source.kind;
+        // Urine puts a burn out and makes the place its own, so the fire around does not light it again.
+        if source.kind == URINE || source.kind == BLOODY_URINE {
+            if fire.x > 0.0 {
+                kind = source.kind;
+            }
+            fire.x = 0.0;
+        } else if (source.adds & BURNING) != 0u && cover > 0.5 && burns(kind) && depth > FUEL {
+            fire.x = LEVELS;
         }
-        depth += added;
     }
-    water_out[at.index] = packed(depth, kind, share);
+    water_out[at.index] = packed(depth, kind, share, fire, 0.0);
 }
 
 // Each texel's outflow to its four neighbours from the difference of the liquid's height, never more than stands
@@ -193,15 +251,6 @@ fn pipes(@builtin(global_invocation_id) id: vec3<u32>) {
         out *= movable / leaving;
     }
     flux[at.index] = vec2(pack2x16float(out.xy), pack2x16float(out.zw));
-    let cell = (u32(at.y) / SPILL_CELL) * (u32(SIDE) / SPILL_CELL) + u32(at.x) / SPILL_CELL;
-    let counted = (at.slot * SPILL_CELLS + cell) * 2u;
-    for (var k = 0; k < 4; k++) {
-        let j = texel_of(at.slot, at.x + WAYS[k].x, at.y + WAYS[k].y);
-        if out[k] > 0.0 && j >= 0 && floors[j] < floor_here - LEDGE {
-            atomicAdd(&spills[counted], u32(out[k] * step.seconds * SPILL_SCALE));
-            atomicOr(&spills[counted + 1u], 1u << u32(k));
-        }
-    }
 }
 
 // The new depth from what flows in and out, the kind and blood share carried with the liquid, and drying.
@@ -215,17 +264,19 @@ fn level(@builtin(global_invocation_id) id: vec3<u32>) {
     var blood = kept * share_of(w);
     var kind = kind_of(w);
     var most = kept;
+    var hottest = 0.0;
     for (var k = 0; k < 4; k++) {
         let j = texel_of(at.slot, at.x + WAYS[k].x, at.y + WAYS[k].y);
         if j < 0 {
             continue;
         }
+        let other = water_in[j];
+        hottest = max(hottest, fire_of(other).x);
         // The neighbour's pipe back to this texel is the opposite way.
         let came = outflow(u32(j))[k ^ 1] * step.seconds / AREA;
         if came <= 0.0 {
             continue;
         }
-        let other = water_in[j];
         depth += came;
         blood += came * share_of(other);
         if came > most {
@@ -235,7 +286,18 @@ fn level(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let share = blood / max(depth, EMPTY);
     depth = max(depth - step.drying * step.seconds, 0.0);
-    water_out[at.index] = packed(depth, kind, share);
+    // Fuel catches from a neighbour at full heat and burns away; once it is gone the glow dies, and the scorch fades.
+    var fire = fire_of(w);
+    let fuel = burns(kind) && depth > FUEL;
+    let grain = 0.6 + 0.8 * unit_of(pcg(at.index));
+    if fuel && (fire.x > 0.0 || hottest >= LEVELS) {
+        fire.x = min(fire.x + LEVELS * SPREAD * grain * step.seconds, LEVELS);
+        depth = max(depth - select(BURN, BURN * NAPALM_BURN, kind == NAPALM) * step.seconds * fire.x / LEVELS, 0.0);
+    } else if fire.x > 0.0 {
+        fire.x -= LEVELS * DIE * step.seconds;
+    }
+    fire.y += LEVELS * step.seconds * (CHAR * min(fire.x, LEVELS) / LEVELS - 1.0 / SCORCH_LIFE);
+    water_out[at.index] = packed(depth, kind, share, fire, unit_of(pcg(at.index ^ pcg(step.seed))));
 }
 
 // The atlas texel at (x, y) of the slot's rect: depth, kind and blood share, the floor's height and the speed. A texel
@@ -257,12 +319,15 @@ fn publish(@builtin(global_invocation_id) id: vec3<u32>) {
     let w = water_in[j];
     let out = outflow(u32(j));
     let speed = length(vec2(out.y - out.x, out.w - out.z)) / (TEXEL_UU * max(w.x, step.film));
-    var near = w.x > 0.0;
+    let fire = fire_of(w);
+    let alight = fire.x + fire.y > 0.0;
+    let shown = select(min(speed, FIRE_BASE - 1.0), FIRE_BASE + fire.x * 32.0 + fire.y, alight);
+    var near = w.x > 0.0 || alight;
     for (var dy = -2; dy <= 2 && !near; dy++) {
         for (var dx = -2; dx <= 2 && !near; dx++) {
             let k = texel_of(slot, x + dx, y + dy);
-            near = k >= 0 && water_in[k].x > 0.0;
+            near = k >= 0 && (water_in[k].x > 0.0 || water_in[k].y >= KINDS);
         }
     }
-    textureStore(atlas, into, vec4(w.x, w.y, floors[j], select(-1.0, speed, near)));
+    textureStore(atlas, into, vec4(w.x, kind_of(w) + fract(w.y), floors[j], select(-1.0, shown, near)));
 }
