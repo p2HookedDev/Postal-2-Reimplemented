@@ -8,9 +8,11 @@ import bevy_pbr::{
 import package::p2_engine::projector::{apply_decals, cluster_ranges, mesh_target, project};
 import package::p2_engine::dynamic_light::dynamic_light;
 import package::p2_engine::modern::{
-    allows_gloss, ambient_occlusion, base_relief, has_sun, is_modern, is_see_through, lamp_light, modern_glass, modern_surface, sun_seen,
-    surface_of, with_light,
+    allows_gloss, ambient_occlusion, is_modern, is_see_through, modern_glass, modern_surface, surface_of, with_light,
 };
+import package::p2_engine::relief::base_relief;
+import package::p2_engine::sun_shadow::{has_sun, sun_seen};
+import package::p2_engine::lamp_shadow::lamp_light;
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 @if(BINDLESS)

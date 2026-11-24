@@ -1,4 +1,4 @@
-pub use crate::components::{CanvasDrawn, FollowActor, OVERLAY_LAYERS, SKY_LAYER};
+pub use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, SKY_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SunShadow};
 pub use crate::shown_scene::ShownScene;
 pub use crate::level_collision::{LevelAlbedos, LevelCollision, StaticCollision};
 pub use crate::components::{ActorModel, SceneView};
@@ -56,7 +56,6 @@ use crate::animation::FollowBone;
 use crate::render::blended::{BlendedMaterial, OpaqueDecals, TerrainLayer, TerrainLayerMaterial};
 use crate::render::lightmapped::{BakedLight, LightmappedMaterial};
 use crate::render::mesh_light::{DynamicLit, MeshLitMaterial};
-use crate::render::modern::{CASTER_LAYER, SunShadow};
 use crate::render::shader_layers::{Layers, ShaderLayers};
 use crate::render::terrain_material::{TerrainLayers, TerrainMaterial, TerrainPassLayer};
 use crate::display::Settings;

@@ -3,7 +3,8 @@ import bevy_pbr::render::{
     mesh_view_types::{POINT_LIGHT_FLAGS_SPOT_LIGHT_BIT, POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE},
     clustered_forward as clustering,
 };
-import package::p2_engine::modern::{Relief, highlight, is_lamp};
+import package::p2_engine::relief::{Relief, highlight};
+import package::p2_engine::lamp_shadow::is_lamp;
 
 const LE_NON_INCIDENCE: u32 = 13u;
 const LE_CYLINDER: u32 = 17u;

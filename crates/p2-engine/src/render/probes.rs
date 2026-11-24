@@ -1,5 +1,5 @@
 //! Light that reaches a point second hand, baked once per map into a grid on the compute pool: how much sky it sees
-//! each way, and what the sun and lamps bounce to it. `modern.wesl` reads it for what lights a room beyond the lamps.
+//! each way, and what the sun and lamps bounce to it. `probes.wesl` reads it for what lights a room beyond the lamps.
 
 mod bake;
 
@@ -12,13 +12,12 @@ use bevy::image::{Image, ImageSampler};
 use bevy::math::Vec3;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
-use p2_assets::fan_triangles;
 use p2_math::Vector;
 
 use crate::display::{MODERN_INDIRECT, Settings};
-use crate::level_collision::{GREY_ALBEDO, LevelCollision, StaticCollision};
+use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::render::actor_light::LightEnvironment;
-use crate::render::lamps::atlas::{OPEN_POLYGONS, terrain_triangles, world_triangles};
+use crate::render::lamps::atlas::{WorldTriangles, world_triangles};
 use crate::render::lamps::{MaterialAtlas, MaterialSlot, follow_atlas, map_lamps};
 use crate::render::modern::sun_color;
 use crate::shown_scene::ShownScene;
@@ -52,7 +51,7 @@ impl MaterialAtlas for ProbeAtlas {
 }
 
 #[derive(Default)]
-struct ProbeJob {
+pub(crate) struct ProbeJob {
     key: Option<(usize, usize, i32)>,
     task: Option<Task<Option<ProbeBake>>>,
     ready: Option<Option<ProbeBake>>,
@@ -61,8 +60,8 @@ struct ProbeJob {
 /// Keyed by the grid's columns.
 pub(crate) type ProbePrebake = crate::render::lamps::Prebaked<i32, Option<ProbeBake>>;
 
-pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, origin: Vec3, level: u8) -> ProbePrebake {
-    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, origin, grid)))
+pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8) -> ProbePrebake {
+    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, world, origin, grid)))
 }
 
 fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
@@ -73,30 +72,15 @@ fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {
     image
 }
 
-/// One per triangle of `world_triangles`, in its order.
-fn world_albedos(collision: &StaticCollision) -> Vec<[f32; 3]> {
-    let albedos = &collision.albedos;
-    let known = |found: Option<&[f32; 3]>| found.copied().unwrap_or(GREY_ALBEDO);
-    let bsp = collision.model.polygons().into_iter().filter(|polygon| polygon.poly_flags & OPEN_POLYGONS == 0).flat_map(|polygon| {
-        std::iter::repeat_n(known(albedos.bsp.get(&polygon.material)), fan_triangles(polygon.positions.len()).count())
-    });
-    let casters = (0..collision.lamp_casters.len()).map(|index| known(albedos.casters.get(index)));
-    let terrains = collision.terrains.iter().enumerate().flat_map(|(index, terrain)| std::iter::repeat_n(known(albedos.terrains.get(index)), terrain_triangles(terrain).count()));
-    bsp.chain(casters).chain(terrains).collect()
-}
-
-fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, origin: Vec3, grid: ProbeGrid) -> Option<ProbeBake> {
-    let triangles = world_triangles(collision, origin);
-    let albedos = world_albedos(collision);
-    let terrain_triangle_count: usize = collision.terrains.iter().map(|terrain| terrain_triangles(terrain).count()).sum();
+fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, grid: ProbeGrid) -> Option<ProbeBake> {
     let lamps = map_lamps(environment);
     let sun = environment.sun.as_ref().map(|(_, hardware)| {
         (-Vec3::from(p2_bevy_assets::to_bevy(hardware.direction)).normalize_or_zero(), sun_color(environment))
     });
     let world = ProbeWorld {
-        triangles: &triangles,
-        albedos: &albedos,
-        terrain_from: triangles.len().saturating_sub(terrain_triangle_count),
+        triangles: &world.triangles,
+        albedos: &world.albedos,
+        terrain_from: world.terrain_from,
         lamps: &lamps,
         level_brightness: environment.level_brightness,
         origin,
@@ -112,7 +96,7 @@ fn bake_map(environment: &LightEnvironment, collision: &StaticCollision, origin:
     bake_probes(&world, grid, threads, solid)
 }
 
-fn follow_probes(settings: Res<Settings>, shown: Option<Res<ShownScene>>, level: Option<Res<LevelCollision>>, mut atlas: ResMut<ProbeAtlas>, mut job: Local<ProbeJob>, mut images: ResMut<Assets<Image>>) {
+pub(crate) fn follow_probes(settings: Res<Settings>, shown: Option<Res<ShownScene>>, level: Option<Res<LevelCollision>>, mut atlas: ResMut<ProbeAtlas>, mut job: Local<ProbeJob>, mut images: ResMut<Assets<Image>>) {
     let grid = probe_grid(settings.modern_level(MODERN_INDIRECT)).filter(|_| settings.modern_graphics());
     let environment = shown.as_deref().and_then(|shown| shown.lighting.clone()).filter(|_| grid.is_some());
     let collision = level.as_ref().and_then(|level| level.0.clone());
@@ -128,7 +112,7 @@ fn follow_probes(settings: Res<Settings>, shown: Option<Res<ShownScene>>, level:
             let origin = shown.origin;
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.probes.take(&grid.columns));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { bake_map(&environment, &collision, origin, grid) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { bake_map(&environment, &collision, &world_triangles(&collision, origin), origin, grid) }));
             }
         }
     }

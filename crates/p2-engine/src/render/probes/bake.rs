@@ -11,13 +11,13 @@ use rustc_hash::FxHashMap;
 use crate::level_collision::GREY_ALBEDO;
 use crate::render::modern::linear_light;
 
-/// Tiles across one volume of the atlas. `modern.wesl` holds the same number.
+/// Tiles across one volume of the atlas. `probes.wesl` holds the same number.
 pub(super) const TILES_WIDE: usize = 12;
 const SPACING_STEP: f32 = 1.05;
 const RAYS: usize = 16;
 const FAR: f32 = 200_000.0;
 const SURFACE_MARGIN: f32 = 1.0;
-/// A bounce texel holds the square root of the light over this. `modern.wesl` holds the same number.
+/// A bounce texel holds the square root of the light over this. `probes.wesl` holds the same number.
 const BOUNCE_RANGE: f32 = 2.0;
 const LAMP_CELL: f32 = 1024.0;
 /// What an unobstructed floor's read towards the sky sums to with these weights: a read of 1 is open sky.

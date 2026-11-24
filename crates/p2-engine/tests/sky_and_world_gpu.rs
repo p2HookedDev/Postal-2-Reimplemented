@@ -19,10 +19,9 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::window::{PrimaryWindow, Window, WindowResolution};
 use p2_engine::display::{GAMMA, MODERN_GRAPHICS, Settings};
-use p2_engine::mesh_view::{OVERLAY_LAYERS, SKY_LAYER, SceneView};
+use p2_engine::mesh_view::{OVERLAY_LAYERS, SKY_LAYER, SUN_VIEW_LAYER, SceneView};
 use p2_engine::render::gamma::GammaPlugin;
 use p2_engine::render::mesh_light::{DynamicLit, MeshLightPlugin, MeshLitMaterial};
-use p2_engine::render::modern::SUN_VIEW_LAYER;
 
 const SIZE: u32 = 64;
 

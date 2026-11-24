@@ -11,10 +11,10 @@ import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TA
 import package::p2_engine::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
-import package::p2_engine::modern::{
-    allows_gloss, ambient_occlusion, base_relief, has_sun, is_lamp, is_modern, is_see_through, lamp_light, modern_glass, modern_surface, sun_seen,
-    surface_of,
-};
+import package::p2_engine::modern::{allows_gloss, ambient_occlusion, is_modern, is_see_through, modern_glass, modern_surface, surface_of, with_light};
+import package::p2_engine::relief::base_relief;
+import package::p2_engine::sun_shadow::{sun_found, sun_index, sun_seen_from};
+import package::p2_engine::lamp_shadow::{is_lamp, lamp_light};
 @if(BINDLESS)
 import package::p2_engine::layer_bindings::indices;
 
@@ -66,13 +66,14 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
 @else
     let layers = layers_data;
     let normal = normalize(pbr_input.world_normal);
-    let modern = is_modern(layers.detail.z) && has_sun();
+    let sun = sun_index();
+    let modern = is_modern(layers.detail.z) && sun_found(sun);
     let light_map = view.exposure * pbr_input.lightmap_light;
     var surface = lit_color(layers, color.rgb, light_map);
     var alpha = color.a;
     if modern {
         let position = pbr_input.world_position.xyz;
-        let seen = sun_seen(pbr_input.world_position, normal, pbr_input.frag_coord.xy);
+        let seen = sun_seen_from(sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
         let darken = layers.blend.x != 0.0;
         let gloss = allows_gloss(layers.detail.z) && !darken;
@@ -107,7 +108,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
             // A darken surface stores one minus its colour: light on the colour takes off the stored one.
             lit = to_linear(max(to_display(lit) - (1.0 - texture) * passes, vec3(0.0)));
         } else if modern {
-            lit = to_linear(to_display(lit) + texture * passes);
+            lit = with_light(lit, color.rgb, passes);
         } else {
             lit = to_linear(min(to_display(lit) + texture * passes, vec3(1.0)));
         }

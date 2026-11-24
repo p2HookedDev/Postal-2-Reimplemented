@@ -13,6 +13,10 @@ pub fn light_zones(model: &Model, start: Vector, radius: f32) -> Vec<u8> {
     if point_solid(model, start) {
         return Vec::new();
     }
+    let own = point_zone(model, start);
+    if own == 0 && !model.zones.is_empty() {
+        return Vec::new();
+    }
     let near_portals: Vec<[u8; 2]> = model
         .nodes
         .iter()
@@ -24,16 +28,11 @@ pub fn light_zones(model: &Model, start: Vector, radius: f32) -> Vec<u8> {
                 return false;
             }
             let middle = sum * (1.0 / count);
-            let far = |from: Vector, to: Vector| (to - from).dot(to - from).sqrt();
-            let size = corners.map(|&corner| far(middle, Vector::from(corner))).fold(0.0, f32::max);
-            far(start, middle) <= radius + size
+            let size = corners.map(|&corner| (Vector::from(corner) - middle).size()).fold(0.0, f32::max);
+            (middle - start).size() <= radius + size
         })
         .map(|node| node.zones)
         .collect();
-    let own = point_zone(model, start);
-    if own == 0 && !model.zones.is_empty() {
-        return Vec::new();
-    }
     let mut zones = vec![own];
     let mut next = 0;
     while let Some(&zone) = zones.get(next) {

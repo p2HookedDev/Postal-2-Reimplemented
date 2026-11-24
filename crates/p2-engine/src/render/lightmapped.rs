@@ -26,7 +26,7 @@ impl MaterialExtension for BakedLight {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        crate::render::modern::cast_both_sides(descriptor, key.mesh_key);
+        crate::render::shaders::cast_both_sides(descriptor, key.mesh_key);
         Ok(())
     }
 

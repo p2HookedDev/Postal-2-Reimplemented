@@ -1,40 +1,41 @@
 //! The static world's shadow of every lamp, drawn once a map into one atlas of six square tiles a lamp. Tiles are
-//! packed in units of the atlas side over [`ATLAS_UNITS`], so the packing is the same at every atlas size. They take
-//! the atlas's upper three quarters; the last holds the sharp tiles, each redrawn for the lamp that wants it, one lamp
-//! a frame.
+//! packed in units of the atlas side over [`ATLAS_UNITS`], the same at every atlas size, in its upper three quarters;
+//! the last holds the detail faces ([`super::faces`]), each drawn in the frame it gets its square.
 
 use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
 
 use bevy::asset::{AssetId, Assets, Handle, RenderAssetUsages, uuid_handle};
-use bevy::ecs::prelude::{Local, Res};
-use bevy::time::Time;
+use bevy::ecs::prelude::{Local, Res, ResMut, Resource};
 use bevy::image::Image;
 use bevy::math::Vec3;
 use bevy::mesh::VertexBufferLayout;
+use bevy::render::diagnostic::{DiagnosticsRecorder, RecordDiagnostics};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::binding_types::{sampler, texture_2d, uniform_buffer_sized};
 use bevy::render::render_resource::{
-    BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferBinding,
-    BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites, CommandEncoderDescriptor, Extent3d, FragmentState, IndexFormat, LoadOp,
-    MultisampleState, Operations, Origin3d, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer, BufferBinding, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
+    CommandEncoder, CommandEncoderDescriptor, Extent3d, IndexFormat, LoadOp, Operations, Origin3d, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
     SamplerBindingType, ShaderStages, StoreOp, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
-    VertexAttribute, VertexFormat, VertexState, VertexStepMode,
+    VertexAttribute, VertexFormat, VertexStepMode,
 };
-use bevy::render::renderer::{RenderDevice, RenderQueue};
+use bevy::render::renderer::{PendingCommandBuffers, RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::shader::Shader;
-use p2_assets::{Model, Terrain, fan_triangles, poly_flags};
+use p2_assets::{Terrain, fan_triangles, poly_flags};
 use p2_math::Vector;
+use rustc_hash::FxHashSet;
 
-use super::LampAtlas;
+use super::{LAMP_SHADOW_SPAN, LampAtlas};
 use super::cells::{BOOK_WIDTH, HEADER_TEXELS, RECORD_TEXELS};
-use crate::level_collision::{MaskedCaster, StaticCollision};
+use super::faces::{DETAIL_UNIT, FaceSlot};
+use super::mover_pass::{NEAREST, pipeline, view_rows};
+use crate::level_collision::{GREY_ALBEDO, MaskedCaster, StaticCollision};
 
 pub(super) const ATLAS_SHADER: Handle<Shader> = uuid_handle!("6d2f91c4-3e7a-4b58-9a10-c7e45f28d316");
 
-/// The atlas side in packing units; a tile's corner is stored in 8 bits an axis. `modern.wesl` holds the same number.
+/// The atlas side in packing units; a tile's corner is stored in 8 bits an axis. `lamp_shadow.wesl` holds the same number.
 pub(super) const ATLAS_UNITS: u32 = 128;
 const ATLAS_ROWS: u32 = ATLAS_UNITS * 3 / 4;
 const TOP_LEVEL: u32 = 3;
@@ -44,15 +45,6 @@ const UNMAPPED_LEVEL: u32 = 7;
 /// Under 2^24, so it stays exact as a float, and far above any real bias.
 pub(super) const LAMP_MARK: u32 = 1 << 20;
 pub(super) const UNMAPPED: u32 = LAMP_MARK | (UNMAPPED_LEVEL << 16);
-
-/// Sharp tiles: the first few large, ten across, a face this share of the atlas side; the rest half that, twenty
-/// across. `modern.wesl` reads a tile's place from the book, so it holds none of these.
-pub(super) const SHARP_TILES: usize = 100;
-const LARGE_TILES: u32 = 20;
-const LARGE_ACROSS: u32 = 10;
-const FACE_SHARE_OF_SIDE: u32 = 32;
-/// A lamp's shadow goes from its plain tile to its sharp one, and back, over this long.
-const SHARP_FADE_SECONDS: f32 = 0.3;
 
 pub(super) const NEAR: f32 = 8.0;
 pub(super) const GUARD_TEXELS: f32 = 3.0;
@@ -122,14 +114,6 @@ fn pack(radii: &[f32]) -> Vec<Option<Tile>> {
 
 pub(crate) const OPEN_POLYGONS: u32 = poly_flags::INVISIBLE | poly_flags::PORTAL | poly_flags::FAKE_BACKDROP | poly_flags::MASKED | poly_flags::TRANSLUCENT;
 
-fn solid_polygons(model: &Model) -> impl Iterator<Item = [[f32; 3]; 3]> + '_ {
-    model
-        .polygons()
-        .into_iter()
-        .filter(|polygon| polygon.poly_flags & OPEN_POLYGONS == 0)
-        .flat_map(|polygon| fan_triangles(polygon.positions.len()).map(move |[a, b, c]| [polygon.positions[a], polygon.positions[b], polygon.positions[c]]).collect::<Vec<_>>())
-}
-
 pub(crate) fn terrain_triangles(terrain: &Terrain) -> impl Iterator<Item = [[f32; 3]; 3]> + '_ {
     let (width, height) = (terrain.width, terrain.height);
     let ready = terrain.vertices.len() == width * height;
@@ -173,6 +157,7 @@ pub(super) struct LampBake {
     pub(super) vertices: Vec<[f32; 3]>,
     indices: Vec<u32>,
     draws: Vec<LampDraw>,
+    draw_index: Vec<Option<usize>>,
     tiles: Vec<Option<Tile>>,
     masked_vertices: Vec<[f32; 6]>,
     masked_indices: Vec<u32>,
@@ -185,10 +170,9 @@ impl LampBake {
         self.tiles.get(lamp).copied().flatten().map_or(UNMAPPED, Tile::packed)
     }
 
-    /// Where a lamp is among the draws, which hold only lamps with a tile.
-    fn draw_of(&self, lamp: usize) -> Option<usize> {
-        self.tiles.get(lamp)?.as_ref()?;
-        Some(self.tiles[..lamp].iter().flatten().count())
+    /// The side of a face of a lamp's plain tile, in texels.
+    pub(super) fn plain_face(&self, lamp: usize, unit: u32) -> Option<u32> {
+        Some(self.tiles.get(lamp)?.as_ref()?.size(unit))
     }
 
     /// For each lamp the side of a face of its tile in texels and its casters' corners in the vertices.
@@ -198,40 +182,52 @@ impl LampBake {
     }
 }
 
+/// Where each lamp is among the draws, which hold only lamps with a tile.
+fn draw_index(tiles: &[Option<Tile>]) -> Vec<Option<usize>> {
+    let mut next = 0;
+    tiles.iter().map(|tile| tile.map(|_| { next += 1; next - 1 })).collect()
+}
+
 /// Lamp positions and triangles in the scene's space.
-pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], lamps: &[([f32; 3], f32)]) -> LampBake {
+pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], lamps: &[([f32; 3], f32)], threads: usize) -> LampBake {
     let radii: Vec<f32> = lamps.iter().map(|&(_, radius)| radius).collect();
     let tiles = pack(&radii);
+    let near = super::on_threads(lamps.len(), threads, |lamp| {
+        let (position, radius) = lamps[lamp];
+        tiles[lamp]?;
+        let near = triangles.iter().enumerate().filter(|(_, triangle)| near_sphere(triangle, position, radius));
+        let own: Vec<u32> = near.flat_map(|(index, _)| [0, 1, 2].map(|corner| index as u32 * 3 + corner)).collect();
+        let groups: Vec<(usize, Vec<[f32; 6]>)> = masked
+            .iter()
+            .enumerate()
+            .map(|(group, caster)| {
+                let near = caster.triangles.iter().filter(|triangle| near_sphere(&triangle.map(|[x, y, z, ..]| [x, y, z]), position, radius));
+                (group, near.flat_map(|triangle| triangle.map(|[x, y, z, u, v]| [x, y, z, u, v, caster.cutoff])).collect::<Vec<_>>())
+            })
+            .filter(|(_, vertices)| !vertices.is_empty())
+            .collect();
+        Some((own, groups))
+    });
     let mut indices = Vec::new();
     let mut draws = Vec::new();
     let (mut masked_vertices, mut masked_indices, mut masked_ranges) = (Vec::new(), Vec::new(), Vec::new());
-    for (&(position, radius), tile) in lamps.iter().zip(&tiles) {
-        let Some(tile) = *tile else { continue };
-        let first = indices.len() as u32;
-        for (index, _) in triangles.iter().enumerate().filter(|(_, triangle)| near_sphere(triangle, position, radius)) {
-            let corner = index as u32 * 3;
-            indices.extend([corner, corner + 1, corner + 2]);
-        }
+    for ((&(position, radius), tile), near) in lamps.iter().zip(&tiles).zip(near) {
+        let (Some(tile), Some((own, groups))) = (*tile, near) else { continue };
         let lamp = draws.len();
-        draws.push(LampDraw { position, radius, tile, first, count: indices.len() as u32 - first });
-        for (group, caster) in masked.iter().enumerate() {
-            let first = masked_indices.len() as u32;
-            for triangle in &caster.triangles {
-                if near_sphere(&triangle.map(|[x, y, z, ..]| [x, y, z]), position, radius) {
-                    masked_indices.extend((0..3).map(|corner| masked_vertices.len() as u32 + corner));
-                    masked_vertices.extend(triangle.map(|[x, y, z, u, v]| [x, y, z, u, v, caster.cutoff]));
-                }
-            }
-            let count = masked_indices.len() as u32 - first;
-            if count > 0 {
-                masked_ranges.push(MaskedRange { lamp, group, first, count });
-            }
+        draws.push(LampDraw { position, radius, tile, first: indices.len() as u32, count: own.len() as u32 });
+        indices.extend(own);
+        for (group, vertices) in groups {
+            let (first, count) = (masked_indices.len() as u32, vertices.len() as u32);
+            masked_indices.extend((0..count).map(|corner| masked_vertices.len() as u32 + corner));
+            masked_vertices.extend(vertices);
+            masked_ranges.push(MaskedRange { lamp, group, first, count });
         }
     }
     LampBake {
         vertices: triangles.iter().flatten().copied().collect(),
         indices,
         draws,
+        draw_index: draw_index(&tiles),
         tiles,
         masked_vertices,
         masked_indices,
@@ -240,15 +236,26 @@ pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], la
     }
 }
 
+pub(crate) struct WorldTriangles {
+    pub(crate) triangles: Vec<[[f32; 3]; 3]>,
+    pub(crate) albedos: Vec<[f32; 3]>,
+    pub(crate) terrain_from: usize,
+}
+
 /// Level, then static meshes, then terrain.
-pub(crate) fn world_triangles(collision: &StaticCollision, origin: Vec3) -> Vec<[[f32; 3]; 3]> {
+pub(crate) fn world_triangles(collision: &StaticCollision, origin: Vec3) -> WorldTriangles {
     let moved = |point: [f32; 3]| -> [f32; 3] { (Vec3::from(p2_bevy_assets::to_bevy(Vector::from(point))) + origin).into() };
-    let mut triangles: Vec<[[f32; 3]; 3]> = solid_polygons(&collision.model).map(|triangle| triangle.map(moved)).collect();
-    triangles.extend(collision.lamp_casters.iter().map(|triangle| triangle.map(moved)));
-    for terrain in &collision.terrains {
-        triangles.extend(terrain_triangles(terrain).map(|triangle| triangle.map(moved)));
-    }
-    triangles
+    let albedos = &collision.albedos;
+    let known = |found: Option<&[f32; 3]>| found.copied().unwrap_or(GREY_ALBEDO);
+    let bsp = collision.model.polygons().into_iter().filter(|polygon| polygon.poly_flags & OPEN_POLYGONS == 0).flat_map(|polygon| {
+        let albedo = known(albedos.bsp.get(&polygon.material));
+        fan_triangles(polygon.positions.len()).map(|[a, b, c]| ([polygon.positions[a], polygon.positions[b], polygon.positions[c]], albedo)).collect::<Vec<_>>()
+    });
+    let mut walked: Vec<([[f32; 3]; 3], [f32; 3])> = bsp.chain(collision.lamp_casters.iter().enumerate().map(|(index, triangle)| (*triangle, known(albedos.casters.get(index))))).collect();
+    let terrain_from = walked.len();
+    walked.extend(collision.terrains.iter().enumerate().flat_map(|(index, terrain)| terrain_triangles(terrain).map(move |triangle| (triangle, known(albedos.terrains.get(index))))));
+    let (triangles, albedos): (Vec<_>, Vec<_>) = walked.into_iter().map(|(triangle, albedo)| (triangle.map(moved), albedo)).unzip();
+    WorldTriangles { triangles, albedos, terrain_from }
 }
 
 pub(super) fn world_masked(collision: &StaticCollision, origin: Vec3) -> Vec<MaskedCaster> {
@@ -278,7 +285,7 @@ pub(super) fn new_atlas(images: &mut Assets<Image>, side: u32) -> Handle<Image> 
 
 const FACE_STRIDE: u64 = 256;
 
-/// World axes of a cube face's camera x, y and z. `modern.wesl` picks the same face and axes.
+/// World axes of a cube face's camera x, y and z. `lamp_shadow.wesl` picks the same face and axes.
 pub(super) const FACE_AXES: [[[f32; 3]; 3]; 6] = [
     [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
     [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]],
@@ -288,24 +295,18 @@ pub(super) const FACE_AXES: [[[f32; 3]; 3]; 6] = [
     [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]],
 ];
 
-fn face_uniforms(draws: &[LampDraw], face_size: impl Fn(&LampDraw) -> u32) -> Vec<u8> {
+/// What `lamp_atlas.wesl` draws one face of a lamp with, a face `size` texels a side.
+fn face_uniform(bytes: &mut Vec<u8>, draw: &LampDraw, axes: [[f32; 3]; 3], size: u32) {
+    let start = bytes.len();
+    bytes.extend(view_rows(axes, draw.position, draw.radius, size, 1.0, 0.0).iter().flatten().flat_map(|value| value.to_le_bytes()));
+    bytes.resize(start + FACE_STRIDE as usize, 0);
+}
+
+fn plain_uniforms(draws: &[LampDraw], unit: u32) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(draws.len() * 6 * FACE_STRIDE as usize);
     for draw in draws {
-        let size = face_size(draw) as f32;
-        let scale = (0.5 * size - GUARD_TEXELS) / (0.5 * size);
-        let depth_a = draw.radius / (draw.radius - NEAR).max(1.0);
         for axes in FACE_AXES {
-            let start = bytes.len();
-            let [px, py, pz] = draw.position;
-            let rows = [
-                [axes[0][0], axes[0][1], axes[0][2], 0.0],
-                [axes[1][0], axes[1][1], axes[1][2], 0.0],
-                [axes[2][0], axes[2][1], axes[2][2], 0.0],
-                [px, py, pz, 1.0 / draw.radius],
-                [scale, depth_a, -NEAR * depth_a, 0.0],
-            ];
-            bytes.extend(rows.iter().flatten().flat_map(|value: &f32| value.to_le_bytes()));
-            bytes.resize(start + FACE_STRIDE as usize, 0);
+            face_uniform(&mut bytes, draw, axes, draw.tile.size(unit));
         }
     }
     bytes
@@ -317,18 +318,6 @@ fn face_corner(tile: Tile, face: u32, unit: u32) -> (u32, u32) {
     (tile.x * unit + (face % 3) * size, tile.y * unit + (face / 3) * size)
 }
 
-/// A sharp tile's corner and the side of one of its faces in an atlas of this side, in texels.
-fn sharp_tile(slot: usize, side: u32) -> (u32, u32, u32) {
-    let large = side / FACE_SHARE_OF_SIDE;
-    let top = side / ATLAS_UNITS * ATLAS_ROWS;
-    let slot = slot as u32;
-    if slot < LARGE_TILES {
-        return (slot % LARGE_ACROSS * 3 * large, top + slot / LARGE_ACROSS * 2 * large, large);
-    }
-    let (small, at) = (large / 2, slot - LARGE_TILES);
-    (at % (2 * LARGE_ACROSS) * 3 * small, top + LARGE_TILES / LARGE_ACROSS * 2 * large + at / (2 * LARGE_ACROSS) * 2 * small, small)
-}
-
 pub(super) struct AtlasPipelines {
     faces: BindGroupLayoutDescriptor,
     solid: CachedRenderPipelineId,
@@ -337,14 +326,18 @@ pub(super) struct AtlasPipelines {
     clear: CachedRenderPipelineId,
 }
 
-/// Kept for the map: the sharp tiles are drawn from them long after the plain ones.
+/// Kept for the map: the detail faces are drawn from them long after the plain tiles.
 struct AtlasBuffers {
     faces: BindGroup,
-    /// For the large sharp tiles, then the small.
-    sharp_faces: [BindGroup; 2],
     vertices: Buffer,
+    indices: Buffer,
     masked: Option<(Buffer, Buffer)>,
+    image_groups: Vec<Option<BindGroup>>,
 }
+
+/// The bake whose plain tiles the atlas holds: until they are drawn the atlas is not yet cleared for them.
+#[derive(Resource, Default)]
+pub(super) struct PlainTilesDrawn(pub(super) Option<usize>);
 
 #[derive(Default)]
 pub(super) struct AtlasDraw {
@@ -352,9 +345,8 @@ pub(super) struct AtlasDraw {
     drawn: Option<(usize, AssetId<Image>)>,
     waited: u32,
     buffers: Option<AtlasBuffers>,
-    /// The lamp each sharp tile holds, and how far its shadow has gone over to the tile, 0 to 1.
-    sharp: Vec<Option<u32>>,
-    blend: Vec<f32>,
+    /// The detail faces drawn and written in the book.
+    detail: Vec<FaceSlot>,
 }
 
 fn atlas_pipelines(cache: &PipelineCache) -> AtlasPipelines {
@@ -366,54 +358,37 @@ fn atlas_pipelines(cache: &PipelineCache) -> AtlasPipelines {
         "lamp_atlas_image",
         &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (texture_2d(TextureSampleType::Float { filterable: true }), sampler(SamplerBindingType::Filtering))),
     );
-    let min = BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::One, operation: BlendOperation::Min };
-    let pipeline = |label: &'static str, layout: Vec<BindGroupLayoutDescriptor>, vertex: &'static str, fragment: &'static str, buffers: Vec<VertexBufferLayout>, blend: Option<BlendState>| {
-        cache.queue_render_pipeline(RenderPipelineDescriptor {
-            label: Some(label.into()),
-            layout,
-            vertex: VertexState { shader: ATLAS_SHADER, entry_point: Some(vertex.into()), buffers, ..Default::default() },
-            fragment: Some(FragmentState {
-                shader: ATLAS_SHADER,
-                entry_point: Some(fragment.into()),
-                targets: vec![Some(ColorTargetState { format: TextureFormat::R16Float, blend, write_mask: ColorWrites::ALL })],
-                ..Default::default()
-            }),
-            primitive: PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            ..Default::default()
-        })
-    };
-    let nearest = Some(BlendState { color: min, alpha: min });
     let attribute = |format: VertexFormat, offset: u64, shader_location: u32| VertexAttribute { format, offset, shader_location };
     let solid = pipeline(
+        cache,
+        ATLAS_SHADER,
         "lamp atlas",
         vec![faces.clone()],
-        "vertex",
-        "fragment",
+        ["vertex", "fragment"],
         vec![VertexBufferLayout { array_stride: 12, step_mode: VertexStepMode::Vertex, attributes: vec![attribute(VertexFormat::Float32x3, 0, 0)] }],
-        nearest,
+        Some(NEAREST),
     );
     let masked = pipeline(
+        cache,
+        ATLAS_SHADER,
         "lamp atlas masked",
         vec![faces.clone(), image.clone()],
-        "masked_vertex",
-        "masked_fragment",
+        ["masked_vertex", "masked_fragment"],
         vec![VertexBufferLayout {
             array_stride: 24,
             step_mode: VertexStepMode::Vertex,
             attributes: vec![attribute(VertexFormat::Float32x3, 0, 0), attribute(VertexFormat::Float32x2, 12, 1), attribute(VertexFormat::Float32, 20, 2)],
         }],
-        nearest,
+        Some(NEAREST),
     );
-    let clear = pipeline("lamp atlas clear", Vec::new(), "clear_vertex", "clear_fragment", Vec::new(), None);
+    let clear = pipeline(cache, ATLAS_SHADER, "lamp atlas clear", Vec::new(), ["clear_vertex", "clear_fragment"], Vec::new(), None);
     AtlasPipelines { faces, solid, image, masked, clear }
 }
 
 /// A lamp's texture may reach the GPU a little after the bake; past this many frames its casters are left out.
 const ATLAS_WAIT_FRAMES: u32 = 240;
 
-fn bytes_of<const N: usize>(values: &[[f32; N]]) -> Vec<u8> {
+pub(super) fn bytes_of<const N: usize>(values: &[[f32; N]]) -> Vec<u8> {
     values.as_flattened().iter().flat_map(|value| value.to_le_bytes()).collect()
 }
 
@@ -421,14 +396,25 @@ fn index_bytes(values: &[u32]) -> Vec<u8> {
     values.iter().flat_map(|value| value.to_le_bytes()).collect()
 }
 
-/// One lamp's six faces to draw. `clear` is the tile's rectangle where what it held must go first.
+/// A face's square in the atlas, in texels, and where its uniform lies in the job's buffer.
+struct FaceView {
+    uniform: u32,
+    x: u32,
+    y: u32,
+    size: u32,
+}
+
+enum Before {
+    Keep,
+    /// What the squares held goes first: white is open, as the atlas starts.
+    Whiten,
+}
+
 struct TileJob<'a> {
     lamp: usize,
     faces: &'a BindGroup,
-    size: u32,
-    corners: [(u32, u32); 6],
-    clear: Option<[u32; 4]>,
-    indices: &'a Buffer,
+    views: Vec<FaceView>,
+    before: Before,
     range: Range<u32>,
 }
 
@@ -438,77 +424,98 @@ struct Ready<'a> {
     clear: &'a RenderPipeline,
     target: &'a GpuImage,
     buffers: &'a AtlasBuffers,
-    image_groups: Vec<Option<BindGroup>>,
 }
 
-fn draw_tiles(device: &RenderDevice, queue: &RenderQueue, ready: &Ready, bake: &LampBake, load: LoadOp<wgpu_types::Color>, jobs: &[TileJob]) {
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("lamp atlas") });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("lamp atlas"),
-            color_attachments: &[Some(RenderPassColorAttachment { view: &ready.target.texture_view, depth_slice: None, resolve_target: None, ops: Operations { load, store: StoreOp::Store } })],
-            ..Default::default()
-        });
-        for job in jobs {
-            if let Some([x, y, width, height]) = job.clear {
-                pass.set_pipeline(ready.clear);
-                pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
-                pass.set_scissor_rect(x, y, width, height);
+/// The lamp shadow passes run outside the cameras' graph, so they time themselves, all under one name.
+/// The pass goes out with the frame's one submit, ahead of the cameras' passes that read what it drew.
+pub(super) fn submit_timed(device: &RenderDevice, pending: &mut PendingCommandBuffers, recorder: Option<&DiagnosticsRecorder>, label: &'static str, encode: impl FnOnce(&mut CommandEncoder)) {
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some(label) });
+    let span = recorder.time_span(&mut encoder, LAMP_SHADOW_SPAN);
+    encode(&mut encoder);
+    span.end(&mut encoder);
+    pending.push_encoder(encoder, label);
+}
+
+fn draw_tiles(encoder: &mut CommandEncoder, ready: &Ready, bake: &LampBake, load: LoadOp<wgpu_types::Color>, jobs: &[TileJob]) {
+    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("lamp atlas"),
+        color_attachments: &[Some(RenderPassColorAttachment { view: &ready.target.texture_view, depth_slice: None, resolve_target: None, ops: Operations { load, store: StoreOp::Store } })],
+        ..Default::default()
+    });
+    for job in jobs {
+        if matches!(job.before, Before::Whiten) {
+            pass.set_pipeline(ready.clear);
+            for view in &job.views {
+                pass.set_viewport(view.x as f32, view.y as f32, view.size as f32, view.size as f32, 0.0, 1.0);
+                pass.set_scissor_rect(view.x, view.y, view.size, view.size);
                 pass.draw(0..3, 0..1);
             }
-            let solid = (!job.range.is_empty()).then(|| (None, job.range.clone()));
-            let masked = ready.buffers.masked.iter().flat_map(|_| &bake.masked_ranges).filter(|range| range.lamp == job.lamp).map(|range| (Some(range.group), range.first..range.first + range.count));
-            for (group, range) in solid.into_iter().chain(masked) {
-                match (group, &ready.buffers.masked) {
-                    (Some(group), Some((vertices, indices))) => {
-                        let Some(image_group) = &ready.image_groups[group] else { continue };
-                        pass.set_pipeline(ready.masked);
-                        pass.set_vertex_buffer(0, *vertices.slice(..));
-                        pass.set_index_buffer(*indices.slice(..), IndexFormat::Uint32);
-                        pass.set_bind_group(1, image_group, &[]);
-                    }
-                    _ => {
-                        pass.set_pipeline(ready.solid);
-                        pass.set_vertex_buffer(0, *ready.buffers.vertices.slice(..));
-                        pass.set_index_buffer(*job.indices.slice(..), IndexFormat::Uint32);
-                    }
+        }
+        let solid = (!job.range.is_empty()).then(|| (None, job.range.clone()));
+        let masked = ready.buffers.masked.iter().flat_map(|_| &bake.masked_ranges).filter(|range| range.lamp == job.lamp).map(|range| (Some(range.group), range.first..range.first + range.count));
+        for (group, range) in solid.into_iter().chain(masked) {
+            match (group, &ready.buffers.masked) {
+                (Some(group), Some((vertices, indices))) => {
+                    let Some(image_group) = &ready.buffers.image_groups[group] else { continue };
+                    pass.set_pipeline(ready.masked);
+                    pass.set_vertex_buffer(0, *vertices.slice(..));
+                    pass.set_index_buffer(*indices.slice(..), IndexFormat::Uint32);
+                    pass.set_bind_group(1, image_group, &[]);
                 }
-                for (face, &(x, y)) in job.corners.iter().enumerate() {
-                    pass.set_viewport(x as f32, y as f32, job.size as f32, job.size as f32, 0.0, 1.0);
-                    pass.set_scissor_rect(x, y, job.size, job.size);
-                    pass.set_bind_group(0, job.faces, &[((job.lamp as u64 * 6 + face as u64) * FACE_STRIDE) as u32]);
-                    pass.draw_indexed(range.clone(), 0, 0..1);
+                _ => {
+                    pass.set_pipeline(ready.solid);
+                    pass.set_vertex_buffer(0, *ready.buffers.vertices.slice(..));
+                    pass.set_index_buffer(*ready.buffers.indices.slice(..), IndexFormat::Uint32);
                 }
+            }
+            for view in &job.views {
+                pass.set_viewport(view.x as f32, view.y as f32, view.size as f32, view.size as f32, 0.0, 1.0);
+                pass.set_scissor_rect(view.x, view.y, view.size, view.size);
+                pass.set_bind_group(0, job.faces, &[view.uniform]);
+                pass.draw_indexed(range.clone(), 0, 0..1);
             }
         }
     }
-    queue.submit([encoder.finish()]);
 }
 
-/// The last texel of a lamp's record in the book: its sharp tile's corner and face side in texels and how far its
-/// shadow has gone over to it, all 0 without one.
-fn write_sharp(queue: &RenderQueue, book: &GpuImage, lamp: u32, tile: [f32; 4]) {
-    let texel = HEADER_TEXELS + (lamp as usize + 1) * RECORD_TEXELS - 1;
-    queue.write_texture(
-        TexelCopyTextureInfo { texture: &book.texture, mip_level: 0, origin: Origin3d { x: (texel % BOOK_WIDTH) as u32, y: (texel / BOOK_WIDTH) as u32, z: 0 }, aspect: TextureAspect::All },
-        &bytes_of(&[tile]),
-        TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
-        Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-    );
+/// The fourth and fifth texels of a lamp's record in the book: the square of each of its six faces that has one, 0 for
+/// a face that reads the plain tile.
+fn write_faces(queue: &RenderQueue, book: &GpuImage, lamp: u32, faces: &[FaceSlot]) {
+    let mut packed = [[0.0f32; 4]; 2];
+    for slot in faces.iter().filter(|slot| slot.lamp == lamp) {
+        packed[usize::from(slot.face) / 4][usize::from(slot.face) % 4] = slot.packed();
+    }
+    for (at, texel) in packed.iter().enumerate() {
+        let index = HEADER_TEXELS + lamp as usize * RECORD_TEXELS + 3 + at;
+        queue.write_texture(
+            TexelCopyTextureInfo { texture: &book.texture, mip_level: 0, origin: Origin3d { x: (index % BOOK_WIDTH) as u32, y: (index / BOOK_WIDTH) as u32, z: 0 }, aspect: TextureAspect::All },
+            &bytes_of(&[*texel]),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
+            Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+    }
 }
 
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 pub(super) fn draw_lamp_atlas(
     atlas: Res<LampAtlas>,
     images: Res<RenderAssets<GpuImage>>,
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
-    time: Res<Time>,
+    mut pending: ResMut<PendingCommandBuffers>,
+    recorder: Option<Res<DiagnosticsRecorder>>,
+    mut plain: ResMut<PlainTilesDrawn>,
     mut state: Local<AtlasDraw>,
 ) {
-    let (Some(bake), Some(image)) = (&atlas.bake, &atlas.image) else { return };
-    let key = (Arc::as_ptr(bake).addr(), image.id());
     let state = &mut *state;
+    // A later bake may sit where this one sat in memory: nothing drawn for it counts.
+    let (Some(bake), Some(image)) = (&atlas.bake, &atlas.image) else {
+        state.drawn = None;
+        plain.0 = None;
+        return;
+    };
+    let key = (Arc::as_ptr(bake).addr(), image.id());
     let unit = atlas.side / ATLAS_UNITS;
     let pipelines = state.pipelines.get_or_insert_with(|| atlas_pipelines(&cache));
     let (Some(solid), Some(masked), Some(clear), Some(target)) =
@@ -516,30 +523,30 @@ pub(super) fn draw_lamp_atlas(
     else {
         return;
     };
-    let image_groups = || -> Vec<Option<BindGroup>> {
-        let layout = cache.get_bind_group_layout(&pipelines.image);
-        bake.masked_images.iter().map(|image| images.get(image).map(|image| device.create_bind_group(None, &layout, &BindGroupEntries::sequential((&image.texture_view, &image.sampler))))).collect()
+    let image_group = |image: &Handle<Image>| -> Option<BindGroup> {
+        let image = images.get(image)?;
+        Some(device.create_bind_group(None, &cache.get_bind_group_layout(&pipelines.image), &BindGroupEntries::sequential((&image.texture_view, &image.sampler))))
     };
     let index_buffer = |indices: &[u32]| device.create_buffer_with_data(&BufferInitDescriptor { label: Some("lamp atlas indices"), contents: &index_bytes(indices), usage: BufferUsages::INDEX });
+    let face_layout = cache.get_bind_group_layout(&pipelines.faces);
+    let faces = |label: &'static str, bytes: Vec<u8>| {
+        let buffer = device.create_buffer_with_data(&BufferInitDescriptor { label: Some(label), contents: if bytes.is_empty() { &[0; FACE_STRIDE as usize] } else { &bytes }, usage: BufferUsages::UNIFORM });
+        device.create_bind_group(None, &face_layout, &BindGroupEntries::single(BufferBinding { buffer: &buffer, offset: 0, size: NonZero::new(80) }))
+    };
     if state.drawn != Some(key) {
         state.waited += 1;
         if state.waited < ATLAS_WAIT_FRAMES && bake.masked_images.iter().any(|image| images.get(image).is_none()) {
             return;
         }
         state.waited = 0;
-        let face_layout = cache.get_bind_group_layout(&pipelines.faces);
-        let faces = |label: &'static str, bytes: Vec<u8>| {
-            let buffer = device.create_buffer_with_data(&BufferInitDescriptor { label: Some(label), contents: if bytes.is_empty() { &[0; FACE_STRIDE as usize] } else { &bytes }, usage: BufferUsages::UNIFORM });
-            device.create_bind_group(None, &face_layout, &BindGroupEntries::single(BufferBinding { buffer: &buffer, offset: 0, size: NonZero::new(80) }))
-        };
         let vertex_buffer = |label: &'static str, bytes: Vec<u8>| device.create_buffer_with_data(&BufferInitDescriptor { label: Some(label), contents: &bytes, usage: BufferUsages::VERTEX });
         let buffers = state.buffers.insert(AtlasBuffers {
-            faces: faces("lamp atlas faces", face_uniforms(&bake.draws, |draw| draw.tile.size(unit))),
-            sharp_faces: [1, 2].map(|share| faces("lamp atlas sharp faces", face_uniforms(&bake.draws, |_| atlas.side / FACE_SHARE_OF_SIDE / share))),
+            faces: faces("lamp atlas faces", plain_uniforms(&bake.draws, unit)),
             vertices: vertex_buffer("lamp atlas vertices", bytes_of(&bake.vertices)),
+            indices: index_buffer(&bake.indices),
             masked: (!bake.masked_indices.is_empty()).then(|| (vertex_buffer("lamp atlas masked vertices", bytes_of(&bake.masked_vertices)), index_buffer(&bake.masked_indices))),
+            image_groups: bake.masked_images.iter().map(&image_group).collect(),
         });
-        let indices = index_buffer(&bake.indices);
         let jobs: Vec<TileJob> = bake
             .draws
             .iter()
@@ -547,56 +554,69 @@ pub(super) fn draw_lamp_atlas(
             .map(|(lamp, draw)| TileJob {
                 lamp,
                 faces: &buffers.faces,
-                size: draw.tile.size(unit),
-                corners: std::array::from_fn(|face| face_corner(draw.tile, face as u32, unit)),
-                clear: None,
-                indices: &indices,
+                views: (0..6)
+                    .map(|face| {
+                        let (x, y) = face_corner(draw.tile, face, unit);
+                        FaceView { uniform: ((lamp as u64 * 6 + u64::from(face)) * FACE_STRIDE) as u32, x, y, size: draw.tile.size(unit) }
+                    })
+                    .collect(),
+                before: Before::Keep,
                 range: draw.first..draw.first + draw.count,
             })
             .collect();
-        draw_tiles(&device, &queue, &Ready { solid, masked, clear, target, buffers, image_groups: image_groups() }, bake, LoadOp::Clear(wgpu_types::Color::WHITE), &jobs);
+        let ready = Ready { solid, masked, clear, target, buffers };
+        submit_timed(&device, &mut pending, recorder.as_deref(), "lamp atlas", |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Clear(wgpu_types::Color::WHITE), &jobs));
         state.drawn = Some(key);
-        state.sharp = vec![None; SHARP_TILES];
-        state.blend = vec![0.0; SHARP_TILES];
+        plain.0 = Some(key.0);
+        state.detail.clear();
         return;
     }
-    let (Some(buffers), Some(book)) = (&state.buffers, atlas.book.as_ref().and_then(|book| images.get(book))) else { return };
-    let step = time.delta_secs() / SHARP_FADE_SECONDS;
-    let mut redrawn = false;
-    for slot in 0..state.sharp.len().min(atlas.sharp.len()) {
-        let (held, wanted, blend) = (state.sharp[slot], atlas.sharp[slot], state.blend[slot]);
-        let (x, y, face) = sharp_tile(slot, atlas.side);
-        let place = |blend: f32| if blend > 0.0 { [x as f32, y as f32, face as f32, blend] } else { [0.0; 4] };
-        if held == wanted {
-            if let Some(lamp) = held.filter(|_| blend < 1.0) {
-                state.blend[slot] = (blend + step).min(1.0);
-                write_sharp(&queue, book, lamp, place(state.blend[slot]));
-            }
-            continue;
-        }
-        // The lamp that held the tile fades back to its plain one before another is drawn here.
-        if let Some(lamp) = held.filter(|_| blend > 0.0) {
-            state.blend[slot] = (blend - step).max(0.0);
-            write_sharp(&queue, book, lamp, place(state.blend[slot]));
-            continue;
-        }
-        state.sharp[slot] = None;
-        let Some((lamp, draw_index)) = wanted.filter(|_| !redrawn).and_then(|lamp| Some((lamp, bake.draw_of(lamp as usize)?))) else { continue };
-        redrawn = true;
-        state.sharp[slot] = Some(lamp);
-        let draw = &bake.draws[draw_index];
-        let indices = index_buffer(&bake.indices[draw.first as usize..(draw.first + draw.count) as usize]);
-        let job = TileJob {
-            lamp: draw_index,
-            faces: &buffers.sharp_faces[usize::from(slot as u32 >= LARGE_TILES)],
-            size: face,
-            corners: std::array::from_fn(|at| (x + at as u32 % 3 * face, y + at as u32 / 3 * face)),
-            clear: Some([x, y, 3 * face, 2 * face]),
-            indices: &indices,
-            range: 0..draw.count,
-        };
-        draw_tiles(&device, &queue, &Ready { solid, masked, clear, target, buffers, image_groups: image_groups() }, bake, LoadOp::Load, &[job]);
+    if state.detail == atlas.faces {
+        return;
     }
+    let (Some(buffers), Some(book)) = (state.buffers.as_mut(), atlas.book.as_ref().and_then(|book| images.get(book))) else { return };
+    let slot_key = |slot: &FaceSlot| (slot.lamp, slot.face, slot.x, slot.y, slot.level);
+    let (drawn, wanted): (FxHashSet<_>, FxHashSet<_>) = (state.detail.iter().map(slot_key).collect(), atlas.faces.iter().map(slot_key).collect());
+    let mut fresh: Vec<(usize, FaceSlot)> = atlas.faces.iter().filter(|&slot| !drawn.contains(&slot_key(slot))).filter_map(|&slot| Some((bake.draw_index.get(slot.lamp as usize).copied().flatten()?, slot))).collect();
+    let mut changed: Vec<u32> = state.detail.iter().filter(|&slot| !wanted.contains(&slot_key(slot))).chain(fresh.iter().map(|(_, slot)| slot)).map(|slot| slot.lamp).collect();
+    changed.sort_unstable();
+    changed.dedup();
+    fresh.sort_by_key(|&(draw, _)| draw);
+    let mut uniforms = Vec::with_capacity(fresh.len() * FACE_STRIDE as usize);
+    for &(draw, slot) in &fresh {
+        face_uniform(&mut uniforms, &bake.draws[draw], FACE_AXES[usize::from(slot.face)], slot.side());
+    }
+    let group = faces("lamp atlas detail faces", uniforms);
+    let mut first = 0;
+    let jobs: Vec<TileJob> = fresh
+        .chunk_by(|a, b| a.0 == b.0)
+        .map(|run| {
+            let (lamp, at) = (run[0].0, first);
+            first += run.len();
+            TileJob {
+                lamp,
+                faces: &group,
+                views: run
+                    .iter()
+                    .zip(at..)
+                    .map(|((_, slot), at)| FaceView { uniform: (at as u64 * FACE_STRIDE) as u32, x: u32::from(slot.x) * DETAIL_UNIT, y: u32::from(slot.y) * DETAIL_UNIT, size: slot.side() })
+                    .collect(),
+                before: Before::Whiten,
+                range: bake.draws[lamp].first..bake.draws[lamp].first + bake.draws[lamp].count,
+            }
+        })
+        .collect();
+    if !jobs.is_empty() {
+        for (made, image) in buffers.image_groups.iter_mut().zip(&bake.masked_images).filter(|(made, _)| made.is_none()) {
+            *made = image_group(image);
+        }
+        let ready = Ready { solid, masked, clear, target, buffers };
+        submit_timed(&device, &mut pending, recorder.as_deref(), "lamp atlas", |encoder| draw_tiles(encoder, &ready, bake, LoadOp::Load, &jobs));
+    }
+    for lamp in changed {
+        write_faces(&queue, book, lamp, &atlas.faces);
+    }
+    state.detail.clone_from(&atlas.faces);
 }
 
 #[cfg(test)]
@@ -627,33 +647,8 @@ mod tests {
     }
 
     #[test]
-    fn sharp_tiles_lie_under_the_plain_ones_large_then_small_and_none_overlaps() {
-        let side = 8192;
-        let tiles: Vec<(u32, u32, u32)> = (0..SHARP_TILES).map(|slot| sharp_tile(slot, side)).collect();
-        assert_eq!(tiles[..2], [(0, 6144, 256), (768, 6144, 256)]);
-        assert_eq!(tiles[LARGE_TILES as usize], (0, 6144 + 1024, 128));
-        for (index, &(ax, ay, a)) in tiles.iter().enumerate() {
-            assert!(ax + 3 * a <= side && ay + 2 * a <= side && ay >= 6144);
-            for &(bx, by, b) in &tiles[index + 1..] {
-                assert!(ax + 3 * a <= bx || bx + 3 * b <= ax || ay + 2 * a <= by || by + 2 * b <= ay);
-            }
-        }
-        assert_eq!(tiles[SHARP_TILES - 1].1 + 2 * tiles[SHARP_TILES - 1].2, side);
-    }
-
-    #[test]
     fn a_lamp_without_a_tile_is_in_no_draw_and_the_rest_keep_their_order() {
-        let bake = LampBake {
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            draws: Vec::new(),
-            tiles: vec![Some(Tile { x: 0, y: 0, level: 0 }), None, Some(Tile { x: 3, y: 0, level: 0 })],
-            masked_vertices: Vec::new(),
-            masked_indices: Vec::new(),
-            masked_ranges: Vec::new(),
-            masked_images: Vec::new(),
-        };
-        assert_eq!([0, 1, 2, 3].map(|lamp| bake.draw_of(lamp)), [Some(0), None, Some(1), None]);
+        assert_eq!(draw_index(&[Some(Tile { x: 0, y: 0, level: 0 }), None, Some(Tile { x: 3, y: 0, level: 0 })]), [Some(0), None, Some(1)]);
     }
 
     #[test]
@@ -676,7 +671,7 @@ mod tests {
     fn a_lamp_gets_only_triangles_in_its_reach() {
         let near = [[10.0, 0.0, 0.0], [10.0, 5.0, 0.0], [10.0, 0.0, 5.0]];
         let far = [[900.0, 0.0, 0.0], [900.0, 5.0, 0.0], [900.0, 0.0, 5.0]];
-        let bake = lamp_bake(&[far, near], &[], &[([0.0; 3], 100.0)]);
+        let bake = lamp_bake(&[far, near], &[], &[([0.0; 3], 100.0)], 1);
         assert_eq!(bake.draws[0].count, 3);
         assert_eq!(bake.indices, [3, 4, 5]);
         assert_eq!(bake.vertices.len(), 6);

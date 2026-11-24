@@ -13,10 +13,11 @@ import bevy_pbr::{
 import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TARGET_TERRAIN};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::dynamic_light::dynamic_light;
-import package::p2_engine::modern::{
-    LUMINANCE, MODERN_ON, NO_GLOSS, NO_RELIEF, ambient_occlusion, has_sun, lamp_light, modern_surface, no_lamps, relief_from, relief_shows,
-    sky_mask, sun_seen, surface_of, with_light,
-};
+import package::p2_engine::modern::{ambient_occlusion, modern_surface, sky_mask, surface_of, with_light};
+import package::p2_engine::modern_base::{LUMINANCE, MODERN_ON, NO_GLOSS, NO_RELIEF};
+import package::p2_engine::relief::{relief_from, relief_shows};
+import package::p2_engine::sun_shadow::{sun_found, sun_index, sun_seen_from};
+import package::p2_engine::lamp_shadow::{lamp_light, no_lamps};
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
 @if(BINDLESS)
@@ -170,7 +171,8 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
 
     let terrain = params(vertex_output);
     let count = min(terrain.count.x, MAX_LAYERS);
-    let modern = (terrain.count.y & MODERN_ON) != 0u && has_sun();
+    let sun = sun_index();
+    let modern = (terrain.count.y & MODERN_ON) != 0u && sun_found(sun);
     let normal = normalize(pbr_input.world_normal);
     let ranges = cluster_ranges(pbr_input);
     let gloss = (terrain.count.y & NO_GLOSS) == 0u;
@@ -179,7 +181,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var lamps = no_lamps();
     var dynamic = vec3(0.0);
     if modern {
-        seen = sun_seen(vertex_output.world_position, normal, pbr_input.frag_coord.xy);
+        seen = sun_seen_from(sun, vertex_output.world_position, normal, pbr_input.frag_coord.xy);
         occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
         lamps = lamp_light(vertex_output, position, normal, pbr_input.frag_coord.xy, ranges, gloss, surface_of(0.0));
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);

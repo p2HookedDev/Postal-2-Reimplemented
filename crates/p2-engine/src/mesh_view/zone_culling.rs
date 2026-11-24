@@ -1,5 +1,4 @@
 use super::*;
-use crate::render::modern::STATIC_CASTER_LAYER;
 
 pub(crate) fn merged_box((min, max): ([f32; 3], [f32; 3]), (low, high): ([f32; 3], [f32; 3])) -> ([f32; 3], [f32; 3]) {
     ([0, 1, 2].map(|k| min[k].min(low[k])), [0, 1, 2].map(|k| max[k].max(high[k])))
@@ -80,6 +79,7 @@ fn zone_visibility(
     mut shadow_only: ResMut<ShadowOnly>,
     mut world_seen: ResMut<WorldSeenZones>,
     mut walk: bevy::ecs::system::Local<VisibleZones>,
+    mut only_shadows: bevy::ecs::system::Local<bevy::utils::Parallel<Vec<Entity>>>,
 ) {
     shadow_only.0.clear();
     let model = collision.model();
@@ -111,7 +111,6 @@ fn zone_visibility(
     let sun = eye_seen.zip(suns.iter().next().and_then(|config| config.bounds.last().copied()));
     let caster = RenderLayers::layer(CASTER_LAYER);
     let cached_caster = RenderLayers::layer(STATIC_CASTER_LAYER);
-    let only_shadows = std::sync::Mutex::new(Vec::new());
     let unseen_flips = std::sync::Mutex::new(Vec::new());
     culled.par_iter_mut().for_each(|(root, zone, mut visibility, children, within, unseen_caster)| {
         let forced = forced_shown(zone.only_from.as_deref(), view_zone);
@@ -128,15 +127,14 @@ fn zone_visibility(
         {
             flips.push((root, casts_unseen));
         }
-        if drawn
-            && !seen
-            && let Ok(mut roots) = only_shadows.lock()
-        {
-            roots.push(root);
+        if drawn && !seen {
+            only_shadows.scope(|roots| roots.push(root));
         }
         visibility.set_if_neq(if drawn { Visibility::Inherited } else { Visibility::Hidden });
     });
-    shadow_only.0.extend(only_shadows.into_inner().unwrap_or_default());
+    for roots in only_shadows.iter_mut() {
+        shadow_only.0.extend(roots.drain(..));
+    }
     for (root, casts_unseen) in unseen_flips.into_inner().unwrap_or_default() {
         commands.entity(root).queue_silenced(move |mut entity: bevy::ecs::world::EntityWorldMut| {
             let layers = entity.get::<RenderLayers>().cloned().unwrap_or_default();

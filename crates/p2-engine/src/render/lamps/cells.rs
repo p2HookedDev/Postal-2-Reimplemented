@@ -2,8 +2,6 @@
 //! reach is read off its shadow tile, redrawn here on the CPU texel for texel as the atlas pass draws it: a cell loses
 //! a lamp only where the atlas shades every point of it. Masked casters are left out, which only lists more.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use bevy::math::Vec3;
 
 use super::atlas::{FACE_AXES, GUARD_TEXELS, NEAR};
@@ -11,14 +9,20 @@ use super::atlas::{FACE_AXES, GUARD_TEXELS, NEAR};
 const MOST_CELLS: u64 = 1 << 22;
 /// The shader takes a cell's place apart from 10 bits an axis.
 const MOST_CELLS_AN_AXIS: u32 = 1023;
-/// `modern.wesl` moves the point it looks up by 1.5 texels along the normal, lets it be up to 3 texels nearer and its
-/// soft edge's taps 3.5 more, and reads texels up to 3.5 from it and the one past each.
+/// `lamp_shadow.wesl` moves the point it looks up by 1.5 texels along the normal, lets it be up to 3 texels nearer and its
+/// edge's reads 1.5 more, and reads at places up to 1 texel from it, each with the texel past it. It also lets the point
+/// be nearer by a share of its distance, for the steps of a 16 bit float.
 const LOOKUP_OFFSET_TEXELS: f32 = 1.5;
-const LOOKUP_MARGIN_TEXELS: f32 = 7.0;
-const LOOKUP_REACH_TEXELS: f32 = 3.5;
+const LOOKUP_MARGIN_TEXELS: f32 = 4.5;
+const LOOKUP_REACH_TEXELS: f32 = 1.0;
+const DEPTH_STEP: f32 = 0.001;
+/// `lamp_shadow.wesl` skips a lamp that gives a pixel less display light than this, and weighs colours so.
+const LAMP_SMALLEST: f32 = 0.01;
+const LUMINANCE: [f32; 3] = [0.2126, 0.7152, 0.0722];
+/// Rounding here and in the shader differs: a lamp is dropped only this far under what the shader skips.
+const DIM_SLACK: f32 = 0.9;
 /// Covers the rounding between a pixel's cell in the shader and here.
 const CELL_SLACK: f32 = 0.5;
-const LAMPS_PER_BATCH: usize = 8;
 
 pub(super) struct CellLamp<'a> {
     pub position: [f32; 3],
@@ -27,6 +31,39 @@ pub(super) struct CellLamp<'a> {
     pub face: Option<u32>,
     /// Corners of its casters in the vertices, three a triangle.
     pub casters: &'a [u32],
+    /// Its display light at its own place, weighed as the shader weighs it.
+    pub strength: f32,
+    /// A spot's direction, and the scale and offset that turn the cosine of the angle off it into its share of light.
+    pub spot: Option<([f32; 3], f32, f32)>,
+}
+
+impl<'a> CellLamp<'a> {
+    /// From the lamp's texels in the book, so a cell is judged by the numbers the shader reads.
+    pub(super) fn of(record: &[[f32; 4]; RECORD_TEXELS], face: Option<u32>, casters: &'a [u32]) -> Self {
+        let [[x, y, z, radius], [r, g, b, _], [along_x, along_y, scale, offset], ..] = *record;
+        let strength = [r, g, b].iter().zip(LUMINANCE).map(|(channel, weight)| channel.max(0.0).sqrt() * weight).sum();
+        let along = [along_x, along_y, (1.0 - along_x * along_x - along_y * along_y).max(0.0).sqrt().copysign(scale)];
+        Self { position: [x, y, z], radius: radius.abs(), face, casters, strength, spot: (radius < 0.0).then_some((along, scale.abs(), offset)) }
+    }
+
+    /// The most display light the lamp gives any point of a box, as the shader counts it before shadows. The box is seen
+    /// from the lamp and `nearest` is its distance.
+    fn most_light(&self, low: [f32; 3], high: [f32; 3], nearest: f32) -> f32 {
+        let x = (nearest / self.radius).min(1.0);
+        let falloff = 1.0 - x * x * (3.0 - 2.0 * x);
+        let cone = self.spot.map_or(1.0, |(along, scale, offset)| {
+            let (low, high) = (Vec3::from(low), Vec3::from(high));
+            let middle = 0.5 * (low + high);
+            let (far, around) = (middle.length(), 0.5 * (high - low).length());
+            if far <= around {
+                return 1.0;
+            }
+            let off = (Vec3::from(along).dot(middle) / far).clamp(-1.0, 1.0).acos() - (around / far).asin();
+            let share = (off.max(0.0).cos() * scale + offset).clamp(0.0, 1.0);
+            share * share
+        });
+        self.strength * falloff * cone
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -39,6 +76,8 @@ pub(super) struct LampCells {
     pub lamps: Vec<u32>,
     /// How many pairs of a lamp and a cell within its radius there are, lit or not.
     pub in_reach: u64,
+    /// For each lamp, how far the casters it sees through each face of its tile lie.
+    pub reach: Vec<[f32; 6]>,
 }
 
 impl LampCells {
@@ -104,6 +143,18 @@ impl Cube {
         Self { side, levels }
     }
 
+    /// Over the radius, for each face: nine in ten of its texels that hold a caster hold one no farther.
+    fn reach(&self) -> [f32; 6] {
+        let texels = self.side * self.side;
+        let mut held = Vec::new();
+        std::array::from_fn(|face| {
+            held.clear();
+            held.extend(self.levels[0][face * texels..(face + 1) * texels].iter().copied().filter(|&depth| depth < 1.0));
+            let at = held.len() * 9 / 10;
+            if held.is_empty() { 0.0 } else { *held.select_nth_unstable_by(at, f32::total_cmp).1 }
+        })
+    }
+
     /// Whether any texel a lookup inside the box could read holds `depth` or more. The box is seen from the lamp.
     fn open_to(&self, low: [f32; 3], high: [f32; 3], depth: f32) -> bool {
         let half = 0.5 * self.side as f32;
@@ -157,9 +208,6 @@ fn draw_triangle(depths: &mut [f32], side: usize, corners: [[f32; 3]; 3], radius
     {
         return;
     }
-    let [a, b, c] = corners.map(Vec3::from);
-    let normal = (b - a).cross(c - a);
-    let plane = normal.dot(a);
     let mut seen = [[0.0f32; 2]; 4];
     let mut count = 0;
     for index in 0..3 {
@@ -185,21 +233,34 @@ fn draw_triangle(depths: &mut [f32], side: usize, corners: [[f32; 3]; 3], radius
         (((low - 0.5).ceil() as i32).max(0), ((high - 0.5).floor() as i32).min(side as i32 - 1))
     };
     let ((x0, x1), (y0, y1)) = (bounds(0), bounds(1));
-    let edges = || (0..count).map(|index| (seen[index], [seen[(index + 1) % count][0] - seen[index][0], seen[(index + 1) % count][1] - seen[index][1]]));
-    let winding = edges().map(|(from, along)| from[0] * along[1] - from[1] * along[0]).sum::<f32>().signum();
+    if x0 > x1 || y0 > y1 {
+        return;
+    }
+    let [a, b, c] = corners.map(Vec3::from);
+    let normal = (b - a).cross(c - a);
+    let plane = normal.dot(a);
+    let along = |index: usize| [seen[(index + 1) % count][0] - seen[index][0], seen[(index + 1) % count][1] - seen[index][1]];
+    let winding = (0..count).map(|index| (seen[index], along(index))).map(|(from, along)| from[0] * along[1] - from[1] * along[0]).sum::<f32>().signum();
+    // A texel on an edge two triangles share belongs to one of them: they run along it in opposite directions.
+    let edges: [([f32; 2], [f32; 2], bool); 4] = std::array::from_fn(|index| {
+        let (from, along) = (seen[index % count], along(index % count));
+        let (across, down) = (winding * along[0], winding * along[1]);
+        (from, along, down > 0.0 || down == 0.0 && across > 0.0)
+    });
+    let edges = &edges[..count];
     for y in y0..=y1 {
+        let py = y as f32 + 0.5;
+        let rise = (half - py) / span;
         for x in x0..=x1 {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            // A texel on an edge two triangles share belongs to one of them: they run along it in opposite directions.
-            let covered = edges().all(|(from, along)| {
+            let px = x as f32 + 0.5;
+            let covered = edges.iter().all(|&(from, along, owns_edge)| {
                 let turn = winding * (along[0] * (py - from[1]) - along[1] * (px - from[0]));
-                let (across, down) = (winding * along[0], winding * along[1]);
-                turn > 0.0 || turn == 0.0 && (down > 0.0 || down == 0.0 && across > 0.0)
+                turn > 0.0 || turn == 0.0 && owns_edge
             });
             if !covered {
                 continue;
             }
-            let ray = Vec3::new((px - half) / span, (half - py) / span, 1.0);
+            let ray = Vec3::new((px - half) / span, rise, 1.0);
             let slope = normal.dot(ray);
             if slope.abs() < 1e-12 {
                 continue;
@@ -225,11 +286,14 @@ fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) 
     if nearest(0.0) >= lamp.radius {
         return Reach::Out;
     }
+    if lamp.most_light(low, high, nearest(0.0)) < DIM_SLACK * LAMP_SMALLEST {
+        return Reach::Dark;
+    }
     let lights = cube.zip(lamp.face).is_none_or(|(cube, face)| {
         let farthest = (0..3).map(|axis| low[axis].abs().max(high[axis].abs())).map(|reach| reach * reach).sum::<f32>().sqrt().min(lamp.radius);
         let texel = 2.0 * farthest / face as f32;
         let grown = texel * LOOKUP_OFFSET_TEXELS;
-        let depth = (nearest(grown) - texel * LOOKUP_MARGIN_TEXELS) / lamp.radius;
+        let depth = (nearest(grown) - texel * LOOKUP_MARGIN_TEXELS - farthest * DEPTH_STEP) / lamp.radius;
         depth <= 0.0 || cube.open_to(low.map(|at| at - grown), high.map(|at| at + grown), depth)
     });
     if lights { Reach::Lit } else { Reach::Dark }
@@ -237,7 +301,7 @@ fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) 
 
 /// The cells of `grid` a lamp lights, and how many lie within its radius. Cells are tried eight at a time as one box
 /// first: a box the lamp leaves dark holds no lit cell.
-fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<u32>, u64) {
+fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<u32>, u64, [f32; 6]) {
     let cube = lamp.face.map(|face| Cube::drawn(face as usize, lamp, vertices));
     let blocks = |axis: usize| {
         let cell = |at: f32| (((at - grid.origin[axis]) / grid.cell).floor().max(0.0) as u32).min(grid.dims[axis] - 1);
@@ -270,7 +334,7 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<u
             }
         }
     }
-    (lit, in_reach)
+    (lit, in_reach, cube.as_ref().map_or([1.0; 6], Cube::reach).map(|share| share * lamp.radius))
 }
 
 /// Cells no smaller than `smallest_cell`, grown until the grid over every lamp's reach is small enough to hold.
@@ -279,30 +343,10 @@ pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cel
         return LampCells::default();
     }
     let mut grid = grid(lamps, smallest_cell);
-    let next = AtomicUsize::new(0);
-    let mut lit: Vec<(usize, (Vec<u32>, u64))> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads.max(1))
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut done = Vec::new();
-                    loop {
-                        let start = next.fetch_add(LAMPS_PER_BATCH, Ordering::Relaxed);
-                        if start >= lamps.len() {
-                            return done;
-                        }
-                        for (index, lamp) in lamps.iter().enumerate().skip(start).take(LAMPS_PER_BATCH) {
-                            done.push((index, lit_cells(&grid, lamp, vertices)));
-                        }
-                    }
-                })
-            })
-            .collect();
-        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_default()).collect()
-    });
-    lit.sort_by_key(|&(lamp, _)| lamp);
+    let lit = super::on_threads(lamps.len(), threads, |lamp| lit_cells(&grid, &lamps[lamp], vertices));
     let cells = grid.dims.iter().product::<u32>() as usize;
     let mut starts = vec![0u32; cells + 1];
-    for &cell in lit.iter().flat_map(|(_, (cells, _))| cells) {
+    for &cell in lit.iter().flat_map(|(cells, ..)| cells) {
         starts[cell as usize + 1] += 1;
     }
     for cell in 0..cells {
@@ -310,27 +354,29 @@ pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cel
     }
     let mut filled = starts.clone();
     let mut listed = vec![0u32; starts[cells] as usize];
-    for (lamp, (cells, _)) in &lit {
+    for (lamp, (cells, ..)) in lit.iter().enumerate() {
         for &cell in cells {
-            listed[filled[cell as usize] as usize] = *lamp as u32;
+            listed[filled[cell as usize] as usize] = lamp as u32;
             filled[cell as usize] += 1;
         }
     }
-    grid.in_reach = lit.iter().map(|(_, (_, in_reach))| in_reach).sum();
+    grid.in_reach = lit.iter().map(|(_, in_reach, _)| in_reach).sum();
+    grid.reach = lit.iter().map(|&(_, _, reach)| reach).collect();
     grid.starts = starts;
     grid.lamps = listed;
     grid
 }
 
-/// Texels of a lamp's record in the book. `modern.wesl` holds the same number.
-pub(super) const RECORD_TEXELS: usize = 4;
+/// Texels of a lamp's record in the book. `lamp_shadow.wesl` holds the same number.
+pub(super) const RECORD_TEXELS: usize = 6;
 pub(super) const HEADER_TEXELS: usize = 2;
-/// The book's width in texels. `modern.wesl` holds the same number.
+/// The book's width in texels. `lamp_shadow.wesl` holds the same number.
 pub(super) const BOOK_WIDTH: usize = 2048;
-/// A texel's number goes through a float, exact up to 2^24.
-const MOST_BOOK_TEXELS: usize = 1 << 24;
+/// A texel's number goes through a float, exact up to 2^24; eight rows less, so the book with the movers' eight rows is no
+/// taller than the 8192 texels every GPU takes.
+const MOST_BOOK_TEXELS: usize = (1 << 24) - 8 * BOOK_WIDTH;
 
-/// What `modern.wesl` reads, four floats a texel: a header (the grid's corner and its cell; its sides and where the
+/// What `lamp_shadow.wesl` reads, four floats a texel: a header (the grid's corner and its cell; its sides and where the
 /// cells start), every lamp's record, a texel for each cell (where its list starts and how many lamps it holds) and
 /// the lists, four lamps a texel. Lists past the largest book are dropped, cells farthest along first.
 pub(super) fn book_texels(cells: &LampCells, records: &[[[f32; 4]; RECORD_TEXELS]]) -> Vec<[f32; 4]> {
@@ -361,7 +407,7 @@ mod tests {
 
     fn cells_of(vertices: &[[f32; 3]], face: Option<u32>) -> LampCells {
         let casters: Vec<u32> = (0..vertices.len() as u32).collect();
-        lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 1000.0, face, casters: &casters }], 128.0, 2)
+        lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 1000.0, face, casters: &casters, strength: 1.0, spot: None }], 128.0, 2)
     }
 
     fn cell_at(cells: &LampCells, point: [f32; 3]) -> usize {
@@ -403,7 +449,7 @@ mod tests {
     fn cells_tried_eight_at_a_time_come_out_as_each_tried_alone() {
         let vertices = wall(300.0);
         let casters: Vec<u32> = (0..vertices.len() as u32).collect();
-        let lamp = CellLamp { position: [37.0, -11.0, 5.0], radius: 1000.0, face: Some(64), casters: &casters };
+        let lamp = CellLamp { position: [37.0, -11.0, 5.0], radius: 1000.0, face: Some(64), casters: &casters, strength: 1.0, spot: None };
         let cells = lamp_cells(&vertices, std::slice::from_ref(&lamp), 128.0, 1);
         let cube = Cube::drawn(64, &lamp, &vertices);
         let mut alone = Vec::new();
@@ -422,6 +468,56 @@ mod tests {
         assert_eq!(listed, alone);
     }
 
+    fn shader_share(record: &[[f32; 4]; RECORD_TEXELS], point: Vec3) -> f32 {
+        let [[x, y, z, radius], [r, g, b, _], [along_x, along_y, scale, offset], ..] = *record;
+        let to_light = Vec3::new(x, y, z) - point;
+        let x2 = to_light.length_squared() / (radius * radius);
+        if x2 >= 1.0 {
+            return 0.0;
+        }
+        let mut cone = 1.0;
+        if radius < 0.0 {
+            let along = Vec3::new(along_x, along_y, (1.0 - along_x * along_x - along_y * along_y).max(0.0).sqrt() * scale.signum());
+            let share = ((-along).dot(to_light / to_light.length().max(0.01)) * scale.abs() + offset).clamp(0.0, 1.0);
+            cone = share * share;
+        }
+        let shown = Vec3::new(r, g, b).map(f32::sqrt) * ((1.0 - x2 * (3.0 - 2.0 * x2.sqrt())) * cone);
+        shown.dot(Vec3::from(LUMINANCE))
+    }
+
+    fn spot_record(along: Vec3, sine: f32, color: f32) -> [[f32; 4]; RECORD_TEXELS] {
+        let scale = 1.0 / (1.0 - sine);
+        [[30.0, -20.0, 10.0, -1000.0], [color; 4], [along.x, along.y, scale.copysign(along.z), -sine * scale], [0.0; 4], [0.0; 4], [0.0; 4]]
+    }
+
+    #[test]
+    fn a_cell_loses_only_a_lamp_the_shader_would_skip_at_every_point_of_it() {
+        let point_lamp = [[30.0, -20.0, 10.0, 1000.0], [0.05; 4], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]];
+        let down = spot_record(Vec3::new(0.2, -0.9, -0.38).normalize(), 0.5, 0.6);
+        let narrow = spot_record(Vec3::new(-0.7, 0.1, 0.7).normalize(), 0.875, 1.0);
+        for (record, most_listed) in [(point_lamp, 1.0), (down, 0.45), (narrow, 0.2)] {
+            let lamp = CellLamp::of(&record, None, &[]);
+            let cells = lamp_cells(&[], std::slice::from_ref(&lamp), 128.0, 2);
+            let (mut listed, mut dropped) = (0, 0);
+            for index in 0..cells.starts.len() - 1 {
+                let at = [index as u32 % cells.dims[0], index as u32 / cells.dims[0] % cells.dims[1], index as u32 / (cells.dims[0] * cells.dims[1])];
+                let corner = Vec3::from(std::array::from_fn(|axis| cells.origin[axis] + at[axis] as f32 * cells.cell));
+                if !cells.of(index).is_empty() {
+                    listed += 1;
+                    continue;
+                }
+                dropped += 1;
+                for step in 0..125u32 {
+                    let inside = Vec3::new((step % 5) as f32, (step / 5 % 5) as f32, (step / 25) as f32) * (cells.cell / 4.0);
+                    let share = shader_share(&record, corner + inside);
+                    assert!(share < LAMP_SMALLEST, "cell {at:?} lost a lamp that gives {share} at {inside}");
+                }
+            }
+            let share = listed as f32 / (listed + dropped) as f32;
+            assert!(listed > 20 && share <= most_listed, "{listed} of {} cells listed", listed + dropped);
+        }
+    }
+
     #[test]
     fn a_lamp_without_a_tile_lights_through_walls() {
         let cells = cells_of(&wall(300.0), None);
@@ -432,7 +528,7 @@ mod tests {
     fn the_cube_holds_the_distance_to_a_wall_over_the_radius() {
         let vertices = wall(300.0);
         let casters: Vec<u32> = (0..6).collect();
-        let cube = Cube::drawn(64, &CellLamp { position: [0.0; 3], radius: 1000.0, face: Some(64), casters: &casters }, &vertices);
+        let cube = Cube::drawn(64, &CellLamp { position: [0.0; 3], radius: 1000.0, face: Some(64), casters: &casters, strength: 1.0, spot: None }, &vertices);
         let middle = cube.levels[0][32 * 64 + 32];
         assert!((middle - 0.3).abs() < 0.01, "{middle}");
         assert!(cube.levels[0][64 * 64..2 * 64 * 64].iter().all(|&texel| texel == 1.0));
@@ -440,8 +536,16 @@ mod tests {
     }
 
     #[test]
+    fn a_face_reaches_as_far_as_the_casters_it_sees_and_a_lamp_without_a_tile_its_radius() {
+        let reach = cells_of(&wall(300.0), Some(64)).reach[0];
+        assert!(reach[0] > 300.0 && reach[0] < 520.0, "{reach:?}");
+        assert_eq!(reach[1], 0.0);
+        assert_eq!(cells_of(&wall(300.0), None).reach, [[1000.0; 6]]);
+    }
+
+    #[test]
     fn a_grid_too_large_takes_larger_cells() {
-        let far = |x: f32| CellLamp { position: [x, 0.0, 0.0], radius: 1000.0, face: None, casters: &[] };
+        let far = |x: f32| CellLamp { position: [x, 0.0, 0.0], radius: 1000.0, face: None, casters: &[], strength: 1.0, spot: None };
         let cells = grid(&[far(0.0), far(200_000.0)], 128.0);
         assert_eq!(cells.cell, 256.0);
         assert!(cells.dims[0] <= MOST_CELLS_AN_AXIS);
@@ -449,7 +553,7 @@ mod tests {
 
     #[test]
     fn the_book_points_each_lit_cell_at_its_lamps_four_a_texel() {
-        let cells = LampCells { origin: [1.0, 2.0, 3.0], cell: 128.0, dims: [2, 1, 1], starts: vec![0, 0, 5], lamps: vec![0, 1, 1, 0, 1], in_reach: 5 };
+        let cells = LampCells { origin: [1.0, 2.0, 3.0], cell: 128.0, dims: [2, 1, 1], starts: vec![0, 0, 5], lamps: vec![0, 1, 1, 0, 1], in_reach: 5, reach: Vec::new() };
         let texels = book_texels(&cells, &[[[7.0; 4]; RECORD_TEXELS], [[9.0; 4]; RECORD_TEXELS]]);
         let cells_start = HEADER_TEXELS + 2 * RECORD_TEXELS;
         assert_eq!(texels[..2], [[1.0, 2.0, 3.0, 128.0], [2.0, 1.0, 1.0, cells_start as f32]]);

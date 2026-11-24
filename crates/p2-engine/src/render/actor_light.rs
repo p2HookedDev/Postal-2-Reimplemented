@@ -16,10 +16,11 @@ use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, Shade
 use bevy::shader::{Shader, ShaderRef};
 use p2_math::{Rotator, Vector};
 use p2_assets::{Model, SkeletalMesh, StaticMesh, StaticMeshInstance, uv_matrix};
-use p2_render_cpu::{HardwareKind, HardwareLight, MeshLight, MeshPlacement, Walls, actor_ambient, hardware_ambient, leaf_lights, leaves_ambient, relevant_lights, static_mesh_colors};
+use p2_render_cpu::{HardwareKind, HardwareLight, LE_SUNLIGHT, MeshLight, MeshPlacement, Walls, actor_ambient, hardware_ambient, leaf_lights, leaves_ambient, relevant_lights, static_mesh_colors};
 use p2_bevy_assets::{lighting_colors, set_vertex_colors, to_bevy};
 use p2_vm::ObjectId;
 
+use crate::render::map_lights::MapLights;
 use crate::render::mesh_light::MeshLitMaterial;
 use crate::mesh_view::set_specular_uv;
 use crate::components::{CanvasDrawn, OVERLAY_LAYERS};
@@ -42,6 +43,22 @@ pub struct LightEnvironment {
     pub(crate) level_brightness: f32,
     pub(crate) sun: Option<(MeshLight, HardwareLight)>,
     pub(crate) terrain: Vec<crate::render::terrain_light::TerrainSector>,
+}
+
+pub(crate) fn brightest_sun<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, level_brightness: f32) -> Option<(MeshLight, HardwareLight)> {
+    let strength = |light: &HardwareLight| light.color.iter().sum::<f32>();
+    lights
+        .into_iter()
+        .filter(|light| light.effect == LE_SUNLIGHT)
+        .filter_map(|light| Some((*light, HardwareLight::new(light, level_brightness, Vector::default(), 0.0)?)))
+        // Equal suns by location: the lights come in hash order, which differs between runs.
+        .max_by(|(light_a, a), (light_b, b)| {
+            strength(a)
+                .total_cmp(&strength(b))
+                .then_with(|| light_a.location.x.total_cmp(&light_b.location.x))
+                .then_with(|| light_a.location.y.total_cmp(&light_b.location.y))
+                .then_with(|| light_a.location.z.total_cmp(&light_b.location.z))
+        })
 }
 
 #[derive(Clone, Copy)]
@@ -84,7 +101,7 @@ impl LightEnvironment {
         let mut ordered: Vec<(&i32, &MeshLight)> = lights.iter().collect();
         // Highest key first: of fully equal suns the picker keeps the last, so the lowest key wins.
         ordered.sort_unstable_by_key(|&(&key, _)| std::cmp::Reverse(key));
-        let sun = crate::render::modern::brightest_sun(ordered.into_iter().map(|(_, light)| light), level_brightness);
+        let sun = brightest_sun(ordered.into_iter().map(|(_, light)| light), level_brightness);
         Self { lights, zone_ambients, level_brightness, sun, terrain: Vec::new() }
     }
 
@@ -217,7 +234,7 @@ impl MaterialExtension for HardwareLighting {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        crate::render::modern::cast_both_sides(descriptor, key.mesh_key);
+        crate::render::shaders::cast_both_sides(descriptor, key.mesh_key);
         Ok(())
     }
 
@@ -397,6 +414,7 @@ pub(crate) struct ActorLightFrame<'w> {
     collision: Res<'w, LevelCollision>,
     time: Res<'w, Time>,
     settings: Option<Res<'w, Settings>>,
+    map_lights: Option<Res<'w, MapLights>>,
 }
 
 #[derive(SystemParam)]
@@ -412,7 +430,9 @@ struct RelightWorld<'a> {
     level: &'a StaticCollision,
     model: &'a Model,
     origin: Vec3,
-    modern: bool,
+    /// None under the retail look.
+    map_lights: Option<&'a MapLights>,
+    view_models: &'a mut Vec<(Vector, SkinnedLighting)>,
 }
 
 struct StartingMaterial<'a> {
@@ -439,14 +459,25 @@ pub(crate) fn light_actors(
     canvases: Query<(), With<CanvasDrawn>>,
     mut buffers: Local<LightActorBuffers>,
 ) {
-    let (Some(environment), Some(level)) = (frames.shown.lighting.as_deref(), frames.collision.0.as_deref()) else { return };
+    let (Some(environment), Some(level)) = (frames.shown.lighting.as_ref(), frames.collision.0.as_deref()) else { return };
     let modern = frames.settings.as_deref().is_some_and(Settings::modern_graphics);
-    let world = RelightWorld { environment, level, model: &level.model, origin: frames.shown.origin, modern };
+    let fresh;
+    // On the frame a new map shows, this runs before the resource follows it.
+    let map_lights = match frames.map_lights.as_deref().filter(|map| map.is_for(environment)) {
+        _ if !modern => None,
+        Some(map) => Some(map),
+        None => {
+            fresh = MapLights::new(environment);
+            Some(&fresh)
+        }
+    };
     let step = settle_step(frames.time.delta_secs(), LIGHT_SETTLE_SECONDS);
     let now = frames.time.elapsed_secs();
-    let LightActorBuffers { colors, hud_bases } = &mut *buffers;
+    let LightActorBuffers { colors, hud_bases, view_models } = &mut *buffers;
     colors.clear();
     hud_bases.clear();
+    view_models.clear();
+    let mut world = RelightWorld { environment, level, model: &level.model, origin: frames.shown.origin, map_lights, view_models };
     if !canvases.is_empty() {
         hud_bases.extend(
             models
@@ -469,7 +500,8 @@ pub(crate) fn light_actors(
         let vertices = matches!(lit.shading, Shading::Vertices { .. });
         let last = cache.lit.or(lit.baked);
         // Modern reads neither hardware lights nor vertex colours; the stale cache makes retail relight a moved actor.
-        if modern && !overlay && last.is_some() && (vertices || fade.material.is_some()) {
+        // One that just left the overlay layers is lit once more, which clears its material's overlay mark.
+        if modern && !overlay && !cache.view_model && last.is_some() && (vertices || fade.material.is_some()) {
             continue;
         }
         let view_model = modern && overlay;
@@ -487,7 +519,7 @@ pub(crate) fn light_actors(
             if !relight_vertices(&lit, frame, &mesh.0, &world, colors, &mut assets.meshes) {
                 continue;
             }
-        } else if let Some(handle) = relight_tint(&lit, &mut fade, still, overlay, frame, step, &world, &mut assets, StartingMaterial { standard, vertex_lit }) {
+        } else if let Some(handle) = relight_tint(&lit, &mut fade, still, overlay, frame, step, &mut world, &mut assets, StartingMaterial { standard, vertex_lit }) {
             commands
                 .entity(entity)
                 .remove::<(MeshMaterial3d<StandardMaterial>, MeshMaterial3d<MeshLitMaterial>)>()
@@ -502,6 +534,7 @@ pub(crate) fn light_actors(
 pub(crate) struct LightActorBuffers {
     colors: FxHashMap<ObjectId, Vec<[f32; 4]>>,
     hud_bases: FxHashMap<ObjectId, (Option<ActorPlace>, (f32, usize))>,
+    view_models: Vec<(Vector, SkinnedLighting)>,
 }
 
 fn attach_to_hud_base(lit: &mut ActorLit, cache: &mut ActorLightCache, mesh: &Mesh3d, (radius, max_lights): (f32, usize), meshes: &mut Assets<Mesh>) {
@@ -535,10 +568,17 @@ fn relight_vertices(lit: &ActorLit, frame: ActorPlace, target: &Handle<Mesh>, wo
 }
 
 #[expect(clippy::too_many_arguments, reason = "the parts of one actor's light state and of the frame")]
-fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, overlay: bool, frame: ActorPlace, step: f32, world: &RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
-    let target = match fade.target {
-        Some(target) if still => target,
-        _ if world.modern && overlay => view_model_lighting(world.environment, world.level, world.origin, frame.location),
+fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, overlay: bool, frame: ActorPlace, step: f32, world: &mut RelightWorld, assets: &mut ActorLightAssets, start: StartingMaterial) -> Option<Handle<ActorLitMaterial>> {
+    let target = match (fade.target, world.map_lights.filter(|_| overlay)) {
+        (Some(target), _) if still => target,
+        (_, Some(map)) => match world.view_models.iter().find(|(eye, _)| *eye == frame.location) {
+            Some(&(_, lighting)) => lighting,
+            None => {
+                let lighting = view_model_lighting(world.environment, map, world.level, world.origin, frame.location);
+                world.view_models.push((frame.location, lighting));
+                lighting
+            }
+        },
         _ => world.environment.skinned_lighting(world.model, frame.location, lit.radius, frame.glow, lit.max_lights, world.origin),
     };
     fade.target = Some(target);

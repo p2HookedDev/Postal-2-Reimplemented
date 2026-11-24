@@ -9,6 +9,27 @@ pub const SKY_LAYER: usize = 2;
 
 pub const OVERLAY_LAYERS: [usize; 4] = [1, 4, 5, 6];
 
+/// The layer the view camera adds while modern graphics are on, shared by the sun and fills so the view sees them while
+/// the sun keeps its own casters (Bevy: a light's casters are the meshes sharing a layer with it). No mesh is on it.
+/// Layers 0 to 6 are the view, overlay, sky and gamma ones (`mesh_view.rs`, `gamma.rs`).
+pub const SUN_VIEW_LAYER: usize = 7;
+
+/// The layer the modern look adds to every solid mesh in the world: the sun's casters. No camera sees it.
+pub const CASTER_LAYER: usize = 8;
+
+/// The layer it adds to moving objects only.
+pub const MOVER_LAYER: usize = 9;
+
+/// The layer it adds to every other caster: the static world.
+pub const STATIC_CASTER_LAYER: usize = 10;
+
+/// The layer it adds to a placed mesh that stands still. Its lamp shadow is drawn with the movers': the lamps' atlas
+/// holds only what can never move.
+pub const RESTING_PROP_LAYER: usize = 11;
+
+#[derive(Component)]
+pub struct SunShadow;
+
 #[derive(Component, Clone, Copy)]
 pub struct FollowActor {
     pub actor: ObjectId,

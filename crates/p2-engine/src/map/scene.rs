@@ -326,7 +326,8 @@ impl PreparedScene {
         }
         phase("actors");
         let projector_count = projectors.len();
-        let decals: Vec<_> = projectors.iter().filter_map(|projector| projector_decal(game, t, projector)).collect();
+        let mut decal_images = HashMap::new();
+        let decals: Vec<_> = projectors.iter().filter_map(|projector| projector_decal(game, t, projector, &mut decal_images)).collect();
         let emitter_count = emitters.len();
         let antiportals = antiportal_actors(game, &model, &antiportal_paths);
         missing += resolve_mesh_paths(game, id, mesh_paths, &mut placements);

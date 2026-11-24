@@ -4,6 +4,7 @@ pub mod bsp_light;
 pub mod gamma;
 pub mod lamps;
 pub mod lightmapped;
+pub mod map_lights;
 pub mod mesh_light;
 pub mod modern;
 pub mod particle_material;

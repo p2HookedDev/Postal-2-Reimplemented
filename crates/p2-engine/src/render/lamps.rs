@@ -1,24 +1,28 @@
-//! Modern lamps: a pixel is lit by the lamps listed for its cell of the map ([`cells`]), read from a book of words the
-//! shaders take as a texture. A lamp's shadow of the static world comes from one atlas drawn once a map ([`atlas`]); the
-//! strongest lamps near the eye get a sharp tile as well, redrawn as the eye moves, and the strongest point lamps are
-//! Bevy lights too, for a cube map of the movers.
+//! Modern lamps: a pixel is lit by the lamps listed for its cell of the map ([`cells`]), read from a book the shaders
+//! take as a texture. The static world's shadows come from one atlas drawn once a map ([`atlas`]), finer where a face
+//! would show its texels ([`faces`]); what moves casts into tiles of its own ([`movers`]).
 
 pub(crate) mod atlas;
 mod cells;
+mod faces;
+mod grounding;
+mod mover_pass;
+mod mover_pick;
+mod movers;
+mod tile_grid;
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::asset::{Asset, AssetEvent, AssetEventSystems, Assets, Handle, RenderAssetUsages};
-use bevy::camera::visibility::{InheritedVisibility, RenderLayers, Visibility};
-use bevy::color::Color;
+use bevy::camera::visibility::{InheritedVisibility, RenderLayers, Visibility, VisibilitySystems};
+use bevy::camera::{Camera, Projection};
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::message::{MessageCursor, Messages};
-use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, Resource, With, Without};
+use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
-use bevy::light::{PointLight, PointLightShadowMap};
 use bevy::math::Vec3;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -27,76 +31,121 @@ use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::shader::Shader;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
-use bevy::time::Time;
+use bevy::transform::TransformSystems;
 use bevy::transform::components::Transform;
 use p2_assets::Model;
 use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT, MeshLight};
 
-use crate::components::SceneView;
+use crate::components::{MOVER_LAYER, RESTING_PROP_LAYER, SUN_VIEW_LAYER, SceneView};
 use crate::display::{MODERN_LAMP_SHADOWS, Settings};
 use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::mesh_view::{SeenWithin, ZoneCulled};
 use crate::render::actor_light::{HardwareLighting, LightEnvironment};
 use crate::render::blended::{OpaqueDecals, TerrainLayer};
-use crate::render::bsp_light::{BevyLight, gpu_light, place};
+use crate::render::bsp_light::{gpu_light, place};
 use crate::render::lightmapped::BakedLight;
 use crate::render::mesh_light::DynamicLit;
-use crate::render::modern::{MOVER_LAYER, RESTING_PROP_LAYER, SUN_VIEW_LAYER, linear_light};
+use crate::render::modern::linear_light;
 use crate::render::shaders::add_shaders;
 use crate::render::terrain_material::TerrainLayers;
 use crate::shown_scene::ShownScene;
-use atlas::{ATLAS_SHADER, ATLAS_UNITS, LAMP_MARK, LampBake, SHARP_TILES, UNMAPPED, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
+use atlas::{ATLAS_SHADER, ATLAS_UNITS, LAMP_MARK, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
 use cells::{BOOK_WIDTH, CellLamp, RECORD_TEXELS, book_texels, lamp_cells};
+use faces::{Eye, FaceBook, FaceLamp, FaceSlot};
+use mover_pass::{MOVER_CASTER_SHADER, draw_mover_tiles};
+use mover_pick::pick_mover_tiles;
+pub(crate) use movers::MoverTiles;
 
-/// Where `modern.wesl`'s fade ends. A far lamp's pool covers few pixels but costs every cluster and list on its way.
+pub(crate) const LAMP_SHADOW_SPAN: &str = "lamp_shadows";
+
+/// Where `lamp_shadow.wesl`'s fade ends. A far lamp's pool covers few pixels but costs every cluster and list on its way.
 const LAMP_SEEN_RADII: f32 = 30.0;
 /// Without an atlas a lamp lights through walls and a cell lists every lamp in reach, so the cells are larger.
 const SHADOWED_CELL: f32 = 128.0;
 const UNSHADOWED_CELL: f32 = 512.0;
 /// Left to the game while the lists are made: the slowest machine it must run on has four threads.
 const THREADS_KEPT: usize = 2;
+const ITEMS_PER_BATCH: usize = 8;
 
-/// A lamp's texels in the book, as `modern.wesl` takes them apart: its place and radius, the radius negative for a spot;
-/// its colour in linear light and its atlas tile; for a spot its direction's x and y, the cone's scale with the sign of
-/// the direction's z, and the cone's offset; last its sharp tile, which the atlas pass writes.
-fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32) -> [[f32; 4]; RECORD_TEXELS] {
-    let at = Vec3::from(p2_bevy_assets::to_bevy(light.location)) + origin;
-    let [r, g, b] = linear_light(light.color(level_brightness));
-    let look = [r, g, b, (tile & (LAMP_MARK - 1)) as f32];
-    if !matches!(light.effect, LE_STATIC_SPOT | LE_SPOTLIGHT) {
-        return [[at.x, at.y, at.z, light.world_radius()], look, [0.0; 4], [0.0; 4]];
-    }
-    let along = Vec3::from(p2_bevy_assets::to_bevy(light.rotation.vector())).normalize_or_zero();
-    let scale = 1.0 / (1.0 - light.cone_sine()).max(1e-4);
-    [[at.x, at.y, at.z, -light.world_radius()], look, [along.x, along.y, scale.copysign(along.z), -light.cone_sine() * scale], [0.0; 4]]
+/// `work` on each of `count` items, on `threads` threads, the results in the items' order.
+fn on_threads<T: Send>(count: usize, threads: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    let next = AtomicUsize::new(0);
+    let mut done: Vec<(usize, T)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.max(1))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let start = next.fetch_add(ITEMS_PER_BATCH, Ordering::Relaxed);
+                        if start >= count {
+                            return done;
+                        }
+                        done.extend((start..count.min(start + ITEMS_PER_BATCH)).map(|item| (item, work(item))));
+                    }
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
+    });
+    done.sort_unstable_by_key(|&(item, _)| item);
+    done.into_iter().map(|(_, result)| result).collect()
 }
 
-const MOVER_PICK_FRAMES: u32 = 10;
-const MOVER_KEEP_FACTOR: f32 = 1.5;
-const MOVER_SHADOW_NEAR: f32 = 4.0;
+/// A lamp's texels in the book, as `lamp_shadow.wesl` reads them: place and radius (negative for a spot); linear colour
+/// and atlas tile; a spot's direction x and y, its cone's scale signed as the direction's z, and the cone's offset.
+/// The last three are written by the passes: two of detail squares, one of where its movers' tiles lie.
+fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32) -> [[f32; 4]; RECORD_TEXELS] {
+    let (at, spot) = scene_place(light, origin);
+    let [r, g, b] = linear_light(light.color(level_brightness));
+    let look = [r, g, b, (tile & (LAMP_MARK - 1)) as f32];
+    let Some(along) = spot else {
+        return [[at.x, at.y, at.z, light.world_radius()], look, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]];
+    };
+    let scale = 1.0 / (1.0 - light.cone_sine()).max(1e-4);
+    [[at.x, at.y, at.z, -light.world_radius()], look, [along.x, along.y, scale.copysign(along.z), -light.cone_sine() * scale], [0.0; 4], [0.0; 4], [0.0; 4]]
+}
+
+/// A lamp's place in the scene and, for a spot, the way it shines.
+fn scene_place(light: &MeshLight, origin: Vec3) -> (Vec3, Option<Vec3>) {
+    let spot = matches!(light.effect, LE_STATIC_SPOT | LE_SPOTLIGHT).then(|| Vec3::from(p2_bevy_assets::to_bevy(light.rotation.vector())).normalize_or_zero());
+    (Vec3::from(p2_bevy_assets::to_bevy(light.location)) + origin, spot)
+}
+
+/// The first scene camera's place, and how wide a texel may be a unit of distance away for it to cover `texel_pixels`.
+fn scene_eye(cameras: &Query<(&Transform, &Projection, &Camera), With<SceneView>>, texel_pixels: f32) -> Option<Eye> {
+    let Some((eye, Projection::Perspective(lens), camera)) = cameras.iter().next() else { return None };
+    let height = camera.physical_viewport_size().map(|size| size.y as f32).filter(|&height| height > 0.0)?;
+    Some(Eye { at: eye.translation, texel_spread: 2.0 * (0.5 * lens.fov).tan() / height * texel_pixels })
+}
+
+const FACE_PICK_FRAMES: u32 = 4;
+/// A mover's tile fades in and out over this long.
+const MOVER_FADE_SECONDS: f32 = 0.3;
 
 /// The largest texture the GPU takes, once the renderer is known.
 static MOST_ATLAS_SIDE: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// An atlas side of 0 makes no atlas: lamps light without a shadow.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct LampQuality {
     atlas_side: u32,
-    mover_cubes: usize,
-    cube_size: usize,
+    /// How many pixels of the screen a texel of a detail face may cover.
+    texel_pixels: f32,
+    /// How many texels of new detail faces one pick may ask the atlas pass to draw.
+    texels_a_pick: u32,
 }
 
 fn lamp_quality(level: u8) -> LampQuality {
-    let (atlas_side, mover_cubes, cube_size) = match level {
-        0 => (0, 0, 512),
-        1 | 2 => (4096, 0, 512),
-        3 => (8192, 2, 1024),
-        _ => (16384, 4, 1024),
+    let (atlas_side, texel_pixels, texels_a_pick) = match level {
+        0 => (0, 2.0, 0),
+        1 | 2 => (4096, 2.0, 1 << 20),
+        3 => (8192, 1.5, 1 << 21),
+        _ => (16384, 1.0, 1 << 23),
     };
-    LampQuality { atlas_side: atlas_side.min(MOST_ATLAS_SIDE.load(Ordering::Relaxed)), mover_cubes, cube_size }
+    LampQuality { atlas_side: atlas_side.min(MOST_ATLAS_SIDE.load(Ordering::Relaxed)), texel_pixels, texels_a_pick }
 }
 
-fn is_lamp(light: &MeshLight) -> bool {
+pub(crate) fn is_lamp(light: &MeshLight) -> bool {
     !light.dynamic && !light.special_lit && light.effect != LE_SUNLIGHT && light.color(1.0).iter().sum::<f32>() > 0.0
 }
 
@@ -109,45 +158,15 @@ pub(crate) fn map_lamps(environment: &LightEnvironment) -> Vec<MeshLight> {
 #[derive(Component)]
 pub struct Lamp;
 
-/// A lamp's number in the book, the sum of its colour in linear light, and its radius.
 #[derive(Component)]
 struct Placed {
     number: u32,
     strength: f32,
     range: f32,
-}
-
-/// A lamp that lights all round, which a cube map of the movers can serve.
-#[derive(Component)]
-struct PointLamp;
-
-/// One of a few Bevy lights that stay for the whole map and move from lamp to lamp, each a cube map of the movers.
-/// Their number never changes: Bevy makes its cube map texture anew, and draws every face again, when it does.
-#[derive(Component, Default)]
-struct MoverLight {
-    lamp: Option<u32>,
-    /// How far the cube map's shadows have faded in, 0 to 1.
-    fade: f32,
-    leaving: bool,
-}
-
-/// No lamp's number: what an idle mover light is marked with.
-const NO_LAMP: u32 = LAMP_MARK - 1;
-const MOVER_FADE_SECONDS: f32 = 0.3;
-
-fn mover_light() -> impl bevy::ecs::bundle::Bundle {
-    let light = PointLight {
-        color: Color::BLACK,
-        range: 1.0,
-        radius: 0.0,
-        shadow_maps_enabled: true,
-        contact_shadows_enabled: false,
-        affects_lightmapped_mesh_diffuse: false,
-        shadow_depth_bias: (LAMP_MARK + NO_LAMP) as f32,
-        shadow_map_near_z: MOVER_SHADOW_NEAR,
-        ..PointLight::default()
-    };
-    (Lamp, MoverLight::default(), light, Transform::from_translation(Vec3::splat(-1.0e6)), RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER, RESTING_PROP_LAYER]))
+    /// A spot's direction and the cosine of its cone's half angle.
+    spot: Option<(Vec3, f32)>,
+    /// How far the static world it lights lies from it through each face of its tile.
+    reach: [f32; 6],
 }
 
 #[derive(Resource, Default)]
@@ -158,18 +177,32 @@ struct LampBook {
 
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
-struct LampAtlas {
+pub struct LampAtlas {
     image: Option<Handle<Image>>,
     bake: Option<Arc<LampBake>>,
     side: u32,
     book: Option<Handle<Image>>,
-    /// The lamp each sharp tile is wanted for.
-    sharp: Vec<Option<u32>>,
+    faces: Vec<FaceSlot>,
+}
+
+impl LampAtlas {
+    pub fn has_detail_faces(&self) -> bool {
+        !self.faces.is_empty()
+    }
+}
+
+/// The squares of the atlas's last quarter, which the lamps' detail faces and the movers' tiles share. A new atlas
+/// starts them anew, under the next `made` number.
+#[derive(Resource, Default)]
+struct DetailSquares {
+    bake: usize,
+    made: u32,
+    book: Option<FaceBook>,
 }
 
 struct LampJobResult {
-    /// Each lamp with the zones it could light (none known for a lamp inside solid).
-    lamps: Vec<(MeshLight, Vec<u8>)>,
+    /// Each lamp with the zones it could light (none known for a lamp inside solid) and its reach through each face.
+    lamps: Vec<(MeshLight, Vec<u8>, [f32; 6])>,
     bake: Option<LampBake>,
     book: Vec<[f32; 4]>,
     listed: String,
@@ -182,21 +215,17 @@ struct LampJob {
     ready: Option<LampJobResult>,
 }
 
-fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, origin: Vec3, side: u32) -> LampJobResult {
+fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], origin: Vec3, side: u32) -> LampJobResult {
     let lamps = map_lamps(environment);
-    let spheres: Vec<_> = lamps.iter().map(|light| ((Vec3::from(p2_bevy_assets::to_bevy(light.location)) + origin).to_array(), light.world_radius())).collect();
-    let bake = (side > 0).then(|| lamp_bake(&world_triangles(collision, origin), &world_masked(collision, origin), &spheres));
+    let spheres: Vec<_> = lamps.iter().map(|light| (scene_place(light, origin).0.to_array(), light.world_radius())).collect();
     let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(THREADS_KEPT).max(1));
+    let bake = (side > 0).then(|| lamp_bake(triangles, &world_masked(collision, origin), &spheres, threads));
+    let records: Vec<_> = lamps.iter().enumerate().map(|(index, light)| lamp_record(light, environment.level_brightness, origin, bake.as_ref().map_or(UNMAPPED, |bake| bake.tile_bits(index)))).collect();
     let cells = {
         let drawn: Vec<_> = bake.as_ref().map_or_else(|| vec![None; lamps.len()], |bake| bake.drawn(side / ATLAS_UNITS).collect());
-        let cell_lamps: Vec<_> = spheres
-            .iter()
-            .zip(drawn)
-            .map(|(&(position, radius), drawn)| CellLamp { position, radius, face: drawn.map(|(face, _)| face), casters: drawn.map_or(&[], |(_, casters)| casters) })
-            .collect();
+        let cell_lamps: Vec<_> = records.iter().zip(drawn).map(|(record, drawn)| CellLamp::of(record, drawn.map(|(face, _)| face), drawn.map_or(&[], |(_, casters)| casters))).collect();
         lamp_cells(bake.as_ref().map_or(&[], |bake| &bake.vertices), &cell_lamps, if side > 0 { SHADOWED_CELL } else { UNSHADOWED_CELL }, threads)
     };
-    let records: Vec<_> = lamps.iter().enumerate().map(|(index, light)| lamp_record(light, environment.level_brightness, origin, bake.as_ref().map_or(UNMAPPED, |bake| bake.tile_bits(index)))).collect();
     let lit = cells.starts.windows(2).filter(|pair| pair[1] > pair[0]).count().max(1);
     let listed = format!(
         "cells of {} units, {:.1} lamps a lit cell, {} of the {} lamp and cell pairs in reach kept",
@@ -206,13 +235,16 @@ fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, origin:
         cells.in_reach
     );
     let book = book_texels(&cells, &records);
-    LampJobResult { lamps: lamps.into_iter().map(|light| (light, p2_collision::light_zones(&collision.model, light.location, light.world_radius()))).collect(), bake, book, listed }
+    let zones = on_threads(lamps.len(), threads, |lamp| p2_collision::light_zones(&collision.model, lamps[lamp].location, lamps[lamp].world_radius()));
+    let lamps = lamps.into_iter().zip(zones).zip(cells.reach).map(|((light, zones), reach)| (light, zones, reach)).collect();
+    LampJobResult { lamps, bake, book, listed }
 }
 
 /// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them, and Bevy asks for all a GPU offers.
+/// Eight more rows after the texels hold the movers' tile grid, their tiles and their capsules in two grids.
 fn book_image(texels: &[[f32; 4]]) -> Image {
-    let rows = texels.len().div_ceil(BOOK_WIDTH).max(1);
-    let mut bytes: Vec<u8> = texels.iter().flatten().flat_map(|value| value.to_le_bytes()).collect();
+    let rows = texels.len().div_ceil(BOOK_WIDTH).max(1) + 8;
+    let mut bytes = bytes_of(texels);
     bytes.resize(rows * BOOK_WIDTH * 16, 0);
     Image::new(Extent3d { width: BOOK_WIDTH as u32, height: rows as u32, depth_or_array_layers: 1 }, TextureDimension::D2, bytes, TextureFormat::Rgba32Float, RenderAssetUsages::RENDER_WORLD)
 }
@@ -258,10 +290,12 @@ pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCo
         return None;
     }
     let side = lamp_quality((levels & 255) as u8).atlas_side;
-    Some(Arc::new(LightBakes {
-        lamps: Prebaked::new(side, lamp_job(environment, collision, origin, side)),
-        probes: crate::render::probes::prebake(environment, collision, origin, (levels >> 8 & 255) as u8),
-    }))
+    let world = world_triangles(collision, origin);
+    let (lamps, probes) = std::thread::scope(|scope| {
+        let probes = scope.spawn(|| crate::render::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8));
+        (lamp_job(environment, collision, &world.triangles, origin, side), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+    });
+    Some(Arc::new(LightBakes { lamps: Prebaked::new(side, lamps), probes }))
 }
 
 /// A lamp that could light no zone the eye can see costs nothing: zone culling hides it, as it hides meshes. A lamp
@@ -273,16 +307,14 @@ fn lamp_zone(light: &MeshLight, model: &Model, lit_zones: &[u8]) -> ZoneCulled {
     ZoneCulled { zones, min, max, only_from: None }
 }
 
-fn spawn_lamp(commands: &mut Commands, index: usize, light: &MeshLight, environment: &LightEnvironment, origin: Vec3, zone: ZoneCulled) {
+fn spawn_lamp(commands: &mut Commands, index: usize, light: &MeshLight, reach: [f32; 6], environment: &LightEnvironment, origin: Vec3, zone: ZoneCulled) {
     let Some(gpu) = gpu_light(light, environment.level_brightness) else { return };
     let at = place(light, &gpu, origin);
     let [r, g, b] = linear_light(light.color(environment.level_brightness));
-    let placed = Placed { number: index as u32, strength: r + g + b, range: light.world_radius() };
+    let spot = scene_place(light, origin).1.map(|along| (along, light.cone_sine()));
+    let placed = Placed { number: index as u32, strength: r + g + b, range: light.world_radius(), spot, reach };
     let seen = (Lamp, placed, at, Visibility::default(), RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER, RESTING_PROP_LAYER]), zone, SeenWithin(light.world_radius() * LAMP_SEEN_RADII));
-    match gpu {
-        BevyLight::Point(_) => commands.spawn((seen, PointLamp)),
-        BevyLight::Spot(_) => commands.spawn(seen),
-    };
+    commands.spawn(seen);
 }
 
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
@@ -296,16 +328,9 @@ fn follow_lamps(
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     lamps: Query<Entity, With<Lamp>>,
-    cube_map: Option<ResMut<PointLightShadowMap>>,
 ) {
     let modern = settings.modern_graphics();
     let quality = lamp_quality(settings.modern_level(MODERN_LAMP_SHADOWS));
-    if let Some(mut cube_map) = cube_map {
-        let size = if modern { quality.cube_size } else { PointLightShadowMap::default().size };
-        if cube_map.size != size {
-            cube_map.size = size;
-        }
-    }
     let environment = shown.as_deref().and_then(|shown| shown.lighting.clone()).filter(|_| modern);
     let collision = level.as_ref().and_then(|level| level.0.clone());
     let key = environment.as_ref().zip(collision.as_ref()).map(|(environment, collision)| (Arc::as_ptr(environment).addr(), Arc::as_ptr(collision).addr(), quality.atlas_side));
@@ -315,7 +340,7 @@ fn follow_lamps(
         job.ready = None;
         atlas.bake = None;
         atlas.book = None;
-        atlas.sharp = vec![None; SHARP_TILES];
+        atlas.faces.clear();
         book.image = None;
         let side = key.map_or(0, |(_, _, side)| side);
         if atlas.side != side {
@@ -329,7 +354,7 @@ fn follow_lamps(
             let origin = shown.origin;
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.lamps.take(&side));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, origin, side) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, origin, side) }));
             }
         }
     }
@@ -338,15 +363,12 @@ fn follow_lamps(
     }
     let (Some(environment), Some(shown), Some(model)) = (environment, shown.as_deref(), level.as_ref().and_then(|level| level.model())) else { return };
     let Some(LampJobResult { lamps: map, bake, book: texels, listed }) = job.ready.take().or_else(|| job.task.take().map(block_on)) else { return };
-    for (index, (light, zones)) in map.iter().enumerate() {
-        spawn_lamp(&mut commands, index, light, &environment, shown.origin, lamp_zone(light, model, zones));
-    }
-    for _ in 0..quality.mover_cubes {
-        commands.spawn(mover_light());
+    for (index, (light, zones, reach)) in map.iter().enumerate() {
+        spawn_lamp(&mut commands, index, light, *reach, &environment, shown.origin, lamp_zone(light, model, zones));
     }
     if !map.is_empty() {
-        let zones: usize = map.iter().map(|(_, zones)| zones.len()).sum();
-        let unknown = map.iter().filter(|(_, zones)| zones.is_empty()).count();
+        let zones: usize = map.iter().map(|(_, zones, _)| zones.len()).sum();
+        let unknown = map.iter().filter(|(_, zones, _)| zones.is_empty()).count();
         bevy::log::info!("modern lamps: {}, {:.1} zones a lamp on average, {unknown} inside solid with no zone known; {listed}", map.len(), zones as f32 / map.len() as f32);
     }
     book.image = Some(images.add(book_image(&texels)));
@@ -415,9 +437,11 @@ fn follow_atlas_binding<A: MaterialAtlas, E: MaterialExtension>(
     events: Option<Res<Messages<AssetEvent<ExtendedMaterial<StandardMaterial, E>>>>>,
     mut cursor: Local<MessageCursor<AssetEvent<ExtendedMaterial<StandardMaterial, E>>>>,
     mut known: Local<usize>,
+    mut bound: Local<Option<Handle<Image>>>,
 ) {
+    let moved = atlas.is_changed() && atlas.wanted() != *bound;
     let Some(mut materials) = materials else { return };
-    if !atlas.is_changed() && materials.len() == *known && !material_added(events.as_deref(), &mut cursor) {
+    if !moved && materials.len() == *known && !material_added(events.as_deref(), &mut cursor) {
         return;
     }
     *known = materials.len();
@@ -428,6 +452,7 @@ fn follow_atlas_binding<A: MaterialAtlas, E: MaterialExtension>(
             A::SLOT.of_mut(&mut material.base).clone_from(&wanted);
         }
     }
+    *bound = wanted;
 }
 
 /// Before the frame's asset events go out, so a new material reaches the GPU once, already bound.
@@ -446,110 +471,77 @@ pub(crate) fn follow_atlas<A: MaterialAtlas>(app: &mut App) {
     );
 }
 
-/// In the lamp's ranges from the eye: a lamp's pool, and a figure's shadow in it, is seen from well outside its range.
-const MOVER_PICK_RANGES: f32 = 3.0;
-
-fn mover_score(strength: f32, range: f32, distance: f32) -> f32 {
-    let x = (distance / (range * MOVER_PICK_RANGES)).min(1.0);
-    strength * (1.0 - x * x * (3.0 - 2.0 * x))
-}
-
-/// The lamps that matter most at the eye take the sharp tiles; one that holds a tile keeps it against a slightly
-/// stronger newcomer and while its zone is out of sight, and keeps its place among the tiles so it is not redrawn. The
-/// first tiles are the large ones, so they go to the strongest newcomers.
-fn pick_sharp_tiles(mut frames: Local<u32>, mut atlas: ResMut<LampAtlas>, cameras: Query<&Transform, With<SceneView>>, lamps: Query<(&Transform, &Placed, &InheritedVisibility), With<Lamp>>) {
-    *frames += 1;
-    if *frames < MOVER_PICK_FRAMES || atlas.bake.is_none() {
-        return;
-    }
-    *frames = 0;
-    let Some(eye) = cameras.iter().next().map(|camera| camera.translation) else { return };
-    let mut scored: Vec<(u32, f32)> = lamps
-        .iter()
-        .filter(|(_, placed, shown)| shown.get() || atlas.sharp.contains(&Some(placed.number)))
-        .map(|(transform, placed, _)| {
-            let score = mover_score(placed.strength, placed.range, transform.translation.distance(eye));
-            (placed.number, if atlas.sharp.contains(&Some(placed.number)) { score * MOVER_KEEP_FACTOR } else { score })
-        })
-        .filter(|&(_, score)| score > 0.0)
-        .collect();
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-    scored.truncate(SHARP_TILES);
-    let mut sharp: Vec<Option<u32>> = atlas.sharp.iter().map(|held| held.filter(|lamp| scored.iter().any(|(picked, _)| picked == lamp))).collect();
-    for (lamp, _) in scored {
-        if !sharp.contains(&Some(lamp))
-            && let Some(free) = sharp.iter_mut().find(|held| held.is_none())
-        {
-            *free = Some(lamp);
-        }
-    }
-    if atlas.sharp != sharp {
-        atlas.sharp = sharp;
-    }
-}
-
-/// The strongest point lamps at the eye hold the mover lights. A light leaves a lamp by fading its shadows out, then
-/// takes the next lamp that waits and fades in, so no shadow of a person appears or goes at once. Spot lamps keep no
-/// mover map: Bevy sizes the sun's shadow texture by the spot maps in view too.
-fn pick_mover_cubes(
-    time: Res<Time>,
+/// The faces of the lamps in sight that would show their texels get a square each, those nearest the eye first. A
+/// face keeps its square while its lamp's zone is out of sight, so walking back draws nothing again. Lamps out of sight
+/// in a zone one portal from the eye's get squares too, sized as seen from that portal, so a room is drawn before it
+/// is entered.
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
+fn pick_faces(
     mut frames: Local<u32>,
-    cameras: Query<&Transform, With<SceneView>>,
-    lamps: Query<(&Transform, &Placed, &InheritedVisibility), (With<PointLamp>, Without<MoverLight>)>,
-    mut lights: Query<(&mut MoverLight, &mut PointLight, &mut Transform), Without<SceneView>>,
+    mut squares: ResMut<DetailSquares>,
+    settings: Res<Settings>,
+    mut atlas: ResMut<LampAtlas>,
+    scene: Option<Res<ShownScene>>,
+    level: Option<Res<LevelCollision>>,
+    mut portals: Local<(usize, Vec<([u8; 2], Vec3)>)>,
+    mut doors: Local<Vec<(u8, Vec3)>>,
+    cameras: Query<(&Transform, &Projection, &Camera), With<SceneView>>,
+    lamps: Query<(&Transform, &Placed, &InheritedVisibility, &ZoneCulled), With<Lamp>>,
 ) {
-    let step = time.delta_secs() / MOVER_FADE_SECONDS;
-    for (mut mover, mut light, _) in &mut lights {
-        let fade = if mover.leaving || mover.lamp.is_none() { (mover.fade - step).max(0.0) } else { (mover.fade + step).min(1.0) };
-        if fade != mover.fade {
-            mover.fade = fade;
-            light.radius = fade;
+    let Some(bake) = atlas.bake.clone() else {
+        if squares.book.is_some() {
+            squares.book = None;
         }
-        if mover.leaving && fade == 0.0 {
-            mover.lamp = None;
-            mover.leaving = false;
-            light.shadow_depth_bias = (LAMP_MARK + NO_LAMP) as f32;
-        }
+        return;
+    };
+    let key = Arc::as_ptr(&bake).addr();
+    if squares.book.is_none() || squares.bake != key {
+        *squares = DetailSquares { bake: key, made: squares.made + 1, book: Some(FaceBook::new(atlas.side)) };
     }
     *frames += 1;
-    if *frames < MOVER_PICK_FRAMES {
+    if *frames < FACE_PICK_FRAMES {
         return;
     }
     *frames = 0;
-    let Some(eye) = cameras.iter().next().map(|camera| camera.translation) else { return };
-    let held: Vec<u32> = lights.iter().filter_map(|(mover, ..)| mover.lamp).collect();
-    let mut scored: Vec<(u32, f32, Vec3, f32)> = lamps
-        .iter()
-        .filter(|(_, placed, shown)| shown.get() || held.contains(&placed.number))
-        .map(|(transform, placed, _)| {
-            let score = mover_score(placed.strength, placed.range, transform.translation.distance(eye));
-            (placed.number, if held.contains(&placed.number) { score * MOVER_KEEP_FACTOR } else { score }, transform.translation, placed.range)
-        })
-        .filter(|&(_, score, ..)| score > 0.0)
-        .collect();
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-    scored.truncate(lights.iter().count());
-    for (mut mover, ..) in &mut lights {
-        if let Some(lamp) = mover.lamp {
-            let wanted = scored.iter().any(|&(number, ..)| number == lamp);
-            if mover.leaving == wanted {
-                mover.leaving = !wanted;
-            }
+    let quality = lamp_quality(settings.modern_level(MODERN_LAMP_SHADOWS));
+    let Some(eye) = scene_eye(&cameras, quality.texel_pixels) else { return };
+    let Some(faces) = squares.book.as_mut() else { return };
+    let unit = atlas.side / ATLAS_UNITS;
+    doors.clear();
+    if let (Some(scene), Some(collision)) = (scene.as_deref(), level.as_ref().and_then(|level| level.0.as_ref())) {
+        let model = &collision.model;
+        let key = Arc::as_ptr(collision).addr();
+        if portals.0 != key {
+            let middles = model
+                .nodes
+                .iter()
+                .filter(|node| node.zones[0] != node.zones[1] && model.surfaces.get(node.surface).is_some_and(|surface| surface.poly_flags & p2_assets::poly_flags::PORTAL != 0))
+                .filter_map(|node| {
+                    let corners = model.verts.iter().skip(node.vert_pool).take(usize::from(node.num_vertices)).filter_map(|vert| model.points.get(vert.point));
+                    let (sum, count) = corners.fold((Vec3::ZERO, 0.0), |(sum, count), &corner| (sum + Vec3::from(corner), count + 1.0));
+                    (count > 0.0).then(|| (node.zones, sum / count))
+                });
+            *portals = (key, middles.collect());
+        }
+        let own = p2_collision::point_zone(model, p2_bevy_assets::to_bevy(eye.at - scene.origin).into());
+        if own != 0 {
+            doors.extend(portals.1.iter().filter_map(|&([a, b], middle)| {
+                let other = if a == own { b } else if b == own { a } else { return None };
+                Some((other, Vec3::from(p2_bevy_assets::to_bevy(middle)) + scene.origin))
+            }));
         }
     }
-    let mut waiting = scored.iter().filter(|(number, ..)| !held.contains(number));
-    for (mut mover, mut light, mut transform) in &mut lights {
-        if mover.lamp.is_some() {
-            continue;
-        }
-        let Some(&(number, _, at, range)) = waiting.next() else { break };
-        mover.lamp = Some(number);
-        mover.fade = 0.0;
-        light.radius = 0.0;
-        light.range = range;
-        // The shaders find a cube map's lamp by its number above the mark.
-        light.shadow_depth_bias = (LAMP_MARK + number) as f32;
-        transform.translation = at;
+    let in_sight = lamps.iter().filter(|(_, _, shown, _)| shown.get()).filter_map(|(at, placed, _, _)| {
+        Some(FaceLamp { number: placed.number, at: at.translation, spot: placed.spot, reach: placed.reach, plain_face: bake.plain_face(placed.number as usize, unit)?, ahead: None })
+    });
+    let ahead = lamps.iter().filter(|(_, _, shown, _)| !shown.get()).filter_map(|(at, placed, _, zone)| {
+        let &(_, portal) = doors.iter().filter(|(other, _)| zone.zones.contains(other)).min_by(|a, b| a.1.distance_squared(at.translation).total_cmp(&b.1.distance_squared(at.translation)))?;
+        Some(FaceLamp { number: placed.number, at: at.translation, spot: placed.spot, reach: placed.reach, plain_face: bake.plain_face(placed.number as usize, unit)?, ahead: Some(portal) })
+    });
+    faces.pick(&eye, in_sight.chain(ahead), quality.texels_a_pick);
+    let slots = faces.slots();
+    if atlas.faces != slots {
+        atlas.faces = slots;
     }
 }
 
@@ -559,16 +551,24 @@ impl Plugin for LampsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LampAtlas>();
         app.init_resource::<LampBook>();
-        app.add_systems(Update, (follow_lamps, pick_mover_cubes, pick_sharp_tiles).chain());
+        app.init_resource::<DetailSquares>();
+        app.init_resource::<MoverTiles>();
+        app.add_systems(Update, (follow_lamps, pick_faces).chain());
+        // After this frame's places and bounds are known: a tile aimed by last frame's trails its mover.
+        app.add_systems(PostUpdate, pick_mover_tiles.after(TransformSystems::Propagate).after(VisibilitySystems::CalculateBounds));
         follow_atlas::<LampAtlas>(app);
         follow_atlas::<LampBook>(app);
-        app.add_plugins(ExtractResourcePlugin::<LampAtlas>::default());
+        app.add_plugins((ExtractResourcePlugin::<LampAtlas>::default(), ExtractResourcePlugin::<MoverTiles>::default()));
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        add_shaders(app, [(ATLAS_SHADER, Shader::from_wesl(include_str!("lamp_atlas.wesl"), "p2_engine/lamp_atlas.wesl"))]);
+        add_shaders(app, [
+            (ATLAS_SHADER, Shader::from_wesl(include_str!("lamp_atlas.wesl"), "p2_engine/lamp_atlas.wesl")),
+            (MOVER_CASTER_SHADER, Shader::from_wesl(include_str!("mover_caster.wesl"), "p2_engine/mover_caster.wesl")),
+        ]);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
-            render.add_systems(Render, draw_lamp_atlas.in_set(RenderSystems::PrepareResources));
+            render.init_resource::<PlainTilesDrawn>();
+            render.add_systems(Render, (draw_lamp_atlas, draw_mover_tiles).chain().in_set(RenderSystems::PrepareResources));
         }
     }
 
@@ -584,9 +584,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_lamp_level_sets_atlas_and_mover_cubes() {
-        let table: Vec<(u32, usize, usize)> = (0..=4).map(lamp_quality).map(|q| (q.atlas_side, q.mover_cubes, q.cube_size)).collect();
-        assert_eq!(table, [(0, 0, 512), (4096, 0, 512), (4096, 0, 512), (8192, 2, 1024), (16384, 4, 1024)]);
+    fn the_lamp_level_sets_the_atlas_side() {
+        let table: Vec<u32> = (0..=4).map(lamp_quality).map(|quality| quality.atlas_side).collect();
+        assert_eq!(table, [0, 4096, 4096, 8192, 16384]);
         assert_eq!(lamp_quality(9), lamp_quality(4));
     }
 
@@ -617,8 +617,8 @@ mod tests {
     #[test]
     fn a_book_is_whole_rows_of_float_texels() {
         let image = book_image(&[[1.0, 2.0, 3.0, 4.0]]);
-        assert_eq!((image.width() as usize, image.height()), (BOOK_WIDTH, 1));
-        assert_eq!(image.data.as_ref().map(|data| (data.len(), data[..8].to_vec())), Some((BOOK_WIDTH * 16, [1.0f32.to_le_bytes(), 2.0f32.to_le_bytes()].concat())));
+        assert_eq!((image.width() as usize, image.height()), (BOOK_WIDTH, 9));
+        assert_eq!(image.data.as_ref().map(|data| (data.len(), data[..8].to_vec())), Some((9 * BOOK_WIDTH * 16, [1.0f32.to_le_bytes(), 2.0f32.to_le_bytes()].concat())));
     }
 
     #[test]

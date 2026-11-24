@@ -1,6 +1,5 @@
 // Skinned actors. Retail: lit like D3D mesh lighting, per pixel: ambient plus hardware lights, clamped to 1, doubled in
-// display space. Modern: the world's shared light where the view has the sun. No generated relief: its per-triangle frame
-// made polygons visible.
+// display space. Modern: the world's shared light where the view has the sun, without generated relief.
 
 import bevy_pbr::render::{
     pbr_functions::alpha_discard,
@@ -11,10 +10,12 @@ import package::p2_engine::dynamic_light::dynamic_light;
 import package::p2_engine::projector::{actor_target, cluster_ranges, project};
 import package::p2_engine::color::to_linear;
 import package::p2_engine::modern::{
-    Around, ROOFED_SKY, SKY_FACING_FADE, SUN_FACING_FADE, actor_highlight, actor_sun, add_lamp, allows_gloss, ambient_occlusion,
-    has_sun, is_modern, lamp_light, lamp_shown, lit_surface, modern_surface, no_lamps, sky_from_ambient, sun_seen, sun_visibility,
-    surface_of, to_eye, with_light,
+    Around, actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, lit_surface, modern_surface, sky_from_ambient,
+    surface_of, with_light,
 };
+import package::p2_engine::modern_base::to_eye;
+import package::p2_engine::sun_shadow::{ROOFED_SKY, SKY_FACING_FADE, SUN_FACING_FADE, sun_found, sun_index, sun_seen_from, sun_visibility};
+import package::p2_engine::lamp_shadow::{add_lamp, lamp_light, lamp_shown, no_lamps};
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 import package::p2_engine::tone_curve::pbr_neutral;
 @if(BINDLESS)
@@ -142,15 +143,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var out: FragmentOutput;
     var lit = vec3(0.0);
     let overlay = (*shading).overlay != 0u;
-    if modern && (has_sun() || overlay) {
+    let sun_id = sun_index();
+    let sun_on = sun_found(sun_id);
+    if modern && (sun_on || overlay) {
         let position = in.world_position.xyz;
         let darken = (*shading).layers.blend.x != 0.0;
         let gloss = allows_gloss(flag) && !darken;
         let occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
         let color = select(base.rgb, vec3(1.0), darken);
         var surface = vec3(0.0);
-        if has_sun() {
-            let seen = sun_seen(in.world_position, normal, pbr_input.frag_coord.xy);
+        if sun_on {
+            let seen = sun_seen_from(sun_id, in.world_position, normal, pbr_input.frag_coord.xy);
             let material_surface = surface_of(0.0);
             let lamps = lamp_light(in, position, normal, pbr_input.frag_coord.xy, ranges, gloss, material_surface);
             surface = modern_surface(color, position, normal, seen, occlusion, gloss, lamps, material_surface);
@@ -173,7 +176,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         var sun = 1.0;
         if modern {
             light *= ambient_occlusion(pbr_input.frag_coord.xy);
-            sun = sun_visibility(in.world_position, normal, pbr_input.frag_coord.xy);
+            sun = sun_visibility(sun_id, in.world_position, normal, pbr_input.frag_coord.xy);
         }
         for (var i = 0u; i < count; i++) {
             var one = light_at((*lighting).lights[i], in.world_position.xyz, normal);

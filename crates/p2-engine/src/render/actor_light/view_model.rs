@@ -6,17 +6,19 @@ use p2_assets::poly_flags::FAKE_BACKDROP;
 use p2_bevy_assets::to_bevy;
 use p2_collision::{Sides, terrain_line_check};
 use p2_math::Vector;
-use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, LE_SUNLIGHT, MAX_HARDWARE_LIGHTS, MeshLight};
+use p2_render_cpu::{LE_SPOTLIGHT, LE_STATIC_SPOT, MAX_HARDWARE_LIGHTS, MeshLight};
 
 use super::{HardwareLightUniform, LightEnvironment, SkinnedLighting};
 use crate::level_collision::StaticCollision;
-use crate::render::modern::{fill_suns, linear_light, sun_color};
+use crate::render::lamps::is_lamp;
+use crate::render::map_lights::MapLights;
+use crate::render::modern::linear_light;
 
 /// Its visibility rides in the colour's alpha, the share of open sky above the eye in the attenuation's x.
-pub(super) const SUN_KIND: u32 = 2;
+const SUN_KIND: u32 = 2;
 /// The attenuation holds the cone's cosine, 1 on a spot, and the source's radius.
-pub(super) const LAMP_KIND: u32 = 3;
-pub(super) const FILL_KIND: u32 = 4;
+const LAMP_KIND: u32 = 3;
+const FILL_KIND: u32 = 4;
 
 const SUN_TRACE: f32 = 200_000.0;
 /// In world units around the eye, about a weapon's size: a shadow's edge dims it in steps as it passes.
@@ -24,7 +26,7 @@ const SUN_SPREAD: f32 = 24.0;
 const LAMP_CHECKS: usize = 12;
 /// A lamp's fitting often holds it inside its own collision, so the trace stops this short of it.
 const LAMP_CLEARANCE: f32 = 16.0;
-/// Matches `lamps.rs`.
+/// Matches `lamp_shadow.wesl`.
 const LAMP_SOURCE_SHARE: f32 = 0.08;
 
 /// A fake backdrop is the sky, however solid the level is behind it. Terrain and static meshes stop the ray before it.
@@ -62,7 +64,7 @@ fn nearest_lamps<'a>(environment: &'a LightEnvironment, level: &StaticCollision,
     let mut lamps: Vec<(f32, &MeshLight)> = environment
         .lights
         .values()
-        .filter(|light| !light.dynamic && !light.special_lit && light.effect != LE_SUNLIGHT)
+        .filter(|light| is_lamp(light))
         .filter_map(|light| {
             let to_light = light.location - eye;
             let toward = to_light / to_light.dot(to_light).sqrt().max(1.0);
@@ -75,12 +77,12 @@ fn nearest_lamps<'a>(environment: &'a LightEnvironment, level: &StaticCollision,
 }
 
 /// Colours in linear light and the ambient in display light, as the world's lights carry them.
-pub fn view_model_lighting(environment: &LightEnvironment, level: &StaticCollision, origin: Vec3, eye: Vector) -> SkinnedLighting {
+pub fn view_model_lighting(environment: &LightEnvironment, map: &MapLights, level: &StaticCollision, origin: Vec3, eye: Vector) -> SkinnedLighting {
     let zone = p2_collision::point_zone(&level.model, eye);
     let ambient = environment.zone_ambients.get(usize::from(zone)).copied().unwrap_or_default();
     let brightness = environment.level_brightness;
-    let sun = environment.sun.as_ref().map(|(_, hardware)| {
-        let [r, g, b] = sun_color(environment);
+    let sun = map.sun.as_ref().map(|(_, hardware)| {
+        let [r, g, b] = map.sun_color;
         HardwareLightUniform {
             direction: Vec3::from(to_bevy(hardware.direction)),
             kind: SUN_KIND,
@@ -89,7 +91,7 @@ pub fn view_model_lighting(environment: &LightEnvironment, level: &StaticCollisi
             ..Default::default()
         }
     });
-    let fills = fill_suns(environment, environment.sun.as_ref()).into_iter().map(|(direction, [r, g, b])| HardwareLightUniform {
+    let fills = map.fills.iter().map(|&(direction, [r, g, b])| HardwareLightUniform {
         direction,
         kind: FILL_KIND,
         color: Vec4::new(r, g, b, 0.0),
@@ -122,7 +124,9 @@ mod tests {
     use p2_assets::Model;
     use p2_collision::{BspHulls, MeshCollision, MeshSet};
     use p2_math::Rotator;
+    use p2_render_cpu::LE_SUNLIGHT;
     use rustc_hash::FxHashMap;
+    use std::sync::Arc;
 
     const DOWN: Rotator = Rotator { pitch: -16384, yaw: 0, roll: 0 };
 
@@ -149,10 +153,10 @@ mod tests {
         MeshLight { location, radius: 8.0, brightness: 255.0, ..MeshLight::default() }
     }
 
-    fn environment(extra: Vec<MeshLight>) -> LightEnvironment {
+    fn environment(extra: Vec<MeshLight>) -> Arc<LightEnvironment> {
         let sun = MeshLight { effect: LE_SUNLIGHT, rotation: DOWN, brightness: 128.0, ..MeshLight::default() };
         let lights = FxHashMap::from_iter([sun].into_iter().chain(extra).enumerate().map(|(key, light)| (key as i32, light)));
-        LightEnvironment::new(lights, vec![[0.1, 0.2, 0.3]], 1.0)
+        Arc::new(LightEnvironment::new(lights, vec![[0.1, 0.2, 0.3]], 1.0))
     }
 
     fn kinds(lighting: &SkinnedLighting) -> Vec<u32> {
@@ -164,7 +168,7 @@ mod tests {
         let fill = MeshLight { effect: LE_SUNLIGHT, rotation: Rotator { pitch: -8192, yaw: 0, roll: 0 }, brightness: 64.0, ..MeshLight::default() };
         let special = MeshLight { special_lit: true, ..lamp(Vector::new(120.0, 0.0, 0.0)) };
         let environment = environment(vec![fill, lamp(Vector::new(100.0, 0.0, 0.0)), lamp(Vector::new(5000.0, 0.0, 0.0)), special]);
-        let lighting = view_model_lighting(&environment, &level(Vec::new()), Vec3::ZERO, Vector::ZERO);
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO);
         assert_eq!(kinds(&lighting), [SUN_KIND, FILL_KIND, LAMP_KIND]);
         assert_eq!(lighting.ambient, Vec3::new(0.1, 0.2, 0.3));
         let sun = lighting.lights[0];
@@ -177,7 +181,7 @@ mod tests {
     #[test]
     fn a_roof_takes_the_sun_the_sky_and_the_lamps_above_it() {
         let environment = environment(vec![lamp(Vector::new(0.0, 0.0, 200.0)), lamp(Vector::new(0.0, 0.0, 50.0))]);
-        let lighting = view_model_lighting(&environment, &level(vec![roof()]), Vec3::ZERO, Vector::ZERO);
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(vec![roof()]), Vec3::ZERO, Vector::ZERO);
         assert_eq!(kinds(&lighting), [SUN_KIND, LAMP_KIND]);
         assert_eq!((lighting.lights[0].color.w, lighting.lights[0].attenuation.x), (0.0, 0.0));
         assert_eq!(lighting.lights[1].position.y, 50.0);
@@ -186,7 +190,8 @@ mod tests {
     #[test]
     fn a_spot_lamp_carries_its_cone() {
         let spot = MeshLight { effect: LE_SPOTLIGHT, cone: 64, rotation: DOWN, ..lamp(Vector::new(0.0, 0.0, 50.0)) };
-        let lighting = view_model_lighting(&environment(vec![spot]), &level(Vec::new()), Vec3::ZERO, Vector::ZERO);
+        let environment = environment(vec![spot]);
+        let lighting = view_model_lighting(&environment, &MapLights::new(&environment), &level(Vec::new()), Vec3::ZERO, Vector::ZERO);
         let lamp = lighting.lights[1];
         assert_eq!((lamp.attenuation.x, lamp.attenuation.y), (0.75, 1.0));
         assert!(lamp.direction.y < -0.99);

@@ -127,18 +127,6 @@ fn light(effect: p2_render_cpu::LightEffect, brightness: f32, x: f32) -> MeshLig
 }
 
 #[test]
-fn the_brightest_sun_is_picked_and_none_without_sun() {
-    let lights = [light(p2_render_cpu::LightEffect(0), 255.0, 1.0), light(LE_SUNLIGHT, 64.0, 2.0), light(LE_SUNLIGHT, 200.0, 3.0), light(LE_SUNLIGHT, 100.0, 4.0)];
-    let (picked, sun) = brightest_sun(&lights, 1.0).expect("a sun");
-    assert_eq!(<[f32; 3]>::from(picked.location), [3.0, 0.0, 0.0]);
-    assert_eq!(sun.kind, p2_render_cpu::HardwareKind::Directional);
-    let baked = picked.color(1.0);
-    assert!((sun.color[0] - 0.875 * baked[0]).abs() < 1e-6);
-    assert!(brightest_sun(&lights[..1], 1.0).is_none());
-    assert!(brightest_sun(&[] as &[MeshLight], 1.0).is_none());
-}
-
-#[test]
 fn casters_carry_the_caster_layers_only_in_the_world() {
     let world = RenderLayers::layer(0);
     let still = RenderLayers::from_layers(&[0, CASTER_LAYER, STATIC_CASTER_LAYER]);
@@ -189,6 +177,30 @@ fn every_solid_world_mesh_casts_and_movers_stand_apart() {
     world.insert_resource(settings("False"));
     world.run_system(system).unwrap();
     assert!(!on(&world, prop, CASTER_LAYER) && !on(&world, floor, CASTER_LAYER));
+}
+
+#[test]
+fn a_mover_keeps_its_layer_for_the_lamps_with_the_suns_shadows_off() {
+    let settings = |sun: &'static str, lamps: &'static str| {
+        Settings::read(move |query| match query {
+            MODERN_GRAPHICS => "True".to_owned(),
+            MODERN_SHADOWS => sun.to_owned(),
+            MODERN_LAMP_SHADOWS => lamps.to_owned(),
+            _ => String::new(),
+        })
+    };
+    let mut world = World::new();
+    world.insert_resource(settings("0", "3"));
+    world.init_resource::<SunCacheStale>();
+    let follow = FollowActor { actor: p2_vm::ObjectId::from_index(1), scale: [1.0; 3].into(), pre_pivot: [0.0; 3].into(), skeletal: None };
+    let prop = world.spawn((Mesh3d::default(), follow)).id();
+    let system = world.register_system(sun_casters);
+    world.run_system(system).unwrap();
+    let moves = |world: &World| world.get::<RenderLayers>(prop).is_some_and(|layers| layers.intersects(&RenderLayers::layer(MOVER_LAYER)));
+    assert!(moves(&world));
+    world.insert_resource(settings("0", "0"));
+    world.run_system(system).unwrap();
+    assert!(!moves(&world));
 }
 
 #[test]

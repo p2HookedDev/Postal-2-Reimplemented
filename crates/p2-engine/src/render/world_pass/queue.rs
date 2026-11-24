@@ -1,5 +1,4 @@
 use super::*;
-use crate::render::sun_cache::{CachedSunLevel, SunCacheStale};
 
 /// Unique per bucket, so no two buckets share a bin even with the same pipeline and slabs.
 fn draw_key(bucket: usize) -> UntypedAssetId {
@@ -166,7 +165,7 @@ fn queue_shadows(world: &mut World, lights: &mut QueryState<(&ExtractedView, &Li
         .iter(world)
         .filter_map(|(view, light)| {
             let LightEntity::Directional { light_entity, .. } = light else { return None };
-            let drawn = casts && world.get::<CachedSunLevel>(*light_entity).is_some_and(CachedSunLevel::drawn_now);
+            let drawn = casts && world.get::<DrawsStaticWorld>(*light_entity).is_some_and(|draws| draws.0);
             Some((view.retained_view_entity, drawn))
         })
         .collect();
@@ -199,7 +198,7 @@ fn queue_shadows(world: &mut World, lights: &mut QueryState<(&ExtractedView, &Li
 
 /// A level that redrew without the static world holds only the props' shadows until it is drawn again.
 fn redraw_levels(world: &World) {
-    if let Some(stale) = world.get_resource::<SunCacheStale>() {
+    if let Some(stale) = world.get_resource::<StaticShadowsStale>() {
         stale.mark();
     }
 }
@@ -218,7 +217,7 @@ pub(super) fn queue_world(
     world.resource_mut::<ModifiedMeshes>().0.clear();
     if world.resource::<WorldPass>().built.is_none() {
         let level_draws = lights.iter(world).any(|(_, light)| {
-            matches!(light, LightEntity::Directional { light_entity, .. } if world.get::<CachedSunLevel>(*light_entity).is_some_and(CachedSunLevel::drawn_now))
+            matches!(light, LightEntity::Directional { light_entity, .. } if world.get::<DrawsStaticWorld>(*light_entity).is_some_and(|draws| draws.0))
         });
         if level_draws && world.get_resource::<WorldDraws>().is_some_and(|draws| !draws.sections.is_empty()) {
             redraw_levels(world);

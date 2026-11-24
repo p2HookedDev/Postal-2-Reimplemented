@@ -1,6 +1,6 @@
 //! Modern graphics: the world's cameras draw linear light, bloom included, into a half-float image; one full-screen quad
 //! draws it through the tone curve into the frame the HUD's actors, canvas layers and the gamma ramp then draw on. The
-//! same quad adds the sun's rays, the colour settings, the vignette, the colour fringe and the film grain.
+//! same quad adds the sun's rays, the colour settings, the vignette and the colour fringe.
 
 use bevy::app::{App, Plugin, Startup, Update};
 use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -21,15 +21,13 @@ use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::shader::{Shader, ShaderRef};
 use bevy::shape::Rectangle;
 use bevy::sprite_render::{Material2d, Material2dPlugin, MeshMaterial2d};
-use bevy::time::Time;
 use bevy::transform::components::GlobalTransform;
 use bevy::window::{PrimaryWindow, Window};
 
-use crate::components::{CanvasLayer, SceneView};
+use crate::components::{CanvasLayer, SceneView, SunShadow};
 use crate::display::{
-    MODERN_CHROMATIC_ABERRATION, MODERN_CONTRAST, MODERN_EXPOSURE, MODERN_FILM_GRAIN, MODERN_GOD_RAYS, MODERN_SATURATION, MODERN_VIGNETTE, NEUTRAL_LEVEL, Settings,
+    MODERN_CHROMATIC_ABERRATION, MODERN_CONTRAST, MODERN_EXPOSURE, MODERN_GOD_RAYS, MODERN_SATURATION, MODERN_VIGNETTE, NEUTRAL_LEVEL, Settings,
 };
-use crate::render::modern::SunShadow;
 use crate::render::shaders::{add_libraries, add_shaders};
 
 const TONE_SHADER: Handle<Shader> = uuid_handle!("6d1f3a92-5b0e-4c87-a2d4-8e7c19b05f3a");
@@ -83,14 +81,12 @@ impl Default for ToneEffects {
 
 const RAYS_PER_LEVEL: f32 = 0.08;
 const VIGNETTE_PER_LEVEL: f32 = 0.05;
-const GRAIN_PER_LEVEL: f32 = 0.012;
 const FRINGE_PER_LEVEL: f32 = 0.0005;
 const SATURATION_PER_LEVEL: f32 = 0.1;
 const CONTRAST_PER_LEVEL: f32 = 0.05;
 const EXPOSURE_STOPS_PER_LEVEL: f32 = 0.2;
 /// The rays fade in as the view turns towards the sun, over these cosines of the angle between them.
 const RAYS_FACING: (f32, f32) = (0.1, 0.45);
-const GRAIN_TIME_WRAP: f32 = 64.0;
 
 /// Where the sun stands on the screen, in uv, and how much of its rays the view's turn leaves. `None` behind the eye.
 pub(crate) fn sun_on_screen(clip_from_world: Mat4, forward: Vec3, to_sun: Vec3) -> Option<(Vec2, f32)> {
@@ -104,7 +100,6 @@ pub(crate) fn sun_on_screen(clip_from_world: Mat4, forward: Vec3, to_sun: Vec3) 
 
 fn follow_effects(
     settings: Res<Settings>,
-    time: Res<Time>,
     tone: Res<ToneFrame>,
     window: Single<&Window, With<PrimaryWindow>>,
     views: Query<(&Camera, &GlobalTransform), With<SceneView>>,
@@ -126,11 +121,8 @@ fn follow_effects(
             1.0 + around_neutral(MODERN_CONTRAST) * CONTRAST_PER_LEVEL,
             level(MODERN_VIGNETTE) * VIGNETTE_PER_LEVEL,
         ),
-        lens: Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, level(MODERN_FILM_GRAIN) * GRAIN_PER_LEVEL, 0.0, 0.0),
+        lens: Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, 0.0, 0.0, 0.0),
     };
-    if wanted.lens.y > 0.0 {
-        wanted.lens.z = time.elapsed_secs() % GRAIN_TIME_WRAP;
-    }
     let rays = level(MODERN_GOD_RAYS) * RAYS_PER_LEVEL;
     let view = views.iter().find(|(camera, _)| camera.is_active);
     let sun = suns.iter().map(|(light, place)| (light.color.to_linear(), place)).find(|(color, _)| color.red + color.green + color.blue > 0.0);

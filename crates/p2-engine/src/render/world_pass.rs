@@ -4,6 +4,7 @@
 use std::any::TypeId;
 use std::num::NonZero;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::app::{App, Plugin};
 use bevy::asset::uuid::Uuid;
@@ -77,7 +78,7 @@ use draw::{DrawWorld, DrawWorldDepthOnly, DrawWorldPrepass};
 
 /// In Unreal units: small enough to cull well, large enough to keep draws few.
 const CELL: f32 = 2048.0;
-/// The camera and the four cascades of one sun.
+/// More than a frame takes: the camera and the one cached sun level it draws.
 const MAX_VIEWS: usize = 5;
 const VIEW_STRIDE: u64 = 256;
 const VIEW_SIZE: u64 = 144;
@@ -232,6 +233,23 @@ impl WorldTargets<'_, '_> {
 #[derive(Component, Clone, Default, ExtractComponent)]
 #[extract_app(RenderApp)]
 pub struct WorldCamera;
+
+/// On a directional light: whether its shadow views draw the static world this frame. Extracted by whoever sets it.
+#[derive(Component, Clone, Copy, Default, ExtractComponent)]
+#[extract_app(RenderApp)]
+pub struct DrawsStaticWorld(pub bool);
+
+/// Raised when every shadow view that holds the static world must draw it again. Shared by both worlds; whoever keeps
+/// those views inits and extracts it.
+#[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(RenderApp)]
+pub struct StaticShadowsStale(pub Arc<AtomicBool>);
+
+impl StaticShadowsStale {
+    pub fn mark(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
 
 #[derive(Component)]
 pub(crate) struct WorldBucketIndex(usize);

@@ -20,9 +20,8 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::window::{PrimaryWindow, Window, WindowResolution};
 use p2_engine::display::{GAMMA, MODERN_GRAPHICS, Settings};
-use p2_engine::mesh_view::{OVERLAY_LAYERS, SceneView};
+use p2_engine::mesh_view::{OVERLAY_LAYERS, SceneView, SunShadow};
 use p2_engine::render::gamma::GammaPlugin;
-use p2_engine::render::modern::SunShadow;
 
 const SIZE: u32 = 64;
 

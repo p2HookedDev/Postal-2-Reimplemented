@@ -29,15 +29,16 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::time::{Real, Time};
 use bevy::transform::components::{GlobalTransform, Transform};
 
-use crate::components::SceneView;
+use crate::components::{STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow};
 use crate::display::{MODERN_SHADOW_DISTANCE, MODERN_SHADOWS, Settings};
-use crate::render::modern::{STATIC_CASTER_LAYER, SUN_VIEW_LAYER, StillProp, SunShadow, shadow_reach, sun_quality};
+use crate::render::modern::{StillProp, shadow_reach, sun_quality};
+use crate::render::world_pass::{DrawsStaticWorld, StaticShadowsStale};
 
 /// The level looking straight down, which tells a room from open sky. Not a power of two, so it never shares a size with
 /// another level and the two never redraw on one frame.
 const SKY_HALF_WIDTH: f32 = 24576.0;
 
-/// What `modern.wesl` tells the sky level by; one cascade never reads its overlap.
+/// What `sun_shadow.wesl` tells the sky level by; one cascade never reads its overlap.
 const SKY_OVERLAP: f32 = 0.5;
 
 /// Redraws asked for closer than this merge into one, unless the texture is gone and nothing else can show.
@@ -74,20 +75,16 @@ impl SunCacheStale {
 
 #[derive(Component, Clone, ExtractComponent)]
 #[extract_app(RenderApp)]
+#[require(DrawsStaticWorld)]
 pub struct CachedSunLevel {
     half_width: f32,
     center: Option<Vec3>,
     due: bool,
-    drawn_now: bool,
 }
 
 impl CachedSunLevel {
     pub fn new(half_width: f32) -> Self {
-        Self { half_width, center: None, due: true, drawn_now: false }
-    }
-
-    pub fn drawn_now(&self) -> bool {
-        self.drawn_now
+        Self { half_width, center: None, due: true }
     }
 }
 
@@ -101,9 +98,9 @@ pub fn level_config(half_width: f32) -> CascadeShadowConfig {
 
 /// Outermost first, each a quarter of the one before. Powers of two keep a level's moves whole texels, so its shadows do
 /// not shimmer when it redraws.
-fn level_half_widths(settings: &Settings) -> Vec<f32> {
+fn level_half_widths(settings: &Settings) -> impl Iterator<Item = f32> {
     let outermost = shadow_reach(settings.modern_level(MODERN_SHADOW_DISTANCE));
-    std::iter::successors(Some(outermost), |width| Some(width / 4.0)).take(sun_quality(settings.modern_level(MODERN_SHADOWS)).1).collect()
+    std::iter::successors(Some(outermost), |width| Some(width / 4.0)).take(sun_quality(settings.modern_level(MODERN_SHADOWS)).1)
 }
 
 fn snapped(eye: Vec3, half_width: f32) -> Vec3 {
@@ -155,12 +152,14 @@ impl RedrawRequests {
 }
 
 /// At most one level draws a frame, the finest that is due; the others keep their layer.
+#[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn place_levels(
     stale: Res<SunCacheStale>,
+    world_stale: Res<StaticShadowsStale>,
     map: Res<DirectionalLightShadowMap>,
     cameras: Query<(Entity, &GlobalTransform, &Camera), With<SceneView>>,
     casters: Query<&RenderLayers, (With<Mesh3d>, Changed<InheritedVisibility>, Without<CachedSunLevel>, Without<StillProp>)>,
-    mut levels: Query<(&mut CachedSunLevel, &mut Cascades, &GlobalTransform, &mut RenderLayers)>,
+    mut levels: Query<(&mut CachedSunLevel, &mut DrawsStaticWorld, &mut Cascades, &GlobalTransform, &mut RenderLayers)>,
     time: Res<Time<Real>>,
     mut asked: Local<RedrawRequests>,
 ) {
@@ -168,12 +167,13 @@ fn place_levels(
     if casters.iter().any(|layers| layers.intersects(&static_casters)) {
         stale.mark();
     }
-    asked.whole |= stale.whole.swap(false, Ordering::Relaxed);
+    // Before the requests are taken: without a camera no level can answer them.
+    let Some((camera, eye, _)) = cameras.iter().find(|(_, _, camera)| camera.is_active) else { return };
+    asked.whole |= stale.whole.swap(false, Ordering::Relaxed) | world_stale.0.swap(false, Ordering::Relaxed);
     asked.near |= stale.near.swap(false, Ordering::Relaxed);
     let (redraw_all, redraw_near) = asked.step(stale.lost.swap(false, Ordering::Relaxed), time.elapsed_secs());
-    let Some((camera, eye, _)) = cameras.iter().find(|(_, _, camera)| camera.is_active) else { return };
     let world_from_light = |light: &GlobalTransform| Mat4::from_quat(light.rotation());
-    for (mut level, _, light, _) in &mut levels {
+    for (mut level, _, _, light, _) in &mut levels {
         let eye = world_from_light(light).transpose().transform_point3(eye.translation());
         let half_width = level.half_width;
         let moved = level.center.is_none_or(|center| needs_move(center, eye, half_width));
@@ -183,14 +183,14 @@ fn place_levels(
         level.due |= redraw_all || moved || (redraw_near && half_width <= NEAR_REDRAW_HALF_WIDTH);
     }
     let finest = levels.iter().filter(|(level, ..)| level.due).map(|(level, ..)| level.half_width).min_by(f32::total_cmp);
-    for (mut level, mut cascades, light, mut layers) in &mut levels {
+    for (mut level, mut draws, mut cascades, light, mut layers) in &mut levels {
         let drawn_now = finest == Some(level.half_width);
         let world_from_light = world_from_light(light);
         if drawn_now {
             level.center = Some(snapped(world_from_light.transpose().transform_point3(eye.translation()), level.half_width));
             level.due = false;
         }
-        level.drawn_now = drawn_now;
+        draws.0 = drawn_now;
         let idle = RenderLayers::layer(SUN_VIEW_LAYER);
         layers.set_if_neq(if drawn_now { idle.with(STATIC_CASTER_LAYER) } else { idle });
         cascades.cascades.clear();
@@ -207,21 +207,25 @@ pub(crate) fn follow_sun(
     suns: Query<(&DirectionalLight, &Transform), With<SunShadow>>,
     mut levels: Query<(Entity, &CachedSunLevel, &mut Transform), Without<SunShadow>>,
     mut commands: Commands,
+    mut wanted: Local<Vec<f32>>,
+    mut have: Local<Vec<f32>>,
 ) {
     let place = suns.iter().find(|(light, _)| light.shadow_maps_enabled).map(|(_, place)| *place);
-    let mut wanted = place.map(|_| level_half_widths(&settings)).unwrap_or_default();
+    wanted.clear();
     if place.is_some() {
+        wanted.extend(level_half_widths(&settings));
         wanted.push(SKY_HALF_WIDTH);
     }
     wanted.sort_by(f32::total_cmp);
-    let mut have: Vec<f32> = levels.iter().map(|(_, level, _)| level.half_width).collect();
+    have.clear();
+    have.extend(levels.iter().map(|(_, level, _)| level.half_width));
     have.sort_by(f32::total_cmp);
-    if have != wanted {
+    if *have != *wanted {
         for (entity, ..) in &levels {
             commands.entity(entity).despawn();
         }
         let idle = RenderLayers::layer(SUN_VIEW_LAYER);
-        for &half_width in &wanted {
+        for &half_width in wanted.iter() {
             let (config, place) = if half_width == SKY_HALF_WIDTH {
                 (CascadeShadowConfig { overlap_proportion: SKY_OVERLAP, ..level_config(half_width) }, Transform::IDENTITY.looking_to(Vec3::NEG_Y, Vec3::Z))
             } else {
@@ -244,6 +248,7 @@ struct CacheWatch {
     pipelines_waiting: bool,
     texture: Option<TextureId>,
     passes: Vec<String>,
+    scratch: Vec<String>,
 }
 
 /// The layers survive between frames only if Bevy hands back the same texture and the same layer order, which it does while
@@ -251,7 +256,7 @@ struct CacheWatch {
 fn keep_cached_levels(
     stale: Res<SunCacheStale>,
     cache: Res<PipelineCache>,
-    levels: Query<&CachedSunLevel>,
+    levels: Query<&DrawsStaticWorld, With<CachedSunLevel>>,
     bindings: Query<&ViewShadowBindings>,
     mut views: Query<(&LightEntity, &mut ShadowView)>,
     mut watch: Local<CacheWatch>,
@@ -260,18 +265,24 @@ fn keep_cached_levels(
     if std::mem::replace(&mut watch.pipelines_waiting, waiting) && !waiting {
         stale.mark();
     }
-    let mut passes = Vec::new();
+    let CacheWatch { passes, scratch, .. } = &mut *watch;
+    let mut count = 0;
     for (light, mut view) in &mut views {
         let LightEntity::Directional { light_entity, .. } = light else { continue };
-        let Ok(level) = levels.get(*light_entity) else { continue };
-        passes.push(view.pass_name.clone());
-        if !level.drawn_now {
+        let Ok(draws) = levels.get(*light_entity) else { continue };
+        match scratch.get_mut(count) {
+            Some(name) => name.clone_from(&view.pass_name),
+            None => scratch.push(view.pass_name.clone()),
+        }
+        count += 1;
+        if !draws.0 {
             view.depth_attachment = DepthStencilViewAttachment::new(view.depth_attachment.depth_stencil_views.clone(), None, None);
         }
     }
-    passes.sort_unstable();
-    if watch.passes != passes {
-        watch.passes = passes;
+    scratch.truncate(count);
+    scratch.sort_unstable();
+    if passes != scratch {
+        std::mem::swap(passes, scratch);
         stale.mark();
     }
     let texture = bindings.iter().next().map(|binding| binding.directional_light_depth_texture.id());
@@ -280,18 +291,17 @@ fn keep_cached_levels(
     }
 }
 
-/// A shadow view with nothing to draw still costs a render pass, and a lamp's cube face a whole run of the 3D schedule.
-/// Its layer needs one clear after its last draw, which a pass without draws does (a cached level's pass loads instead);
-/// from then on the layer is already right. A sun's view leaves its camera's list, a lamp's face loses the mark that
-/// makes Bevy run it, which Bevy sets again each frame.
+/// A shadow view with nothing to draw still costs a render pass. Its layer needs one clear after its last draw, which a
+/// pass without draws does (a cached level's pass loads instead); from then on the view is skipped.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn skip_idle_shadow_views(
     mut commands: Commands,
-    levels: Query<&CachedSunLevel>,
+    levels: Query<&DrawsStaticWorld, With<CachedSunLevel>>,
     phases: Res<ViewBinnedRenderPhases<Shadow>>,
     views: Query<(Entity, &ExtractedView, &ShadowView, &LightEntity)>,
     mut cameras: Query<(&mut ViewLightEntities, &ViewShadowBindings)>,
     mut cleared: Local<HashMap<RetainedViewEntity, String>>,
+    mut seen: Local<HashMap<RetainedViewEntity, String>>,
     mut texture: Local<Option<(TextureId, TextureId)>>,
     mut idle: Local<HashSet<Entity>>,
     mut turns: Local<FaceTurns>,
@@ -302,18 +312,26 @@ fn skip_idle_shadow_views(
         turns.drawn.clear();
     }
     idle.clear();
-    let mut seen = HashMap::with_capacity(cleared.len());
     for (entity, view, shadow, light) in &views {
-        let redrawing = matches!(light, LightEntity::Directional { light_entity, .. } if levels.get(*light_entity).is_ok_and(CachedSunLevel::drawn_now));
+        let redrawing = matches!(light, LightEntity::Directional { light_entity, .. } if levels.get(*light_entity).is_ok_and(|draws| draws.0));
         if redrawing || !phases.get(&view.retained_view_entity).is_none_or(BinnedRenderPhase::is_empty) {
             continue;
         }
-        if cleared.get(&view.retained_view_entity).is_some_and(|name| *name == shadow.pass_name) {
-            idle.insert(entity);
-        }
-        seen.insert(view.retained_view_entity, shadow.pass_name.clone());
+        let name = match cleared.remove(&view.retained_view_entity) {
+            Some(name) if name == shadow.pass_name => {
+                idle.insert(entity);
+                name
+            }
+            Some(mut name) => {
+                name.clone_from(&shadow.pass_name);
+                name
+            }
+            None => shadow.pass_name.clone(),
+        };
+        seen.insert(view.retained_view_entity, name);
     }
-    *cleared = seen;
+    std::mem::swap(&mut *cleared, &mut *seen);
+    seen.clear();
     for (mut lights, _) in &mut cameras {
         lights.lights.retain(|light| !idle.contains(light));
     }
@@ -363,10 +381,16 @@ pub struct SunCachePlugin;
 impl Plugin for SunCachePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SunCacheStale>();
+        app.init_resource::<StaticShadowsStale>();
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        app.add_plugins((ExtractResourcePlugin::<SunCacheStale>::default(), ExtractComponentPlugin::<CachedSunLevel>::default()));
+        app.add_plugins((
+            ExtractResourcePlugin::<SunCacheStale>::default(),
+            ExtractResourcePlugin::<StaticShadowsStale>::default(),
+            ExtractComponentPlugin::<CachedSunLevel>::default(),
+            ExtractComponentPlugin::<DrawsStaticWorld>::default(),
+        ));
         app.add_systems(
             PostUpdate,
             place_levels.after(SimulationLightSystems::UpdateDirectionalLightCascades).before(SimulationLightSystems::UpdateLightFrusta),
@@ -433,8 +457,8 @@ mod tests {
                 _ => String::new(),
             })
         };
-        assert_eq!(level_half_widths(&settings("1", "1")), [2048.0, 512.0, 128.0]);
-        assert_eq!(level_half_widths(&settings("4", "5")), [32768.0, 8192.0, 2048.0, 512.0]);
+        assert_eq!(level_half_widths(&settings("1", "1")).collect::<Vec<_>>(), [2048.0, 512.0, 128.0]);
+        assert_eq!(level_half_widths(&settings("4", "5")).collect::<Vec<_>>(), [32768.0, 8192.0, 2048.0, 512.0]);
         for level in 1..=4 {
             let (size, count) = sun_quality(level);
             for distance in 1..=5 {

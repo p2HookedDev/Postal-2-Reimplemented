@@ -104,7 +104,6 @@ pub const QUERIES: &[&str] = &[
     MODERN_TERRAIN_DETAIL,
     MODERN_GOD_RAYS,
     MODERN_VIGNETTE,
-    MODERN_FILM_GRAIN,
     MODERN_CHROMATIC_ABERRATION,
     MODERN_SATURATION,
     MODERN_CONTRAST,
@@ -151,7 +150,6 @@ pub const MODERN_SPECULAR: &str = "ini:Engine.Engine.RenderDevice ModernSpecular
 pub const MODERN_TERRAIN_DETAIL: &str = "ini:Engine.Engine.RenderDevice ModernTerrainDetail";
 pub const MODERN_GOD_RAYS: &str = "ini:Engine.Engine.RenderDevice ModernGodRays";
 pub const MODERN_VIGNETTE: &str = "ini:Engine.Engine.RenderDevice ModernVignette";
-pub const MODERN_FILM_GRAIN: &str = "ini:Engine.Engine.RenderDevice ModernFilmGrain";
 pub const MODERN_CHROMATIC_ABERRATION: &str = "ini:Engine.Engine.RenderDevice ModernChromaticAberration";
 pub const MODERN_SATURATION: &str = "ini:Engine.Engine.RenderDevice ModernSaturation";
 pub const MODERN_CONTRAST: &str = "ini:Engine.Engine.RenderDevice ModernContrast";
@@ -161,7 +159,7 @@ pub const MODERN_EXPOSURE: &str = "ini:Engine.Engine.RenderDevice ModernExposure
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 16] = [
+const LEVELS: [(&str, u8, u8); 15] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
@@ -173,7 +171,6 @@ const LEVELS: [(&str, u8, u8); 16] = [
     (MODERN_SHARPEN, 4, 10),
     (MODERN_GOD_RAYS, 5, 10),
     (MODERN_VIGNETTE, 2, 10),
-    (MODERN_FILM_GRAIN, 0, 10),
     (MODERN_CHROMATIC_ABERRATION, 0, 10),
     (MODERN_SATURATION, NEUTRAL_LEVEL, 10),
     (MODERN_CONTRAST, NEUTRAL_LEVEL, 10),
@@ -383,7 +380,7 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 0, 5, 5, 5]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
         assert_eq!(with("True", MODERN_BLOOM, "7").modern_level(MODERN_BLOOM), 7);
         assert_eq!(with("True", MODERN_BLOOM, "0").modern_level(MODERN_BLOOM), 0);

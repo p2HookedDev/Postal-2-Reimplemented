@@ -21,11 +21,11 @@ use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use p2_assets::Model;
 use p2_collision::{BspHulls, MeshSet};
 use p2_engine::display::{MODERN_GRAPHICS, Settings};
-use p2_engine::mesh_view::{LevelAlbedos, LevelCollision, OVERLAY_LAYERS, ShownScene, StaticCollision};
+use p2_engine::mesh_view::{CASTER_LAYER, LevelAlbedos, LevelCollision, OVERLAY_LAYERS, SUN_VIEW_LAYER, ShownScene, StaticCollision};
 use p2_engine::render::actor_light::{ActorLightPlugin, ActorLitMaterial, HardwareLighting, LightEnvironment, SkinnedLighting, view_model_lighting};
 use p2_engine::render::lamps::LampsPlugin;
+use p2_engine::render::map_lights::MapLights;
 use p2_engine::render::mesh_light::{DynamicLit, MeshLightPlugin, MeshLitMaterial};
-use p2_engine::render::modern::{CASTER_LAYER, SUN_VIEW_LAYER};
 use p2_math::{Rotator, Vector};
 use p2_render_cpu::{LE_SUNLIGHT, MeshLight};
 use rustc_hash::FxHashMap;
@@ -34,10 +34,10 @@ const SIZE: u32 = 32;
 const CLEAR: u8 = 43;
 const ZONE: f32 = 0.05;
 
-fn light_at_the_eye() -> (SkinnedLighting, LightEnvironment, StaticCollision) {
+fn light_at_the_eye() -> (SkinnedLighting, Arc<LightEnvironment>, StaticCollision) {
     let sun = MeshLight { effect: LE_SUNLIGHT, rotation: Rotator { pitch: -16384, yaw: 0, roll: 0 }, brightness: 40.0, ..MeshLight::default() };
     let lamp = MeshLight { location: Vector::new(0.0, 0.0, 10.0), radius: 0.0, brightness: 60.0, ..MeshLight::default() };
-    let environment = LightEnvironment::new(FxHashMap::from_iter([(0, sun), (1, lamp)]), vec![[ZONE; 3]], 1.0);
+    let environment = Arc::new(LightEnvironment::new(FxHashMap::from_iter([(0, sun), (1, lamp)]), vec![[ZONE; 3]], 1.0));
     let level = StaticCollision {
         model: Model::default(),
         hulls: BspHulls::default(),
@@ -48,7 +48,7 @@ fn light_at_the_eye() -> (SkinnedLighting, LightEnvironment, StaticCollision) {
         lamp_masked: Vec::new(),
         albedos: LevelAlbedos::default(),
     };
-    (view_model_lighting(&environment, &level, Vec3::ZERO, Vector::ZERO), environment, level)
+    (view_model_lighting(&environment, &MapLights::new(&environment), &level, Vec3::ZERO, Vector::ZERO), environment, level)
 }
 
 fn target(app: &mut App, frames: &Arc<Mutex<Vec<Vec<u8>>>>) -> Handle<Image> {
@@ -83,7 +83,7 @@ fn world_and_weapon(sun_blocked: bool, overlay_field: u32) -> (u8, u8) {
     app.add_plugins((MeshLightPlugin, ActorLightPlugin, LampsPlugin));
     app.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
     let mut shown = ShownScene::default();
-    shown.lighting = Some(Arc::new(environment));
+    shown.lighting = Some(environment);
     app.insert_resource(shown);
     app.insert_resource(LevelCollision(Some(Arc::new(level))));
     app.finish();

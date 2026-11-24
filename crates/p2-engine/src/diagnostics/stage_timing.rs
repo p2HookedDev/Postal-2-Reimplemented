@@ -5,7 +5,8 @@ pub struct StageTimingPlugin;
 
 const MAIN_STAGES: [&str; 6] = ["transforms", "bounds and frusta", "camera culling", "clusters", "cascades and frusta", "light visibility"];
 const UPDATE_STAGES: [&str; 2] = ["whole update", "wait for render thread and extract"];
-const RENDER_STAGES: [&str; 7] = ["wait for main and extract", "assets and views", "specialize", "queue", "sort and prepare", "bind groups", "render"];
+/// The window's next frame is taken in the view stage, which waits there while the GPU is behind.
+const RENDER_STAGES: [&str; 8] = ["wait for main and extract", "assets and views", "specialize", "views and the wait for a frame", "queue", "sort and prepare", "bind groups", "render"];
 const GRAPH_STAGES: [&str; 4] = ["all cameras", "finish encoders and submit", "gpu timers", "last submit and present"];
 const PASS_STAGES: [&str; 3] = ["shadows and prepass", "main", "post"];
 
@@ -268,8 +269,8 @@ fn log_scene_counts(
     settings: Option<Res<Settings>>,
     time: Res<Time<Real>>,
     (meshes, culled): (Query<(&ViewVisibility, Has<FollowActor>, Has<FollowBone>), With<Mesh3d>>, Query<&InheritedVisibility, Without<NoCpuCulling>>),
-    cameras: Query<&Camera>,
-    windows: Query<&Window>,
+    (cameras, windows): (Query<&Camera>, Query<&Window>),
+    tiles: Option<Res<crate::render::lamps::MoverTiles>>,
     mut since: Local<f32>,
 ) {
     if let Some(settings) = settings.as_ref().filter(|settings| settings.is_changed()) {
@@ -298,9 +299,10 @@ fn log_scene_counts(
     let window = windows.iter().next().map_or([0, 0], |window| [window.physical_width(), window.physical_height()]);
     let [opaque, masked, prepass, masked_prepass, shadow, blended, views, shadow_views_drawing] = *clocks.draw_groups.lock().unwrap_or_else(PoisonError::into_inner);
     let movers = meshes.iter().filter(|(_, actor, bone)| *actor || *bone);
+    let (tiles, most_tiles) = tiles.map_or((0, 0), |tiles| tiles.counts());
     let (movers_all, movers_shown) = movers.fold((0, 0), |(all, on), (visible, ..)| (all + 1, on + usize::from(shown(visible))));
     bevy::log::info!(
-        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; culling walks {} entities a camera, {} not hidden; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}",
+        "scene: {} mesh entities, {} of them shown, movers {movers_all} with {movers_shown} shown; culling walks {} entities a camera, {} not hidden; {views} views, {shadow_views_drawing} shadow views with something to draw; {} cameras active; window {} x {}; draw groups: opaque {opaque}, masked {masked}, prepass {prepass}, masked prepass {masked_prepass}, shadow {shadow}, blended {blended}; mover tiles {tiles}, {most_tiles} on the lamp with the most",
         meshes.iter().len(),
         meshes.iter().filter(|(visible, ..)| shown(visible)).count(),
         culled.iter().len(),
@@ -310,6 +312,9 @@ fn log_scene_counts(
         window[1],
     );
 }
+
+/// A pass that draws only in some frames keeps its old samples; past this age they say nothing of now.
+const STALE_PASS: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A pass runs once per camera and each run adds a sample, so a path's time per frame is its samples' rate over the frame rate.
 fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, mut since: Local<f32>, mut frames: Local<u32>) {
@@ -326,11 +331,15 @@ fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, m
             let (first, last) = (diagnostic.measurements().next()?, diagnostic.measurements().last()?);
             let seconds = last.time.duration_since(first.time).as_secs_f64();
             let spent: f64 = diagnostic.measurements().skip(1).map(|sample| sample.value).sum();
-            (seconds > 0.0).then(|| (spent / seconds / frames_per_second, name.to_owned()))
+            (seconds > 0.0 && last.time.elapsed() < STALE_PASS).then(|| (spent / seconds / frames_per_second, name.to_owned()))
         })
         .collect();
     list.sort_by(|a, b| b.0.total_cmp(&a.0));
-    list.truncate(14);
+    let mut rank = 0;
+    list.retain(|(_, name)| {
+        rank += 1;
+        rank <= 14 || name == crate::render::lamps::LAMP_SHADOW_SPAN
+    });
     let list: Vec<String> = list.iter().map(|(ms, name)| format!("{name} {ms:.2}")).collect();
     bevy::log::info!("gpu ms per frame by pass, nested passes overlap: {}", list.join(", "));
 }
@@ -395,10 +404,11 @@ impl Plugin for StageTimingPlugin {
                 render_mark::<0>.before(Stage::ExtractCommands),
                 render_mark::<1>.after(Stage::CreateViews).before(Stage::Specialize),
                 render_mark::<2>.after(Stage::Specialize).before(Stage::PrepareViews),
-                render_mark::<3>.after(Stage::QueueSweep).before(Stage::PhaseSort),
-                render_mark::<4>.after(Stage::PrepareResourcesFlush).before(Stage::PrepareBindGroups),
-                render_mark::<5>.after(Stage::PrepareBindGroups).before(Stage::Render),
-                render_mark::<6>.after(Stage::Render).before(Stage::Cleanup),
+                render_mark::<3>.after(Stage::PrepareViews).before(Stage::Queue),
+                render_mark::<4>.after(Stage::QueueSweep).before(Stage::PhaseSort),
+                render_mark::<5>.after(Stage::PrepareResourcesFlush).before(Stage::PrepareBindGroups),
+                render_mark::<6>.after(Stage::PrepareBindGroups).before(Stage::Render),
+                render_mark::<7>.after(Stage::Render).before(Stage::Cleanup),
                 graph_mark::<3>.after(Stage::Render).before(Stage::Cleanup),
                 render_mark::<-1>.after(Stage::PostCleanup),
             ),

@@ -1,8 +1,7 @@
 import package::p2_engine::tone_curve::pbr_neutral;
 
 // `sun`: its place on the screen in uv, the rays' strength (0 without rays) and the frame's width over its height.
-// `tint`: the rays' colour. `grade`: exposure, saturation, contrast, vignette. `lens`: colour fringe in uv at the corner,
-// grain strength, a time that changes each frame.
+// `tint`: the rays' colour. `grade`: exposure, saturation, contrast, vignette. `lens`: colour fringe in uv at the corner.
 struct Post {
     sun: vec4<f32>,
     tint: vec4<f32>,
@@ -90,9 +89,5 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     color = shown * shown;
     let corner = saturate((across(from_middle) - VIGNETTE_FROM) / (across(vec2(0.5)) - VIGNETTE_FROM));
     color *= 1.0 - post.grade.w * corner * corner;
-    let grain = post.lens.y;
-    if grain > 0.0 {
-        color = max(color + (noise(in.position.xy + vec2(post.lens.z * 61.0, post.lens.z * 37.0)) - 0.5) * grain * sqrt(max(grey, 0.02)), vec3(0.0));
-    }
     return vec4<f32>(color, 1.0);
 }

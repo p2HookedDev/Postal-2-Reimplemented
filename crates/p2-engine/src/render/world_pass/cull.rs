@@ -1,5 +1,4 @@
 use super::*;
-use crate::render::sun_cache::CachedSunLevel;
 
 #[derive(Clone, Copy)]
 pub(super) enum Planes {
@@ -36,7 +35,7 @@ pub(super) fn prepare_world_views(
     queue: Res<RenderQueue>,
     cameras: Query<(Entity, &ExtractedView, Option<&WorldCullSlot>), With<WorldCamera>>,
     lights: Query<(Entity, &ExtractedView, &LightEntity, Option<&WorldCullSlot>), With<ShadowView>>,
-    levels: Query<&CachedSunLevel>,
+    levels: Query<&DrawsStaticWorld>,
     seen_zones: Option<Res<WorldSeenZones>>,
     casts: Option<Res<WorldCasts>>,
 ) {
@@ -65,7 +64,7 @@ pub(super) fn prepare_world_views(
     if casts.is_some_and(|casts| casts.0) {
         for (entity, view, light, had) in &lights {
             if let LightEntity::Directional { light_entity, .. } = light
-                && levels.get(*light_entity).is_ok_and(CachedSunLevel::drawn_now)
+                && levels.get(*light_entity).is_ok_and(|draws| draws.0)
             {
                 add(entity, view_planes(clip_from_world(view), Planes::Sides), Chunks::CastersOnly, [u32::MAX; 8], had);
             }

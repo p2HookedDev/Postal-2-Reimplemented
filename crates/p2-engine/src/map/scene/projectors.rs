@@ -1,7 +1,14 @@
 use super::*;
 
-pub(crate) fn projector_decal(game: &mut Game, t: &mut impl SceneAssets, projector: &ProjectorActor) -> Option<(Handle<Image>, Transform, u32)> {
-    let (image, size, final_blend) = projector_image(game, |image| t.add_image(image), &projector.texture)?;
+/// `images` holds each texture's image, shared by every decal of that texture: all the decal images in view go into one
+/// bind group, which holds 1024 at most.
+pub(crate) fn projector_decal(
+    game: &mut Game,
+    t: &mut impl SceneAssets,
+    projector: &ProjectorActor,
+    images: &mut HashMap<String, Option<(Handle<Image>, Vec2, Option<FinalBlend>)>>,
+) -> Option<(Handle<Image>, Transform, u32)> {
+    let (image, size, final_blend) = images.entry(projector.texture.clone()).or_insert_with(|| projector_image(game, |image| t.add_image(image), &projector.texture)).clone()?;
     Some((image, projector_transform(projector, size), projector_tag(projector, final_blend)))
 }
 

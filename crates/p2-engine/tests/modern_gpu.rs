@@ -21,8 +21,7 @@ use bevy::math::Vec4;
 use p2_engine::render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
 use p2_engine::render::mesh_light::{DynamicLit, MeshLitMaterial};
 use bevy::light::AmbientLight;
-use p2_engine::mesh_view::SceneView;
-use p2_engine::render::modern::{CASTER_LAYER, MOVER_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER};
+use p2_engine::mesh_view::{CASTER_LAYER, MOVER_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView};
 use p2_engine::render::sun_cache::{CachedSunLevel, SunCachePlugin, SunCacheStale, level_config};
 
 const SUN_LESS: f32 = 0.3;

@@ -95,6 +95,11 @@ fn options(extra: &[&str], entry: &[&str]) -> CompileOptions {
 }
 
 #[test]
+fn the_suns_soft_edge_keeps_its_accepted_width() {
+    assert!(include_str!("../src/render/sun_shadow.wesl").contains("const SOFT_EDGE_UNITS: f32 = 1.5;"));
+}
+
+#[test]
 fn engine_shaders_compose_and_validate() {
     let Some(registry) = registry() else {
         eprintln!("skipped: bevy_pbr-{BEVY} not in the cargo registry");

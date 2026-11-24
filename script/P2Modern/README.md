@@ -26,7 +26,7 @@ sliders and boxes. It is our code, not retail's; it uses only the stock Shell me
 - `ModernMenuImage` extends `ModernMenuPage`: `ModernAntiAliasing` (0 Off, 1 FXAA, 2 SMAA, 3 MSAA 2x, 4 MSAA 4x),
   `ModernBloom` and `ModernSharpen` (sliders 0 to 10), `ModernRelief` and `ModernSpecular` boxes.
 - `ModernMenuEffects` extends `ModernMenuPage`: sliders 0 to 10 for `ModernGodRays`, `ModernVignette`,
-  `ModernFilmGrain`, `ModernChromaticAberration` (0 off) and `ModernSaturation`, `ModernContrast`, `ModernExposure`
+  `ModernChromaticAberration` (0 off) and `ModernSaturation`, `ModernContrast`, `ModernExposure`
   (5 neutral). No preset writes them, and changing one keeps the preset.
 
 `ModernBake` keeps its key but has no row. Values and presets: `crates/p2-host/src/display.rs`.

@@ -85,7 +85,7 @@ defaultproperties
 	Helps(1)="Sets every quality row at once. Changing a row yourself makes it Custom."
 	Helps(2)="Sun and lamp shadows, contact shadows, ambient occlusion, indirect light and rounded terrain."
 	Helps(3)="Edge smoothing, bloom, sharpening, surface relief and generated specular."
-	Helps(4)="Sun rays, vignette, film grain, colour fringe, colour strength, contrast and exposure."
+	Helps(4)="Sun rays, vignette, colour fringe, colour strength, contrast and exposure."
 
 	PresetKeys(0)="ModernSunShadows"
 	PresetKeys(1)="ModernShadowDistance"
