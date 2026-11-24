@@ -113,6 +113,7 @@ pub(super) struct JobBuffers {
     pub(super) held: Vec<&'static str>,
     pub(super) followed: FxHashSet<ObjectId>,
     pub(super) visible: FxHashSet<ObjectId>,
+    pub(super) casting: FxHashSet<ObjectId>,
     pub(super) placed: Vec<(ObjectId, BoneFrame)>,
     pub(super) watched: Vec<ObjectId>,
 }
@@ -163,6 +164,8 @@ pub(super) struct Job {
     pub(super) canvas: [f32; 2],
     pub(super) followed: FxHashSet<ObjectId>,
     pub(super) visible: FxHashSet<ObjectId>,
+    /// Actors no camera drew whose shadow a light did: they keep their pose moving, and the game is not told.
+    pub(super) casting: FxHashSet<ObjectId>,
     pub(super) placed: Vec<(ObjectId, BoneFrame)>,
     pub(super) watched: Vec<ObjectId>,
     pub(super) finished: Vec<ObjectId>,

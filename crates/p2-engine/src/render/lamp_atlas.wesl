@@ -60,3 +60,14 @@ fn masked_fragment(in: MaskedOutput) -> @location(0) vec4<f32> {
     }
     return vec4(length(in.from_lamp) * face.lamp.w, 0.0, 0.0, 1.0);
 }
+
+// Whitens a sharp tile before another lamp is drawn into it: white is open, as the atlas starts.
+@vertex
+fn clear_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    return vec4(f32(index & 1u) * 4.0 - 1.0, f32(index >> 1u) * 4.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn clear_fragment() -> @location(0) vec4<f32> {
+    return vec4(1.0);
+}

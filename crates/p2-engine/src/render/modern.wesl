@@ -15,7 +15,7 @@ import bevy_pbr::render::{
 };
 import bevy_pbr::render::{
     mesh_view_bindings::clustered_lights,
-    mesh_view_types::{POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT, POINT_LIGHT_FLAGS_SPOT_LIGHT_BIT, POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE},
+    mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     shadow_sampling::sample_shadow_cubemap,
 };
 @if(SCREEN_SPACE_AMBIENT_OCCLUSION)
@@ -43,15 +43,32 @@ const LUMINANCE: vec3<f32> = vec3(0.2126, 0.7152, 0.0722);
 // In shadow map texels: the depth margin and the move along the normal.
 const SHADOW_BIAS: f32 = 1.0;
 const SHADOW_NORMAL_OFFSET: f32 = 1.5;
-// Half the sharp kernel. A rim of taps one texel past it answers fully lit and fully shadowed pixels early.
-const SHARP_HALF_TEXELS: f32 = 0.5;
+// The radius of a shadow's soft edge in world units, the same in every level and cascade: counted in texels it was four
+// times wider in each coarser level, crisp near the eye and soft far off. A level whose texels are wider than this
+// cannot be that sharp and takes the least radius its texels allow.
+const SOFT_EDGE_UNITS: f32 = 1.5;
+const SOFT_EDGE_LEAST_TEXELS: f32 = 0.75;
+const SOFT_EDGE_MOST_TEXELS: f32 = 8.0;
+const SOFT_EDGE_TAPS: i32 = 12;
+const GOLDEN_ANGLE: f32 = 2.3999632;
 // A receiver plane steeper than this many texels of depth per texel is noise.
 const SHADOW_SLOPE_CAP_TEXELS: f32 = 16.0;
-const LEVEL_FADE_FROM: f32 = 0.9;
+// A level's shadows stand a little apart from the next coarser one's, by their texels' bias, so the change is spread
+// over the outer part of the level, not made at its edge.
+// In a level's half widths from the eye, not from the level's centre, which jumps a quarter of the half width at each
+// redraw: a level is used out to where it surely holds the point whatever its centre, and blends into the next from
+// `LEVEL_FADE_FROM`.
+const LEVEL_FADE_FROM: f32 = 0.45;
+const LEVEL_USABLE: f32 = 0.75;
+// In world units: the most a shadow lookup moves along the normal, which a coarse level's wide texels would make a
+// visible shift of the whole shadow.
+const SHADOW_NORMAL_OFFSET_MOST: f32 = 8.0;
 // In the outermost level's half widths from the eye: its shadows fade out over this range. The level stands up to a
 // fifth of its half width off the eye and moves in steps, so an end at its own edge jumped as the eye walked.
-const LAST_LEVEL_FADE_FROM: f32 = 0.6;
-const LAST_LEVEL_FADE_TO: f32 = 0.8;
+const LAST_LEVEL_FADE_FROM: f32 = 0.55;
+const LAST_LEVEL_FADE_TO: f32 = 0.74;
+// The share of the movers' last cascade past which their shadows fade out.
+const MOVER_FADE_FROM: f32 = 0.8;
 const SUN_FACING_FADE: f32 = 0.05;
 const SKY_FACING_FADE: f32 = 0.1;
 const CONTACT_NEAR: f32 = 1024.0;
@@ -244,7 +261,7 @@ fn cascade_shadow(sun: u32, cascade_index: u32, position: vec3<f32>, normal: vec
     let tilt = min(sqrt(saturate(1.0 - facing * facing)) / max(facing, 0.1), 4.0);
     let texel_world = (*cascade).texel_size;
     let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt);
-    let moved = position + normal * (texel_world * SHADOW_NORMAL_OFFSET) + to_sun * margin;
+    let moved = position + normal * min(texel_world * SHADOW_NORMAL_OFFSET, SHADOW_NORMAL_OFFSET_MOST) + to_sun * margin;
     let local = shadows::world_to_directional_light_local(sun, cascade_index, vec4(moved, 1.0));
     if local.w == 0.0 {
         return 1.0;
@@ -261,8 +278,8 @@ fn cascade_shadow(sun: u32, cascade_index: u32, position: vec3<f32>, normal: vec
     if !sharp {
         return shadow_tap(local.xy, vec2(0.0), local.z, slope, layer);
     }
-    let half_kernel = SHARP_HALF_TEXELS * texel;
-    let rim = half_kernel + texel;
+    let radius = clamp(SOFT_EDGE_UNITS / texel_world, SOFT_EDGE_LEAST_TEXELS, SOFT_EDGE_MOST_TEXELS) * texel;
+    let rim = radius + texel;
     let settled = shadow_tap(local.xy, vec2(0.0), local.z, slope, layer)
         + shadow_tap(local.xy, vec2(rim, 0.0), local.z, slope, layer)
         + shadow_tap(local.xy, vec2(0.0, rim), local.z, slope, layer)
@@ -274,10 +291,17 @@ fn cascade_shadow(sun: u32, cascade_index: u32, position: vec3<f32>, normal: vec
     if settled > 5.0 - 1e-3 {
         return 1.0;
     }
-    return 0.25 * (shadow_tap(local.xy, vec2(half_kernel, half_kernel), local.z, slope, layer)
-        + shadow_tap(local.xy, vec2(-half_kernel, half_kernel), local.z, slope, layer)
-        + shadow_tap(local.xy, vec2(-half_kernel, -half_kernel), local.z, slope, layer)
-        + shadow_tap(local.xy, vec2(half_kernel, -half_kernel), local.z, slope, layer));
+    // A disk of taps turned by a pattern fixed to the screen, so the edge is grain that stands still, not bands.
+    let clip = view.clip_from_world * vec4(position, 1.0);
+    let pixel = (clip.xy / clip.w * 0.5 + 0.5) * view.viewport.zw;
+    let turn = 6.2831853 * fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+    var lit = 0.0;
+    for (var tap = 0; tap < SOFT_EDGE_TAPS; tap++) {
+        let out = sqrt((f32(tap) + 0.5) / f32(SOFT_EDGE_TAPS)) * radius;
+        let angle = f32(tap) * GOLDEN_ANGLE + turn;
+        lit += shadow_tap(local.xy, vec2(cos(angle), sin(angle)) * out, local.z, slope, layer);
+    }
+    return lit / f32(SOFT_EDGE_TAPS);
 }
 
 // The finest level holding the point, fading into the next one near its edge. Past the last level there is no shadow.
@@ -291,8 +315,9 @@ fn static_sun_map(position: vec4<f32>, normal: vec3<f32>) -> f32 {
             continue;
         }
         let local = lights.directional_lights[i].cascades[0].clip_from_world * position;
-        let edge = max(abs(local.x), abs(local.y));
-        if edge >= 1.0 {
+        let eye = lights.directional_lights[i].cascades[0].clip_from_world * vec4(view.world_position.xyz, 1.0);
+        let edge = max(abs(local.x - eye.x), abs(local.y - eye.y));
+        if edge >= LEVEL_USABLE || max(abs(local.x), abs(local.y)) >= 1.0 {
             continue;
         }
         let texel = lights.directional_lights[i].cascades[0].texel_size;
@@ -319,7 +344,7 @@ fn static_sun_map(position: vec4<f32>, normal: vec3<f32>) -> f32 {
     if best_edge <= LEVEL_FADE_FROM {
         return shadow;
     }
-    return mix(shadow, cascade_shadow(next, 0u, position.xyz, normal, true), (best_edge - LEVEL_FADE_FROM) / (1.0 - LEVEL_FADE_FROM));
+    return mix(shadow, cascade_shadow(next, 0u, position.xyz, normal, true), (best_edge - LEVEL_FADE_FROM) / (LEVEL_USABLE - LEVEL_FADE_FROM));
 }
 
 fn sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>) -> f32 {
@@ -349,6 +374,9 @@ fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>) -> f32 {
         if -view_z >= next_near {
             shadow = mix(shadow, cascade_shadow(sun, next, position.xyz, normal, false), (-view_z - next_near) / (far_bound - next_near));
         }
+    } else {
+        let far_bound = (*light).cascades[index].far_bound;
+        shadow = mix(shadow, 1.0, smoothstep(MOVER_FADE_FROM * far_bound, far_bound, -view_z));
     }
     return shadow;
 }
@@ -430,12 +458,12 @@ fn no_lamps() -> LampLight {
     return LampLight(vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0));
 }
 
-// A placed lamp carries its atlas tile in its shadow depth bias field: x and y of the corner in units (8 bits each), then
-// the level (a face is a unit times 2 to the level, 7 without a tile), then this mark, far above any real bias.
+// A point lamp that keeps a cube map of the movers is a Bevy light too. Its shadow depth bias field holds this mark, far
+// above any real bias, plus the lamp's number in the book.
 const LAMP_MARK: f32 = 1048576.0;
 // The atlas side in units. Matches `lamps/atlas.rs`.
 const ATLAS_UNITS: f32 = 128.0;
-const ATLAS_GUARD: f32 = 2.0;
+const ATLAS_GUARD: f32 = 3.0;
 const ATLAS_UNMAPPED: u32 = 7u;
 const ATLAS_NEAR_MARGIN: f32 = 1.0;
 const MOVER_DEPTH_MARGIN: f32 = 2.0;
@@ -444,7 +472,66 @@ const LAMP_ENERGY: f32 = 1.4485;
 // In the lamp's radii from the eye: it fades out over this range, and past it `lamps.rs` hides it.
 const LAMP_FADE_FROM: f32 = 21.0;
 const LAMP_FADE_TO: f32 = 30.0;
-const LAMP_SMALLEST: f32 = 0.004;
+const LAMP_SMALLEST: f32 = 0.01;
+// A lamp's source is this share of its radius.
+const LAMP_SOURCE_SHARE: f32 = 0.08;
+// The book of lamps rides in the material's anisotropy texture, four floats a texel: a header (the corner of a grid of
+// cells over the map and a cell's side; the grid's sides and where the cells start), four texels for every lamp, a
+// texel for each cell (where its list starts and how many lamps it holds) and the lists, four lamps a texel. A list
+// holds the lamps whose light gets into the cell. The numbers match `lamps/cells.rs`.
+const BOOK_WIDTH: u32 = 2048u;
+const BOOK_HEADER: u32 = 2u;
+const BOOK_RECORD: u32 = 4u;
+// As many point lamps as `lamps.rs` gives a cube map of the movers at its highest level.
+const MOST_MOVER_CUBES: u32 = 4u;
+
+fn book_texel(in: VertexOutput, index: u32) -> vec4<f32> {
+    let at = vec2(index % BOOK_WIDTH, index / BOOK_WIDTH);
+@if(BINDLESS) {
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    return textureLoad(bindless_textures_2d[material_indices[slot].anisotropy_texture], at, 0);
+}
+@elif(PBR_ANISOTROPY_TEXTURE_SUPPORTED) {
+    return textureLoad(pbr_bindings::anisotropy_texture, at, 0);
+}
+@else {
+    return vec4(0.0);
+}
+}
+
+// Bevy's 1 x 1 default image without a book.
+fn has_book(in: VertexOutput) -> bool {
+@if(BINDLESS) {
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    return textureDimensions(bindless_textures_2d[material_indices[slot].anisotropy_texture]).x == BOOK_WIDTH;
+}
+@elif(PBR_ANISOTROPY_TEXTURE_SUPPORTED) {
+    return textureDimensions(pbr_bindings::anisotropy_texture).x == BOOK_WIDTH;
+}
+@else {
+    return false;
+}
+}
+
+// Where the list of the cell around `position` starts in the book, and how many lamps it holds.
+fn lamp_list(in: VertexOutput, position: vec3<f32>) -> vec2<u32> {
+    if !has_book(in) {
+        return vec2(0u);
+    }
+    let grid = book_texel(in, 0u);
+    let sides = book_texel(in, 1u);
+    let cell = floor((position - grid.xyz) / grid.w);
+    if any(cell < vec3(0.0)) || any(cell >= sides.xyz) {
+        return vec2(0u);
+    }
+    let at = vec3<u32>(cell);
+    let size = vec3<u32>(sides.xyz);
+    return vec2<u32>(book_texel(in, u32(sides.w) + (at.z * size.y + at.y) * size.x + at.x).xy);
+}
+
+// In display light on the surface: a lamp giving less adds no highlight. Its shadow keeps its soft edge: a room lit by
+// many lamps has every one of them under any such share, and their hard edges showed as squares.
+const LAMP_GLOSS_FROM: f32 = 0.03;
 
 fn is_lamp(light_id: u32) -> bool {
     return clustered_lights.data[light_id].shadow_depth_bias >= LAMP_MARK;
@@ -471,55 +558,103 @@ fn atlas_texel(in: VertexOutput, at: vec2<i32>) -> f32 {
 }
 }
 
-// `from_lamp` the point seen from the lamp; a texel holds a distance over the radius, as `lamp_atlas.wesl` draws it.
-fn atlas_shadow(in: VertexOutput, packed: u32, from_lamp: vec3<f32>, radius: f32, margin: f32, unit: f32) -> f32 {
-    let level = (packed >> 16u) & 15u;
-    if level == ATLAS_UNMAPPED {
-        return 1.0;
+// The lamp's edge is the sun's width in world units where the tile is fine enough. On a coarse tile it is this many
+// texels at least, wide enough to round the texels' steps away, and never past the most: the taps stay near a face's
+// guard band.
+const LAMP_EDGE_LEAST_TEXELS: f32 = 1.25;
+const LAMP_EDGE_MOST_TEXELS: f32 = 2.5;
+const LAMP_EDGE_TAPS: i32 = 8;
+
+// A vector in the axes of one face of a lamp's cube: x right, y up, z out of the lamp. Matches `lamps/atlas.rs`.
+fn face_view(v: vec3<f32>, face: u32) -> vec3<f32> {
+    switch face {
+        case 0u { return vec3(-v.z, v.y, v.x); }
+        case 1u { return vec3(v.z, v.y, -v.x); }
+        case 2u { return vec3(v.x, -v.z, v.y); }
+        case 3u { return vec3(v.x, v.z, -v.y); }
+        case 4u { return v; }
+        default { return vec3(-v.x, v.y, -v.z); }
     }
-    let size = unit * f32(1u << level);
-    let m = abs(from_lamp);
-    var face = 0.0;
-    var row = 0.0;
-    var seen = vec3(0.0);
-    if m.x >= m.y && m.x >= m.z {
-        if from_lamp.x > 0.0 {
-            seen = vec3(-from_lamp.z, from_lamp.y, from_lamp.x);
-        } else {
-            face = 1.0;
-            seen = vec3(from_lamp.z, from_lamp.y, -from_lamp.x);
-        }
-    } else if m.y >= m.z {
-        if from_lamp.y > 0.0 {
-            face = 2.0;
-            seen = vec3(from_lamp.x, -from_lamp.z, from_lamp.y);
-        } else {
-            row = 1.0;
-            seen = vec3(from_lamp.x, from_lamp.z, -from_lamp.y);
-        }
-    } else {
-        row = 1.0;
-        if from_lamp.z > 0.0 {
-            face = 1.0;
-            seen = from_lamp;
-        } else {
-            face = 2.0;
-            seen = vec3(-from_lamp.x, from_lamp.y, -from_lamp.z);
-        }
-    }
-    let corner = vec2(f32(packed & 255u), f32((packed >> 8u) & 255u)) * unit + vec2(face, row) * size;
-    let span = 0.5 * size - ATLAS_GUARD;
-    let texel = corner + 0.5 * size + vec2(seen.x, -seen.y) / max(seen.z, 1e-4) * span;
-    let spot = clamp(texel, corner + 1.0, corner + size - 1.0) - 0.5;
+}
+
+// `low` the face's corner and `size` its side in texels, `at` a place in the atlas.
+fn atlas_nearest(in: VertexOutput, low: vec2<f32>, size: f32, at: vec2<f32>, depth: f32) -> f32 {
+    return select(0.0, 1.0, atlas_texel(in, vec2<i32>(clamp(at, low + 1.0, low + size - 1.0))) >= depth);
+}
+
+fn atlas_blended(in: VertexOutput, low: vec2<f32>, size: f32, at: vec2<f32>, depth: f32) -> f32 {
+    let spot = clamp(at, low + 1.0, low + size - 1.0) - 0.5;
     let base = floor(spot);
     let blend = spot - base;
-    let at = vec2<i32>(base);
-    let depth = (length(from_lamp) - margin) / radius;
-    let a = select(0.0, 1.0, atlas_texel(in, at) >= depth);
-    let b = select(0.0, 1.0, atlas_texel(in, at + vec2(1, 0)) >= depth);
-    let c = select(0.0, 1.0, atlas_texel(in, at + vec2(0, 1)) >= depth);
-    let d = select(0.0, 1.0, atlas_texel(in, at + vec2(1, 1)) >= depth);
+    let corner = vec2<i32>(base);
+    let a = select(0.0, 1.0, atlas_texel(in, corner) >= depth);
+    let b = select(0.0, 1.0, atlas_texel(in, corner + vec2(1, 0)) >= depth);
+    let c = select(0.0, 1.0, atlas_texel(in, corner + vec2(0, 1)) >= depth);
+    let d = select(0.0, 1.0, atlas_texel(in, corner + vec2(1, 1)) >= depth);
     return mix(mix(a, b, blend.x), mix(c, d, blend.x), blend.y);
+}
+
+// What a tap `by` texels off the point is held against: how far the point's own surface lies along that tap's ray, so
+// a tilted surface does not shade itself, never more than a texel of depth a texel off. Over the radius, as a texel is.
+fn receiver_depth(seen: vec3<f32>, normal: vec3<f32>, by: vec2<f32>, span: f32, texel_world: f32, margin: f32, radius: f32) -> f32 {
+    let reach = length(seen);
+    let ray = vec3(seen.x + by.x * seen.z / span, seen.y - by.y * seen.z / span, seen.z);
+    let slope = dot(normal, ray);
+    var along = reach;
+    if abs(slope) > 1e-6 {
+        along = dot(normal, seen) / slope * length(ray);
+    }
+    let most = texel_world * length(by);
+    return (clamp(along, reach - most, reach + most) - margin) / radius;
+}
+
+// `from_lamp` the point seen from the lamp; a texel holds a distance over the radius, as `lamp_atlas.wesl` draws it.
+// `tile` the tile's corner and `size` a face's side, in texels; `turn` an angle fixed to the pixel.
+fn atlas_shadow(in: VertexOutput, tile: vec2<f32>, size: f32, from_lamp: vec3<f32>, normal: vec3<f32>, radius: f32, texel_world: f32, margin: f32, turn: f32) -> f32 {
+    let m = abs(from_lamp);
+    var face = 0u;
+    if m.x >= m.y && m.x >= m.z {
+        face = select(1u, 0u, from_lamp.x > 0.0);
+    } else if m.y >= m.z {
+        face = select(3u, 2u, from_lamp.y > 0.0);
+    } else {
+        face = select(5u, 4u, from_lamp.z > 0.0);
+    }
+    let seen = face_view(from_lamp, face);
+    let low = tile + vec2(f32(face % 3u), f32(face / 3u)) * size;
+    let span = 0.5 * size - ATLAS_GUARD;
+    let at = low + 0.5 * size + vec2(seen.x, -seen.y) / max(seen.z, 1e-4) * span;
+    let tilted = face_view(normal, face);
+    let edge = clamp(SOFT_EDGE_UNITS / texel_world, LAMP_EDGE_LEAST_TEXELS, LAMP_EDGE_MOST_TEXELS);
+    let rim = edge + 1.0;
+    var settled = atlas_nearest(in, low, size, at, receiver_depth(seen, tilted, vec2(0.0), span, texel_world, margin, radius));
+    for (var side = 0; side < 4; side++) {
+        let by = vec2(f32((side + 1) % 2), f32(side % 2)) * select(rim, -rim, side > 1);
+        settled += atlas_nearest(in, low, size, at + by, receiver_depth(seen, tilted, by, span, texel_world, margin, radius));
+    }
+    if settled < 0.5 {
+        return 0.0;
+    }
+    if settled > 4.5 {
+        return 1.0;
+    }
+    // The sun's edge: a disk of taps turned by a pattern fixed to the screen, grain that stands still.
+    var lit = 0.0;
+    for (var tap = 0; tap < LAMP_EDGE_TAPS; tap++) {
+        let out = sqrt((f32(tap) + 0.5) / f32(LAMP_EDGE_TAPS)) * edge;
+        let angle = f32(tap) * GOLDEN_ANGLE + turn;
+        let by = vec2(cos(angle), sin(angle)) * out;
+        lit += atlas_blended(in, low, size, at + by, receiver_depth(seen, tilted, by, span, texel_world, margin, radius));
+    }
+    return lit / f32(LAMP_EDGE_TAPS);
+}
+
+// A lamp's shadow from one tile: `tile` its corner and a face's side in texels.
+fn tile_shadow(in: VertexOutput, tile: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, facing: f32, turn: f32) -> f32 {
+    let texel_world = 2.0 * distance_to / tile.z;
+    let tilt = min(sqrt(saturate(1.0 - facing * facing)) / max(facing, 0.1), 4.0);
+    let moved = position + normal * (texel_world * SHADOW_NORMAL_OFFSET);
+    return atlas_shadow(in, tile.xy, tile.z, moved - lamp_position, normal, lamp_radius, texel_world, texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt), turn);
 }
 
 // A point lamp near the eye also keeps a Bevy cube map, with movers only.
@@ -529,7 +664,8 @@ fn mover_shadow(id: u32, position: vec3<f32>, normal: vec3<f32>, to_lamp: vec3<f
     let m = abs(from_lamp);
     let major = max(m.x, max(m.y, m.z));
     let zw = -major * (*light).light_custom_data.xy + (*light).light_custom_data.zw;
-    return sample_shadow_cubemap(from_lamp * vec3(1.0, 1.0, -1.0), major, zw.x / zw.y, id, frag_coord);
+    // The light's source radius field holds how far the lamp's cube map has faded in.
+    return mix(1.0, sample_shadow_cubemap(from_lamp * vec3(1.0, 1.0, -1.0), major, zw.x / zw.y, id, frag_coord), saturate((*light).position_radius.w));
 }
 
 // The probe grid rides in the material's metal and roughness texture, Bevy's 1 x 1 default without one: two volumes side
@@ -593,16 +729,34 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, frag_coo
     let unit = atlas_side(in) / ATLAS_UNITS;
     let rough = surface.x;
     let eye = to_eye(position);
-    for (var i = ranges.first_point_light_index_offset; i < ranges.first_rect_light_index_offset; i++) {
+    let turn = 6.2831853 * fract(52.9829189 * fract(dot(frag_coord, vec2(0.06711056, 0.00583715))));
+    var cube_lamps: array<u32, MOST_MOVER_CUBES>;
+    var cube_ids: array<u32, MOST_MOVER_CUBES>;
+    var cubes = 0u;
+    for (var i = ranges.first_point_light_index_offset; i < ranges.first_rect_light_index_offset && cubes < MOST_MOVER_CUBES; i++) {
         let id = clustering::get_clusterable_object_id(i);
-        if !is_lamp(id) {
+        let light = &clustered_lights.data[id];
+        if (*light).shadow_depth_bias < LAMP_MARK || ((*light).flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
             continue;
         }
-        let light = &clustered_lights.data[id];
-        let packed = u32((*light).shadow_depth_bias);
-        let to_light = (*light).position_radius.xyz - position;
+        cube_lamps[cubes] = u32((*light).shadow_depth_bias - LAMP_MARK);
+        cube_ids[cubes] = id;
+        cubes += 1u;
+    }
+    let list = lamp_list(in, position);
+    var four = vec4(0.0);
+    for (var i = 0u; i < list.y; i++) {
+        if i % 4u == 0u {
+            four = book_texel(in, list.x + i / 4u);
+        }
+        let lamp = u32(four[i % 4u]);
+        let record = BOOK_HEADER + lamp * BOOK_RECORD;
+        let place = book_texel(in, record);
+        let lamp_position = place.xyz;
+        let to_light = lamp_position - position;
         let d2 = dot(to_light, to_light);
-        let inverse_range = (*light).color_inverse_square_range.w;
+        let lamp_radius = abs(place.w);
+        let inverse_range = 1.0 / (lamp_radius * lamp_radius);
         let x2 = d2 * inverse_range;
         if x2 >= 1.0 {
             continue;
@@ -614,41 +768,49 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, frag_coo
             continue;
         }
         var cone = 1.0;
-        let flags = (*light).flags;
-        let spot = (flags & POINT_LIGHT_FLAGS_SPOT_LIGHT_BIT) != 0u;
-        if spot {
-            var along = vec3((*light).light_custom_data.x, 0.0, (*light).light_custom_data.y);
-            along.y = sqrt(max(0.0, 1.0 - along.x * along.x - along.z * along.z));
-            if (flags & POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE) != 0u {
-                along.y = -along.y;
-            }
-            let share = saturate(dot(-along, to_lamp) * (*light).light_custom_data.z + (*light).light_custom_data.w);
+        if place.w < 0.0 {
+            let spot = book_texel(in, record + 2u);
+            let along = vec3(spot.xy, sqrt(max(0.0, 1.0 - dot(spot.xy, spot.xy))) * sign(spot.z));
+            let share = saturate(dot(-along, to_lamp) * abs(spot.z) + spot.w);
             cone = share * share;
         }
-        let from_eye = length((*light).position_radius.xyz - view.world_position.xyz) * sqrt(inverse_range);
+        let from_eye = length(lamp_position - view.world_position.xyz) * sqrt(inverse_range);
         cone *= 1.0 - smoothstep(LAMP_FADE_FROM, LAMP_FADE_TO, from_eye);
-        let color = (*light).color_inverse_square_range.rgb;
+        let look = book_texel(in, record + 1u);
+        let color = look.rgb;
         let shown = lamp_shown(color, x2, cone);
-        if dot(shown, LUMINANCE) * facing < LAMP_SMALLEST {
+        let share = dot(shown, LUMINANCE) * facing;
+        if share < LAMP_SMALLEST {
             continue;
         }
         var shadow = saturate(facing / SUN_FACING_FADE);
         if unit >= 1.0 {
-            let size = unit * f32(1u << ((packed >> 16u) & 15u));
-            let texel_world = 2.0 * distance_to / size;
-            let tilt = min(sqrt(saturate(1.0 - facing * facing)) / max(facing, 0.1), 4.0);
-            let moved = position + normal * (texel_world * SHADOW_NORMAL_OFFSET);
-            let radius = 1.0 / sqrt(inverse_range);
-            shadow *= atlas_shadow(in, packed, moved - (*light).position_radius.xyz, radius, texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt), unit);
+            // A lamp near the eye holds a sharp tile too: its corner, its face side and how far the shadow has gone
+            // over to it, in the record's last texel.
+            let sharp = book_texel(in, record + 3u);
+            var lit = 1.0;
+            let packed = u32(look.w);
+            let level = (packed >> 16u) & 15u;
+            if sharp.w < 1.0 && level != ATLAS_UNMAPPED {
+                let plain = vec3(vec2(f32(packed & 255u), f32((packed >> 8u) & 255u)) * unit, unit * f32(1u << level));
+                lit = tile_shadow(in, plain, position, normal, lamp_position, lamp_radius, distance_to, facing, turn);
+            }
+            if sharp.w > 0.0 {
+                lit = mix(lit, tile_shadow(in, sharp.xyz, position, normal, lamp_position, lamp_radius, distance_to, facing, turn), sharp.w);
+            }
+            shadow *= lit;
         }
-        if shadow > 0.0 && !spot && (flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
-            shadow *= mover_shadow(id, position, normal, to_lamp, frag_coord);
+        for (var cube = 0u; cube < cubes && shadow > 0.0; cube++) {
+            if cube_lamps[cube] == lamp {
+                shadow *= mover_shadow(cube_ids[cube], position, normal, to_lamp, frag_coord);
+                break;
+            }
         }
         if shadow <= 0.0 {
             continue;
         }
-        let a = saturate(rough * rough + (*light).position_radius.w / (2.0 * distance_to));
-        add_lamp(&sum, shown, color, x2, cone, shadow, facing, to_lamp, normal, eye, gloss, a);
+        let a = saturate(rough * rough + lamp_radius * LAMP_SOURCE_SHARE / (2.0 * distance_to));
+        add_lamp(&sum, shown, color, x2, cone, shadow, facing, to_lamp, normal, eye, gloss && share >= LAMP_GLOSS_FROM, a);
     }
     read_probes(in, position, normal, &sum);
     return sum;

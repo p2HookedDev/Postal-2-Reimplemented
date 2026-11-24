@@ -3,7 +3,9 @@
 //! Usage: `p2-dump <package> [--props | --code]`. `--props` prints each export's tagged properties instead;
 //! `--code` prints the decoded bytecode of every function, state and class (native names from the `.u`
 //! packages next to it, or in `..\System`). `p2-dump <folder> --shaders` counts the `Shader` forms of every
-//! `.utx` / `.usx` / `.fuk` under the folder.
+//! `.utx` / `.usx` / `.fuk` under the folder. `p2-dump <map> --reach` reads lights from standard input, one `x y z radius`
+//! a line in Unreal units, and prints each with the zones it could light in the map's largest BSP model, its own first
+//! (the radius is printed twice: the fifth column once held a reach).
 
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
@@ -13,7 +15,25 @@ use anyhow::Context;
 use p2_package::{Export, MAP_EXTENSION, Package, TagValue};
 use p2_script::{NativeName, ScriptObject, decode_script, disassemble, native_names, read_export};
 
-const USAGE: &str = "usage: p2-dump <package> [--props | --code] | p2-dump <folder> --shaders";
+const USAGE: &str = "usage: p2-dump <package> [--props | --code | --reach] | p2-dump <folder> --shaders";
+
+
+fn light_reaches(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Result<()> {
+    let model = pkg
+        .exports
+        .iter()
+        .filter(|export| p2_script::class_name(pkg, export) == "Model")
+        .filter_map(|export| p2_assets::read_model(pkg, data, export).ok())
+        .max_by_key(|model| model.nodes.len())
+        .context("no BSP model in the package")?;
+    for line in std::io::stdin().lines() {
+        let numbers: Vec<f32> = line?.split_whitespace().filter_map(|part| part.parse().ok()).collect();
+        let [x, y, z, radius] = numbers[..] else { continue };
+        let zones: Vec<String> = p2_collision::light_zones(&model, p2_math::Vector::new(x, y, z), radius).iter().map(u8::to_string).collect();
+        writeln!(out, "{x} {y} {z} {radius} {radius} {}", zones.join(","))?;
+    }
+    Ok(())
+}
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -29,6 +49,7 @@ fn main() -> anyhow::Result<()> {
     match mode {
         None => dump(&pkg, &mut out)?,
         Some("--props") => dump_properties(&pkg, &data, &mut out)?,
+        Some("--reach") => light_reaches(&pkg, &data, &mut out)?,
         Some("--code") => dump_code(&pkg, &data, &natives_near(Path::new(&path)), &mut out)?,
         Some(_) => anyhow::bail!(USAGE),
     }

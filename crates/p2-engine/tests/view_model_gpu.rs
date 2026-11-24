@@ -10,7 +10,7 @@ use bevy::camera::{Camera, Camera3d, RenderTarget};
 use bevy::color::{Color, LinearRgba};
 use bevy::ecs::observer::On;
 use bevy::image::Image;
-use bevy::light::{AmbientLight, CascadeShadowConfigBuilder, DirectionalLight, PointLight};
+use bevy::light::{AmbientLight, CascadeShadowConfigBuilder, DirectionalLight};
 use bevy::math::{Quat, Vec3};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
@@ -20,10 +20,12 @@ use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use p2_assets::Model;
 use p2_collision::{BspHulls, MeshSet};
-use p2_engine::mesh_view::{LevelAlbedos, OVERLAY_LAYERS, StaticCollision};
+use p2_engine::display::{MODERN_GRAPHICS, Settings};
+use p2_engine::mesh_view::{LevelAlbedos, LevelCollision, OVERLAY_LAYERS, ShownScene, StaticCollision};
 use p2_engine::render::actor_light::{ActorLightPlugin, ActorLitMaterial, HardwareLighting, LightEnvironment, SkinnedLighting, view_model_lighting};
+use p2_engine::render::lamps::LampsPlugin;
 use p2_engine::render::mesh_light::{DynamicLit, MeshLightPlugin, MeshLitMaterial};
-use p2_engine::render::modern::{CASTER_LAYER, MOVER_LAYER, SUN_VIEW_LAYER};
+use p2_engine::render::modern::{CASTER_LAYER, SUN_VIEW_LAYER};
 use p2_math::{Rotator, Vector};
 use p2_render_cpu::{LE_SUNLIGHT, MeshLight};
 use rustc_hash::FxHashMap;
@@ -31,9 +33,8 @@ use rustc_hash::FxHashMap;
 const SIZE: u32 = 32;
 const CLEAR: u8 = 43;
 const ZONE: f32 = 0.05;
-const LAMP_MARK: f32 = 1_048_576.0;
 
-fn light_at_the_eye() -> SkinnedLighting {
+fn light_at_the_eye() -> (SkinnedLighting, LightEnvironment, StaticCollision) {
     let sun = MeshLight { effect: LE_SUNLIGHT, rotation: Rotator { pitch: -16384, yaw: 0, roll: 0 }, brightness: 40.0, ..MeshLight::default() };
     let lamp = MeshLight { location: Vector::new(0.0, 0.0, 10.0), radius: 0.0, brightness: 60.0, ..MeshLight::default() };
     let environment = LightEnvironment::new(FxHashMap::from_iter([(0, sun), (1, lamp)]), vec![[ZONE; 3]], 1.0);
@@ -47,7 +48,7 @@ fn light_at_the_eye() -> SkinnedLighting {
         lamp_masked: Vec::new(),
         albedos: LevelAlbedos::default(),
     };
-    view_model_lighting(&environment, &level, Vec3::ZERO, Vector::ZERO)
+    (view_model_lighting(&environment, &level, Vec3::ZERO, Vector::ZERO), environment, level)
 }
 
 fn target(app: &mut App, frames: &Arc<Mutex<Vec<Vec<u8>>>>) -> Handle<Image> {
@@ -71,15 +72,20 @@ fn world_and_overlay(sun_blocked: bool) -> (u8, u8) {
 }
 
 fn world_and_weapon(sun_blocked: bool, overlay_field: u32) -> (u8, u8) {
-    let mut lighting = light_at_the_eye();
+    let (mut lighting, environment, level) = light_at_the_eye();
     assert_eq!(lighting.count, 2, "the sun and the lamp were not picked");
-    let (sun, lamp) = (lighting.lights[0], lighting.lights[1]);
+    let sun = lighting.lights[0];
     if sun_blocked {
         lighting.lights[0].color.w = 0.0;
     }
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins((MeshLightPlugin, ActorLightPlugin));
+    app.add_plugins((MeshLightPlugin, ActorLightPlugin, LampsPlugin));
+    app.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
+    let mut shown = ShownScene::default();
+    shown.lighting = Some(Arc::new(environment));
+    app.insert_resource(shown);
+    app.insert_resource(LevelCollision(Some(Arc::new(level))));
     app.finish();
     app.cleanup();
     let (world_frames, overlay_frames) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
@@ -115,16 +121,6 @@ fn world_and_weapon(sun_blocked: bool, overlay_field: u32) -> (u8, u8) {
     let cascades = CascadeShadowConfigBuilder { num_cascades: 2, minimum_distance: 0.1, maximum_distance: 60.0, first_cascade_far_bound: 30.0, overlap_proportion: 0.1 };
     let along = Transform::default().looking_to(sun.direction, Vec3::Z);
     world.spawn((sun_light, cascades.build(), along, RenderLayers::from_layers(&[SUN_VIEW_LAYER, CASTER_LAYER])));
-    let lamp_light = PointLight {
-        color: Color::LinearRgba(LinearRgba::rgb(lamp.color.x, lamp.color.y, lamp.color.z)),
-        intensity: 4.0 * std::f32::consts::PI,
-        range: lamp.position.w,
-        radius: lamp.attenuation.z,
-        shadow_maps_enabled: false,
-        shadow_depth_bias: LAMP_MARK,
-        ..PointLight::default()
-    };
-    world.spawn((lamp_light, Transform::from_translation(lamp.position.truncate()), RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER])));
     if sun_blocked {
         let roof = world.resource_mut::<Assets<Mesh>>().add(common::quad(4.0, 0.0, [1.0; 4]));
         let plain = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());

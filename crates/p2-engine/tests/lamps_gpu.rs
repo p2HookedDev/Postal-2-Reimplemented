@@ -75,6 +75,7 @@ fn ready(app: &mut App, room: &Room, ground: &Handle<MeshLitMaterial>) -> bool {
     let lamps = world.query_filtered::<(), With<Lamp>>().iter(world).count();
     let Some(material) = world.resource::<Assets<MeshLitMaterial>>().get(ground) else { return false };
     lamps > 0
+        && material.base.anisotropy_texture.is_some()
         && (room.lamp_shadows == "0" || material.base.occlusion_texture.is_some())
         && (room.indirect == "0" || material.base.metallic_roughness_texture.is_some())
 }

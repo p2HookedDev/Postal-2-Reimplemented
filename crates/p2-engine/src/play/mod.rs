@@ -16,7 +16,7 @@ use bevy::audio::{
     SpatialScale, Volume,
 };
 use bevy::camera::Camera;
-use bevy::camera::visibility::{Visibility, VisibleEntities};
+use bevy::camera::visibility::{ViewVisibility, Visibility, VisibleEntities};
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
 use bevy::ecs::prelude::{
     ChildOf, Commands, Component, Entity, Has, Local, MessageReader, Query, Res, ResMut, Resource, SystemSet, With,
@@ -353,7 +353,7 @@ impl PlayCameras<'_, '_> {
 
 #[derive(SystemParam)]
 struct DrawnActors<'w, 's> {
-    models: Query<'w, 's, (Entity, &'static FollowActor, Option<&'static ChildOf>)>,
+    models: Query<'w, 's, (Entity, &'static FollowActor, Option<&'static ChildOf>, &'static ViewVisibility)>,
     attached: Query<'w, 's, (Entity, &'static FollowBone, Option<&'static ChildOf>)>,
     cameras: Query<'w, 's, (&'static Camera, &'static VisibleEntities)>,
     shadow_only: Res<'w, ShadowOnly>,
@@ -443,14 +443,17 @@ fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, back
     // An inactive camera keeps the list it last had, so only the active ones count.
     let meshes: Vec<&[Entity]> = drawing_cameras.iter().filter(|(camera, _)| camera.is_active).map(|(_, seen)| seen.get(TypeId::of::<Mesh3d>())).collect();
     let drew = |entity, parent: Option<&ChildOf>| camera_drew(&meshes, &shadow_only.0, entity, parent.map(ChildOf::parent));
-    for (entity, follow, parent) in &models {
+    let mut frame = world.spare.take().unwrap_or_default();
+    let JobBuffers { mut held, mut followed, visible: mut seen, mut casting, mut placed, mut watched } = std::mem::take(&mut frame.job_buffers);
+    casting.clear();
+    for (entity, follow, parent, in_a_view) in &models {
         world.followed.insert(follow.actor);
         if drew(entity, parent) {
             world.visible.insert(follow.actor);
+        } else if in_a_view.get() {
+            casting.insert(follow.actor);
         }
     }
-    let mut frame = world.spare.take().unwrap_or_default();
-    let JobBuffers { mut held, mut followed, visible: mut seen, mut placed, mut watched } = std::mem::take(&mut frame.job_buffers);
     followed.clear();
     followed.extend(&world.followed);
     followed.extend(attached.iter().flat_map(|(_, follow, _)| [follow.base, follow.actor]));
@@ -475,6 +478,7 @@ fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, back
         canvas,
         followed,
         visible: seen,
+        casting,
         placed,
         watched,
         finished: std::mem::take(&mut world.finished),

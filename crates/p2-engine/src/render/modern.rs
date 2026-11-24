@@ -4,15 +4,16 @@
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
-use bevy::app::{App, Plugin, Update};
-use bevy::asset::{Asset, AssetEvent, Assets};
+use bevy::app::{App, Plugin, PostUpdate, Update};
+use bevy::asset::{Asset, AssetEvent, AssetEventSystems, Assets};
 use bevy::camera::{Camera, Camera3d, CameraOutputMode, ClearColorConfig};
 use bevy::camera::Hdr;
 use bevy::camera::visibility::RenderLayers;
 use bevy::color::{Color, LinearRgba};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::ecs::change_detection::{DetectChanges, DetectChangesMut};
-use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, MessageReader, Mut, Or, Query, Res, ResMut, SystemSet, With, Without};
+use bevy::ecs::prelude::{Added, Changed, Commands, Component, Entity, Has, Local, Mut, Or, Query, Res, ResMut, SystemSet, With, Without};
+use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::ecs::world::EntityWorldMut;
@@ -37,6 +38,7 @@ use crate::display::{
 };
 use crate::level_collision::LevelCollision;
 use crate::mesh_view::{NoSunCast, SKY_LAYER};
+use crate::render::lamps::material_added;
 use crate::render::tone::ToneCamera;
 use crate::render::actor_light::{ActorLitMaterial, HardwareLighting, LightEnvironment, settle_step};
 use crate::render::blended::{OpaqueDecals, TerrainLayerMaterial};
@@ -64,16 +66,23 @@ impl Plugin for ModernGraphicsPlugin {
             Update,
             (
                 apply.run_if(resource_changed::<Settings>),
-                follow_flag::<LightmappedMaterial>,
-                follow_flag::<MeshLitMaterial>,
-                follow_flag::<ActorLitMaterial>,
-                follow_flag::<TerrainMaterial>,
-                follow_flag::<TerrainLayerMaterial>,
                 (sun_shadows, follow_sun).chain(),
                 view_ambient,
                 (watch_props, sun_casters).chain(),
             )
                 .in_set(ModernGraphicsSystems::Apply),
+        );
+        // Before the frame's asset events go out, so a new material reaches the GPU once, with its flag.
+        app.add_systems(
+            PostUpdate,
+            (
+                follow_flag::<LightmappedMaterial>,
+                follow_flag::<MeshLitMaterial>,
+                follow_flag::<ActorLitMaterial>,
+                follow_flag::<TerrainMaterial>,
+                follow_flag::<TerrainLayerMaterial>,
+            )
+                .before(AssetEventSystems),
         );
     }
 }
@@ -124,22 +133,22 @@ impl ModernFlagged for TerrainMaterial {
     }
 }
 
-/// Animated materials change every frame, which must not rescan the whole store.
-fn follow_flag<M: ModernFlagged>(settings: Res<Settings>, mut events: MessageReader<AssetEvent<M>>, mut materials: ResMut<Assets<M>>) {
+/// Animated materials change every frame, which must not rescan the whole store: only a new material or a changed
+/// setting does.
+fn follow_flag<M: ModernFlagged>(
+    settings: Res<Settings>,
+    events: Option<Res<Messages<AssetEvent<M>>>>,
+    mut cursor: Local<MessageCursor<AssetEvent<M>>>,
+    mut known: Local<usize>,
+    mut materials: ResMut<Assets<M>>,
+) {
+    let added = material_added(events.as_deref(), &mut cursor);
+    if !settings.is_changed() && materials.len() == *known && !added {
+        return;
+    }
+    *known = materials.len();
     let bits = modern_flag(&settings);
-    let store = materials.as_ref();
-    let stale: Vec<_> = if settings.is_changed() {
-        store.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect()
-    } else {
-        events
-            .read()
-            .filter_map(|event| match event {
-                AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(*id),
-                _ => None,
-            })
-            .filter(|&id| store.get(id).is_some_and(|material| material.flag() != bits))
-            .collect()
-    };
+    let stale: Vec<_> = materials.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect();
     for &id in &stale {
         if let Some(mut material) = materials.get_mut(id) {
             material.set_flag(bits);
@@ -340,6 +349,10 @@ pub const MOVER_LAYER: usize = 9;
 /// The layer it adds to every other caster: the static world.
 pub const STATIC_CASTER_LAYER: usize = 10;
 
+/// The layer it adds to a placed mesh that stands still. The lamps' cube maps draw it with the movers: the lamps' atlas
+/// holds only what can never move, so a resting prop had no lamp shadow at all.
+pub const RESTING_PROP_LAYER: usize = 11;
+
 pub(crate) fn brightest_sun<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, level_brightness: f32) -> Option<(MeshLight, HardwareLight)> {
     let strength = |light: &HardwareLight| light.color.iter().sum::<f32>();
     lights
@@ -389,16 +402,23 @@ fn sun_place(direction: Vec3) -> Transform {
 /// A map without a sun still gets contact shadows: the key light's side stands for it, and its black light adds nothing.
 const NO_SUN_DIRECTION: Vec3 = Vec3::new(-0.458088, -0.814379, -0.356291);
 
-/// By the sun's shadow level: the side of every directional shadow map, the movers' cascades (two or more, as a sun with
-/// one cascade reads as a cached level) and the static world's cached levels. Level 0 draws no shadow map.
-pub(crate) fn sun_quality(level: u8) -> (usize, usize, usize) {
+/// By the sun's shadow level: the side of every directional shadow map and the static world's cached levels. Level 0
+/// draws no shadow map.
+pub(crate) fn sun_quality(level: u8) -> (usize, usize) {
     match level {
-        0 | 1 => (1024, 2, 3),
-        2 => (2048, 2, 3),
-        3 => (2048, 3, 4),
-        _ => (4096, 3, 4),
+        0 | 1 => (1024, 3),
+        2 => (2048, 3),
+        3 => (2048, 4),
+        _ => (4096, 4),
     }
 }
+
+/// Two, as a sun with one cascade reads as a cached level.
+const MOVER_CASCADES: usize = 2;
+
+/// In Unreal units. Every mover in a cascade is queued and drawn again each frame, a figure's skin changing every frame,
+/// and at the static world's reach the far cascade held every figure of the map for shadows a few pixels wide.
+const MOVER_SHADOW_REACH: f32 = 4096.0;
 
 /// In Unreal units, by the shadow distance level 1 to 5: the movers' reach and the outermost cached level's half width.
 const SHADOW_REACH: [f32; 5] = [2048.0, 4096.0, 8192.0, 16384.0, 32768.0];
@@ -411,11 +431,11 @@ pub(crate) fn shadow_reach(level: u8) -> f32 {
     SHADOW_REACH[usize::from(level.clamp(1, 5) - 1)]
 }
 
-fn sun_cascades(sun_level: u8, distance_level: u8) -> CascadeShadowConfig {
+fn sun_cascades(distance_level: u8) -> CascadeShadowConfig {
     CascadeShadowConfigBuilder {
-        num_cascades: sun_quality(sun_level).1,
+        num_cascades: MOVER_CASCADES,
         minimum_distance: 1.0,
-        maximum_distance: shadow_reach(distance_level),
+        maximum_distance: shadow_reach(distance_level).min(MOVER_SHADOW_REACH),
         first_cascade_far_bound: FIRST_CASCADE_FAR,
         overlap_proportion: SUN_OVERLAP,
     }
@@ -486,7 +506,7 @@ fn sun_shadows(
     let color = sun_color(environment);
     let place = sun_place(sun.map_or(NO_SUN_DIRECTION, |(_, hardware)| Vec3::from(p2_bevy_assets::to_bevy(hardware.direction))));
     let wanted = sun_light(color, sun_level > 0 && sun.is_some(), settings.modern_level(MODERN_CONTACT_SHADOWS) > 0);
-    let cascades = sun_cascades(sun_level, settings.modern_level(MODERN_SHADOW_DISTANCE));
+    let cascades = sun_cascades(settings.modern_level(MODERN_SHADOW_DISTANCE));
     let mut found = false;
     for (entity, mut current, mut transform, mut config) in &mut suns {
         if std::mem::replace(&mut found, true) {
@@ -602,7 +622,9 @@ fn sun_casters(
             let casts = on && !entity.contains::<CanvasDrawn>() && !entity.contains::<NoSunCast>() && !is_see_through(&entity);
             let still = entity.get::<StillProp>().is_some_and(|still| still.0);
             let mover = (entity.contains::<FollowActor>() || entity.contains::<FollowBone>()) && !still;
-            let wanted = caster_layers(&current, casts, mover);
+            let cast = caster_layers(&current, casts, mover);
+            let resting = still && cast.intersects(&RenderLayers::layer(STATIC_CASTER_LAYER));
+            let wanted = if resting { cast.with(RESTING_PROP_LAYER) } else { cast.without(RESTING_PROP_LAYER) };
             if wanted != current {
                 let cached = RenderLayers::layer(STATIC_CASTER_LAYER);
                 if wanted.intersects(&cached) != current.intersects(&cached) {

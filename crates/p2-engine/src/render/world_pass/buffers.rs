@@ -70,6 +70,9 @@ pub(super) fn section_uniform(section: &WorldSection, material: &PreparedMateria
     let affine = Affine3::from(section.world_from_local);
     let transforms = MeshTransforms { world_from_local: affine, previous_world_from_local: affine, flags: flags.bits() };
     let mut uniform = MeshUniform::new(&transforms, first_vertex, material.binding.slot, None, None, None, None, metadata_index);
+    // The section's zone plus one, for the lamps' zone test in `modern.wesl`; 0 on a section in several zones or in
+    // zone 0, which no portal closes off.
+    uniform.tag = section.zone.filter(|&zone| zone != 0).map_or(0, |zone| u32::from(zone) + 1);
     if let Some(slot) = light_slot {
         uniform.material_and_lightmap_bind_group_slot = u32::from(material.binding.slot) | ((slot as u32) << 16);
         uniform.lightmap_uv_rect = UVec2::new(0, u32::MAX);

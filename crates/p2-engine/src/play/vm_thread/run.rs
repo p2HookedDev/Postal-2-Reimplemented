@@ -117,7 +117,7 @@ impl Simulation {
         frame.times.push(("vm read actors", started.elapsed()));
         let started = Instant::now();
         for &actor in followed {
-            if job.visible.contains(&actor) || !self.posed.contains(&actor) {
+            if job.visible.contains(&actor) || job.casting.contains(&actor) || !self.posed.contains(&actor) {
                 self.read_pose(actor, &mut frame);
             }
         }
@@ -154,7 +154,7 @@ impl Simulation {
         frame.profile = self.vm.diagnostics.tick_profile.take().unwrap_or_default();
         let vm_time = frame.times.iter().filter(|(name, _)| !name.starts_with("after hud: ")).map(|(_, time)| *time).sum();
         self.log_work(vm_time);
-        frame.job_buffers = JobBuffers { held: job.held, followed: job.followed, visible: job.visible, placed: job.placed, watched: job.watched };
+        frame.job_buffers = JobBuffers { held: job.held, followed: job.followed, visible: job.visible, casting: job.casting, placed: job.placed, watched: job.watched };
         frame
     }
 

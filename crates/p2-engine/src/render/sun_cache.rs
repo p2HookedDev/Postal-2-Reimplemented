@@ -103,7 +103,7 @@ pub fn level_config(half_width: f32) -> CascadeShadowConfig {
 /// not shimmer when it redraws.
 fn level_half_widths(settings: &Settings) -> Vec<f32> {
     let outermost = shadow_reach(settings.modern_level(MODERN_SHADOW_DISTANCE));
-    std::iter::successors(Some(outermost), |width| Some(width / 4.0)).take(sun_quality(settings.modern_level(MODERN_SHADOWS)).2).collect()
+    std::iter::successors(Some(outermost), |width| Some(width / 4.0)).take(sun_quality(settings.modern_level(MODERN_SHADOWS)).1).collect()
 }
 
 fn snapped(eye: Vec3, half_width: f32) -> Vec3 {
@@ -294,10 +294,12 @@ fn skip_idle_shadow_views(
     mut cleared: Local<HashMap<RetainedViewEntity, String>>,
     mut texture: Local<Option<(TextureId, TextureId)>>,
     mut idle: Local<HashSet<Entity>>,
+    mut turns: Local<FaceTurns>,
 ) {
     let now = cameras.iter().next().map(|(_, bindings)| (bindings.directional_light_depth_texture.id(), bindings.point_light_depth_texture.id()));
     if now.is_some() && std::mem::replace(&mut *texture, now) != now {
         cleared.clear();
+        turns.drawn.clear();
     }
     idle.clear();
     let mut seen = HashMap::with_capacity(cleared.len());
@@ -315,10 +317,44 @@ fn skip_idle_shadow_views(
     for (mut lights, _) in &mut cameras {
         lights.lights.retain(|light| !idle.contains(light));
     }
-    for (entity, _, _, light) in &views {
-        if idle.contains(&entity) && !matches!(light, LightEntity::Directional { .. }) {
-            commands.entity(entity).remove::<RootNonCameraView>();
+    let mut busy = Vec::new();
+    for (entity, view, shadow, light) in &views {
+        if matches!(light, LightEntity::Directional { .. }) {
+            continue;
         }
+        if idle.contains(&entity) {
+            commands.entity(entity).remove::<RootNonCameraView>();
+        } else if !cleared.contains_key(&view.retained_view_entity) {
+            busy.push((shadow.pass_name.clone(), entity, view.retained_view_entity));
+        }
+    }
+    for entity in turns.wait(busy) {
+        commands.entity(entity).remove::<RootNonCameraView>();
+    }
+}
+
+/// A lamp's cube faces with movers in them each cost a run of the 3D schedule. This many are drawn a frame, in turn; the
+/// others keep the shadows of their last turn, a frame or two old.
+const FACES_A_FRAME: usize = 4;
+
+#[derive(Default)]
+struct FaceTurns {
+    drawn: HashMap<RetainedViewEntity, String>,
+    next: usize,
+}
+
+impl FaceTurns {
+    /// The faces that wait this frame. A face that has not drawn under its pass name holds another lamp's shadows, or
+    /// none, so it draws at once and takes no turn.
+    fn wait(&mut self, mut busy: Vec<(String, Entity, RetainedViewEntity)>) -> Vec<Entity> {
+        busy.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let (taking_turns, first_draw): (Vec<_>, Vec<_>) = busy.into_iter().partition(|(name, _, view)| self.drawn.get(view) == Some(name));
+        let count = taking_turns.len();
+        let start = if count == 0 { 0 } else { self.next % count };
+        let has_turn = |index: usize| count <= FACES_A_FRAME || (index + count - start) % count < FACES_A_FRAME;
+        self.next = if count > FACES_A_FRAME { (start + FACES_A_FRAME) % count } else { 0 };
+        self.drawn = taking_turns.iter().chain(&first_draw).map(|(name, _, view)| (*view, name.clone())).collect();
+        taking_turns.into_iter().enumerate().filter(|&(index, _)| !has_turn(index)).map(|(_, (_, entity, _))| entity).collect()
     }
 }
 
@@ -344,6 +380,22 @@ impl Plugin for SunCachePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_faces_take_turns_and_a_new_face_draws_at_once() {
+        let face = |index: u32| (format!("face {index}"), Entity::from_raw_u32(index + 1).expect("an entity"), RetainedViewEntity::new(bevy::render::sync_world::MainEntity::from(Entity::from_raw_u32(100).expect("an entity")), None, index));
+        let six = || (0..6).map(face).collect::<Vec<_>>();
+        let mut turns = FaceTurns::default();
+        assert!(turns.wait(six()).is_empty());
+        let waiting = |turns: &mut FaceTurns| turns.wait(six()).into_iter().map(|entity| entity.index_u32() - 1).collect::<Vec<_>>();
+        assert_eq!(waiting(&mut turns), [4, 5]);
+        assert_eq!(waiting(&mut turns), [2, 3]);
+        assert_eq!(waiting(&mut turns), [0, 1]);
+        let mut with_new = six();
+        with_new.push(face(6));
+        assert_eq!(turns.wait(with_new).len(), 2);
+        assert!(turns.wait((0..4).map(face).collect()).is_empty());
+    }
 
     #[test]
     fn redraws_merge_but_a_lost_texture_goes_at_once() {
@@ -384,7 +436,7 @@ mod tests {
         assert_eq!(level_half_widths(&settings("1", "1")), [2048.0, 512.0, 128.0]);
         assert_eq!(level_half_widths(&settings("4", "5")), [32768.0, 8192.0, 2048.0, 512.0]);
         for level in 1..=4 {
-            let (size, _, count) = sun_quality(level);
+            let (size, count) = sun_quality(level);
             for distance in 1..=5 {
                 let outermost = shadow_reach(distance);
                 for half_width in std::iter::successors(Some(outermost), |width| Some(width / 4.0)).take(count) {
