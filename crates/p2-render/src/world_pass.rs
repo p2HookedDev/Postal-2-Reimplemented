@@ -1,5 +1,5 @@
-//! The static world drawn from one table instead of one entity per section, culled in a compute pass. Sections keep
-//! their Bevy mesh and material assets, so pipelines, shaders and bindless slots stay Bevy's.
+//! The static world drawn from one table instead of one entity per section, culled in a compute pass.
+//! Sections keep their Bevy mesh and material assets, so pipelines, shaders and bindless slots stay Bevy's.
 
 use std::any::TypeId;
 use std::num::NonZero;
@@ -79,9 +79,7 @@ use queue::queue_world;
 use cull::prepare_world_views;
 use draw::{DrawWorld, DrawWorldDepthOnly, DrawWorldPrepass};
 
-/// In Unreal units: small enough to cull well, large enough to keep draws few.
 const CELL: f32 = 2048.0;
-/// More than a frame takes: the camera and the one cached sun level it draws.
 const MAX_VIEWS: usize = 5;
 const VIEW_STRIDE: u64 = 256;
 const VIEW_SIZE: u64 = 144;
@@ -105,7 +103,6 @@ pub struct Chunk {
     pub half: Vec3,
 }
 
-/// Sorts a mesh's triangles into cells, one index range each. `None`: not a triangle list.
 pub fn chunks_of(mesh: &mut Mesh) -> Option<Arc<[Chunk]>> {
     if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
         return None;
@@ -147,16 +144,13 @@ pub struct WorldSection {
     pub lightmap: Option<AssetId<Image>>,
     pub chunks: Arc<[Chunk]>,
     pub casts: bool,
-    /// Drawn only while the eye's portals reach one of these zones. `None`: always.
     pub zones: Option<Vec<u8>>,
 }
 
-/// Whether sun shadow views draw the static world. Off, the shadow phase queues nothing and culls nothing.
 #[derive(Resource, Clone, Copy, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct WorldCasts(pub bool);
 
-/// One bit per zone the eye's portals reach.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct WorldSeenZones(pub [u32; 8]);
@@ -186,7 +180,6 @@ impl Default for WorldDraws {
     }
 }
 
-/// Keeps the assets alive, which no entity holds.
 #[derive(Resource, Default)]
 struct WorldAssets {
     meshes: Vec<Handle<Mesh>>,
@@ -237,8 +230,6 @@ impl WorldTargets<'_, '_> {
 #[extract_app(RenderApp)]
 pub struct WorldCamera;
 
-/// Raised when every shadow view that holds the static world must draw it again. Shared by both worlds; whoever keeps
-/// those views inits and extracts it.
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct StaticShadowsStale(pub Arc<AtomicBool>);
@@ -351,8 +342,8 @@ impl Plugin for WorldPassPlugin {
             .add_systems(ExtractSchedule, extract_modified_meshes)
             .add_systems(Render, queue_world.in_set(RenderSystems::QueueMeshes))
             .add_systems(Render, prepare_world_views.in_set(RenderSystems::PrepareResources))
-            // The shadow passes are in no set: without their own order a level that redraws can run before this
-            // frame's cull and draw none of the world.
+            // The shadow passes are in no set: without their own order a redrawing level can run before this frame's cull
+            // and draw none of the world.
             .add_systems(
                 Core3d,
                 level::cull_and_draw_level

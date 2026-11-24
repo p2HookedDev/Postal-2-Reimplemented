@@ -162,7 +162,6 @@ fn joint_gap(world: &World, bodies: &[BodyId], params: &RagdollParams) -> f32 {
     }).fold(0.0, f32::max)
 }
 
-/// The cases that end under the ground, torn or too fast; those asleep that turn once woken; the worst joint gap.
 fn ground_cases(rig: &Rig) -> (Vec<String>, Vec<String>, f32) {
     let (mut failures, mut kicked) = (Vec::new(), Vec::new());
     let mut worst_gap = 0.0f32;

@@ -34,7 +34,6 @@ struct PlayingAmbient {
     said: (p2_math::Vector, f32, f32),
 }
 
-/// What is playing for the world of `generation`, and the sounds read for it. Emptied when another world is played.
 #[derive(Resource, Default)]
 pub(crate) struct SoundBook {
     generation: u64,
@@ -44,7 +43,6 @@ pub(crate) struct SoundBook {
     heard_now: FxHashSet<ObjectId>,
     voices: FxHashMap<(ObjectId, u8), Entity>,
     sounds: HashMap<String, Option<LoadedSound>>,
-    /// In the world's seconds played.
     flashbang_until: Option<f32>,
     flashbang_on: bool,
 }
@@ -98,8 +96,6 @@ fn pause_movie_sound(play: Res<Play>, sinks: Query<(&MovieSound, &AudioSink)>) {
     }
 }
 
-/// The quietest give way when more than `Channels` play. One on an actor's ambient slot stops when its
-/// actor goes; any other plays on where it was.
 #[derive(Component)]
 pub(crate) struct Channel {
     loudness: f32,
@@ -403,8 +399,6 @@ fn play_sounds(commands: &mut Commands, world: &mut PlayWorld, book: &mut SoundB
             commands.spawn((AudioPlayer::new(source), settings));
             continue;
         }
-        // A sound on an actor's slot (not slot 0) replaces the one still playing there,
-        // or with `bNoOverride` is dropped.
         let voice = played.actor.filter(|_| played.slot != 0).map(|actor| (actor, played.slot));
         if let Some(mut playing) = voice.and_then(|voice| book.voices.get(&voice)).and_then(|&entity| commands.get_entity(entity).ok()) {
             if played.no_override {

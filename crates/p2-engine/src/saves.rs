@@ -51,7 +51,8 @@ pub fn write(slot: i32, save: Box<SaveGame>) {
     }));
 }
 
-/// The lock is held through the wait, so a save queued meanwhile starts after it; the writers never take the lock.
+/// The lock is held through the wait, so a save queued meanwhile starts after it; the writers never take the
+/// lock.
 pub fn finish_writes() {
     let mut last = LAST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(last) = last.take() {

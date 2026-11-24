@@ -3,11 +3,9 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(super) enum Planes {
     Frustum,
-    /// A sun's cascade: what lies before its near plane still casts, as its depth is clamped.
     Sides,
 }
 
-/// `Vec4(normal, d)`: a point is inside at `dot(normal, p) + d >= 0`. An unused plane is (0, 0, 0, 1), always inside.
 pub(super) fn view_planes(clip_from_world: Mat4, planes: Planes) -> [Vec4; 6] {
     let row = |index: usize| clip_from_world.row(index);
     let plane = |raw: Vec4| {
@@ -43,7 +41,6 @@ pub(super) fn prepare_world_views(
     let clip_from_world = |view: &ExtractedView| view.clip_from_world.unwrap_or_else(|| view.clip_from_view * view.world_from_view.to_matrix().inverse());
     let mut bytes = Vec::with_capacity(MAX_VIEWS * VIEW_STRIDE as usize);
     let mut slot = 0u32;
-    // The cached sun level has no view entity: its slot is kept on the pass.
     let mut add = |entity: Option<(Entity, Option<&WorldCullSlot>)>, planes: [Vec4; 6], chunks: Chunks, zones: [u32; 8]| {
         if slot as usize >= MAX_VIEWS {
             return None;

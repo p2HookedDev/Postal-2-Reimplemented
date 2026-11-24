@@ -44,7 +44,6 @@ use rustc_hash::FxHashMap;
 
 const W: u32 = 640;
 const H: u32 = 360;
-/// The floor, in Unreal z and Bevy y.
 const FLOOR: f32 = -6.0;
 
 fn image(width: u32, height: u32, texels: Vec<u8>, format: TextureFormat) -> Image {
@@ -59,7 +58,6 @@ fn hash(x: u32, y: u32) -> f32 {
     (h & 0xFFFF) as f32 / 65535.0
 }
 
-/// Grey concrete with some grain.
 fn concrete() -> Image {
     let side = 64;
     let texels = (0..side * side)
@@ -72,7 +70,6 @@ fn concrete() -> Image {
     image(side, side, texels, TextureFormat::Rgba8UnormSrgb)
 }
 
-/// Tiles 32 units square in a beige and blue-grey checker with darker grout, two texels to the unit.
 fn tile() -> Image {
     let side = 128;
     let texels = (0..side * side)
@@ -101,7 +98,6 @@ enum Floor {
 }
 
 impl Floor {
-    /// Wrapping as the map's textures do; the floor's texture coordinates run far past 1.
     fn texture(self) -> Image {
         let mut image = match self {
             Self::Concrete => concrete(),
@@ -111,7 +107,6 @@ impl Floor {
         image
     }
 
-    /// The least spread of luma along a row of bare floor: a smaller one is a floor drawn in one flat colour.
     fn least_spread(self) -> u32 {
         match self {
             Self::Concrete => 6,
@@ -119,7 +114,6 @@ impl Floor {
         }
     }
 
-    /// The floor length, in units, that one repeat of the texture covers.
     fn repeat(self) -> f32 {
         match self {
             Self::Concrete => 32.0,
@@ -128,7 +122,6 @@ impl Floor {
     }
 }
 
-/// A retail-like wall splat: dark red on transparent black, a blob with spatter round it.
 fn splat() -> Image {
     let side = 64u32;
     let blobs = [(32.0, 32.0, 14.0), (20.0, 26.0, 6.0), (44.0, 40.0, 5.0), (12.0, 44.0, 3.0), (52.0, 16.0, 3.5), (40.0, 54.0, 2.5)];
@@ -142,7 +135,6 @@ fn splat() -> Image {
     image(side, side, texels, TextureFormat::Rgba8UnormSrgb)
 }
 
-/// A horizontal floor at `FLOOR`, its texture repeating every `repeat` units.
 fn floor_mesh(repeat: f32) -> Mesh {
     let half = 400.0;
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -173,7 +165,6 @@ fn floor_collision() -> StaticCollision {
     }
 }
 
-/// Splats lying flat on the floor at these Unreal places, each `half` wide.
 fn lying(places: &[(f32, f32)], half: f32) -> DrawnEmitter {
     let sprites = places
         .iter()
@@ -198,7 +189,6 @@ fn blood(parent: bevy::ecs::entity::Entity, role: LiquidRole, emitter: DrawnEmit
     DrawnActor { parent, drawn: true, seen: true, liquid: Some(liquid), emitters: vec![emitter], ..DrawnActor::default() }
 }
 
-/// A blood stream from a wound 40 units up, arcing down onto the floor.
 fn stream(parent: bevy::ecs::entity::Entity) -> DrawnActor {
     let from = Vector::new(-70.0, -60.0, FLOOR + 40.0);
     let velocity = Vector::new(40.0, -120.0, 60.0);
@@ -212,16 +202,12 @@ fn stream(parent: bevy::ecs::entity::Entity) -> DrawnActor {
     blood(parent, LiquidRole::Stream, DrawnEmitter { strip: strip.collect(), ..DrawnEmitter::default() }, Some(pour))
 }
 
-/// A game blood decal on the floor around Unreal (x, y), `side` units wide, marked as blood the way our liquids mark
-/// the game's blood decals.
 fn decal_box(x: f32, y: f32, side: f32) -> Transform {
     let trace = 16.0;
     let centre = Vec4::new(x, FLOOR + 4.0 - trace / 2.0, y, 1.0);
     Transform::from_matrix(Mat4::from_cols(Vec4::X * side, Vec4::Z * side, Vec4::Y * trace, centre))
 }
 
-/// The scene: a floor lit by its light map and a low sun, a blood puddle, a trail of splats, a game blood decal and a
-/// blood stream, seen from a standing player's eye. The picture as RGBA.
 fn blood_scene(ground: Floor, sun_way: Vec3) -> Vec<u8> {
     let mut app = App::new();
     common::headless_renderer(&mut app);
@@ -302,8 +288,6 @@ fn blood_scene(ground: Floor, sun_way: Vec3) -> Vec<u8> {
 
     let start = Instant::now();
     let floor_pixel = ((H * 7 / 8 * W + W / 2) * 4) as usize;
-    // The stream moves every frame: the picture is taken three seconds after everything is built, the probes are
-    // baked and the floor shows. The camera's ambient alpha is the probe spacing, 0 until the bake is in.
     let mut settled = 0;
     loop {
         let mut facts = app.world_mut().resource_mut::<FrameFacts>();
@@ -324,11 +308,9 @@ fn blood_scene(ground: Floor, sun_way: Vec3) -> Vec<u8> {
     }
 }
 
-/// Not a check of a number: it draws blood the way the game does and leaves the picture to be looked at.
 #[test]
 #[ignore = "needs a GPU; writes a picture to look at"]
 fn blood_on_a_lit_floor_picture() {
-    // Lit from behind the eye, and from low ahead of it as a lamp down a corridor, where a wet pool shows its gloss.
     for (ground, prefix, (floor_x, floor_y)) in [(Floor::Concrete, "", (320, 330)), (Floor::Tile, "tile_", (418, 112))] {
         for (name, sun_way) in [("front", Vec3::new(0.4, -0.6, -0.7)), ("back", Vec3::new(-0.15, -0.45, 0.88))] {
             let frame = blood_scene(ground, sun_way);
@@ -337,8 +319,6 @@ fn blood_on_a_lit_floor_picture() {
             std::fs::write(&path, &frame).expect("the picture written");
             eprintln!("PICTURE {} {W}x{H}, {red} blood pixels", path.display());
             assert!(red > 200, "{prefix}{name}: no blood drawn: {red} pixels");
-            // The ketchup fault: blood brighter than the lit floor it lies on. Blood is darker than the floor, and the
-            // crimson of the game's blood splats.
             let pixel = |x: u32, y: u32| frame[((y * W + x) * 4) as usize..][..3].to_vec();
             let brightness = |rgb: &[u8]| (u32::from(rgb[0]) * 299 + u32::from(rgb[1]) * 587 + u32::from(rgb[2]) * 114) / 1000;
             let luma = |x: u32| brightness(&pixel(x, H * 7 / 8));

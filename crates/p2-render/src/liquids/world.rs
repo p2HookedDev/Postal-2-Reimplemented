@@ -1,5 +1,5 @@
-//! The world's liquids on the main world: the scripts' puddles and trail splats hold the surface they lie on wet and
-//! landing drops add to it; the layer steps on the level's clock.
+//! The world's liquids on the main world: the scripts' puddles and trail splats hold the surface they lie on wet
+//! and landing drops add to it; the layer steps on the level's clock.
 
 use std::f32::consts::PI;
 
@@ -30,7 +30,6 @@ const MOST_STEPS: u32 = 4;
 /// The share of a puddle or splat sprite's half side its picture reaches at the most (unverified).
 const SPRITE_FILL: f32 = 0.85;
 const MOST_FEED_RADIUS: f32 = 280.0;
-/// A landing drop's volume spreads over at least this radius, in texels.
 const DROP_TEXELS: f32 = 1.5;
 /// Where a stream lands it piles a little liquid each second over this many texels. Small against drying, so it
 /// hardly grows the scripts' splats.
@@ -48,13 +47,13 @@ impl Plugin for LiquidWorldPlugin {
     }
 }
 
-/// A face whose normal's z is over 0.5 is a floor; any other feeds the tiles of its plane.
 fn face_of(normal: Vector) -> Option<Vector> {
     (normal.z <= 0.5).then_some(normal)
 }
 
-/// The surfaces under the scripts' puddles and trail splats, held at the film while their sprites show and as their
-/// fade thins it: the scripts keep their size, place and life. A splat lies on the face the scripts fitted it to.
+/// The surfaces under the scripts' puddles and trail splats, held at the film while their sprites show and as
+/// their fade thins it: the scripts keep their size, place and life. A splat lies on the face the scripts fitted
+/// it to.
 fn deposits(drawn: &DrawnParticles, feeds: &mut Vec<Feeding>) {
     for actor in drawn.actors.iter().filter(|actor| actor.drawn && actor.overlay.is_none()) {
         let Some(Liquid { kind, role: role @ (LiquidRole::Puddle | LiquidRole::Trail | LiquidRole::Flow), burning, .. }) = actor.liquid else { continue };
@@ -63,7 +62,6 @@ fn deposits(drawn: &DrawnParticles, feeds: &mut Vec<Feeding>) {
             .iter()
             .filter_map(|emitter| Some((emitter.shape.facing.filter(|facing| *facing != Vec3::ZERO)?, &emitter.sprites)))
             .flat_map(|(facing, sprites)| sprites.iter().map(move |sprite| (sprite, Vector::from(facing.to_array()))))
-            // Only quads lying on the face: a drip trail's falling drops face along their flight.
             .filter(|(sprite, normal)| sprite.color[3] > 0 && sprite.right.cross(sprite.up).dot(*normal).abs() >= 0.5 * sprite.right.size() * sprite.up.size());
         let fed = |(sprite, normal): (&SpriteParticle, Vector)| Feeding {
             at: sprite.location,
@@ -89,12 +87,10 @@ fn deposits(drawn: &DrawnParticles, feeds: &mut Vec<Feeding>) {
     }
 }
 
-/// What a stream's landing piles where it lands, on any face.
 fn impact(hit: &FluidHit) -> Feeding {
     Feeding { at: hit.at, radius: IMPACT_TEXELS * TEXEL, kind: hit.kind, feed: Feed::Add(IMPACT_VOLUME * hit.seconds), burning: false, face: face_of(hit.normal) }
 }
 
-/// A landing drop's disc, wide enough for its volume to stand at the film at its middle and no narrower than a drop.
 fn landing_radius(landing: &LiquidLanding) -> f32 {
     (landing.volume / (PI * film_of(landing.kind))).sqrt().max(DROP_TEXELS * TEXEL)
 }

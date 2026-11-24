@@ -100,8 +100,8 @@ fn steam_paths() -> Vec<PathBuf> {
     app.into_iter().chain(steam_folders(libraries)).collect()
 }
 
-/// Stands in for retail's Steam ownership check: Steam keeps no readable list of owned apps, so an app counts when it
-/// is installed in any library, and a DLC when POSTAL 2's manifest lists one of its depots.
+/// Stands in for retail's Steam ownership check: Steam keeps no readable list of owned apps, so an app counts
+/// when it is installed in any library, and a DLC when POSTAL 2's manifest lists one of its depots.
 pub fn steam_installed_apps() -> Vec<u32> {
     let Ok(steam) = steamlocate::SteamDir::locate() else {
         return Vec::new();

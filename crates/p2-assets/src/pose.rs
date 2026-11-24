@@ -1,6 +1,3 @@
-//! Pose maths for crates that must not depend on Bevy, in Unreal coordinates.
-//! The root bone's quaternion is used as stored, every other bone's conjugated.
-
 use p2_math::{Rotator, Vector};
 
 use crate::mesh_animation::slerp;
@@ -25,7 +22,6 @@ impl Frame {
         [0, 1, 2].map(|i| v[i] + self.origin[i])
     }
 
-    /// `self` after `inner` (`self · inner`).
     pub fn then(&self, inner: &Self) -> Self {
         Self { axes: inner.axes.map(|axis| self.transform_vector(axis)), origin: self.transform_point(inner.origin) }
     }
@@ -144,10 +140,7 @@ pub fn mesh_to_world(
         .then(&Frame::translation((-origin).into()))
 }
 
-/// The rotator's matrix multiplies the stored local frame, so the root turns on its parent's side
-/// and every other bone, conjugated, on its own side the other way.
 pub fn turn_local(orientation: [f32; 4], turn: [i32; 3]) -> [f32; 4] {
-    // Yaw about Z, then pitch about −Y, then roll about −X; half angles for the quaternions.
     let [pitch, yaw, roll] = turn.map(|u| u as f32 * std::f32::consts::PI / 65536.0);
     let about = |axis: usize, half: f32| {
         let mut q = [0.0, 0.0, 0.0, half.cos()];

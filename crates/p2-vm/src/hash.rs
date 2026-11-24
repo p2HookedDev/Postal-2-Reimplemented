@@ -14,8 +14,6 @@ const MAX_SPREAD_CELLS: i64 = 256;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Entry {
     pub actor: ObjectId,
-    /// May block box (extent) moves: `bBlockNonZeroExtentTraces`, and not part of the static world geometry (which
-    /// `Vm::trace_boxes` checks). Whether it blocks a given mover is `Vm::is_blocked_by`.
     pub blocks: bool,
 }
 
@@ -41,8 +39,9 @@ fn cell(v: f32) -> i32 {
     (v / CELL).floor() as i32
 }
 
-/// A long line's corridor instead of its bounding rectangle (a diagonal shot across a map covered hundreds of cells and
-/// every actor in them). Square cells of `size` units within `pad` of `a`..`b`, column by column without repeats.
+/// A long line's corridor instead of its bounding rectangle (a diagonal shot across a map covered hundreds of
+/// cells and every actor in them). Square cells of `size` units within `pad` of `a`..`b`, column by column
+/// without repeats.
 pub(crate) fn segment_cells(a: [f32; 2], b: [f32; 2], pad: f32, size: f32) -> impl Iterator<Item = (i32, i32)> {
     let index = move |v: f32| (v / size).floor() as i32;
     let (x0, x1) = (index(a[0].min(b[0]) - pad), index(a[0].max(b[0]) + pad));
@@ -163,8 +162,6 @@ impl<L: LoaderRef> Vm<L> {
             return None;
         }
         let world = self.world.is_static(actor);
-        // A live ragdoll goes in by the box around its Karma bodies, not its cylinder:
-        // the box's centre, reaching its larger horizontal half size.
         if let Some((min, max)) = self.ragdoll_box(actor) {
             let half = (max.x - min.x).max(max.y - min.y) * 0.5;
             return Some((actor, (min + max) * 0.5, Some(half)));
@@ -198,8 +195,8 @@ impl<L: LoaderRef> Vm<L> {
         (hash.placed.len(), hash.always.len(), stale)
     }
 
-    /// Nothing before the first query, which reads every actor. A static actor has the whole hash read again at the next
-    /// query.
+    /// Nothing before the first query, which reads every actor. A static actor has the whole hash read again at the
+    /// next query.
     pub(crate) fn relocate(&mut self, actor: ObjectId) {
         if !self.hash.built {
             return;
@@ -236,8 +233,6 @@ impl<L: LoaderRef> Vm<L> {
         self.hash.spare.push(entries);
     }
 
-    /// In actor order: touch events and `encroached` see actors in it. `blocks` is read now: scripts may change
-    /// `bBlockNonZeroExtentTraces` without moving the actor.
     fn current_entries(&self, mut found: Vec<Entry>) -> Vec<Entry> {
         for entry in &mut found {
             entry.blocks = !self.world.is_static(entry.actor) &&self.store.flag_of(entry.actor, Prop::bBlockNonZeroExtentTraces);

@@ -114,8 +114,6 @@ pub struct EmitterProperties {
 }
 
 impl EmitterProperties {
-    /// Particles a second while it keeps spawning, 0 once stopped: `ParticlesPerSecond` when set, else as many as
-    /// `MaxParticles` over one lifetime while dead particles respawn (the rule the simulation fills by).
     pub fn flow_rate(&self) -> f32 {
         if self.disabled {
             0.0

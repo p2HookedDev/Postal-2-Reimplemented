@@ -11,8 +11,6 @@ use crate::frame_facts::FrameFacts;
 
 /// Level 10 fades over the last quarter of the cull distance.
 const SHARE_PER_LEVEL: f32 = 0.025;
-/// A first-person eye stands about this far above its pawn at most. Farther (behind view, a cutscene camera) nothing
-/// fades: the game's cut is measured from the pawn and Bevy's range from the eye, and the two would disagree.
 const MAX_EYE_OFFSET: f32 = 96.0;
 const EYE_OFFSET_STEP: f32 = 16.0;
 
@@ -32,8 +30,8 @@ impl Plugin for FadeInPlugin {
 struct Faded;
 
 /// The game hides a thing past its cull distance from the view target; Bevy's range is measured from the eye,
-/// `eye_offset` from that target. The band ends that much past the cut, so only the game's cut hides anything and the
-/// scripts see the same at every level. A distance of 0 or below gets no band.
+/// `eye_offset` from that target. The band ends that much past the cut, so only the game's cut hides anything and
+/// the scripts see the same at every level. A distance of 0 or below gets no band.
 fn fade_band(cull_distance: f32, level: u8, eye_offset: f32) -> Option<Range<f32>> {
     let share = f32::from(level.min(10)) * SHARE_PER_LEVEL;
     (cull_distance > 0.0 && level > 0).then(|| {
@@ -47,7 +45,6 @@ fn stepped_eye_offset(offset: f32) -> Option<f32> {
     (stepped <= MAX_EYE_OFFSET).then_some(stepped)
 }
 
-/// The band last given to the draws under an `ActorModel` root.
 #[derive(Component)]
 struct FadeApplied(Option<Range<f32>>);
 
@@ -79,7 +76,6 @@ fn fade_by_cull_distance(
         return;
     };
     let joined: EntityHashSet = joined.iter().flat_map(|entity| parents.iter_ancestors(entity)).filter(|&root| models.contains(root)).collect();
-    // Every root only when what sets a band changed; else only the roots that are new or gained a draw.
     let inputs = (level, eye_offset.to_bits(), facts.cull_version);
     let every_root = last.replace(inputs) != Some(inputs);
     let mut fade = |(root, model, applied): (Entity, &ActorModel, Option<&FadeApplied>)| {

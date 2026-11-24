@@ -7,7 +7,7 @@ use bevy::time::Time;
 use p2_bevy_assets::library::WetSource;
 use p2_render_cpu::WetSim;
 
-/// Simulation steps per second; retail's rate is `(unverified)`.
+/// Simulation steps per second; retail's rate is (unverified).
 const STEPS_PER_SECOND: f32 = 30.0;
 
 pub(crate) struct WetPlugin;
@@ -45,7 +45,6 @@ pub fn animate_wet(time: Res<Time>, facts: Res<crate::frame_facts::FrameFacts>, 
     let delta = if facts.paused { 0.0 } else { time.delta_secs() };
     let interval = 1.0 / STEPS_PER_SECOND;
     wet.0.retain_mut(|wet| {
-        // Only a step touches the image: `get_mut` marks it changed, and a changed image is uploaded again.
         wet.pending = (wet.pending + delta).min(interval * 2.0);
         if wet.pending < interval {
             return images.contains(wet.image);

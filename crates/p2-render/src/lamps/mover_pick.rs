@@ -1,5 +1,3 @@
-//! Which movers get a tile from which lamps this frame, and the squares of the atlas their tiles hold.
-
 use std::ops::Range;
 
 use bevy::asset::{AssetEvent, AssetId, Assets};
@@ -54,7 +52,6 @@ struct Lit {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Square {
-    /// In [`DETAIL_UNIT`]s.
     corner: (u16, u16),
     level: usize,
 }
@@ -75,7 +72,6 @@ struct LevelHold {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Primary {
     lamp: Option<u32>,
-    /// The lamp that outscores it enough, and for how long it has.
     rival: Option<(u32, f32)>,
 }
 
@@ -98,7 +94,6 @@ struct HeldTile {
     square: Option<Square>,
     fade: f32,
     fading: Fading,
-    /// The square, axis and tangent it was drawn with last frame.
     last: Option<(Square, Vec3, f32)>,
 }
 
@@ -111,8 +106,7 @@ struct MoverState {
     near: bool,
     resting: bool,
     eye_distance: f32,
-    /// Its lamps scoring above 0 before the wall checks, best first, with their place in the lamp list, for the middle's
-    /// bits and lamp list it was made for.
+    /// Its lamps scoring above 0 before the wall checks, best first, with their place in the lamp list.
     scored: Vec<(u32, Lit)>,
     scored_for: Option<([u32; 3], u32)>,
 }
@@ -129,13 +123,9 @@ impl Bounds {
     }
 }
 
-/// A column's side in world units, unless the lamps reach wider than `LAMP_COLUMNS_MOST` of them.
 const LAMP_COLUMN: f32 = 512.0;
 const LAMP_COLUMNS_MOST: f32 = 256.0;
 
-/// The lamps that may reach each column of a grid in x and z over every lamp's reach, each column's list in the lamps'
-/// own order, so a mover scores them as it would score the whole list. A point outside the grid, which no lamp reaches,
-/// takes an edge column.
 #[derive(Default)]
 struct LampGrid {
     low: Vec2,
@@ -196,7 +186,6 @@ impl LampGrid {
         }
     }
 
-    /// The lamps that may reach `middle`, by their place in the list the grid was built from.
     fn near(&self, middle: Vec3) -> &[u32] {
         let column = self.column(middle.z, self.low.y, self.down) * self.across + self.column(middle.x, self.low.x, self.across);
         match (self.starts.get(column), self.starts.get(column + 1)) {
@@ -212,10 +201,7 @@ pub(super) struct PickState {
     movers: FxHashMap<Entity, MoverState>,
     bounds: FxHashMap<Entity, Bounds>,
     near: Vec<(f32, Entity)>,
-    /// This frame's casting meshes and their movers, in the meshes' order.
     casting: Vec<(Entity, Entity)>,
-    /// Every lamp, shown or not, remade only when one is placed, moved or removed; `lamps_made` counts the remakes. Whether
-    /// each is shown follows the view every frame, so it is read apart (`shown`, in the same order).
     lamps: Vec<Lit>,
     lamp_entities: Vec<Entity>,
     shown: Vec<bool>,
@@ -235,7 +221,6 @@ struct BuiltSkin {
     matrices: Vec<Mat4>,
 }
 
-/// Each skinned caster's joint matrices as the last run and this one built them, by the caster.
 #[derive(Default)]
 struct Skins {
     last: FxHashMap<Entity, BuiltSkin>,
@@ -246,12 +231,10 @@ fn lamp_score(lamp: &Lit, middle: Vec3) -> f32 {
     lamp.strength * lamp_falloff(lamp.at, lamp.range, lamp.spot, middle)
 }
 
-/// Best first; equal scores by lamp number, so the order never follows the query's.
 fn by_score(a: &Lit, b: &Lit) -> std::cmp::Ordering {
     b.score.total_cmp(&a.score).then(a.lamp.cmp(&b.lamp))
 }
 
-/// How far the lamp may score above 0; the slack covers rounding, so it never falls short.
 fn lamp_reach(lamp: &Lit) -> f32 {
     lamp.range.abs() * 1.001 + 1.0
 }
@@ -270,7 +253,6 @@ fn caster_key(caster: &MoverCaster) -> (AssetId<Mesh>, [u32; 16], Option<Range<u
     (*mesh, bits(world_from_mesh.to_cols_array()), joints.clone(), *mover)
 }
 
-/// Moves `next` into `held` when they differ, and says whether they did.
 fn take_if_new<T>(held: &mut Vec<T>, next: &mut Vec<T>, same: impl Fn(&T, &T) -> bool) -> bool {
     if held.len() == next.len() && held.iter().zip(next.iter()).all(|(a, b)| same(a, b)) {
         return false;
@@ -279,7 +261,6 @@ fn take_if_new<T>(held: &mut Vec<T>, next: &mut Vec<T>, same: impl Fn(&T, &T) ->
     true
 }
 
-/// The tile's axis, the tangent of its half angle and the lamp's distance to the mover's middle.
 fn tile_view(lamp_at: Vec3, middle: Vec3, radius: f32) -> (Vec3, f32, f32) {
     let to_mover = middle - lamp_at;
     let distance = to_mover.length();
@@ -287,7 +268,6 @@ fn tile_view(lamp_at: Vec3, middle: Vec3, radius: f32) -> (Vec3, f32, f32) {
     (to_mover.normalize_or(Vec3::NEG_Y), tan_half, distance)
 }
 
-/// The level whose texel on the mover is no larger than `texel` world units.
 fn tile_level(tan_half: f32, distance: f32, texel: f32, finest: usize) -> usize {
     let texels = 2.0 * tan_half * distance / texel;
     (texels / DETAIL_UNIT as f32).log2().round().clamp(0.0, finest as f32) as usize
@@ -306,7 +286,6 @@ fn hold_level(hold: LevelHold, wanted: usize, dt: f32) -> LevelHold {
     }
 }
 
-/// `best` is the best scoring lamp and `held_score` what the held primary scores now.
 fn hold_primary(held: Primary, best: Option<(u32, f32)>, held_score: f32, dt: f32) -> Primary {
     let Some((best, best_score)) = best.filter(|&(_, score)| score > 0.0) else { return Primary::default() };
     match held.lamp {
@@ -322,7 +301,6 @@ fn hold_primary(held: Primary, best: Option<(u32, f32)>, held_score: f32, dt: f3
     }
 }
 
-/// `scores` best first; held extras are kept before new ones are taken.
 fn pick_extras(held: [Option<u32>; MOST_EXTRAS], scores: impl Iterator<Item = (u32, f32)> + Clone, (primary, primary_score): (u32, f32), most: usize) -> [Option<u32>; MOST_EXTRAS] {
     let was_held = |lamp: u32| held.contains(&Some(lamp));
     let others = scores.filter(move |&(lamp, score)| lamp != primary && score > 0.0);
@@ -371,7 +349,6 @@ fn lamp_reaches(level: &StaticCollision, origin: Vec3, lamp_at: Vec3, middle: Ve
     level.light_passes(from, from + to_lamp * (1.0 - LAMP_CLEARANCE / distance))
 }
 
-/// A square of `level`, else the largest smaller one free; a held square stays while no larger one is free.
 fn resize(book: &mut FaceBook, held: Option<Square>, level: usize) -> Option<Square> {
     match held {
         Some(square) if square.level == level => Some(square),
@@ -438,7 +415,6 @@ impl MoverState {
 }
 
 impl PickState {
-    /// Each near mover's primary lamp and extras, and a tile begun for each lamp newly wanted.
     fn choose_lamps(&mut self, eye: Vec3, now: f32, dt: f32, walls: Option<(&StaticCollision, Vec3)>, most_extras: usize) {
         self.near.clear();
         self.near.extend(self.bounds.iter().map(|(&root, bounds)| (bounds.sphere().0.distance(eye), root)).filter(|&(distance, _)| distance <= MOVER_REACH));
@@ -496,7 +472,6 @@ impl PickState {
         }
     }
 
-    /// Every tile's view, square and fade for this frame. Whether any square was taken or given back.
     fn place_tiles(&mut self, book: &mut FaceBook, eye: Vec3, spread: f32, finest: usize, dt: f32) -> bool {
         let mut squares_changed = false;
         for (root, mover) in &mut self.movers {
@@ -543,7 +518,6 @@ impl PickState {
         squares_changed
     }
 
-    /// The tiles ordered by lamp, the nearest movers' first when there are too many, and each mover's number.
     fn fill_tiles(&mut self, out: &mut MoverTiles) {
         self.order.clear();
         self.order.extend(self.movers.iter().filter(|(_, mover)| !mover.tiles.is_empty()).map(|(&root, mover)| (mover.eye_distance, root)));

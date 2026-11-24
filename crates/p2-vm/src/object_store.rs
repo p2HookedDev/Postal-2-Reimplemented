@@ -27,10 +27,7 @@ pub struct ObjectStore {
     pub(crate) class_redirects: Vec<(ClassId, ClassId)>,
     pub(crate) memory: memory::MemLayouts,
     pub(crate) work: profiling::Counters,
-    /// `Diagnostics::count_work` as of the start of the last level tick: the store cannot see `Vm`'s diagnostics.
     pub(crate) count_work: bool,
-    /// Goes up when a follower of object values has read them ([`ObjectStore::next_stamp`]); every write leaves the
-    /// current one on its object.
     pub(crate) stamp: u64,
     drawn_reads: AtomicBool,
 }
@@ -40,7 +37,6 @@ impl ObjectStore {
         self.stamp
     }
 
-    /// Called by a follower once it has read what it follows: writes from now on carry a later stamp than its reads.
     pub fn next_stamp(&mut self) {
         self.stamp += 1;
     }
@@ -69,7 +65,6 @@ impl ObjectStore {
         }
     }
 
-    /// `most` is [`Stamp::Written`] for the host's own write-backs: they leave `drawn` as it was.
     fn write_span(&mut self, object: ObjectId, span: Span, most: Stamp, apply: impl FnOnce(&memory::MemLayouts, &mut memory::Mem)) {
         let kind = match most {
             Stamp::Drawn => self.stamp_at(object, span),
@@ -145,8 +140,6 @@ impl ObjectStore {
         }))
     }
 
-    /// R, G, B, A (`Object.uc` declares B, G, R, A), read in place. All four: [`Self::member_words`] reaches only the first
-    /// three.
     pub fn color_of(&self, object: ObjectId, property: impl PropertyName) -> Option<[u8; 4]> {
         let field = self.field(object, property)?;
         let (memory::Shape::Struct(id), 1) = (field.shape, field.dim) else { return None };
@@ -206,7 +199,6 @@ impl ObjectStore {
         Some(self.memory.read(f.shape, f.dim, &array.mem, index * w as usize, index * h as usize))
     }
 
-    /// An element of a static array (`var T X[N]`).
     pub(crate) fn set_element(&mut self, object: ObjectId, property: impl PropertyName, index: usize, value: Value) -> bool {
         let Some(field) = self.field(object, property) else { return false };
         if index >= field.dim as usize {
@@ -271,7 +263,6 @@ impl ObjectStore {
         true
     }
 
-    /// See [`Object::mem_mut_unstamped`].
     pub(crate) fn set_unstamped(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
         let Some(field) = self.field(object, property) else { return false };
         self.memory.write_field(&field, self.objects[object.0 as usize].mem_mut_unstamped(), value);
@@ -284,7 +275,6 @@ impl ObjectStore {
         true
     }
 
-    /// For the host's write-backs of what it drew: they move `written` but not `drawn`.
     pub(crate) fn set_undrawn(&mut self, object: ObjectId, property: impl PropertyName, value: Value) -> bool {
         let Some(field) = self.field(object, property) else { return false };
         self.write_span(object, Span::of(&field), Stamp::Written, |memory, mem| memory.write_field(&field, mem, value));

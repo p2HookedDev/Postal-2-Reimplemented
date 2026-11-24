@@ -23,24 +23,14 @@ impl BoneFrame {
     }
 }
 
-/// Where each actor is drawn, and the only way to a drawn place. One hung on a bone has the place its bone gave it and
-/// none before that: its own stored location is where the game spawned it, which does not follow the bone.
 #[derive(Default)]
 pub(crate) struct Places {
-    /// Per actor still on its way: the place it showed at when the newest tick came and its place at the tick before.
-    /// It is drawn through both to the newest tick's place, so the world moves at the frame rate while ticks are
-    /// slower than frames.
     gliding: FxHashMap<ObjectId, [(Vector, Rotator); 2]>,
-    /// Its base, the bone's frame the game is told and the frame it is drawn at: these differ while the drawn body
-    /// leaves the game's pose. Kept until the actor leaves its base: handing a place to the game does not take it
-    /// from here.
     on_bones: FxHashMap<ObjectId, (ObjectId, BoneFrame, BoneFrame)>,
     untold: FxHashSet<ObjectId>,
 }
 
 impl Places {
-    /// A new tick came: what was shown becomes where each glide starts. `landed` takes the actors whose glide ended:
-    /// the frame before may have drawn them short of their place, and nothing places them again unless told.
     pub(super) fn tick(&mut self, glide: Glide, actors: &FxHashMap<ObjectId, ActorFrame>, landed: &mut FxHashSet<ObjectId>) {
         self.gliding.retain(|actor, [from, mid]| {
             let on_its_way = actors.get(actor).filter(|_| glide.to_newest < 1.0);
@@ -76,7 +66,6 @@ impl Places {
         self.gliding.contains_key(&actor)
     }
 
-    /// Where the actor is drawn this frame; `None` for one on a bone that has no place yet.
     pub(in crate::play) fn shown(&self, actor: ObjectId, now: &ActorFrame, glide: Glide) -> Option<(Vector, Rotator)> {
         if now.attachment.is_some() {
             return self.on_bone(actor);
@@ -85,7 +74,6 @@ impl Places {
         Some(self.gliding.get(&actor).map_or(to, |&[from, mid]| glide.pick(from, mid, to, glided)))
     }
 
-    /// Its place at the newest tick, for what the game's scripts draw themselves at that tick's view.
     pub(in crate::play) fn newest(&self, actor: ObjectId, now: &ActorFrame) -> Option<(Vector, Rotator)> {
         if now.attachment.is_some() { self.on_bone(actor) } else { Some((now.location, now.rotation)) }
     }
@@ -95,7 +83,6 @@ impl Places {
         Some((location, p2_vm::orthogonal_rotation(x, y, z)))
     }
 
-    /// The frame it is drawn at.
     pub(crate) fn bone_frame(&self, actor: ObjectId) -> Option<BoneFrame> {
         self.on_bones.get(&actor).map(|&(.., drawn)| drawn)
     }
@@ -107,7 +94,6 @@ impl Places {
         }
     }
 
-    /// The bone places made since the last call, of bases a camera drew, for the game to learn.
     pub(in crate::play) fn tell(&mut self, visible: &FxHashSet<ObjectId>, told: &mut Vec<(ObjectId, BoneFrame)>) {
         let on_bones = &self.on_bones;
         told.extend(self.untold.drain().filter_map(|actor| on_bones.get(&actor).filter(|(base, ..)| visible.contains(base)).map(|&(_, told, _)| (actor, told))));

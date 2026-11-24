@@ -1,4 +1,3 @@
-// No preset writes these rows, and changing one keeps the preset.
 class ModernMenuScreen extends ModernMenuPage;
 
 var localized string    HudNames[3];

@@ -1,6 +1,6 @@
-//! The engine's back-to-front list of translucent draws: BSP nodes whose surfaces need sorting in BSP order from the
-//! eye, and each translucent actor placed by the distance to its centre against actors and by plane side against
-//! nodes. It replaces Bevy's sort by depth along the view.
+//! The engine's back-to-front list of translucent draws: BSP nodes in BSP order from the eye, and each
+//! translucent actor placed by distance to its centre against actors and by plane side against nodes. Replaces
+//! Bevy's depth sort.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::camera::visibility::RenderLayers;
@@ -24,7 +24,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::level_collision::LevelCollision;
 use crate::view::{SKY_LAYER, ShownScene};
 
-/// A translucent section holding one BSP node's surfaces, with the node's plane in the drawn space: `xyz · p - w`.
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
 pub struct SortedBspNode {
     node: usize,
@@ -32,7 +31,6 @@ pub struct SortedBspNode {
 }
 
 impl SortedBspNode {
-    /// `plane` is the node's plane in the level's own coordinates; the drawn level is moved by `-center`.
     pub fn new(node: usize, plane: [f32; 4], center: Vec3) -> Self {
         let normal = Vec3::from(to_bevy([plane[0], plane[1], plane[2]]));
         Self { node, plane: normal.extend(plane[3] - normal.dot(center)) }
@@ -43,25 +41,19 @@ impl SortedBspNode {
     }
 }
 
-/// How a blended draw that is not a BSP node joins the engine's list.
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
 pub enum TranslucentDraw {
-    /// A terrain layer: drawn with the world, before the list, in layer order.
     Terrain(u32),
-    /// One of an actor's draws (an emitter): the actor enters the list once, its draws follow in this order.
     Part { actor: Entity, order: u32 },
-    /// A corona: drawn after the scene.
     AfterScene,
 }
 
 #[derive(Resource, Clone, Default, PartialEq, ExtractResource)]
 #[extract_app(RenderApp)]
 struct TranslucentOrder {
-    /// Per camera: each sorted node's place in the back-to-front BSP walk from that camera's eye.
     ranks: FxHashMap<Entity, FxHashMap<usize, usize>>,
     nodes: FxHashMap<Entity, SortedBspNode>,
     draws: FxHashMap<Entity, TranslucentDraw>,
-    /// The sky zone's draws: they go first, ordered from the sky's own eye.
     sky: FxHashSet<Entity>,
     sky_ranks: Option<FxHashMap<usize, usize>>,
     sky_place: Option<(Vec3, Quat)>,
@@ -98,7 +90,6 @@ fn rank_sorted_nodes(
     mut order: ResMut<TranslucentOrder>,
     mut cached: Local<Option<(usize, WantedNodes)>>,
 ) {
-    // Removals are read first and in full, so a despawned section or draw never lingers in the kept maps.
     let nodes = (removed_sections.read().count() > 0 || !changed_sections.is_empty())
         .then(|| sections.iter().map(|(entity, node)| (entity, *node)).collect::<FxHashMap<Entity, SortedBspNode>>());
     let draws = (removed_draws.read().count() > 0 || !changed_draws.is_empty())
@@ -151,8 +142,8 @@ fn rank_sorted_nodes(
     }
 }
 
-/// The wanted nodes in the order the engine's list holds them: it pushes each onto the head while walking the tree
-/// front to back, so the list runs back to front, a node's coplanar nodes ahead of it.
+/// The wanted nodes in the engine's list order: it pushes each onto the head while walking the tree front to
+/// back, so the list runs back to front, a node's coplanar nodes ahead of it.
 pub(crate) fn back_to_front(model: &Model, eye: [f32; 3], wanted: &WantedNodes) -> Vec<usize> {
     enum Step {
         Visit(usize),
@@ -182,8 +173,6 @@ pub(crate) fn back_to_front(model: &Model, eye: [f32; 3], wanted: &WantedNodes) 
     out
 }
 
-/// The walk skips any node whose subtree and coplanar chain hold no wanted node; a level has thousands of nodes and
-/// few translucent ones.
 pub(crate) struct WantedNodes {
     wanted: FxHashSet<usize>,
     holding: Vec<bool>,
@@ -216,8 +205,8 @@ enum Entry {
     Actor { distance: f32 },
 }
 
-/// Where the engine inserts a translucent actor: before the first actor as near as it or nearer, or before the first
-/// node whose plane has the actor on the far side from the eye; else at the near end.
+/// Where the engine inserts a translucent actor: before the first actor as near as it or nearer, or before the
+/// first node whose plane has the actor on the far side from the eye; else at the near end.
 fn insert_at(list: &[Entry], eye: Vec3, center: Vec3, distance: f32) -> usize {
     list.iter()
         .position(|entry| match entry {
@@ -262,13 +251,11 @@ fn order_phase(
         let side = if order.sky.contains(&key.1.id()) { &mut partition.sky } else { &mut partition.level };
         side.push((key, item.sorting_info));
     }
-    // As retail draws the sky's scene before the level's, from the sky's eye.
     let sky = match order.sky_place {
         Some((sky_eye, turn)) => engine_list(order, partition.sky.drain(..), order.sky_ranks.as_ref(), sky_eye, |center| sky_eye + turn * (center - eye)),
         None => engine_list(order, partition.sky.drain(..), ranks, eye, |center| center),
     };
     let listed = sky.into_iter().chain(engine_list(order, partition.level.drain(..), ranks, eye, |center| center));
-    // Every item lands in exactly one list, so each gets its place once.
     for (place, key) in listed.enumerate() {
         if let Some(item) = phase.items.get_mut(&key) {
             item.distance = place as f32;
@@ -277,8 +264,6 @@ fn order_phase(
     phase.items.sort_by_key(|_, item| item.sort_key());
 }
 
-/// Terrain layers first, then the BSP nodes back to front with each translucent actor where the engine inserts it, then
-/// what draws after the scene. `true_center` takes a drawn centre to where it is seen from `eye`.
 fn engine_list(
     known: &TranslucentOrder,
     items: impl IntoIterator<Item = (ItemKey, TransparentSortingInfo3d)>,

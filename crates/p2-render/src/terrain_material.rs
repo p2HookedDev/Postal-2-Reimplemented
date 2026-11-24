@@ -36,7 +36,6 @@ pub struct TerrainParams {
     pub u: [Vec4; MAX_LAYERS],
     pub v: [Vec4; MAX_LAYERS],
     pub count: UVec4,
-    /// A sky sector's sky eye and zone turn (by columns), to find where a placed point is in the map.
     pub sky_eye: Vec4,
     pub sky_turn: [Vec4; 3],
 }

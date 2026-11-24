@@ -1,5 +1,5 @@
-//! Modern graphics: photo mode's engine side. The script asks for a picture with the console word `shot`; it is saved
-//! as a PNG in `Screenshots` beside the settings file. Its depth of field is Bevy's, on the scene camera.
+//! Modern graphics: photo mode's engine side. The script asks for a picture with the console word `shot`; it is
+//! saved as a PNG in `Screenshots` beside the settings file. Its depth of field is Bevy's, on the scene camera.
 
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
@@ -17,7 +17,6 @@ use p2_host::display::{MODERN_PHOTO_BLUR, MODERN_PHOTO_FOCUS, Settings};
 const NEAREST_FOCUS: f32 = 32.0;
 /// Bevy's lens works in metres; the world is in Unreal units.
 const UNITS_PER_METER: f32 = 50.0;
-/// The f-number at blur level 1; each level divides it.
 const F_STOPS_AT_ONE: f32 = 22.0;
 
 pub struct PhotoPlugin;

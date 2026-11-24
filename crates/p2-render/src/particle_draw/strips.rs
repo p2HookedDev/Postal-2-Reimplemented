@@ -54,7 +54,6 @@ pub(crate) fn fill_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<
     quads.write(mesh);
 }
 
-/// The modern stream: the drawn points smoothed into a ribbon, each script segment keeping its span of the texture.
 pub(crate) fn fill_smooth_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3) {
     let mut quads = Quads::default();
     if points.len() > 2 {
@@ -70,8 +69,9 @@ pub(crate) fn fill_smooth_strip(mesh: &mut Mesh, points: &[StripPoint], normal: 
 
 const PIECES: usize = 4;
 
-/// A Catmull-Rom curve through the script's points, `PIECES` points per segment, passing through every script point.
-/// The scripts already throw a stream's points under gravity and carry its texture along: only the corners are new.
+/// A Catmull-Rom curve through the script's points, `PIECES` points per segment, passing through every script
+/// point. The scripts already throw a stream's points under gravity and carry its texture along: only the corners
+/// are new.
 fn ribbon(points: &[StripPoint]) -> Vec<StripPoint> {
     let last = points.len().saturating_sub(1);
     let at = |i: usize| Vec3::from_array(points[i.min(last)].location.into());
@@ -89,7 +89,6 @@ fn ribbon(points: &[StripPoint]) -> Vec<StripPoint> {
     out
 }
 
-/// One quad per pair of neighbouring points, `v` giving each quad's texture V at its first and second point.
 fn strip_quads(quads: &mut Quads, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3, v: impl Fn(usize) -> [f32; 2]) {
     let at = |i: usize| Vec3::from_array(points[i].location.into());
     let sides: Vec<Vec3> = (0..points.len())

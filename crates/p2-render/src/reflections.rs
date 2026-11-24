@@ -1,9 +1,6 @@
-//! Modern graphics: screen-space reflections. After the main passes one full-screen pass marches the depth prepass
-//! along each reflecting pixel's mirrored ray and adds what it meets to the frame. A pixel reflects when its normal
-//! prepass alpha names a reflecting class, which our lit materials' prepass writes. A ray that leaves the screen or
-//! meets nothing shows nothing: no stand-in light takes its place. Level 1 marches half as far as level 2. A puddle
-//! is a sprite, which writes no prepass: the pass is told where the nearest puddles lie and mirrors the floor there.
-//! A lit pool writes its gloss into the frame's alpha past 1, negated on blood; the pass mirrors it and puts alpha back to 1.
+//! Screen-space reflections: a full-screen pass marches the depth prepass along each reflecting pixel's ray.
+//! A ray that leaves the screen or hits nothing adds nothing. Puddles are sprites with no prepass, so the pass is
+//! given their places; a lit pool stores its gloss in frame alpha above 1 (negated on blood), reset to 1 here.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -38,9 +35,7 @@ use crate::shaders::{add_libraries, add_shaders, shader_file};
 use crate::view::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
-/// Registered with the shared libraries: every app with the lit materials draws their prepass through it.
 pub(crate) const CLASS_PREPASS_SHADER: Handle<Shader> = uuid_handle!("e2a4f9c1-7b36-4d58-9f0e-3c81b6d27a45");
-/// From this level the march reaches its whole length; from the next every pixel steps one pixel at a time.
 const WHOLE_MARCH_LEVEL: u8 = 2;
 const EVERY_PIXEL_LEVEL: u8 = 3;
 const FULL_STRENGTH: f32 = 10.0;
@@ -68,20 +63,18 @@ impl Plugin for ReflectionsPlugin {
             .add_systems(RenderStartup, init_reflections_pipeline)
             .add_systems(Render, prepare_reflections_pipelines.in_set(RenderSystems::Prepare))
             .add_systems(Render, prepare_pass_uniforms::<Reflections>.in_set(RenderSystems::PrepareResources))
-            // Before the temporal resolve, which steadies what was drawn through the frame's jitter.
             .add_systems(Core3d, reflect.in_set(Core3dSystems::EarlyPostProcess).before(bevy::anti_alias::taa::temporal_anti_alias));
     }
 }
 
-/// Where a material's bind group holds its `ShaderLayers`.
 #[derive(Debug, Clone, Copy)]
 pub enum LayersHeld {
     Alone,
     InActorShading,
 }
 
-/// A prepass pipeline that writes normals gets the shader that also writes the material's class in their alpha. Its
-/// normals and depth are Bevy's own, so ambient occlusion and contact shadows read the same.
+/// Prepass pipelines that write normals also store the material's reflecting class in the normal's alpha.
+/// Normals and depth stay Bevy's own, so ambient occlusion and contact shadows read the same.
 pub fn write_class_in_prepass(descriptor: &mut RenderPipelineDescriptor, held: LayersHeld) {
     let Some(fragment) = descriptor.fragment.as_mut() else {
         return;
@@ -95,7 +88,6 @@ pub fn write_class_in_prepass(descriptor: &mut RenderPipelineDescriptor, held: L
     }
 }
 
-/// On a scene camera while screen-space reflections are on. As `reflections.wesl` reads it.
 #[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq, ExtractComponent)]
 #[extract_app(RenderApp)]
 #[extract_component_sync_target((Self, ReflectionsPipelineId, PassUniformOffset<Self>))]
@@ -104,23 +96,20 @@ pub struct Reflections {
     view_from_clip: Mat4,
     view_from_world: Mat4,
     look: Vec4,
-    /// In view space: the centre and the radius of each puddle; `puddle_count.x` of them are set.
     puddles: [Vec4; MAX_PUDDLES],
     puddle_count: Vec4,
     in_frame: Vec4,
     from_frame: Vec4,
 }
 
-/// The viewport's corner and size as shares of its target, and the map back from a target uv (times zw plus xy). Both
-/// are exactly the identity when the viewport fills the target, so that case reads the same texels as without them.
 fn viewport_in_frame(viewport: URect, target: UVec2) -> (Vec4, Vec4) {
     let target = target.as_vec2();
     let (corner, size) = (viewport.min.as_vec2() / target, viewport.size().as_vec2() / target);
     (Vec4::new(corner.x, corner.y, size.x, size.y), Vec4::new(-corner.x / size.x, -corner.y / size.y, 1.0 / size.x, 1.0 / size.y))
 }
 
-/// x the strength, 1 at the top level (a surface returns no more than reaches it), y the march's stride in pixels (2
-/// below the top level), z its steps, w the materials level. `None` while off. A ray that meets nothing on screen shows nothing.
+/// x strength (1 at the top level), y march stride in pixels (2 below the top level), z step count,
+/// w the materials level. `None` while off.
 pub(crate) fn look(level: u8, strength: u8, materials: u8) -> Option<Vec4> {
     (level > 0 && strength > 0).then(|| {
         let stride = if level >= EVERY_PIXEL_LEVEL { 1.0 } else { 2.0 };

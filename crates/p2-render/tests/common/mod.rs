@@ -20,12 +20,10 @@ pub fn quad(half: f32, z: f32, color: [f32; 4]) -> Mesh {
     mesh
 }
 
-/// Read backs during this are not results: a frame stays black or clear for as long as a shader takes to compile.
 pub fn compiling(app: &App) -> bool {
     app.get_sub_app(bevy::render::RenderApp).is_some_and(|render| render.world().resource::<bevy::render::render_resource::PipelineCache>().waiting_pipelines().next().is_some())
 }
 
-/// What each pipeline that is not built yet waits for or failed with.
 #[allow(dead_code, reason = "not every test file names its stuck pipelines")]
 pub fn stuck_pipelines(app: &App) -> String {
     use bevy::render::render_resource::{CachedPipelineState, PipelineCache};

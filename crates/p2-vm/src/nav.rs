@@ -14,9 +14,7 @@ use crate::{ClassNames, Error, Kind, LoaderRef, ObjectId, ObjectStore, Value, Vm
 const UNVISITED: i32 = 10_000_000;
 const ANCHOR_DISTANCE_SQUARED: i32 = 1_440_000;
 const ANCHOR_CELL: f32 = 1200.0;
-/// The anchor distance plus a margin for the rounding of the cell bounds.
 const ANCHOR_REACH: f32 = 1201.0;
-/// Within this the rounding stays far below the margin; a node or a query beyond it is scanned in full.
 const ANCHOR_GRID_LIMIT: f32 = 1_048_576.0;
 const REACH_DISTANCE_SQUARED: f32 = 1_000_000.0;
 const WALK_STEPS: usize = 100;
@@ -24,8 +22,8 @@ pub(crate) const WALK_MIN_MOVE: f32 = 4.1;
 const WALK_MIN_LAST_MOVE: f32 = 8.0;
 const FLY_STEP: f32 = 200.0;
 const FLOOR_DROP: f32 = MAX_STEP_HEIGHT + 2.0;
-/// How often one reach test may pass between its air and water halves. Retail has no limit and would run out of stack
-/// long after this many, so the answers are the same wherever retail gives one.
+/// How often one reach test may pass between its air and water halves. Retail has no limit and would run out of
+/// stack long after this many, so the answers are the same wherever retail gives one.
 const HAND_OFFS: u32 = 64;
 /// A swimmer that leaves the water tries to climb out only toward a goal lower than this above it.
 const SWIM_EXIT_HEIGHT: f32 = 78.0 + MAX_STEP_HEIGHT;
@@ -353,7 +351,6 @@ pub(crate) enum AnchorCheck {
     Skipped,
 }
 
-/// `actor` touches a pain volume that hurts `pawn`: one whose damage is not the pawn's `ReducedDamageType`.
 fn hurt_by_volume(store: &ObjectStore, pawn: ObjectId, actor: ObjectId) -> bool {
     let spared = store.object_of(pawn, "ReducedDamageType");
     store.object_list(actor, Prop::Touching).into_iter().any(|volume| {
@@ -750,7 +747,6 @@ impl<L: LoaderRef> Vm<L> {
         let can_jump = self.store.flag_of(pawn, Prop::bCanJump);
         let mut step_size = radius.max(if can_jump { 128.0 } else { 12.0 });
         let jump_target = goal.map_or(to, |goal| Vector::new(to.x, to.y, to.z - self.store.float_of(goal, Prop::CollisionHeight) + height));
-        // Test moves leave the touch list alone, so a pawn already in a pain volume fails after its first step.
         let hurt = hurt_by_volume(&self.store, pawn, pawn);
         let mut location = from;
         for _ in 0..WALK_STEPS {
@@ -806,7 +802,6 @@ impl<L: LoaderRef> Vm<L> {
         false
     }
 
-    /// Where the test pawn is left, and the result; a fall or a bad floor after a step up puts it back to before its last move.
     pub(crate) fn walk_move(&mut self, pawn: ObjectId, from: Vector, step: Vector, threshold: f32) -> (Vector, WalkMove) {
         let (radius, height) = self.store.collision_size(pawn);
         let mut at = from;

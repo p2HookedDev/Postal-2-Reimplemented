@@ -1,5 +1,3 @@
-//! The shown map's suns under the modern look, worked out once per map instead of every frame.
-
 use std::sync::Arc;
 
 use bevy::ecs::prelude::{Commands, Query, Res, Resource};
@@ -13,7 +11,6 @@ use crate::actor_light::{LightEnvironment, SunSet};
 use crate::modern::{fill_suns, sun_color};
 use crate::view::ShownScene;
 
-/// Present while modern graphics is on and a map is shown.
 #[derive(Resource)]
 pub struct MapLights {
     source: Arc<LightEnvironment>,
@@ -39,8 +36,8 @@ impl MapLights {
     }
 }
 
-/// Retail bakes each zone's suns into that zone's surfaces. Here the suns of the zone the eye stands in light the whole
-/// view, and a zone without suns keeps the last ones.
+/// The original game bakes each zone's suns into that zone's surfaces. Here the suns of the eye's zone light
+/// the whole view, and a zone without suns keeps the last ones.
 pub(crate) fn follow_map_lights(
     settings: Res<Settings>,
     shown: Option<Res<ShownScene>>,

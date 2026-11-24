@@ -10,12 +10,9 @@ use bevy::log::tracing_subscriber::layer::Context;
 use bevy::log::tracing_subscriber::registry::LookupSpan;
 use rustc_hash::FxHashMap;
 
-/// Time per Bevy system, summed over all threads, its longest single run (what a hitch is made of) and its runs. Bevy
-/// opens these spans only in a build with its `trace` feature, which also makes wgpu's own scopes spans.
 #[derive(Resource, Clone, Default)]
 pub struct SystemSpans(Arc<Mutex<FxHashMap<Arc<str>, [f64; 3]>>>);
 
-/// What a second's spans give the log, each `(name, ms, runs)` per frame except `longest`, in ms of one run.
 #[derive(Default)]
 pub(super) struct SpanSecond {
     pub(super) slowest: Vec<(Arc<str>, f64, f64)>,
@@ -23,7 +20,6 @@ pub(super) struct SpanSecond {
     pub(super) wgpu: Vec<(Arc<str>, f64, f64)>,
 }
 
-/// wgpu's scopes are named apart from the systems so that they rank among themselves.
 pub(super) const WGPU: &str = "wgpu ";
 
 impl SystemSpans {

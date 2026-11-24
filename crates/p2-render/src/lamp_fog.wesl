@@ -1,13 +1,11 @@
-// Lamp-lit fog. `march` runs at half size: each view ray is marched through the stretch the picked lamps reach, from an
-// offset that differs over every 4 by 4 pixels. `composite` averages one such block, each texel weighted by how near
-// its depth lies to the pixel's, and adds the light to the frame.
+// Lamp-lit fog. `march` runs at half size, marching each view ray through the picked lamps' reach from an
+// offset that varies over each 4x4 block. `composite` averages a block, weighting each texel by how close
+// its depth is to the pixel's, and adds the light to the frame.
 
 import package::p2_render::screen_pass::{pattern, texel_at, view_at};
 
 struct FogLamp {
-    // xyz the place in view space, w the fog's reach.
     place: vec4<f32>,
-    // rgb linear light, w a spot's cone cosine, below -1 for a point lamp.
     color: vec4<f32>,
     along: vec4<f32>,
 }
@@ -15,9 +13,7 @@ struct FogLamp {
 struct LampFog {
     view_from_clip: mat4x4<f32>,
     lamps: array<FogLamp, 4>,
-    // x density a unit, y lamps, z steps, w the reach into the sky.
     look: vec4<f32>,
-    // The view's part of the target in pixels: corner in xy, size in zw.
     viewport: vec4<f32>,
 }
 
@@ -25,7 +21,6 @@ struct LampFog {
 @group(0) @binding(1) var<uniform> fog: LampFog;
 @group(0) @binding(2) var marched: texture_2d<f32>;
 
-// A tap whose depth is off by this share of the pixel's, squared, counts half.
 const DEPTH_EASE: f32 = 0.0001;
 
 struct FullscreenOutput {
@@ -38,7 +33,6 @@ fn texel_of(uv: vec2<f32>) -> vec2<i32> {
     return clamp(texel_at(uv, fog.viewport), vec2(0), size - 1);
 }
 
-// To the surface, or the reach into the sky, which stores depth 0.
 fn ray_length(uv: vec2<f32>) -> f32 {
     let z = textureLoad(depth, texel_of(uv), 0);
     if z <= 0.0 {

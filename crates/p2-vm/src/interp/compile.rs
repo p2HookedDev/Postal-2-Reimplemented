@@ -1,5 +1,3 @@
-//! Closures hold indices into their [`Code`]'s tables, never other closures, so they are `'static`.
-
 use std::sync::Arc;
 
 use p2_math::{Rotator, Vector};
@@ -74,7 +72,6 @@ struct Site {
     script: bool,
 }
 
-/// Found when compiled. An offset that is no statement stays a [`Flow::Jump`], which fails when taken.
 #[derive(Clone, Copy)]
 struct JumpTo {
     offset: u16,

@@ -54,7 +54,6 @@ pub(super) fn walk_view(transform: &Transform, projection: &Projection, origin: 
     let sides = frustum.0.half_spaces.iter().enumerate().filter(|&(index, _)| index != bevy::shape::ViewFrustum::NEAR_PLANE_IDX);
     sides
         .map(|(_, half)| {
-            // Bevy half-spaces (inside: n · p + d > 0) moved to Unreal space (p = swap(u) + origin).
             let normal = Vec3::from(half.normal());
             let [x, y, z] = to_bevy(normal);
             Plane::from([x, y, z, -(half.d() + normal.dot(origin))])
@@ -62,9 +61,9 @@ pub(super) fn walk_view(transform: &Transform, projection: &Projection, origin: 
         .collect()
 }
 
-/// Scenes without BSP portals, and a view outside the world, show everything. While the modern sun casts ([`SunShadow`]),
-/// a moving sun caster ([`CASTER_LAYER`]) in the last cascade and every static one ([`STATIC_CASTER_LAYER`]) stay shown:
-/// `Visibility::Hidden` takes a mesh out of the shadow pass too, so its shadow popped in and out with the view.
+/// Scenes without BSP portals, and a view outside the world, show everything. While the modern sun casts, sun
+/// casters stay shown: `Visibility::Hidden` also removes a mesh from the shadow pass, so its shadow popped with
+/// the view.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn zone_visibility(
     mut commands: Commands,
@@ -146,13 +145,9 @@ fn zone_visibility(
     }
 }
 
-/// A caster in a zone the eye cannot see: its draws wait on [`UNSEEN_LAYER`] in place of the view's layer, and stay on
-/// the sun's, so it keeps casting.
 #[derive(Component)]
 pub(super) struct CastsUnseen;
 
-/// The engine culls an attachment by its own box. Ours has no zones, so it leaves the view with the model it is on,
-/// and keeps casting with it.
 pub(super) fn attachments_with_their_base(
     mut commands: Commands,
     models: Query<(Entity, &ActorModel)>,
@@ -195,7 +190,6 @@ pub(super) fn attachments_with_their_base(
     }
 }
 
-/// Moves every draw of `root` and under it from one layer to the other. A mesh without layers is on layer 0.
 pub(super) fn move_draws(world: &mut bevy::ecs::world::World, root: Entity, from: usize, to: usize) {
     let mut draws = vec![root];
     let mut next = 0;
@@ -212,8 +206,6 @@ pub(super) fn move_draws(world: &mut bevy::ecs::world::World, root: Entity, from
     }
 }
 
-/// Sets the draws under a moving actor, a particle actor or a corona to the sky camera's layer, the view's or both,
-/// when its zones change or a draw joins it (a particle pool grows).
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 pub(super) fn layers_by_zone(
     mut commands: Commands,
@@ -233,17 +225,14 @@ pub(super) fn layers_by_zone(
         let world_layer = if unseen { UNSEEN_LAYER } else { 0 };
         let (in_sky, in_world) = sky_and_world(&zone.zones, shown.sky_zone);
         for draw in children.iter_descendants(root) {
-            // As `move_draws`: an entity without layers is a draw only if it is a mesh, so a skeleton's joints are left be.
             let (now, was_in_sky) = match layers.get(draw) {
                 Ok((Some(now), _, was_in_sky)) => (now.clone(), was_in_sky),
                 Ok((None, true, was_in_sky)) => (RenderLayers::default(), was_in_sky),
                 _ => continue,
             };
-            // Draws on other layers only (an overlay's) are not the level's to move.
             if !now.intersects(&scene) && !was_in_sky {
                 continue;
             }
-            // The sky draws its own copy of a draw in the sky zone.
             let mut next = now.clone().without(0).without(UNSEEN_LAYER).without(SKY_LAYER);
             if in_world {
                 next = next.with(world_layer);
@@ -269,7 +258,6 @@ pub(super) fn sun_reaches(eye: [f32; 3], reach: f32, zone: &ZoneCulled) -> bool 
     gap(0).powi(2) + gap(1).powi(2) + gap(2).powi(2) <= reach * reach
 }
 
-/// In Unreal units, from the eye to the middle of its `ZoneCulled` box: past this it is hidden, whatever its zone.
 #[derive(Component)]
 pub struct SeenWithin(pub f32);
 
@@ -279,7 +267,8 @@ fn in_reach(eye: [f32; 3], zone: &ZoneCulled, within: f32) -> bool {
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= within * within
 }
 
-/// Left out of the sun's casters: grass and the like come in thousands of instances, and would be in every cascade.
+/// Left out of the sun's casters: grass and the like come in thousands of instances, and would be in every
+/// cascade.
 #[derive(Component)]
 pub struct NoSunCast;
 

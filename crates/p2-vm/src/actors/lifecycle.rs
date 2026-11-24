@@ -43,8 +43,6 @@ impl<L: LoaderRef> Vm<L> {
         self.level
     }
 
-    /// `placement` holds `Vector` / `Rotator` struct values. `None` if a class colliding with the world
-    /// does not fit, if `EncroachingOn` refused an overlapped actor, or if the actor destroyed itself.
     pub fn spawn(&mut self, class: ClassId, owner: Option<ObjectId>, placement: [Option<Value>; 2]) -> Result<Option<ObjectId>, Error> {
         self.spawn_actor(class, owner, None, placement)
     }
@@ -119,7 +117,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(Some(actor))
     }
 
-    /// No check that the owner changed, nor for a destroy between.
     pub(crate) fn set_owner(&mut self, actor: ObjectId, owner: Option<ObjectId>) -> Result<(), Error> {
         if let Some(old) = self.store.object_of(actor, Prop::Owner) {
             self.event(old, crate::states::Event::LostChild, [Value::Object(Some(actor))])?;
@@ -132,8 +129,8 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// `Emitters` is an `export editinline` object array: constructing an object at run time instances
-    /// such subobjects (unverified), so one fire's script `+=` stays its own.
+    /// `Emitters` is an `export editinline` object array: constructing an object at run time instances such
+    /// subobjects (unverified), so one fire's script `+=` stays its own.
     fn instance_emitters(&mut self, actor: ObjectId) {
         if !self.store.is_a(actor, Kind::Emitter) {
             return;
@@ -149,8 +146,8 @@ impl<L: LoaderRef> Vm<L> {
         self.store.set(actor, Prop::Emitters, Value::Array(emitters));
     }
 
-    /// In retail order. `Attached` detach by a live index walk, so retail skips every other one. After
-    /// every event a nested destroy that finished ends this one. The object and its lists stay, as retail.
+    /// In retail order. `Attached` detach by a live index walk, so retail skips every other one. After every event
+    /// a nested destroy that finished ends this one. The object and its lists stay, as in retail.
     pub fn destroy(&mut self, actor: ObjectId) -> Result<bool, Error> {
         if self.store.flag_of(actor, Prop::bStatic) || self.store.flag_of(actor, Prop::bNoDelete) {
             return Ok(false);
@@ -179,7 +176,6 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) {
             return Ok(true);
         }
-        // The walk sees actors spawned during its events (retail's list grows at the end).
         self.list_linked_statics();
         let mut at = None;
         while let Some(other) = self.next_destroy_walk_actor(at) {

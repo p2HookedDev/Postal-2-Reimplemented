@@ -1,5 +1,6 @@
-// Skinned actors. Retail: lit like D3D mesh lighting, per pixel: ambient plus hardware lights, clamped to 1, doubled in
-// display space. Modern: the world's shared light where the view has the sun, without generated relief.
+// Skinned actors. Retail: lit like D3D mesh lighting, per pixel: ambient plus hardware lights, clamped to 1,
+// doubled in display space. Modern: the world's shared light where the view has the sun, without generated
+// relief.
 
 import bevy_pbr::render::{
     pbr_functions::alpha_discard,
@@ -30,18 +31,13 @@ import package::p2_render::layer_bindings::indices;
 @else
 @group(3) @binding(100) var<uniform> shading_data: ActorShading;
 
-// The world's lights handed to an overlay-drawn actor under modern, as `actor_light/view_model.rs` packs them.
 const SUN_KIND: u32 = 2u;
 const LAMP_KIND: u32 = 3u;
 const FILL_KIND: u32 = 4u;
-// Drawn by an overlay camera straight over the scene, as `OverlayMark` in `actor_light.rs` numbers it.
 const OVERLAY_WORLD_LIT: u32 = 2u;
-// In world units: as the weapon's bounds reach this far into a wall, its light turns wholly to the light at the eye.
 const POKE_SPAN: f32 = 16.0;
-// In world units: a pulled point stops this much nearer the eye, so it never sits on a wall's face.
 const FREE_EYE_MARGIN: f32 = 0.5;
 
-// Pulled toward the eye to no farther than the level leaves free, so a barrel through a wall takes this side's light.
 fn within_free(position: vec3<f32>, free: f32) -> vec3<f32> {
     let eye = view.world_position.xyz;
     let from_eye = position - eye;
@@ -49,7 +45,6 @@ fn within_free(position: vec3<f32>, free: f32) -> vec3<f32> {
     return eye + from_eye * (max(min(distance, free) - FREE_EYE_MARGIN, 0.0) / distance);
 }
 
-// The open sky above the eye, picked on the CPU for the whole weapon.
 fn eye_sky(lighting: Lighting) -> f32 {
     for (var i = 0u; i < lighting.count; i++) {
         if lighting.lights[i].kind == SUN_KIND {
@@ -106,7 +101,6 @@ fn overlay_surface(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, ao:
 
 fn light_at(light: HardwareLight, position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     let kind = light.kind;
-    // A modern overlay light fading out after the switch turned off.
     if kind >= LAMP_KIND {
         return vec3(0.0);
     }
@@ -131,7 +125,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 @if(VISIBILITY_RANGE_DITHER)
     visibility_range_dither(in.position, in.visibility_range_dither);
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    // The specular mask (`apply_layers`), before `alpha_discard` sets the alpha to 1 on opaque and masked materials.
     let base_alpha = pbr_input.material.base_color.a;
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material.flags,
@@ -156,13 +149,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let world_lit = (*shading).overlay == OVERLAY_WORLD_LIT;
     let sun_id = sun_index();
     let sun_on = sun_found(sun_id);
-    // Wounds stand as blood under the sun; elsewhere, and on a darken skin which takes no pool, `project` pastes them.
     var pooled = false;
     var mirror = 0.0;
     if modern && (sun_on || overlay) {
         let darken = (*shading).layers.blend.x != 0.0;
         let dynamic = dynamic_light(in.world_position, normal, ranges);
-        // The share of the light picked at the eye: all of it for an overlay that does not take the world's.
         var eye_share = 1.0;
         if sun_on && (!overlay || world_lit) {
             pooled = !darken;
@@ -176,7 +167,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             if world_lit {
                 lit_input.world_position = vec4(within_free(in.world_position.xyz, (*shading).free), 1.0);
                 eye_share = saturate(((*shading).reach - (*shading).free) / POKE_SPAN);
-                // By whole screen pixel: the weapon is locked to the view, so the grain stays on it and never crawls.
                 lookup = ShadowLookup(0.0, eye_sky(*lighting), floor(in.position.xy));
             }
             var incoming = modern_light(in, lit_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken, wounds, lookup);
@@ -228,7 +218,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     let layered = apply_layers(in, vec4(lit, base.a), base_alpha, pbr_input, (*shading).layers);
     out.color = post_lighting(pbr_input, project(pbr_input, decals, base.rgb, layered, actor_target(in.instance_index), pooled));
-    // The overlay camera has no reflection pass to read the record back.
 @if(POOL_MIRROR) {
     if !overlay {
         out.color.a = 1.0 + mirror;

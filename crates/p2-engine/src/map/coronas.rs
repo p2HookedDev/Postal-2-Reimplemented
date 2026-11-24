@@ -1,6 +1,3 @@
-//! A `bCorona` light is told to the renderer once, and its place and whether the eye's line to it is blocked every
-//! frame.
-
 use super::*;
 use crate::actors::CORONA_SIZE;
 use p2_render::coronas::{CoronaLook, CoronaPlace};

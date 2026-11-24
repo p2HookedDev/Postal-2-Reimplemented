@@ -49,14 +49,11 @@ pub(super) struct ParticleActor {
     burning: bool,
 }
 
-/// What one frame's update hands from its part on the main thread to the part worked on several threads and back.
 #[derive(Default)]
 struct Turn {
     owner: Owner,
     place: Option<Vector>,
-    /// The simulation's step, on a frame that holds a game tick.
     step: Option<f32>,
-    /// Sprites are drawn this part of the way from their place before the newest tick to their newest (`shown_part`).
     shown: f32,
     hidden: bool,
     here: Vec3,
@@ -64,7 +61,6 @@ struct Turn {
     seen_box: Option<(Vec3, Vec3)>,
 }
 
-/// Emitters below this are worked on the calling thread: handing them out costs more than it saves.
 const PARALLEL_EMITTERS: usize = 32;
 
 #[derive(Default)]
@@ -82,7 +78,6 @@ struct ParticleFrames {
 
 struct EmitterDraw {
     disabled: bool,
-    /// Of a mesh emitter whose model is built: how far a particle of size 1 reaches.
     mesh_reach: Option<f32>,
     pending_model: Option<ModelKey>,
     name: String,
@@ -104,10 +99,8 @@ pub struct Particles {
     pub(super) blasts: Vec<Blast>,
 }
 
-/// A hit's reach in Unreal units and its push in Unreal units a second.
 const SHOT: (f32, f32) = p2_render::particle_frame::SHOT_PUSH;
 const SWING: (f32, f32) = (80.0, 600.0);
-/// The effects the scripts spawn where a hit lands; a kick's or a swing's first, since a shot's name begins theirs.
 const IMPACTS: [(&str, (f32, f32)); 10] = [
     ("SmokeHitPuffMelee", SWING),
     ("SmokeHitPuffSledge", SWING),
@@ -120,12 +113,9 @@ const IMPACTS: [(&str, (f32, f32)); 10] = [
     ("PickupHitPuff", SHOT),
     ("BloodImpact", SHOT),
 ];
-/// An explosion's momentum over the mass the scripts' people have gives the speed at its middle, kept under what
-/// would throw a piece out of the level.
 const PUSHED_MASS: f32 = 100.0;
 const PUSH_MOST: f32 = 1500.0;
 
-/// The push an emitter actor stands for: an explosion's own reach and force, or a hit's by its class.
 fn blast_of(name: &str, explosion: Option<(f32, f32)>, at: Vector) -> Option<Blast> {
     if let Some((radius, force)) = explosion {
         return Some(Blast { at, radius, push: (force / PUSHED_MASS).min(PUSH_MOST), way: Vector::ZERO });
@@ -285,14 +275,13 @@ impl Particles {
     }
 }
 
-/// One emitter's frame. On a bone and not placed yet it is neither drawn nor stepped: where the game keeps its actor is
-/// where it was spawned, the weapon's origin by the eye, and a sprite left there fills the screen.
+/// One emitter's frame. On a bone and not placed yet it is neither drawn nor stepped: where the game keeps its
+/// actor is where it was spawned, the weapon's origin by the eye, and a sprite left there fills the screen.
 fn emitter_turn(place: Option<(Vector, p2_math::Rotator)>, actor: &crate::play::ActorFrame, step: f32, shown: f32) -> Turn {
     let (location, rotation) = place.unwrap_or_default();
-    // Player-owned emitters ignore `TimeDilation`. One simulation tick per game tick, as the engine's: host frames without a
-    // new game frame (step 0) do not tick. A tick with no time still runs the "all particles dead" test, and an emitter dies
-    // on its second dead tick (`AutoDestroy`): an empty gas trail, whose first splat comes one game tick later, died before
-    // it.
+    // Player-owned emitters ignore `TimeDilation`. One simulation tick per game tick, as in the engine;
+    // host frames without a new game frame (step 0) do not tick. A zero-time tick still runs the all-dead
+    // test, and an emitter dies on its second dead tick (`AutoDestroy`).
     Turn {
         owner: Owner { location, rotation, velocity: actor.velocity },
         place: place.map(|(location, _)| location),
@@ -324,7 +313,6 @@ pub(super) fn present_particles(mut t: ParticleParams) {
 
 fn update_particles(t: &mut ParticleParams) {
     t.drawn.born.append(&mut t.particles.born);
-    // Last frame's pushes go here, not in their readers: the droplets and the pieces both read them.
     t.drawn.blasts.clear();
     t.drawn.blasts.append(&mut t.particles.blasts);
     t.drawn.born_meshes.append(&mut t.particles.born_meshes);

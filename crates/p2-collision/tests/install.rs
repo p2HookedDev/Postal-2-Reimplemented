@@ -19,7 +19,6 @@ fn game_dir() -> Option<PathBuf> {
     dir
 }
 
-/// Maps whose player starts the level BSP puts in solid space (open question).
 const SOLID_START_MAPS: [&str; 4] = ["MPS-Ponderous", "ngt-underhub", "underhub", "VincesHouse"];
 
 fn script_loader(dir: &std::path::Path) -> Loader {
@@ -144,7 +143,6 @@ fn tiny_box_matches_line_check() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
-/// Starts sit about 84 units above their floor, not at pawn centre height.
 #[test]
 fn pawn_box_lands_and_stops_at_walls() {
     let Some(dir) = game_dir() else { return };

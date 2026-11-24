@@ -37,7 +37,6 @@ impl Plugin for ViewerControlsPlugin {
     }
 }
 
-/// Light-mapped surfaces keep only their light map. The game has none.
 fn headlight(mut commands: Commands, cameras: Query<Entity, Added<SceneView>>) {
     for camera in &cameras {
         commands.entity(camera).with_child((

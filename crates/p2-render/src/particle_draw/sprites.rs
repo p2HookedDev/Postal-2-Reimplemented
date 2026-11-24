@@ -48,7 +48,6 @@ pub(super) fn write_sprite_records(writes: &mut MeshWrites, actor: &mut ActorDra
     }
 }
 
-/// A modern puddle's edge seed in a sprite record's spare word.
 const SEED_BITS: u32 = 0x3ff;
 
 #[cfg(test)]
@@ -117,7 +116,6 @@ pub(crate) fn grid_capacity(current: u32, count: usize) -> u32 {
     if count <= current { current } else { count.next_power_of_two().max(MIN_QUADS) }
 }
 
-/// Fills `SpriteRecord` in `particle.wesl`, with the sprite's position relative to `grid_at`.
 pub(crate) fn sprite_record(sprite: &SpriteParticle, grid_at: Vec3) -> [u32; RECORD_WORDS] {
     let [r, g, b, a] = sprite.color;
     let (next, alpha) = sprite.blend.unwrap_or((sprite.uv, a));
@@ -141,8 +139,8 @@ pub(crate) fn lamps_shown(lamps: Vec3) -> Vec3 {
     lamps.max(Vec3::ZERO).powf(1.0 / 2.2)
 }
 
-/// A puff's share of the script lights around it (a fire, a gun flash), in display light: their falloff with no facing,
-/// at half of what a surface facing them takes.
+/// A puff's share of the script lights around it (a fire, a gun flash), in display light: their falloff with no
+/// facing, at half of what a surface facing them takes.
 pub(crate) fn glow_at<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, location: Vector, level_brightness: f32) -> Vec3 {
     let points = lights.into_iter().filter(|light| light.dynamic && !matches!(light.effect, LE_SUNLIGHT | LE_SPOTLIGHT | LE_STATIC_SPOT));
     points
@@ -153,8 +151,6 @@ pub(crate) fn glow_at<'a>(lights: impl IntoIterator<Item = &'a MeshLight>, locat
         .sum()
 }
 
-/// The emitter's sprite count, in the place of a sprite's centre its `emitter_light` and of its up axis its
-/// `lamps_shown`, which a sprite lying on a surface takes in place of the zone's ambient.
 pub(crate) fn header_record(count: usize, light: Vec3, lamps: Vec3) -> [u32; RECORD_WORDS] {
     let mut record = [0; RECORD_WORDS];
     record[0..3].copy_from_slice(&light.to_array().map(f32::to_bits));
@@ -163,7 +159,6 @@ pub(crate) fn header_record(count: usize, light: Vec3, lamps: Vec3) -> [u32; REC
     record
 }
 
-/// Writes `records` into `buffer`, which only grows, so a frame of the same capacity reuses the GPU buffer.
 pub(crate) fn upload_records<T: bytemuck::NoUninit>(buffers: &mut Assets<ShaderBuffer>, buffer: &Handle<ShaderBuffer>, records: &[T]) {
     let Some(mut buffer) = buffers.get_mut(buffer.id()) else { return };
     let record_bytes = size_of::<T>() as u64;
@@ -207,8 +202,8 @@ mod tests {
         if x <= 0.003_130_8 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 }
     }
 
-    /// `s`: the texel × vertex colour in display space; `a`: the alpha; `d`: the framebuffer's display brightness. The
-    /// framebuffer blends in linear light.
+    /// `s`: the texel × vertex colour in display space; `a`: the alpha; `d`: the framebuffer's display brightness.
+    /// The framebuffer blends in linear light.
     fn drawn(style: DrawStyle, s: f32, a: f32, d: f32) -> f32 {
         let (b, dl) = (to_linear(0.25), to_linear(d));
         let over = |source: f32, keep: f32| (to_linear(source + 0.25 * keep) - b * keep).max(0.0);
@@ -227,7 +222,6 @@ mod tests {
         to_display(out.min(1.0))
     }
 
-    /// What the engine shows (D3D blending in display space, saturating).
     fn engine(style: DrawStyle, s: f32, a: f32, d: f32) -> f32 {
         let out = match style {
             DrawStyle::Translucent => s + d,

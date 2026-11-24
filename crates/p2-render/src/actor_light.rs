@@ -47,10 +47,7 @@ pub struct LightEnvironment {
     pub zone_ambients: Vec<[f32; 3]>,
     pub level_brightness: f32,
     pub sun: Option<(MeshLight, HardwareLight)>,
-    /// The still suns that shine together with `sun`: every one of the map, or its zone's after
-    /// [`Self::suns_of_one_zone`].
     pub suns: Vec<MeshLight>,
-    /// Each zone that holds still suns of its own, after [`Self::suns_of_one_zone`].
     pub zone_suns: Vec<ZoneSuns>,
     pub terrain: Vec<crate::terrain_light::TerrainSector>,
 }
@@ -61,7 +58,6 @@ pub struct ZoneSuns {
     suns: Vec<MeshLight>,
 }
 
-/// The suns that shine together: the one that casts the shadow and the still ones around it.
 #[derive(Clone, Copy)]
 pub(crate) struct SunSet<'a> {
     pub(crate) sun: Option<&'a (MeshLight, HardwareLight)>,
@@ -130,10 +126,9 @@ impl LightEnvironment {
         Self { lights, zone_ambients, level_brightness, sun, suns, zone_suns: Vec::new(), terrain: Vec::new() }
     }
 
-    /// A map holds a copy of its suns in each outdoor zone, and a copy lights its own zone only (unverified in the
-    /// game's code; the maps repeat one set of suns many times over). Counting every copy made such a map many times
-    /// too bright, so only the picked sun's zone counts. The other zones' sets are kept for an eye that stands in them;
-    /// a set is the suns that light every surface, never the ones for `bSpecialLit` surfaces alone.
+    /// A map holds a copy of its suns in each outdoor zone, and a copy lights only its own zone (unverified);
+    /// counting every copy would make such maps many times too bright, so only the picked sun's zone counts.
+    /// Other zones' sets are kept for an eye standing in them; none holds suns for `bSpecialLit` surfaces alone.
     pub fn suns_of_one_zone(mut self, zone_of: impl Fn(Vector) -> u8) -> Self {
         for light in self.suns.iter().filter(|light| !light.special_lit) {
             let zone = zone_of(light.location);
@@ -169,7 +164,6 @@ impl LightEnvironment {
         actor_ambient(self.zone_ambients.get(usize::from(zone)).copied().unwrap_or_default(), glow)
     }
 
-    /// Uses the baked list of lights reaching each of `leaves`, then with `Walls::Checked` a line check from `center` to each light.
     pub fn hardware_lights(&self, model: &Model, leaves: &[usize], center: Vector, radius: f32, max: usize, walls: Walls) -> Vec<HardwareLight> {
         let listed = leaf_lights(model, leaves);
         let candidates = listed.iter().filter_map(|light| self.lights.get(light));
@@ -211,13 +205,9 @@ pub type ActorLitMaterial = ExtendedMaterial<StandardMaterial, HardwareLighting>
 pub struct HardwareLighting {
     pub lighting: SkinnedLighting,
     pub layers: ShaderLayers,
-    /// An `OverlayMark`. Not 0 when an overlay camera draws it: no tone pass follows that camera, so under modern the
-    /// shader applies the curve.
     pub overlay: u32,
-    /// World-lit overlays only, see `WeaponReach`.
     pub reach: f32,
     pub free: f32,
-    /// World-lit overlays only: the `AmbientGlow` share, added to the ambient after the probes.
     pub glow: f32,
     #[texture(101)]
     #[sampler(102)]
@@ -244,8 +234,6 @@ impl HardwareLighting {
     }
 }
 
-/// Who draws an actor: the scene, an overlay camera over a 2D canvas (lit by the light at the eye), or an overlay
-/// camera straight over the scene (lit per pixel as the world is).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum OverlayMark {
     #[default]
@@ -367,10 +355,8 @@ pub struct ActorLit {
     pub max_lights: usize,
     pub radius: f32,
     pub shading: Shading,
-    /// Where its vertex colours were made as the map loaded, when they were.
     baked: Option<ActorPlace>,
     layers: Layers,
-    /// The mesh's box in the actor's own axes, the actor standing unturned at the origin.
     bounds: Option<[Vec3; 2]>,
 }
 
@@ -398,11 +384,8 @@ impl Default for ActorLightCache {
 pub struct ActorLightFade {
     material: Option<Handle<ActorLitMaterial>>,
     target: Option<SkinnedLighting>,
-    /// The light on its way to `target`. The material gets it only once it differs by a step a display can show:
-    /// every write makes the renderer prepare the material again.
     shown: Option<SkinnedLighting>,
     settling: bool,
-    /// A world-lit weapon's room on its way to the traced one.
     reach: Option<WeaponReach>,
 }
 
@@ -455,14 +438,13 @@ fn moved(old: (Vector, Rotator), new: (Vector, Rotator), rotation_counts: bool) 
 }
 
 const VERTEX_UPDATES_PER_FRAME: usize = 64;
-/// In seconds. A moving actor's vertex light is made again at most this often: each time sends its whole mesh to the
-/// graphics card, and frames come faster than the light on a surface visibly changes.
+/// In seconds. A moving actor's vertex light is made again at most this often: each time sends its whole mesh to
+/// the graphics card, and frames come faster than the light on a surface visibly changes.
 const VERTEX_RELIGHT_PERIOD: f32 = 1.0 / 60.0;
 
 /// Retail snaps an actor's light at a zone crossing; ours fades in both looks.
 const LIGHT_SETTLE_SECONDS: f32 = 0.3;
 const REACH_SETTLE_SECONDS: f32 = 0.1;
-/// In world units: the eased room reaches the material in steps this fine.
 const REACH_STEP: f32 = 0.25;
 
 pub(crate) fn settle_step(dt: f32, seconds: f32) -> f32 {
@@ -551,10 +533,8 @@ struct RelightWorld<'a> {
     level: &'a StaticCollision,
     model: &'a Model,
     origin: Vec3,
-    /// None under the retail look.
     map_lights: Option<&'a MapLights>,
     view_models: &'a mut Vec<((Vector, u8), SkinnedLighting)>,
-    /// Where the overlay cameras look from, in world units.
     eye: Option<Vector>,
 }
 
@@ -586,7 +566,6 @@ pub(crate) fn light_actors(
     let (Some(environment), Some(level)) = (frames.shown.lighting.as_ref(), frames.collision.0.as_deref()) else { return };
     let modern = frames.settings.as_deref().is_some_and(Settings::modern_graphics);
     let fresh;
-    // On the frame a new map shows, this runs before the resource follows it.
     let map_lights = match frames.map_lights.as_deref().filter(|map| map.is_for(environment)) {
         _ if !modern => None,
         Some(map) => Some(map),
@@ -631,8 +610,6 @@ pub(crate) fn light_actors(
         }
         let vertices = matches!(lit.shading, Shading::Vertices { .. });
         let last = cache.lit.or(lit.baked);
-        // Modern reads neither hardware lights nor vertex colours; the stale cache makes retail relight a moved actor.
-        // One that just left the overlay layers is lit once more, which clears its material's overlay mark.
         if modern && !overlay && !cache.view_model && last.is_some() && (vertices || fade.material.is_some()) {
             continue;
         }
@@ -749,7 +726,6 @@ fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, mark: Ov
     let drawn = assets.lit_materials.get(handle).map(|m| (m.extension.lighting, (m.extension.overlay, m.extension.reach, m.extension.free, m.extension.glow)));
     let stepped = fade_step(drawn.map(|(lighting, _)| lighting), fade.shown, target, steps.light);
     fade.shown = Some(stepped.shown);
-    // A weapon gets its overlay layer after its material is made, and the shader picks its light by this.
     if (stepped.write || drawn.is_some_and(|(_, drawn)| drawn != marks)) && let Some(mut material) = assets.lit_materials.get_mut(handle) {
         material.extension.lighting = stepped.shown;
         (material.extension.overlay, material.extension.reach, material.extension.free, material.extension.glow) = marks;
@@ -758,7 +734,6 @@ fn relight_tint(lit: &ActorLit, fade: &mut ActorLightFade, still: bool, mark: Ov
     None
 }
 
-/// The share of the way an eased value moves this frame: the light's, and a world-lit weapon's room.
 #[derive(Clone, Copy)]
 struct FadeSteps {
     light: f32,
@@ -776,7 +751,6 @@ struct LightFade {
     write: bool,
 }
 
-/// `drawn` is the light the material holds now, `shown` the light on its way to `target`.
 fn fade_step(drawn: Option<SkinnedLighting>, shown: Option<SkinnedLighting>, target: SkinnedLighting, step: f32) -> LightFade {
     let lighting = shown.or(drawn).map_or(target, |shown| blend_lighting(&shown, &target, step));
     let arrived = lighting == target;

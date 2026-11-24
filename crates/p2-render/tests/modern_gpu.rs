@@ -123,13 +123,10 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
         minimum_distance: 0.1,
         maximum_distance: 60.0,
         first_cascade_far_bound: 60.0 / count as f32,
-        // The overlap the modern shaders know the sun by.
         overlap_proportion: 0.1,
     };
     let down = Transform::default().looking_to(Vec3::NEG_Z, Vec3::Y);
     world.spawn((sun, cascades(4).build(), down, RenderLayers::from_layers(&[SUN_VIEW_LAYER, CASTER_LAYER])));
-    // Pipelines compile over the first frames (in the background, up to a minute): until the ground shows (not the clear colour,
-    // Bevy's default grey: 43; nor the empty first read backs: 0), then a few more for the shadow map.
     let red = |frame: &[u8], x: u32, y: u32| frame[((y * SIZE + x) * 4) as usize];
     let mut shown = None;
     let start = std::time::Instant::now();

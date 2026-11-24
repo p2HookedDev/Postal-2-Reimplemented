@@ -31,7 +31,6 @@ pub struct WaterSim {
     rng: u32,
 }
 
-/// 0x40 and 0x41 are whirlies with a negative speed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum DropType {
@@ -117,7 +116,6 @@ impl WaterSim {
         })
     }
 
-    /// The displacement of each texel (a signed byte, row-major) after the last step.
     pub fn displacement(&self) -> &[u8] {
         &self.displacement
     }
@@ -192,7 +190,6 @@ impl WaterSim {
         }
     }
 
-    /// Horizontal gradient of the field that was not updated: field B after an even step, A after an odd one.
     fn gradient(&self, step: Step, x: isize, y: isize) -> i32 {
         match step {
             Step::Even => i32::from(self.b(x, y)) - i32::from(self.b(x - 2, y)),
@@ -315,7 +312,6 @@ pub struct WetSim {
 }
 
 impl WetSim {
-    /// Over `source` (P8 palette indices): a larger source is sampled down, a smaller one gives `None`.
     pub fn new(params: &WetParams, width: u32, height: u32, source: &Mip) -> Option<Self> {
         let water = WaterSim::new(width, height, params)?;
         let (shift_x, shift_y) = (source.width.checked_ilog2()?.checked_sub(width.ilog2())?, source.height.checked_ilog2()?.checked_sub(height.ilog2())?);

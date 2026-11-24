@@ -1,6 +1,3 @@
-// The look of liquid in the air, shared by the ribbon and the drops: each kind's optics, its surface, and the light it
-// takes, which is the lamps, zone ambient and sun the particles take, never the frame behind it.
-
 import package::p2_render::color::{BLOOD_BODY, BLOOD_SIGMA, to_display, to_linear};
 import package::p2_render::sun_shadow::{sun_index, sun_map_visibility};
 // The levels are the material's bindings 5 and 6 (`P2_PARTICLE_LEVELS`), so the source carries no index.
@@ -17,13 +14,10 @@ import bevy_pbr::render::mesh_view_bindings::depth_prepass_texture;
 struct AirIn {
     @location(0) center: vec3<f32>,
     @location(1) way: vec3<f32>,
-    // A sheet's x is its side times one more than its strand; a stream's y is Unreal units from its nozzle.
     @location(2) corner: vec2<f32>,
-    // The light, and a seed word: a stream ring's share of its arc, or a drop's own number in 0..1.
     @location(3) light: vec4<f32>,
     // Radius, `FluidType` byte, `SHAPE_*`, and the shape's extra word.
     @location(4) look: vec4<f32>,
-    // A stream's direction at the ring and its speed in Unreal units a second; zero on drops.
     @location(5) axis: vec4<f32>,
 }
 
@@ -32,37 +26,27 @@ struct AirOut {
     @location(0) world: vec3<f32>,
     @location(1) side: vec3<f32>,
     @location(2) up: vec3<f32>,
-    // Unreal units across and along the quad from its middle.
     @location(3) local: vec2<f32>,
     @location(4) light: vec3<f32>,
     @location(5) look: vec4<f32>,
-    // A capsule's radius and the half length of its straight part; a stream's share of its arc in x.
     @location(6) half: vec2<f32>,
     // A sheet's strand or a drop's seed. Flat, as it is hashed by its bits.
     @location(7) @interpolate(flat) seed: f32,
-    // A tube's axis point there, and the stream's speed.
     @location(8) axis: vec4<f32>,
 }
 
 struct Optics {
     // Absorbed per Unreal unit of liquid, per channel.
     sigma: vec3<f32>,
-    // How much a thin film colours the specular.
     sheen: f32,
-    // The linear albedo the liquid scatters back: dark, as a wet liquid's colour is mostly its specular.
     body: vec3<f32>,
-    // How much solid chunks show in it, which also makes it scatter like a paste.
     chunks: f32,
     roughness: f32,
-    // 1 for a liquid that always burns.
     burns: f32,
-    // How torn its silhouette is as it flies.
     ragged: f32,
-    // The least it hides behind it, so a clear liquid still shows.
     least: f32,
 }
 
-// What a liquid's surface is at one place: a tint on its body, how wet the film there is, and a chunk's extra depth.
 struct Surface {
     tint: vec3<f32>,
     wet: f32,
@@ -73,8 +57,8 @@ const SHAPE_RIBBON: f32 = 0.0;
 const SHAPE_FALL: f32 = 1.0;
 const SHAPE_TUBE: f32 = 2.0;
 
-// The game's own puke textures from the player's install, its pour's strip and its splat sprite, in linear light and
-// repeated with `fract`. Without them a 1 x 1 stand-in is bound and puke keeps its procedural colours.
+// The game's own puke textures from the player's install, its pour's strip and its splat sprite, in linear light
+// and repeated with `fract`. Without them a 1 x 1 stand-in is bound and puke keeps its procedural colours.
 @group(3) @binding(11) var puke_pour: texture_2d<f32>;
 @group(3) @binding(12) var puke_pour_sampler: sampler;
 @group(3) @binding(13) var puke_splat: texture_2d<f32>;
@@ -83,11 +67,10 @@ const KINDS: u32 = 9u;
 const BLOOD: u32 = 3u;
 const PUKE: u32 = 4u;
 const BLOODY_PUKE: u32 = 5u;
-// How far bloody puke's texture colour is pulled toward blood's.
 const BLOODY_SHARE: f32 = 0.55;
 
-// By `FluidType` byte; row 0 stands for a kind the table does not know. A private var, as only memory may be indexed
-// by a value known at run time.
+// By `FluidType` byte; row 0 stands for a kind the table does not know. A private var, as only memory may be
+// indexed by a value known at run time.
 var<private> OPTICS: array<Optics, KINDS> = array<Optics, KINDS>(
     Optics(vec3(0.05, 0.04, 0.03), 0.0, vec3(0.1, 0.1, 0.1), 0.0, 0.1, 0.0, 0.4, 0.2),
     // Gas
@@ -108,39 +91,28 @@ var<private> OPTICS: array<Optics, KINDS> = array<Optics, KINDS>(
     Optics(vec3(0.5, 0.8, 1.5), 0.0, vec3(0.1, 0.06, 0.01), 0.0, 0.2, 1.0, 0.6, 0.3),
 );
 
-// Burning liquid's light, in linear HDR.
 const BURN: vec3<f32> = vec3(7.0, 3.0, 0.6);
 const F0: f32 = 0.02;
 const PI: f32 = 3.14159265;
 const TAU: f32 = 6.28318531;
 const FILM_SCALE: f32 = 0.35;
-// As a puff of smoke, liquid in the air faces the sun with about half of itself.
 const SUN_BODY: f32 = 0.5;
 const LIGHT_LIMIT: f32 = 2.0;
 const SPECULAR_LIMIT: f32 = 16.0;
-// How much of the liquid's own hue its glints take, and how much of the light around it its rim reflects.
 const GLINT_HUE: f32 = 0.6;
 const RIM: f32 = 0.5;
-// A glint from overhead in the light around the liquid, so it shines indoors where no sun reaches.
 const KEY: vec3<f32> = vec3(0.32, 0.9, 0.3);
 const KEY_GLINT: f32 = 0.25;
-// Sun from behind shines through thin liquid in its own colour.
 const BACK_LIGHT: f32 = 0.8;
 const BACK_POWER: f32 = 6.0;
-// The share of its colour a deep, clear liquid keeps: thick blood is near black, its thin edges crimson.
 const DEEP: f32 = 0.25;
-// A chunky liquid's wet film sharpens its roughness this much; its dry places keep this share of the specular.
 const WET_SHARPEN: f32 = 0.35;
 const DRY_SPECULAR: f32 = 0.15;
-// Tints on a chunky liquid's body: bile, solid chunks and dark flecks.
 const BILE: vec3<f32> = vec3(0.8, 1.15, 0.6);
 const CHUNK: vec3<f32> = vec3(1.3, 1.2, 1.4);
 const FLECK: vec3<f32> = vec3(0.35, 0.22, 0.2);
-// A blood drop's radius in Unreal units below which it is a matte speck, with no glint, rim or least opacity, and above
-// which it shines in full.
 const MATTE_BELOW: f32 = 0.3;
 const SHINY_ABOVE: f32 = 1.0;
-// Unreal units over which liquid fades into the geometry behind it.
 const SOFT_UNITS: f32 = 2.0;
 
 fn optics_of(kind: f32) -> Optics {
@@ -177,7 +149,6 @@ fn noise2(p: vec2<f32>) -> f32 {
     return mix(low, high, s.y);
 }
 
-// `at` is in radii and travels with the liquid. Only a chunky liquid is mottled: bile, chunks, flecks, wet patches.
 fn surface_of(kind: f32, at: vec2<f32>) -> Surface {
     let chunks = optics_of(kind).chunks;
     if chunks <= 0.0 {
@@ -198,13 +169,10 @@ fn is_puke(kind: f32) -> bool {
     return k == PUKE || k == BLOODY_PUKE;
 }
 
-// Mip level for a texture of `side` texels spread over `units` Unreal units, `pixel` units to a pixel.
 fn texture_lod(side: f32, units: f32, pixel: f32) -> f32 {
     return log2(max(pixel * side / max(units, 1e-4), 1.0));
 }
 
-// `surface` coloured by the game's puke texture as far as `share`: its gloss and lumps stay ours, its tint becomes what
-// turns the kind's body into the texel's linear colour, bloody puke's pulled toward blood.
 fn textured_surface(surface: Surface, kind: f32, colour: vec3<f32>, share: f32) -> Surface {
     let body = optics_of(kind).body;
     let own = select(colour, mix(colour, OPTICS[BLOOD].body, BLOODY_SHARE), u32(kind + 0.5) == BLOODY_PUKE);
@@ -234,11 +202,8 @@ fn ggx(n_dot_h: f32, a2: f32) -> f32 {
     return a2 / (PI * pow(n_dot_h * n_dot_h * (a2 - 1.0) + 1.0, 2.0));
 }
 
-// Premultiplied colour of liquid `thickness` units deep at `world` with normal `n`: its body lit by the light at its
-// emitter (display brightness) and the sun where it reaches, absorbed over the depth, its glints, and the sun behind it.
 fn air_shade(world: vec3<f32>, n: vec3<f32>, thickness: f32, look: vec4<f32>, emitter: vec3<f32>, frag_coord: vec4<f32>, cover: f32, burning: f32, surface: Surface) -> vec4<f32> {
     let optics = optics_of(look.y);
-    // Blood is turbid: deep, it keeps its colour, and as any water its glints are white.
     let turbid = select(0.0, 1.0, u32(look.y + 0.5) == BLOOD);
     let falling = select(0.0, 1.0, abs(look.z - SHAPE_FALL) < 0.5);
     let shine = 1.0 - turbid * falling *(1.0 - smoothstep(MATTE_BELOW, SHINY_ABOVE, look.x));
@@ -257,10 +222,8 @@ fn air_shade(world: vec3<f32>, n: vec3<f32>, thickness: f32, look: vec4<f32>, em
     let depth = thickness * (1.0 + surface.lump);
     let transmit = exp(-optics.sigma * depth);
     let n_dot_v = max(dot(n, v), 1e-3);
-    // Schlick's Fresnel for water's index of 1.33, whose reflectance head on is `F0`.
     let fresnel = F0 + (1.0 - F0) * pow(1.0 - n_dot_v, 5.0);
     let alpha = cover * max(max(1.0 - dot(transmit, vec3(1.0 / 3.0)), fresnel * shine), optics.least * shine);
-    // A paste scatters from its surface and keeps its colour however deep it is.
     let deep = mix(mix(vec3(DEEP), vec3(1.0), transmit), vec3(1.0), max(saturate(optics.chunks * 1.25), turbid));
     let body = to_linear(to_display(optics.body * surface.tint * deep) * light);
 

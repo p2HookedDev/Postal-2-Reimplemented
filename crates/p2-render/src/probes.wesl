@@ -9,9 +9,9 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 @if(BINDLESS)
 import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
 
-// The probe grid rides in the material's metal and roughness texture, Bevy's 1 x 1 default without one: two volumes side
-// by side, each a tile per layer of the grid, a tile the grid's columns with a repeat at each side, half as many layers
-// as columns. The tile count across and the bounce range match `probes.rs`; the spacing comes in the ambient's alpha.
+// The probe grid rides in the metal-roughness texture (Bevy's 1x1 default without one): two volumes side by
+// side, each a tile per grid layer, a tile the grid's columns plus a repeat at each side, half as many layers
+// as columns. Tile count and bounce range match `probes.rs`; the spacing comes in the ambient's alpha.
 const PROBE_TILES_WIDE: f32 = 12.0;
 const PROBE_BOUNCE_RANGE: f32 = 2.0;
 const PROBE_SMALLEST_ATLAS: f32 = 64.0;

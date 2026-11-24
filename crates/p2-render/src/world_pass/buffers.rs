@@ -46,7 +46,6 @@ pub(super) fn lightmap_slots(draws: &WorldDraws) -> HashMap<AssetId<Image>, usiz
     slots
 }
 
-/// As Bevy decides it for its light map layout, which it keeps private: 16 material textures and 8 probes.
 pub(super) fn lightmap_arrays_usable(device: &RenderDevice) -> bool {
     let limits = device.limits();
     limits.max_binding_array_elements_per_shader_stage >= 24
@@ -70,8 +69,8 @@ pub(super) fn section_uniform(section: &WorldSection, material: &PreparedMateria
     let affine = Affine3::from(section.world_from_local);
     let transforms = MeshTransforms { world_from_local: affine, previous_world_from_local: affine, flags: flags.bits() };
     let mut uniform = MeshUniform::new(&transforms, first_vertex, material.binding.slot, None, None, None, None, metadata_index);
-    // The section's zone plus one, for the lamps' zone test in `modern.wesl`; 0 on a section in several zones or in
-    // zone 0, which no portal closes off.
+    // The section's zone plus one, for the lamps' zone test in `modern.wesl`;
+    // 0 on a section in several zones or in zone 0, which no portal closes off.
     uniform.tag = section.zones.as_deref().map_or(0, |zones| match *zones {
         [zone] if zone != 0 => u32::from(zone) + 1,
         _ => 0,
@@ -146,7 +145,6 @@ pub(super) fn cull_buffers(world: &World, layout: &BindGroupLayoutDescriptor, ch
     (chunks, args, counts, views, group)
 }
 
-/// Bevy's light map layout needs its arrays full.
 pub(super) fn mesh_bind_groups(
     world: &World,
     model: &BindingResource,

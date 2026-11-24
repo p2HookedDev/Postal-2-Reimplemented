@@ -1,10 +1,10 @@
-// A settled prop drawn into a cached sun level's scratch depth, then the scratch copied into the level's tile. The prop's
-// vertex maths keeps the order of Bevy's prepass, so its depth bits match a prop Bevy would have drawn.
+// A settled prop drawn into a cached sun level's scratch depth, then the scratch copied into the level's tile.
+// The prop's vertex maths keeps the order of Bevy's prepass, so its depth bits match a prop Bevy would have
+// drawn.
 
 struct Caster {
     clip_from_world: mat4x4<f32>,
     world_from_local: mat4x4<f32>,
-    // x the alpha cutoff of a masked prop.
     cut: vec4<f32>,
 }
 
@@ -24,7 +24,8 @@ fn placed(position: vec3<f32>, uv: vec2<f32>) -> Output {
     var out: Output;
     out.clip = caster.clip_from_world * vec4(world.xyz, 1.0);
     out.unclipped_depth = out.clip.z;
-    // Without depth clip control, as Bevy's emulation: clamp what reaches the rasteriser, the fragment writes the true depth.
+    // Without depth clip control, as Bevy's emulation: clamp what reaches the rasteriser, the fragment writes the
+    // true depth.
     @if(UNCLIPPED_DEPTH_ORTHO_EMULATION)
     out.clip.z = min(out.clip.z, 1.0);
     out.uv = uv;
@@ -71,7 +72,6 @@ fn copy_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32
     return vec4(f32(index & 1u) * 4.0 - 1.0, f32(index >> 1u) * 4.0 - 1.0, 0.0, 1.0);
 }
 
-// Tile corners are whole multiples of the scratch's side, so the pixel modulo that side is the scratch's texel.
 fn scratch_depth(pixel: vec4<f32>) -> f32 {
     return textureLoad(scratch, vec2<u32>(pixel.xy) % textureDimensions(scratch), 0);
 }

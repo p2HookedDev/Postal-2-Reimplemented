@@ -27,12 +27,11 @@ use crate::sun_levels::SunLevelAtlas;
 
 const PARTICLE_SHADER: Handle<Shader> = uuid_handle!("6f0c2d6e-8a51-4c4f-9a43-2b7d0f3c5e91");
 
-/// This frame's drawn sprites of every sprite emitter, one buffer every [`ParticleMaterial`] binds: per
-/// emitter a header record (its sprite count) then one `sprite_record` (`map/particles.rs`) per sprite. An emitter's
-/// entity has the index of its header as its `MeshTag`.
+/// This frame's drawn sprites of every sprite emitter, one buffer every [`ParticleMaterial`] binds: per emitter a
+/// header record (its sprite count) then one `sprite_record` (`map/particles.rs`) per sprite. An emitter's entity
+/// has the index of its header as its `MeshTag`.
 pub(crate) const PARTICLE_SPRITES: Handle<ShaderBuffer> = uuid_handle!("3b8e5f1a-74c2-4d09-b6e1-9a0c2f7d4e53");
 
-/// One record per corona, at its entity's `MeshTag`: the corona's colour in the record's `center`.
 pub(crate) const CORONA_COLORS: Handle<ShaderBuffer> = uuid_handle!("9d41c7e2-5b3a-4f86-a0d9-6e2f18b7c304");
 
 pub(crate) const RECORD_WORDS: usize = 20;
@@ -79,13 +78,10 @@ fn follow_sun_levels(
     }
 }
 
-/// World units of fade per level of the soft particles setting.
 const SOFT_UNITS_PER_LEVEL: f32 = 6.0;
 
-/// `lit` for a sprite that takes the light of the surface it lies on rather than a puff's.
 const LIT_LYING: u32 = 2;
 
-/// The uniform's `soft` (fade depth in world units, 0 off) and `lit` for a material, from the two setting levels.
 fn modern_params(soft_level: u8, light_level: u8, material: &ParticleMaterial) -> (f32, u32) {
     let soft = if material.soft_edge { f32::from(soft_level) * SOFT_UNITS_PER_LEVEL } else { 0.0 };
     let lit = match material.light {
@@ -96,16 +92,15 @@ fn modern_params(soft_level: u8, light_level: u8, material: &ParticleMaterial) -
     (soft, lit)
 }
 
-/// Faces the normal it was given, so it lies on the surface it was put on: a puddle, a trail.
 fn lies_flat(usage: DirectionUsage) -> bool {
     matches!(usage, DirectionUsage::Normal | DirectionUsage::UpAndNormal | DirectionUsage::RightAndNormal)
 }
 
 const PUFF_WORDS: [&str; 4] = ["smoke", "dust", "steam", "blood"];
 
-/// Additive and brighten sprites (fire, sparks, flashes) and the multiplying ones are self-lit; covering ones take light.
-/// The game also draws its hit puffs, dust, steam and blood spray with brighten: those are told from flames by the
-/// texture's name and take light.
+/// Additive and brighten sprites (fire, sparks, flashes) and the multiplying ones are self-lit; covering ones
+/// take light. The game also draws its hit puffs, dust, steam and blood spray with brighten: those are told from
+/// flames by the texture's name and take light.
 fn takes_light(style: DrawStyle, texture: &str) -> bool {
     let texture = texture.to_ascii_lowercase();
     match style {
@@ -115,13 +110,10 @@ fn takes_light(style: DrawStyle, texture: &str) -> bool {
     }
 }
 
-/// How a sprite takes the modern look's light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SpriteLight {
     SelfLit,
-    /// The light of a puff in the air, at its emitter.
     Puff,
-    /// The light of the surface it lies on.
     Lying,
 }
 
@@ -188,13 +180,13 @@ pub struct ParticleMaterial {
     pub sun_levels: Option<Handle<Image>>,
     pub style: DrawStyle,
     pub no_depth: bool,
-    /// Fades into the level geometry behind it under modern graphics: a sprite facing the eye, which never lies on a surface.
+    /// Fades into the level geometry behind it under modern graphics: a sprite facing the eye, which never lies on a
+    /// surface.
     pub soft_edge: bool,
     pub light: SpriteLight,
     pub sky: bool,
 }
 
-/// What two particle materials must share to draw alike.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SharedParticleKey {
     texture: AssetId<Image>,
@@ -233,8 +225,8 @@ impl ParticleMaterial {
         Self { texture, params, sprites: PARTICLE_SPRITES, sun_levels: None, style: props.draw_style, no_depth: false, soft_edge, light: sprite_light(props.draw_style, "", props.use_direction_as), sky: false }
     }
 
-    /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene (unverified
-    /// for sprites).
+    /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene
+    /// (unverified for sprites).
     pub(crate) fn sprite(texture: Handle<Image>, blend: SpriteBlend) -> Self {
         let (style, alpha_ref, alpha_test) = match blend {
             SpriteBlend::Opaque => (DrawStyle::Regular, 0.0, 0),
@@ -266,8 +258,8 @@ pub(crate) enum SpriteBlend {
     Modulated,
 }
 
-/// Retail's order. Any other style keeps the previous sprite's shared `FinalBlend` in retail (depends
-/// on draw order); here it keeps the start state, `FB_Overwrite` without alpha test.
+/// The original game's order. Any other style keeps the previous sprite's shared `FinalBlend` there, depending
+/// on draw order; here it keeps the start state, `FB_Overwrite` without alpha test.
 pub(crate) fn sprite_blend(blending: Option<Blending>, style: Option<ERenderStyle>) -> SpriteBlend {
     if blending == Some(Blending::Masked) || style == Some(ERenderStyle::Masked) {
         SpriteBlend::Masked
@@ -338,8 +330,8 @@ impl Material for ParticleMaterial {
         if key.bind_group_data.sky {
             crate::shaders::sky_view_defs(descriptor);
         }
-        // Sprites lying on surfaces are coplanar with them; with another triangulation they z-fought. Pulled towards the camera
-        // (reversed Z: up) by a slope bias, which grows at grazing views where they fought.
+        // Sprites lying on surfaces are coplanar with them and z-fight; a slope bias pulls them towards the camera
+        // (reversed Z: up), growing at grazing views where they fight.
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.bias = DepthBiasState { constant: PARTICLE_DEPTH_BIAS.0, slope_scale: PARTICLE_DEPTH_BIAS.1, clamp: 0.0 };
             if key.bind_group_data.no_depth {
@@ -353,9 +345,9 @@ impl Material for ParticleMaterial {
     }
 }
 
-/// Constant, slope scale. Measured on the GPU (floor at about 6°): constant bias alone (up to 512) does nothing on the
-/// float depth; slope 0.01 to 0.05 hides 0.1 % of a coplanar sprite, and 0.05 shows sprites up to ~0.3 units under the
-/// floor (traces' hits are not exact) while one 5 units under stays hidden.
+/// Constant, slope scale. Measured on the GPU (floor at about 6°): constant bias alone (up to 512) does nothing
+/// on the float depth; slope 0.01 to 0.05 hides 0.1 % of a coplanar sprite, and 0.05 shows sprites up to ~0.3
+/// units under the floor (traces' hits are not exact) while one 5 units under stays hidden.
 const PARTICLE_DEPTH_BIAS: (i32, f32) = (16, 0.05);
 
 /// The engine blends in display space, the framebuffer

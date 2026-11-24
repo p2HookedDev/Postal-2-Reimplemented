@@ -70,10 +70,7 @@ struct Poses {
     joints: FxHashMap<ObjectId, Vec<(usize, Entity)>>,
     slots: FxHashMap<ObjectId, Vec<(p2_vm::NameId, usize, Mat4)>>,
     moved: FxHashSet<ObjectId>,
-    /// Actors whose drawn pose the layers redo this frame from the animation's own.
     relayer: FxHashSet<ObjectId>,
-    /// The animation's own pose of an actor whose drawn pose in `bones` was corrected since it was last posed: what
-    /// the game is told about bones. Dropped whenever the actor is posed again.
     animated: FxHashMap<ObjectId, Vec<Mat4>>,
 }
 
@@ -232,7 +229,6 @@ fn map_bones(bone_names: &[String], animation_names: &[String]) -> Vec<Option<us
     bone_names.iter().map(|name| animation_names.iter().position(|n| n == name)).collect()
 }
 
-/// Fewer animated meshes than this are posed on the calling thread: handing them out costs more than it saves.
 const POSED_AT_ONCE: usize = 16;
 
 #[derive(Default)]
@@ -243,13 +239,10 @@ struct PoseScratch {
 enum PoseWork<'a> {
     Keep,
     Ragdoll(std::borrow::Cow<'a, [p2_assets::pose::Frame]>),
-    /// The pose, and where its channels' shown times start in the frame's list of them.
     Channels(&'a ActorPose, usize),
-    /// No game behind it (the viewer), or an actor that does not animate: its own sequence by the clock.
     Free,
 }
 
-/// The mesh's new bone matrices, or `None` while it shows the pose it already has.
 fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elapsed: f32) -> Option<Vec<Mat4>> {
     match work {
         PoseWork::Keep => None,
@@ -294,7 +287,6 @@ fn pose_mesh(item: &mut AnimatedMesh, work: &PoseWork, shown_times: &[f32], elap
                     tween_pose(from, pose, *weight);
                 }
                 if !is_base {
-                    // A bone the channel's animation lacks keeps what is under it.
                     for ((over, under), track) in channel_pose.iter_mut().zip(&local).zip(map.iter()) {
                         if track.is_none() {
                             *over = *under;
@@ -345,8 +337,6 @@ fn pose_work<'a>(item: &AnimatedMesh, world: Option<&'a PlayWorld>, shown_times:
     }
 }
 
-/// The joints of a mesh made after this frame's `animate`, posed as the game shows its actor now, so its first frame
-/// is not the bind pose. `None` while the game has no pose for it.
 pub(crate) fn first_joints(item: &mut AnimatedMesh, world: &PlayWorld) -> Option<Arc<[Transform]>> {
     let mut shown_times = Vec::new();
     let work = pose_work(item, Some(world), &mut shown_times);
@@ -354,7 +344,6 @@ pub(crate) fn first_joints(item: &mut AnimatedMesh, world: &PlayWorld) -> Option
         return None;
     }
     let bones = pose_mesh(item, &work, &shown_times, 0.0)?;
-    // Posed again by the next `animate`, which also records it in `Poses` as for any new mesh.
     item.last_pose = None;
     Some(bones.into_iter().map(joint_transform).collect())
 }
@@ -381,8 +370,6 @@ fn animate(
             _ => true,
         });
     }
-    // A new VM's ids restart: names and aliases are taken again from the meshes animated now. Poses and joints stay for
-    // those meshes (a pose not made again keeps its bones, a joint is noted once) and go for all others.
     if *generation != play.generation() {
         *generation = play.generation();
         poses.names.clear();
@@ -397,7 +384,6 @@ fn animate(
             }
         }
     }
-    // What each mesh is posed from is read here, where the world is at hand; the posing itself is spread over threads.
     let shown_times = &mut scratch.times;
     shown_times.clear();
     let work: Vec<PoseWork> = animated.0.iter().map(|item| pose_work(item, world, shown_times)).collect();
@@ -433,7 +419,8 @@ fn animate(
     times.add("animate", started);
 }
 
-/// A joint whose bone did not move keeps its transform unchanged: no change detection, so no propagation or skin upload.
+/// A joint whose bone did not move keeps its transform unchanged: no change detection, so no propagation or skin
+/// upload.
 fn pose_joints(
     mut poses: ResMut<Poses>,
     mut times: ResMut<FrameTimes>,
@@ -466,16 +453,16 @@ fn pose_joints(
     times.add("pose joints", started);
 }
 
-/// A bone scaled to nothing (`SetBoneScale` 0: a cut limb or head) keeps no rotation: glam divides by the zero scale and
-/// makes it NaN, which made the mesh's bounds NaN and the whole body vanish or flicker.
+/// A bone scaled to nothing (`SetBoneScale` 0: a cut limb or head) keeps no rotation: glam divides by the
+/// zero scale, and the NaN would make the mesh's bounds NaN and the whole body vanish or flicker.
 fn joint_transform(matrix: Mat4) -> Transform {
     let transform = unreal_to_bevy(matrix);
     if transform.rotation.is_finite() { transform } else { Transform { rotation: Quat::IDENTITY, ..transform } }
 }
 
-/// Bevy's `DynamicSkinnedMeshBounds` does this for every skinned mesh every frame and writes the `Aabb` even when equal,
-/// which also makes the renderer extract the mesh again; a mesh's bounds are in its own space, so only a new pose
-/// changes them.
+/// Bevy's `DynamicSkinnedMeshBounds` does this for every skinned mesh every frame and writes the `Aabb` even when
+/// equal, which also makes the renderer extract the mesh again; a mesh's bounds are in its own space, so only a
+/// new pose changes them.
 fn skinned_bounds(
     poses: Res<Poses>,
     inverse_bindposes: Res<Assets<SkinnedMeshInverseBindposes>>,

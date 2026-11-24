@@ -1,5 +1,3 @@
-//! Packages the loader has not loaded, mapped from their files, so only the pages read come from disk.
-
 use std::path::Path;
 use std::sync::Arc;
 

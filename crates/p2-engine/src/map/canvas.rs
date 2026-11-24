@@ -1,6 +1,3 @@
-//! The map's canvas, painted each frame in the egui pass: the HUD and screens the scripts draw, the matinee overlay,
-//! and while a map loads the last image with the loading bar over it.
-
 use super::*;
 
 pub(super) fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
@@ -8,7 +5,6 @@ pub(super) fn spawn_hud_camera(mut commands: Commands, mut egui_settings: ResMut
     commands.spawn((PrimaryEguiContext, p2_render::view::hud_camera()));
 }
 
-/// Where the host shows the map, in egui points: its canvas is painted there. `None` paints nothing.
 #[derive(Resource, Default)]
 pub struct CanvasArea(pub Option<egui::Rect>);
 

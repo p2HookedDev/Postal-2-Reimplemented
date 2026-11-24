@@ -41,7 +41,6 @@ pub(crate) fn set_specular_uv<M: bevy::asset::Asset>(
     }
 }
 
-/// Panned and turned textures follow a clock that stands still while the game is paused.
 pub(super) fn animate_materials(
     (time, facts, mut clock): (Res<Time>, Res<FrameFacts>, bevy::ecs::system::Local<f32>),
     animated: Res<AnimatedMaterials>,

@@ -43,14 +43,12 @@ fn red_pixels(frame: &Mutex<Vec<u8>>) -> usize {
     frame.lock().expect("lock").as_chunks::<4>().0.iter().filter(|&&pixel| is_red(pixel)).count()
 }
 
-/// The mean column of the droplets' pixels.
 fn red_middle(frame: &Mutex<Vec<u8>>) -> Option<f32> {
     let frame = frame.lock().expect("lock");
     let columns: Vec<f32> = frame.as_chunks::<4>().0.iter().enumerate().filter(|&(_, &pixel)| is_red(pixel)).map(|(at, _)| (at as u32 % SIZE) as f32).collect();
     (!columns.is_empty()).then(|| columns.iter().sum::<f32>() / columns.len() as f32)
 }
 
-/// The emitter's texture and the speed of its sprites to the right, in Unreal units a second.
 #[derive(Clone, Copy)]
 struct Source {
     texture: &'static str,
@@ -69,7 +67,6 @@ fn run_for(app: &mut App, seconds: f32) {
     }
 }
 
-/// The floor the scene draws, as the level's collision: Unreal's z is up, 6 units under the eye.
 fn floor_under() -> StaticCollision {
     let corner = |x: f32, y: f32| [x, y, -6.0];
     let floor = [[corner(-200.0, -200.0), corner(200.0, -200.0), corner(200.0, 200.0)], [corner(-200.0, -200.0), corner(200.0, 200.0), corner(-200.0, 200.0)]];
@@ -92,7 +89,6 @@ enum Under {
     AFloor,
 }
 
-/// Throws droplets in front of a wall until some are drawn, then stops; the app and the frame it last drew.
 fn thrown(under: Under, source: Source) -> (App, Arc<Mutex<Vec<u8>>>) {
     let mut app = App::new();
     common::headless_renderer(&mut app);

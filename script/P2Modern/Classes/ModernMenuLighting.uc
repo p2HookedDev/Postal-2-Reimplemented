@@ -33,7 +33,6 @@ function CreateMenuContents()
 	LoadRows();
 }
 
-// No preset writes the shadow filter or the light source size, so changing them keeps the preset.
 function RowChanged(int i)
 {
 	if (RowKeys[i] != "ModernShadowFilter" && RowKeys[i] != "ModernLampSize")

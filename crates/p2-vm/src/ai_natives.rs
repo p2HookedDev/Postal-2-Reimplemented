@@ -9,7 +9,6 @@ use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 const VISIBILITY_SCALE: f32 = 1.0 / 128.0;
 const WALL_STEP_FACTOR: f32 = 1.5;
 const WALL_STEP_BASE: f32 = 16.0;
-/// `moveSmooth` slides along a surface when its normal is at least this steep in Z, or the move is this vertical.
 const SLIDE_NORMAL_Z: f32 = 0.2;
 const SLIDE_UP: f32 = 0.5;
 const SLIDE_DOWN: f32 = -0.2;
@@ -137,7 +136,6 @@ impl<L: LoaderRef> Vm<L> {
         false
     }
 
-    /// The last point of exactly `class` found becomes the `FindPath` goal.
     fn find_path_toward_nearest(&mut self, controller: ObjectId, class: Option<crate::ClassId>) -> Result<Option<ObjectId>, Error> {
         let (Some(class), Some(_)) = (class, self.store.object_of(controller, Prop::Pawn)) else {
             self.diagnostics.log.push(format!("Warning: No goal for FindPathTowardNearest by {}", self.store.object(controller).path));

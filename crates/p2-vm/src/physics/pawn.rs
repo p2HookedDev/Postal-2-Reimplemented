@@ -42,9 +42,9 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// The actor's lift and drag from the volumes it stands in: `Buoyancy` and the volume's `FluidFriction`, each times
-    /// the share of the actor that is inside. Out of water every touched physics volume with a brush counts, at half
-    /// that share: this is why trigger and interest volumes have twice the gravity.
+    /// The actor's lift and drag from the volumes it stands in: `Buoyancy` and the volume's `FluidFriction`, each
+    /// times the share of the actor that is inside. Out of water every touched physics volume with a brush counts, at
+    /// half that share: this is why trigger and interest volumes have twice the gravity.
     pub(crate) fn volume_buoyancy(&mut self, actor: ObjectId) -> (f32, f32) {
         let at = self.store.vector(actor, Prop::Location);
         let (_, height) = self.store.collision_size(actor);
@@ -68,7 +68,6 @@ impl<L: LoaderRef> Vm<L> {
         found.map_or((0.0, 0.0), |(volume, depth)| (self.store.float_of(actor, Prop::Buoyancy) * depth, self.store.float_of(volume, Prop::FluidFriction) * depth))
     }
 
-    /// What an actor landing in a `bBounceVelocity` volume that pushes is thrown up with, instead of landing.
     pub(crate) fn bounce_velocity(&self, actor: ObjectId) -> Option<Vector> {
         let volume = self.store.object_of(actor, Prop::PhysicsVolume).filter(|&v| self.store.object(v).class.is_some())?;
         let push = self.store.vector(volume, Prop::ZoneVelocity);
@@ -200,8 +199,6 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(pawn, Prop::CollisionHeight, Value::Float(crouch_height));
             return Ok(());
         }
-        // The size and place tried above are kept: the pawn's hash entry follows (the encroachment test skips the
-        // pawn itself, so a tried and undone size needs none).
         self.relocate(pawn);
         self.set_vector(pawn, Prop::PrePivot, Vector::ZERO);
         self.store.set(pawn, Prop::bIsCrouched, Value::Bool(false));

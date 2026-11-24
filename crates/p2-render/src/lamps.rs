@@ -1,6 +1,6 @@
-//! Modern lamps: a pixel is lit by the lamps listed for its cell of the map ([`cells`]), read from a book the shaders
-//! take as a texture. The static world's shadows come from one atlas drawn once a map ([`atlas`]), finer where a face
-//! would show its texels ([`faces`]); what moves casts into tiles of its own ([`movers`]).
+//! Modern lamps: a pixel is lit by the lamps listed for its map cell ([`cells`]), read from a book texture.
+//! Static shadows come from an atlas drawn once a map ([`atlas`]), finer where a face would show its texels
+//! ([`faces`]); what moves casts into tiles of its own ([`movers`]).
 
 pub(crate) mod atlas;
 mod cells;
@@ -60,15 +60,16 @@ pub use movers::MoverTiles;
 
 pub const LAMP_SHADOW_SPAN: &str = "lamp_shadows";
 
-/// Where `lamp_shadow.wesl`'s fade ends. A far lamp's pool covers few pixels but costs every cluster and list on its way.
+/// Where `lamp_shadow.wesl`'s fade ends. A far lamp's pool covers few pixels but costs every cluster and list on
+/// its way.
 const LAMP_SEEN_RADII: f32 = 30.0;
 /// Without an atlas a lamp lights through walls and a cell lists every lamp in reach, so the cells are larger.
 const SHADOWED_CELL: f32 = 128.0;
 const UNSHADOWED_CELL: f32 = 512.0;
 const ITEMS_PER_BATCH: usize = 8;
 
-/// Runs `work` in the light bakes' pool: all threads but two, left to the game (the slowest machine it must run on has
-/// four). Bakes that run at once share the pool, each thread taking whichever bake's work is left.
+/// Runs `work` in the light-bake pool of all threads but two, which are left to the game.
+/// Bakes running at once share the pool, each thread taking whichever bake's work is left.
 pub(crate) fn in_bake_pool<R: Send>(work: impl FnOnce() -> R + Send) -> R {
     static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     let pool = POOL.get_or_init(|| {
@@ -81,20 +82,18 @@ pub(crate) fn in_bake_pool<R: Send>(work: impl FnOnce() -> R + Send) -> R {
     }
 }
 
-/// `work` on each of `count` items in the bake pool, the results in the items' order.
 fn on_threads<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
     use rayon::prelude::*;
     in_bake_pool(|| (0..count).into_par_iter().with_min_len(ITEMS_PER_BATCH).map(work).collect())
 }
 
-/// Set above the tile in a lamp's colour texel when the lamp has a size of its own. Under 2^24, so it stays exact as a
-/// float. `lamp_shadow.wesl` holds the same number.
+/// Set above the tile in a lamp's colour texel when the lamp has a size of its own. Under 2^24, so it stays exact
+/// as a float. `lamp_shadow.wesl` holds the same number.
 const BOOK_SIZED: u32 = 1 << 20;
 
-/// A lamp's texels in the book, as `lamp_shadow.wesl` reads them: place and radius (negative for a spot); linear colour
-/// and atlas tile; a spot's direction x and y, its cone's scale signed as the direction's z, and the cone's offset.
-/// The next three are written by the passes: two of detail squares, one of where its movers' tiles lie. The last holds
-/// the lamp's size, which the shader reads only when the tile carries `BOOK_SIZED`: the lamp has a size of its own.
+/// A lamp's book texels, as `lamp_shadow.wesl` reads them: place and radius (negative for a spot), linear colour
+/// and atlas tile, spot direction and cone; then three the passes write (detail squares, mover tiles);
+/// the last holds the lamp's size, read only when the tile carries `BOOK_SIZED`.
 fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32) -> [[f32; 4]; RECORD_TEXELS] {
     let (at, spot) = scene_place(light, origin);
     let [r, g, b] = linear_light(light.color(level_brightness));
@@ -108,13 +107,11 @@ fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32
     [[at.x, at.y, at.z, -light.world_radius()], look, [along.x, along.y, scale.copysign(along.z), -light.cone_sine() * scale], [0.0; 4], [0.0; 4], [0.0; 4], size]
 }
 
-/// A lamp's place in the scene and, for a spot, the way it shines.
 fn scene_place(light: &MeshLight, origin: Vec3) -> (Vec3, Option<Vec3>) {
     let spot = matches!(light.effect, LE_STATIC_SPOT | LE_SPOTLIGHT).then(|| Vec3::from(p2_bevy_assets::to_bevy(light.rotation.vector())).normalize_or_zero());
     (Vec3::from(p2_bevy_assets::to_bevy(light.location)) + origin, spot)
 }
 
-/// The first scene camera's place, and how wide a texel may be a unit of distance away for it to cover `texel_pixels`.
 fn scene_eye(cameras: &Query<(&Transform, &Projection, &Camera), With<SceneView>>, texel_pixels: f32) -> Option<Eye> {
     let Some((eye, Projection::Perspective(lens), camera)) = cameras.iter().next() else { return None };
     let height = camera.physical_viewport_size().map(|size| size.y as f32).filter(|&height| height > 0.0)?;
@@ -122,19 +119,14 @@ fn scene_eye(cameras: &Query<(&Transform, &Projection, &Camera), With<SceneView>
 }
 
 const FACE_PICK_FRAMES: u32 = 4;
-/// A mover's tile fades in and out over this long.
 const MOVER_FADE_SECONDS: f32 = 0.3;
 
-/// The largest texture the GPU takes, once the renderer is known.
 static MOST_ATLAS_SIDE: AtomicU32 = AtomicU32::new(u32::MAX);
 
-/// An atlas side of 0 makes no atlas: lamps light without a shadow.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct LampQuality {
     atlas_side: u32,
-    /// How many pixels of the screen a texel of a detail face may cover.
     texel_pixels: f32,
-    /// How many texels of new detail faces one pick may ask the atlas pass to draw.
     texels_a_pick: u32,
 }
 
@@ -165,16 +157,12 @@ pub struct Lamp;
 pub(crate) struct Placed {
     number: u32,
     strength: f32,
-    /// Linear light.
     pub(crate) color: Vec3,
     pub(crate) range: f32,
-    /// A spot's direction and the cosine of its cone's half angle.
     pub(crate) spot: Option<(Vec3, f32)>,
-    /// How far the static world it lights lies from it through each face of its tile.
     reach: [f32; 6],
 }
 
-/// As the shader lights a point: 0 outside the lamp's range or a spot's cone.
 pub(crate) fn lamp_falloff(lamp_at: Vec3, range: f32, spot: Option<(Vec3, f32)>, point: Vec3) -> f32 {
     let to_point = point - lamp_at;
     let squared = to_point.length_squared();
@@ -189,7 +177,6 @@ pub(crate) fn lamp_falloff(lamp_at: Vec3, range: f32, spot: Option<(Vec3, f32)>,
     (1.0 - x * x * (3.0 - 2.0 * x)) * cone
 }
 
-/// The linear light of the placed lamps at a point, of those in range that `reaches` says light it.
 pub(crate) fn lamp_sum<'a>(lamps: impl IntoIterator<Item = (Vec3, &'a Placed)>, point: Vec3, reaches: impl Fn(Vec3) -> bool) -> Vec3 {
     let lit = lamps.into_iter().map(|(at, placed)| (at, placed.color * lamp_falloff(at, placed.range, placed.spot, point)));
     lit.filter(|&(at, light)| light != Vec3::ZERO && reaches(at)).map(|(_, light)| light).sum()
@@ -217,8 +204,6 @@ impl LampAtlas {
     }
 }
 
-/// The squares of the atlas's last quarter, which the lamps' detail faces and the movers' tiles share. A new atlas
-/// starts them anew, under the next `made` number.
 #[derive(Resource, Default)]
 struct DetailSquares {
     bake: usize,
@@ -227,7 +212,6 @@ struct DetailSquares {
 }
 
 struct LampJobResult {
-    /// Each lamp with the zones it could light (none known for a lamp inside solid) and its reach through each face.
     lamps: Vec<(MeshLight, Vec<u8>, [f32; 6])>,
     bake: Option<LampBake>,
     book: Vec<[f32; 4]>,
@@ -265,9 +249,8 @@ fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangl
     LampJobResult { lamps, bake, book, listed }
 }
 
-/// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them, and Bevy asks for all a GPU offers.
-/// More rows after the texels hold the decals' screen tile lists, which a compute pass writes, the movers' tile grid,
-/// their tiles and their capsules in two grids.
+/// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them. Rows after the texels hold
+/// the decals' screen tile lists (written by a compute pass), the movers' tile grid, their tiles and capsules.
 fn book_image(texels: &[[f32; 4]]) -> Image {
     let rows = texels.len().div_ceil(BOOK_WIDTH).max(1) + DECAL_BINS_FROM_END as usize;
     let mut bytes = bytes_of(texels);
@@ -277,7 +260,6 @@ fn book_image(texels: &[[f32; 4]]) -> Image {
     image
 }
 
-/// The modern switch, the lamp shadow level and the indirect light level in force, for the loading thread.
 static LOAD_LEVELS: AtomicU32 = AtomicU32::new(0);
 const LOAD_MODERN: u32 = 1 << 16;
 
@@ -286,7 +268,6 @@ pub(crate) fn set_load_light_levels(settings: Res<Settings>) {
     LOAD_LEVELS.store(if settings.modern_graphics() { levels | LOAD_MODERN } else { 0 }, Ordering::Relaxed);
 }
 
-/// A bake kept with the setting it was made for, taken once by the system that would otherwise bake it.
 pub(crate) struct Prebaked<K, T>(Mutex<Option<(K, T)>>);
 
 impl<K, T> Default for Prebaked<K, T> {
@@ -305,7 +286,6 @@ impl<K: PartialEq, T> Prebaked<K, T> {
     }
 }
 
-/// The lamps' shadow atlas and the probes, baked while the map loads so its light is there on the first frame.
 #[derive(Default)]
 pub struct LightBakes {
     lamps: Prebaked<u32, LampJobResult>,
@@ -330,8 +310,8 @@ pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCo
     Some(Arc::new(LightBakes { lamps: Prebaked::new(side, lamps), probes }))
 }
 
-/// A lamp that could light no zone the eye can see costs nothing: zone culling hides it, as it hides meshes. A lamp
-/// inside solid names no zone and takes every zone its box touches.
+/// A lamp that could light no zone the eye can see costs nothing: zone culling hides it, as it hides meshes. A
+/// lamp inside solid names no zone and takes every zone its box touches.
 fn lamp_zone(light: &MeshLight, model: &Model, lit_zones: &[u8]) -> ZoneCulled {
     let (center, radius) = (<[f32; 3]>::from(light.location), light.world_radius());
     let (min, max) = (center.map(|axis| axis - radius), center.map(|axis| axis + radius));
@@ -423,8 +403,8 @@ pub(crate) enum MaterialSlot {
     Occlusion,
     MetallicRoughness,
     Anisotropy,
-    /// Bevy reads it only for parallax, compiled out without vertex tangents: a mesh that gains tangents would shift its
-    /// UVs by this image as a height map.
+    /// Bevy reads it only for parallax, compiled out without vertex tangents: a mesh that gains tangents would shift
+    /// its UVs by this image as a height map.
     DepthMap,
     /// Bevy reads it only for normal mapping, compiled out without vertex tangents: a mesh that gains tangents would
     /// bend its normals by this image.
@@ -500,7 +480,6 @@ fn follow_atlas_binding<A: MaterialAtlas, E: MaterialExtension>(
     *bound = wanted;
 }
 
-/// An atlas made anew in `PostUpdate`, which the materials take up in the same frame.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AtlasSizeSystems;
 
@@ -521,10 +500,9 @@ pub(crate) fn follow_atlas<A: MaterialAtlas>(app: &mut App) {
     );
 }
 
-/// The faces of the lamps in sight that would show their texels get a square each, those nearest the eye first. A
-/// face keeps its square while its lamp's zone is out of sight, so walking back draws nothing again. Lamps out of sight
-/// in a zone one portal from the eye's get squares too, sized as seen from that portal, so a room is drawn before it
-/// is entered.
+/// Faces of lamps in sight that would show their texels get a square each, nearest the eye first. A face keeps
+/// its square while its lamp's zone is out of sight, so walking back draws nothing again. Lamps one portal away
+/// get squares too, sized as seen from that portal, so a room is drawn before it is entered.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn pick_faces(
     mut frames: Local<u32>,
@@ -604,7 +582,6 @@ impl Plugin for LampsPlugin {
         app.init_resource::<DetailSquares>();
         app.init_resource::<MoverTiles>();
         app.add_systems(Update, (follow_lamps, pick_faces).chain().in_set(super::RenderFollowSystems));
-        // After this frame's places and bounds are known: a tile aimed by last frame's trails its mover.
         app.add_systems(PostUpdate, pick_mover_tiles.after(TransformSystems::Propagate).after(VisibilitySystems::CalculateBounds));
         follow_atlas::<LampAtlas>(app);
         follow_atlas::<LampBook>(app);

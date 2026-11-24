@@ -28,8 +28,8 @@ const MAX_TICK: f32 = 0.4;
 pub(crate) struct DynamicActors {
     ids: Vec<ObjectId>,
     unsorted: Vec<ObjectId>,
-    /// All [`Vm::destroy`]'s walk needs besides `ids`. `None` until the first destroy and after a level or a save is
-    /// loaded. `Owner` and `Touching` are `const` in script (unverified), so only natives write them.
+    /// Everything [`Vm::destroy`]'s walk needs besides `ids`; `None` until the first destroy and after a level or
+    /// save loads. `Owner` and `Touching` are `const` in script (unverified), so only natives write them.
     linked_statics: Option<std::collections::BTreeSet<ObjectId>>,
 }
 

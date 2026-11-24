@@ -1,5 +1,5 @@
-//! Modern graphics option, off by default and followed at runtime. No baked light shows: a real-time sun with shadow
-//! cascades, the map's other suns as fills and the eye's zone ambient light the world.
+//! Modern graphics option, off by default and followed at runtime. No baked light shows: a real-time sun with
+//! shadow cascades, the map's other suns as fills and the eye's zone ambient light the world.
 
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::fxaa::Fxaa;
@@ -100,7 +100,8 @@ impl Plugin for ModernGraphicsPlugin {
         );
     }
 
-    // In cleanup: Bevy's light plugin has added the system this replaces, and removing a system sets up the whole schedule.
+    // In cleanup: Bevy's light plugin has added the system this replaces, and removing a system sets up the whole
+    // schedule.
     fn cleanup(&self, app: &mut App) {
         if app.remove_systems_in_set(PostUpdate, check_dir_light_mesh_visibility, ScheduleCleanupPolicy::RemoveSystemsOnly).is_ok_and(|removed| removed > 0) {
             app.add_systems(
@@ -176,8 +177,8 @@ impl ModernFlagged for TerrainMaterial {
     }
 }
 
-/// Animated materials change every frame, which must not rescan the whole store: only a changed setting or a store
-/// that grew this frame does, as its new ids are not known before the frame's asset events go out.
+/// Animated materials change every frame, which must not rescan the whole store: only a changed setting or a
+/// store that grew this frame does, as its new ids are not known before the frame's asset events go out.
 fn follow_flag<M: ModernFlagged>(
     settings: Res<Settings>,
     events: Option<Res<Messages<AssetEvent<M>>>>,
@@ -205,8 +206,6 @@ fn follow_flag<M: ModernFlagged>(
     }
 }
 
-/// The view is HDR under modern graphics. Bloom runs before the tone curve,
-/// anti-aliasing and sharpening after it; the depth prepass stays while the occlusion culling needs it.
 pub fn apply(
     settings: Res<Settings>,
     mut commands: Commands,
@@ -297,8 +296,6 @@ pub fn apply(
 
 const BLOOM_PER_LEVEL: f32 = 0.02;
 
-/// Added over the frame through a knee that starts at black: mid tones scatter a little, which is the haze, and bright
-/// light scatters most.
 pub fn bloom(level: u8) -> ModernBloom {
     ModernBloom {
         intensity: f32::from(level) * BLOOM_PER_LEVEL,
@@ -310,8 +307,8 @@ pub fn bloom(level: u8) -> ModernBloom {
     }
 }
 
-/// In Unreal units (about 2 cm each): Bevy's defaults are in metres (0.73 and 0.25), so about 32 and 12 units here (tuned
-/// by eye, unverified). Needs the depth and normal prepasses.
+/// In Unreal units (about 2 cm each): Bevy's defaults are in metres (0.73 and 0.25), so about 32 and 12 units
+/// here (tuned by eye, unverified). Needs the depth and normal prepasses.
 fn ssao(level: u8) -> ScreenSpaceAmbientOcclusion {
     let quality_level = match level {
         1 => ScreenSpaceAmbientOcclusionQualityLevel::Low,
@@ -328,7 +325,8 @@ struct FillSun;
 #[derive(Component, PartialEq)]
 pub struct StillProp(pub bool);
 
-/// A placed mesh casts with the static world, cached, once it has stood still this long, and with the movers while it moves.
+/// A placed mesh casts with the static world, cached, once it has stood still this long, and with the movers
+/// while it moves.
 const PROP_SETTLE_SECONDS: f32 = 2.0;
 const MAP_LOAD_PROPS: usize = 50;
 
@@ -355,7 +353,6 @@ fn watch_props(
         return;
     }
     let now = time.elapsed_secs();
-    // After a settings change every prop is checked again: one may have moved while nothing watched.
     let every = settings.is_changed();
     settling.extend(placed.iter().filter(|(_, transform)| every || transform.is_changed()).map(|(entity, _)| entity));
     settling.retain(|&entity| {
@@ -376,7 +373,8 @@ fn watch_props(
     }
 }
 
-/// Whether it has just settled for the first time: that draws it into every level, a door's later swings only the near ones.
+/// Whether it has just settled for the first time: that draws it into every level, a door's later swings only the
+/// near ones.
 fn settle(transform: &Transform, motion: &mut PropMotion, still: &mut Mut<StillProp>, now: f32) -> bool {
     if transform.translation != motion.translation || transform.rotation != motion.rotation {
         motion.translation = transform.translation;
@@ -390,8 +388,9 @@ fn settle(transform: &Transform, motion: &mut PropMotion, still: &mut Mut<StillP
     false
 }
 
-/// Shaders read the colour as is, at illuminance 1; Bevy's own PBR lights take about a thousandth of it. The biases (world
-/// units, tuned by eye, unverified) serve the actors' shadow lookup; the world's filter has its own.
+/// Shaders read the colour as is, at illuminance 1; Bevy's own PBR lights take about a thousandth of it. The
+/// biases (world units, tuned by eye, unverified) serve the actors' shadow lookup; the world's filter has its
+/// own.
 fn sun_light(color: [f32; 3], shadows: bool, contact: bool) -> DirectionalLight {
     let [r, g, b] = color;
     DirectionalLight {
@@ -405,12 +404,14 @@ fn sun_light(color: [f32; 3], shadows: bool, contact: bool) -> DirectionalLight 
     }
 }
 
-/// A light's colour is stored in display space and doubled when drawn, so its linear light is that doubled and squared.
+/// A light's colour is stored in display space and doubled when drawn, so its linear light is that doubled and
+/// squared.
 pub(crate) fn linear_light(color: [f32; 3]) -> [f32; 3] {
     color.map(|channel| 4.0 * channel * channel)
 }
 
-/// In Unreal units: rays of 48 units (Bevy's 0.3 m is about 15), depth texels 16 units thick (tuned by eye, unverified).
+/// In Unreal units: rays of 48 units (Bevy's 0.3 m is about 15), depth texels 16 units thick (tuned by eye,
+/// unverified).
 fn sun_contact_shadows(level: u8) -> ContactShadows {
     ContactShadows { linear_steps: if level > 1 { 16 } else { 8 }, thickness: 16.0, length: 48.0 }
 }
@@ -420,11 +421,10 @@ fn sun_place(direction: Vec3) -> Transform {
     Transform::IDENTITY.looking_to(direction, up)
 }
 
-/// A map without a sun still gets contact shadows: the key light's side stands for it, and its black light adds nothing.
+/// A map without a sun still gets contact shadows: the key light's side stands for it, and its black light adds
+/// nothing.
 const NO_SUN_DIRECTION: Vec3 = Vec3::new(-0.458088, -0.814379, -0.356291);
 
-/// By the sun's shadow level: the side of every directional shadow map and the static world's cached levels. Level 0
-/// draws no shadow map.
 pub(crate) fn sun_quality(level: u8) -> (usize, usize) {
     match level {
         0 | 1 => (1024, 3),
@@ -434,14 +434,16 @@ pub(crate) fn sun_quality(level: u8) -> (usize, usize) {
     }
 }
 
-/// Three, so a body lying in the middle distance still casts on fine texels; one cascade would read as a cached level.
+/// Three, so a body lying in the middle distance still casts on fine texels; one cascade would read as a cached
+/// level.
 const MOVER_CASCADES: usize = 3;
 
-/// In Unreal units. Every mover in a cascade is queued and drawn again each frame, and past this its shadow is a few
-/// pixels wide.
+/// In Unreal units. Every mover in a cascade is queued and drawn again each frame, and past this its shadow is a
+/// few pixels wide.
 const MOVER_SHADOW_REACH: f32 = 4096.0;
 
-/// In Unreal units, by the shadow distance level 1 to 5: the movers' reach and the outermost cached level's half width.
+/// In Unreal units, by the shadow distance level 1 to 5: the movers' reach and the outermost cached level's half
+/// width.
 const SHADOW_REACH: [f32; 5] = [2048.0, 4096.0, 8192.0, 16384.0, 32768.0];
 const FIRST_CASCADE_FAR: f32 = 400.0;
 
@@ -466,7 +468,6 @@ fn sun_cascades(distance_level: u8) -> CascadeShadowConfig {
 /// With the sun this stays inside Bevy's ten directional lights; the cached sun levels are not lights.
 const MAX_FILL_SUNS: usize = 4;
 
-/// Suns this close in direction light the same way: maps stack several on one direction, and their light adds up.
 const SAME_SUN_COS: f32 = 0.99452;
 
 /// The map's still suns grouped by direction, each group's colours summed as retail's baked light sums them. The
@@ -488,12 +489,10 @@ fn sun_groups(set: SunSet) -> Vec<(Vector, [f32; 3])> {
     groups
 }
 
-/// The shadowed sun's linear colour: every sun on its direction together.
 pub(crate) fn sun_color(set: SunSet) -> [f32; 3] {
     let Some(sun) = set.sun else { return [0.0; 3] };
     let own = sun.0.color(set.level_brightness);
     let summed = sun_groups(set).first().map_or(own, |&(_, sum)| sum);
-    // A sun that is not in the list of lights still shines.
     linear_light(if summed.iter().sum::<f32>() > 0.0 { summed } else { own })
 }
 
@@ -533,7 +532,6 @@ fn sun_shadows(
             commands.entity(entity).despawn();
             continue;
         }
-        // Another zone's suns come in as its ambient does.
         let color = Color::LinearRgba(blend_light(current.color.to_linear(), wanted.color.to_linear(), settle_step(time.delta_secs(), ZONE_AMBIENT_BLEND_SECONDS)));
         if current.color != color || current.contact_shadows_enabled != wanted.contact_shadows_enabled || current.shadow_maps_enabled != wanted.shadow_maps_enabled {
             *current = DirectionalLight { color, ..wanted };
@@ -569,8 +567,8 @@ fn sun_view_cascades(mut suns: Query<&mut Cascades, With<SunShadow>>, views: Que
     }
 }
 
-/// The overlay cameras (the weapon, the foot) light their actors as the scene camera does. They see the sun only while
-/// at most one sun casts, as they borrow its cascades from the scene camera.
+/// The overlay cameras (the weapon, the foot) light their actors as the scene camera does. They see the sun only
+/// while at most one sun casts, as they borrow its cascades from the scene camera.
 fn overlay_light(
     settings: Res<Settings>,
     suns: Query<&DirectionalLight>,
@@ -594,8 +592,8 @@ fn overlay_light(
 /// Retail snaps a zone's ambient at a zone crossing; ours fades, as the zone fog does.
 const ZONE_AMBIENT_BLEND_SECONDS: f32 = 0.35;
 
-/// The zone the eye is in lights every surface with its ambient, under a roof or not. In display light, as `modern.wesl`
-/// adds it; the alpha carries the probe grid's spacing, 0 without one.
+/// The zone the eye is in lights every surface with its ambient, under a roof or not. In display light, as
+/// `modern.wesl` adds it; the alpha carries the probe grid's spacing, 0 without one.
 pub fn view_ambient(
     time: Res<Time>,
     settings: Res<Settings>,
@@ -631,7 +629,8 @@ fn blend_light(shown: LinearRgba, target: LinearRgba, t: f32) -> LinearRgba {
     if near { target } else { blended }
 }
 
-/// The lamps' shadows of movers read the same layers and resting marks as the sun's, with the sun's shadows off too.
+/// The lamps' shadows of movers read the same layers and resting marks as the sun's, with the sun's shadows off
+/// too.
 fn casters_wanted(settings: &Settings) -> bool {
     settings.modern_level(MODERN_SHADOWS) > 0 || settings.modern_level(MODERN_LAMP_SHADOWS) > 0
 }
@@ -690,7 +689,6 @@ fn sun_casters(
     }
 }
 
-/// Glass, fading and additive surfaces let the sun through; masked ones keep casting, with their holes.
 fn see_through_mode(mode: AlphaMode) -> bool {
     match mode {
         AlphaMode::Opaque | AlphaMode::AlphaToCoverage => false,

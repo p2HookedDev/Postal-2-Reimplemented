@@ -1,5 +1,3 @@
-//! The step runs inside the level tick before actors, so scripts see this tick's results.
-
 mod shapes;
 
 use std::collections::BTreeMap;
@@ -25,7 +23,6 @@ pub(crate) const IMPULSE_SCALE: f32 = 0.01;
 /// The force reaches Karma unscaled (Karma lengths are 1/50 of Unreal's), so in Unreal units
 /// the acceleration is force × 50 / mass.
 const MAX_KARMA_TICK: f32 = 0.05;
-/// A corpse this many game ticks old (about 10 s) should lie still: the profile log counts its awake parts apart.
 const OLD_CORPSE_TICKS: u32 = 1000;
 const FORCE_SCALE: f32 = p2_physics::UNITS_PER_METER;
 /// The torque reaches Karma unscaled; inertia in Unreal units is 50² times Karma's (unverified).
@@ -52,7 +49,6 @@ impl Karma {
 }
 
 impl<L: LoaderRef> Vm<L> {
-    /// For the profile log: the bodies the step holds and how many of them it has to move.
     pub fn karma_census(&mut self) -> String {
         let (wakes, [moved, turned]) = self.karma.world.as_mut().map_or_else(Default::default, |world| (std::mem::take(&mut world.wakes), std::mem::take(&mut world.rest_broken)));
         let Some(world) = &self.karma.world else { return String::new() };
@@ -77,7 +73,8 @@ impl<L: LoaderRef> Vm<L> {
     }
 }
 
-/// A static mesh asking for simple Karma collision without `KPhysicsProps`: retail gives level meshes none, our movers a hull.
+/// A static mesh asking for simple Karma collision without `KPhysicsProps`: retail gives level meshes none, our
+/// movers a hull.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WithoutProps {
     Skip,
@@ -295,8 +292,6 @@ impl<L: LoaderRef> Vm<L> {
         self.profile_phase("load: karma world", phase);
     }
 
-    /// As retail, gravity per body from its actor's physics volume: the vertical part as a scale of the world's, a
-    /// sideways part as an acceleration of its own.
     fn karma_gravity(&mut self) {
         let base = crate::physics::DEFAULT_GRAVITY.z;
         let props = self.karma.bodies.iter().map(|(&actor, body)| (actor, body.id));

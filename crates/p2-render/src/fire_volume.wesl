@@ -1,6 +1,6 @@
-// Fire as a volume. `march` runs at half size: a ray from the eye crosses each fire's box, stops at the depth prepass,
-// and gathers flame light through noise that rises with time. `composite` runs at full size and adds a bilinear sample
-// of that to the frame, as retail adds its flame sprites; the fire's smoke stays sprites.
+// Fire as a volume. `march` runs at half size: a ray from the eye crosses each fire's box, stops at the depth
+// prepass, and gathers flame light through noise that rises with time. `composite` runs at full size and adds a
+// bilinear sample of that to the frame, as retail adds its flame sprites; the fire's smoke stays sprites.
 
 import bevy_render::view::View;
 import package::p2_render::screen_pass::gradient_noise;
@@ -15,7 +15,6 @@ const MAX_VOLUMES: u32 = 8u;
 struct Volume {
     centre: vec4<f32>,
     extent: vec4<f32>,
-    // The sprites' mean colour, and their mean alpha in `w`.
     tint: vec4<f32>,
 }
 
@@ -27,7 +26,6 @@ struct Fires {
     seconds: f32,
 }
 
-// The lit scene for `march` (not read), the marched volumes for `composite`.
 @group(0) @binding(0) var marched: texture_2d<f32>;
 @group(0) @binding(1) var depth: texture_depth_2d;
 @group(0) @binding(2) var<uniform> view: View;
@@ -38,7 +36,6 @@ const EXTINCTION: f32 = 0.03;
 const EMISSION: f32 = 0.08;
 // Noise cells a second.
 const RISE: f32 = 1.5;
-// Noise cells are this much taller than wide, so the flame breaks into rising tongues.
 const STRETCH: vec3<f32> = vec3(1.0, 0.5, 1.0);
 
 fn hash(p: vec3<f32>) -> f32 {
@@ -63,7 +60,6 @@ fn value_noise(p: vec3<f32>) -> f32 {
     return mix(near, far, u.z);
 }
 
-// From 0 to 1.
 fn fbm(p: vec3<f32>) -> f32 {
     var sum = 0.0;
     var amplitude = 0.5;
@@ -78,7 +74,6 @@ fn fbm(p: vec3<f32>) -> f32 {
     return sum / max(total, 1e-4);
 }
 
-// Density and heat at a world point: a column that narrows and cools as it rises, broken up by rising noise.
 fn flame(v: Volume, p: vec3<f32>) -> vec2<f32> {
     let local = (p - v.centre.xyz) / max(v.extent.xyz, vec3(1.0));
     let height = saturate(local.y * 0.5 + 0.5);
@@ -90,7 +85,6 @@ fn flame(v: Volume, p: vec3<f32>) -> vec2<f32> {
     return vec2(density, heat);
 }
 
-// Dull red, orange, yellow, near white.
 fn black_body(heat: f32) -> vec3<f32> {
     let t = saturate(heat) * 3.0;
     let low = mix(vec3(0.6, 0.05, 0.0), vec3(1.0, 0.35, 0.03), saturate(t));
@@ -101,7 +95,6 @@ fn black_body(heat: f32) -> vec3<f32> {
 @fragment
 fn march(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let size = vec2<i32>(textureDimensions(depth));
-    // The marched texture covers the viewport, the depth prepass the whole target.
     let texel = min(vec2<i32>(in.position.xy) * 2 + vec2<i32>(view.viewport.xy), size - 1);
     let ndc = vec2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
     let eye = view.world_position;

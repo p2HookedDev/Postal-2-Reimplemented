@@ -1,6 +1,3 @@
-//! Dumps VM state after a few hundred frames. Run `--ignored`; `P2_EQUIV_OUT` is the dump directory,
-//! `P2_EQUIV_BASELINE` one with dumps of an earlier build.
-
 mod common;
 
 use common::{game_dir, start_single_player};
@@ -219,8 +216,6 @@ fn name_numbers_are_masked() {
     assert_eq!(mask_name_ids("a NameId(12320), b NameId(x) NameId(0)"), "a NameId(#), b NameId(x) NameId(#)");
 }
 
-/// A save slot records the real date and time of the run (`Time="2026-11-11 : 12:53"`, `lTime=1794394392`): two runs
-/// a minute apart differ there and nowhere else.
 fn mask_clock(text: &str) -> String {
     mask_field(&mask_field(text, "Time=\"", |c| c == '"'), "lTime=", |c| !c.is_ascii_digit())
 }

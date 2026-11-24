@@ -16,12 +16,9 @@ pub struct VideoMode {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Pointer {
-    /// The player's view: no cursor.
     #[default]
     Captured,
-    /// An interaction that draws a cursor of its own (the inventory selector, a vending machine).
     Drawn,
-    /// The `UWindow` menus, which point with the system cursor.
     System,
 }
 
@@ -40,7 +37,6 @@ pub(crate) struct Client {
 const CINEMATICS_RATIO: f32 = 1.66;
 
 impl<L: LoaderRef> Vm<L> {
-    /// Call after the first map loaded and before [`Vm::login`], which makes the viewport the player's.
     pub fn init_client(&mut self) -> Result<(), Error> {
         let class = self.find_class("Engine", "InteractionMaster")?;
         let master = self.new_object(class, None);
@@ -61,8 +57,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// Adds an interaction of the host's own to the player's viewport, after [`Vm::init_client`]. `false` when the
-    /// class is not installed.
     pub fn add_viewport_interaction(&mut self, package: &str, class: &str) -> Result<bool, Error> {
         let (Some(master), Some(viewport)) = (self.host.client.master, self.host.client.viewport) else { return Ok(false) };
         if self.find_class(package, class).is_err() {
@@ -75,7 +69,6 @@ impl<L: LoaderRef> Vm<L> {
         self.host.client.viewport
     }
 
-    /// `UWindow` menus place their pointer from `WindowsMouseX` / `WindowsMouseY` while drawing; `x`, `y` are canvas pixels.
     pub fn set_mouse_position(&mut self, x: f32, y: f32) {
         let Some(viewport) = self.host.client.viewport else { return };
         self.store.set(viewport, Prop::bWindowsMouseAvailable, Value::Bool(true));
@@ -83,8 +76,8 @@ impl<L: LoaderRef> Vm<L> {
         self.store.set(viewport, Prop::WindowsMouseY, Value::Float(y));
     }
 
-    /// `Some(ratio)` while on. The host draws the level in a band `height / ratio` high, centred, the rest black; the HUD
-    /// still draws over the whole screen.
+    /// `Some(ratio)` while on. The host draws the level in a band `height / ratio` high, centred, the rest black; the
+    /// HUD still draws over the whole screen.
     pub fn cinematics(&self) -> Option<f32> {
         let client = &self.host.client;
         client.cinematics.then(|| client.cinematics_ratio.unwrap_or(CINEMATICS_RATIO))

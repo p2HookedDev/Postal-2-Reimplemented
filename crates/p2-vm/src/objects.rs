@@ -131,7 +131,6 @@ impl<L: LoaderRef> Vm<L> {
         id
     }
 
-    /// Retail loads a package when script names one of its objects; the map may not have.
     pub(crate) fn load_package(&mut self, package: &str) {
         if self.loader.loaded_id(package).is_some() || self.loader.find(package).is_none() {
             return;
@@ -146,8 +145,8 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Assets stay stubs until a script uses them. A failed load leaves the stub (calls return zero, property reads read
-    /// zero).
+    /// Assets stay stubs until a script uses them. A failed load leaves the stub (calls return zero, property reads
+    /// read zero).
     pub(crate) fn load_stub(&mut self, object: ObjectId) {
         if self.store.object(object).class.is_none()
             && let Some((package, export)) = self.export_of(object)

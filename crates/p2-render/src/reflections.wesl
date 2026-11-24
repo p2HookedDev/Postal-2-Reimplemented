@@ -1,5 +1,5 @@
-// Screen-space reflections over the finished frame. The normal prepass's alpha holds a reflecting class in its two
-// bits: 0 tile or glass, 1 metal, 2 wood, 3 (the default prepass's 1) nothing.
+// Screen-space reflections over the finished frame. The normal prepass's alpha holds a reflecting class in two
+// bits: 0 tile or glass, 1 metal, 2 wood, 3 (the default prepass's 1) none.
 
 import package::p2_render::screen_pass::{gradient_noise, texel_at, view_at};
 
@@ -12,10 +12,9 @@ struct Reflections {
     // In view space: xyz the centre and w the radius of each puddle; `puddle_count.x` of them are set.
     puddles: array<vec4<f32>, 16>,
     puddle_count: vec4<f32>,
-    // The view's part of the frame as shares of it, corner in xy and size in zw: a viewport uv times zw plus xy is the
-    // frame's uv.
+    // The view's part of the frame as fractions of it, corner in xy and size in zw: viewport uv times zw plus xy is
+    // frame uv.
     in_frame: vec4<f32>,
-    // A frame uv times zw plus xy is the viewport's uv.
     from_frame: vec4<f32>,
 }
 
@@ -28,7 +27,6 @@ struct Reflections {
 const PIXELS_PER_STEP: f32 = 6.0;
 const REFINE_STEPS: i32 = 5;
 const EDGE_FADE: f32 = 0.08;
-// How far behind a surface a ray still counts as hitting it, in steps.
 const THICKNESS: f32 = 1.5;
 const ROUGH_FROM: f32 = 0.2;
 const ROUGH_TO: f32 = 0.5;
@@ -39,20 +37,20 @@ struct FullscreenOutput {
     @location(0) uv: vec2<f32>,
 }
 
-// The default class's roughness and reflectance, and the materials level that reaches a class. Match `modern.wesl` and `modern_base.wesl`.
+// The default class's roughness and reflectance, and the materials level that reaches a class. Match
+// `modern.wesl` and `modern_base.wesl`.
 const DEFAULT_ROUGHNESS: f32 = 0.85;
 const DEFAULT_REFLECTANCE: f32 = 0.04;
 const MATERIALS_TOP: f32 = 10.0;
 
-// x roughness, y reflectance, z how far a metal, moved from the default surface by the materials level as the lit
-// shader moves it.
+// x roughness, y reflectance, z metalness, moved from the default surface by the materials level as the lit
+// shader does.
 fn surface_of_code(code: u32) -> vec3<f32> {
     let scale = min(reflections.look.w / MATERIALS_TOP, 1.0);
     let picked = class_surface(code);
     return vec3(mix(DEFAULT_ROUGHNESS, picked.x, scale), mix(DEFAULT_REFLECTANCE, picked.y, scale), picked.z * scale);
 }
 
-// x roughness, y reflectance, z 1 on a metal. Matches `material_class.rs`.
 fn class_surface(code: u32) -> vec3<f32> {
     switch code {
         case 0u: {
@@ -70,17 +68,14 @@ fn class_surface(code: u32) -> vec3<f32> {
     }
 }
 
-// A liquid's roughness and reflectance: it mirrors at a low angle and hardly at all from above.
 const PUDDLE_SURFACE: vec3<f32> = vec3(0.1, 0.04, 0.0);
 // How far off a puddle's plane a pixel still lies in it, in world units.
 const PUDDLE_DEPTH: f32 = 4.0;
-// A lit pool's roughness and reflectance, under the gloss the lit pass records in the frame's alpha.
 const POOL_SURFACE: vec3<f32> = vec3(0.1, 0.02, 0.0);
 // Matches projector.wesl.
 const BLOOD_SHEEN: vec3<f32> = vec3(1.0, 0.3, 0.3);
 const LEAST_RECORD: f32 = 1.0 / 256.0;
 
-// 1 on a puddle, falling to 0 inside the sprite's uneven rim; only ground counts, never a wall that stands in the disc.
 fn wetness(at: vec3<f32>, normal: vec3<f32>) -> f32 {
     let ground = smoothstep(0.7, 0.9, dot(normal, normalize(reflections.view_from_world[1].xyz)));
     if ground <= 0.0 {
@@ -119,7 +114,6 @@ fn surface_z(uv: vec2<f32>, viewport: vec4<f32>, size: vec2<f32>) -> f32 {
     return view_at(reflections.view_from_clip, uv, z).z;
 }
 
-// The hit's uv and its weight, 0 on a miss.
 fn march(origin: vec3<f32>, way: vec3<f32>, viewport: vec4<f32>, size: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let start = uv_of(origin);
     let pixels_per_unit = max(length((uv_of(origin + way) - start) * viewport.zw), 1e-3);
@@ -194,8 +188,8 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
         return unmarked;
     }
     let origin = view_at(reflections.view_from_clip, uv, z);
-    // A pool on nearly level ground mirrors as level: the prepass's 10-bit normal of the ground's gentle rolls would
-    // step the mirror in bands. A slope keeps its own normal, as the lit pass lights it.
+    // A pool on nearly level ground mirrors as level: the prepass's 10-bit normal of gentle rolls would band the
+    // mirror. A slope keeps its own normal, as the lit pass lights it.
     let ground = packed.xyz * 2.0 - 1.0;
     let level = select(ground, vec3(0.0, 1.0, 0.0), mirror > 0.0 && ground.y > 0.98);
     let normal = normalize((reflections.view_from_world * vec4(level, 0.0)).xyz);
@@ -203,7 +197,6 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     var glossy = 1.0 - smoothstep(ROUGH_FROM, ROUGH_TO, surface.x);
     var pool_tint = vec3(1.0);
     if mirror > 0.0 {
-        // The liquid comes in by its record, so its rim leaves no ring, and never mirrors less than the floor under it.
         let wet = mix(surface, POOL_SURFACE, mirror);
         surface = vec3(wet.x, max(surface.y, wet.y), wet.z);
         glossy = max(glossy, mirror);
@@ -213,7 +206,6 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
         return unmarked;
     }
     let eye = normalize(-origin);
-    // A ray that meets nothing on screen shows nothing: no stand-in light is put in its place.
     let hit = march(origin, reflect(-eye, normal), viewport, size, in.position.xy);
     if hit.z <= 0.0 {
         return unmarked;
@@ -222,7 +214,6 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let fresnel = surface.y + (1.0 - surface.y) * pow(1.0 - saturate(dot(normal, eye)), 5.0);
     let tint = mix(vec3(1.0), here.rgb / max(max(here.r, max(here.g, here.b)), 1e-3), surface.z) * pool_tint;
     if mirror > 0.0 {
-        // A liquid is a mirror over what shows through it: the room takes its Fresnel share, darker or brighter.
         return vec4(mix(here.rgb, seen * tint, saturate(fresnel * mirror * hit.z * reflections.look.x)), 1.0);
     }
     // The lit pass already gave the surface its light: a reflection shows only where it is brighter, and adds none.

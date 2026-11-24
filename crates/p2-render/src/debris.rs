@@ -1,7 +1,6 @@
-//! Modern graphics: rigid pieces. The shards of a break, the pieces of a head's explosion, the chunks in a stream of
-//! puke and the sparks of an impact are thrown as rigid bodies that land on the level around them. A shard, a lump or a
-//! chunk falls asleep and lies until a blast moves it again; a spark bounces and burns out. Pieces share small physics
-//! worlds by place; nothing reads them back.
+//! Modern graphics: rigid pieces. Shards, head pieces, puke chunks and impact sparks are thrown as rigid
+//! bodies that land on the level; shards, lumps and chunks sleep until a blast moves them, sparks burn out.
+//! Pieces share small physics worlds by place; nothing reads them back.
 
 use std::f32::consts::TAU;
 
@@ -40,50 +39,34 @@ use crate::shaders::{add_shaders, shader_file};
 use crate::slot_buffer::SlotBuffer;
 
 const PIECES_PER_LEVEL: usize = 64;
-/// The tint buffer's first size: the lying pieces' cap and the sparks' cap at the highest setting. Pieces fading out to
-/// make room count against neither, so it may grow.
 const SLOTS: usize = 2 * 10 * PIECES_PER_LEVEL;
 const DEBRIS_SHADER: Handle<Shader> = uuid_handle!("9c4e1a72-3d58-4b06-a8f1-6e27d0b5c934");
-/// Every piece's colour in linear light, at its `MeshTag`.
 const DEBRIS_TINTS: Handle<ShaderBuffer> = uuid_handle!("e5a03f81-7b6c-4d29-9e14-c83f20a6d7b5");
-/// One break or one head takes at most this share of the lying pieces' cap, so several lie at once.
 const BREAK_SHARE: usize = 4;
 const WORLDS: usize = 8;
-/// Half the side of the box of level a world holds, in Unreal units.
 const REACH: f32 = 500.0;
-/// A piece joins a world only this far inside its box, in Unreal units, so it never starts at the box's edge.
 const ROOM: f32 = 200.0;
 /// Half a piece's thickness, in Unreal units: thick enough not to pass a floor between two steps.
 const THICKNESS: f32 = 2.0;
-/// A lump's box against the quads it is drawn with: the texture's corners are empty.
 const LUMP_BODY: f32 = 0.6;
-/// A chunk's box against its mesh, and its half height against its half width, at least `CHUNK_THICKNESS` Unreal
-/// units; the mesh's top and bottom about its middle, against its half width, and the sides around it.
 const CHUNK_BODY: f32 = 0.8;
 const CHUNK_FLAT: f32 = 0.4;
 const CHUNK_THICKNESS: f32 = 1.0;
 const CHUNK_TOP: f32 = 0.5;
 const CHUNK_BOTTOM: f32 = 0.45;
 const CHUNK_SIDES: usize = 7;
-/// The share of a chunk's facets that are flecks, and the flecks' colours (green, brown, orange, pale) against the
-/// chunk's own, in linear light.
 const FLECK_SHARE: f32 = 0.2;
 const FLECKS: [[f32; 4]; 4] = [[0.5, 0.7, 0.25, 1.0], [0.35, 0.25, 0.18, 1.0], [1.0, 0.6, 0.3, 1.0], [1.15, 1.1, 0.95, 1.0]];
 const SPARK_RADIUS: f32 = 1.0;
 const GRAVITY: f32 = 950.0;
-/// Radians a second, most, about each axis.
 const SPIN: f32 = 12.0;
-/// A piece slower than this, in Unreal units a second and radians a second, for the seconds given falls asleep.
 const SLEEP: [f32; 3] = [15.0, 0.8, 0.3];
 const AWAKE_MOST: f32 = 5.0;
-/// Pieces of one emitter actor thrown within this many seconds of each other share a group.
 const TOGETHER: f32 = 0.25;
 const FADE: f32 = 3.0;
 const FRAME_MOST: f32 = 0.1;
-/// A spark's streak is this many times as long as it is wide at `STREAK_SPEED` Unreal units a second and faster.
 const STREAK: f32 = 12.0;
 const STREAK_SPEED: f32 = 300.0;
-/// The colour a spark burns to.
 const EMBER: Vec3 = Vec3::new(1.0, 0.15, 0.05);
 
 pub struct DebrisPlugin;
@@ -100,7 +83,6 @@ impl Plugin for DebrisPlugin {
         let mut debris = Debris::default();
         debris.loose.tints.upload(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>());
         app.add_plugins(MaterialPlugin::<ExtendedMaterial<StandardMaterial, DebrisTint>>::default());
-        // After the droplets' thrower: it hands over this frame's pieces, and the hits' pushes come before it.
         app.init_resource::<PieceBirths>().insert_resource(debris).add_systems(
             PostUpdate,
             (
@@ -126,24 +108,18 @@ impl MaterialExtension for DebrisTint {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PieceKind {
-    /// A thin box that lies where it lands: a shard.
     Flat,
-    /// A box as high as it is wide that bounces and rolls, drawn as three crossed quads: a piece of skull or brain.
     Lump,
-    /// A flat, heavy box that hardly bounces, drawn as a solid faceted lump with flecks: a chunk of puke.
     Chunk,
-    /// A small ball that bounces and burns out, drawn as a streak along its motion.
     Spark,
 }
 
 struct PieceTraits {
-    /// The body for a piece of this half size.
     shape: fn(f32) -> Shape,
     friction: f32,
     restitution: f32,
     alpha_mode: AlphaMode,
     mesh: fn([f32; 4]) -> Mesh,
-    /// Thrown at a random rotation, else unturned.
     tumbles: bool,
 }
 
@@ -195,7 +171,6 @@ impl PieceKind {
     }
 }
 
-/// A piece a sprite throws, in Unreal units and axes.
 pub(crate) struct PieceBirth {
     pub(crate) kind: PieceKind,
     pub(crate) place: Vector,
@@ -206,7 +181,6 @@ pub(crate) struct PieceBirth {
     /// In display light.
     pub(crate) tint: Vec3,
     pub(crate) parent: Entity,
-    /// How long the piece's group lives.
     pub(crate) seconds: f32,
 }
 
@@ -219,7 +193,6 @@ struct DebrisPiece;
 #[derive(Clone, Copy)]
 struct Piece {
     entity: Entity,
-    /// The world and body while it moves; `None` while it lies.
     body: Option<(u32, BodyId)>,
     place: Vector,
     rotation: [f32; 4],
@@ -228,24 +201,19 @@ struct Piece {
     /// In display light.
     tint: Vec3,
     slot: u32,
-    /// The group's age when the piece was last thrown or pushed.
     woke: f32,
-    /// Moved since it was last drawn.
     stirred: bool,
 }
 
-/// Pieces thrown together: one age.
 struct Group {
     parent: Entity,
     kind: PieceKind,
     pieces: Vec<Piece>,
     age: f32,
     seconds: f32,
-    /// Fading out early to make room; its pieces no longer count against the cap.
     ending: bool,
 }
 
-/// A small world of the level within `REACH` of `centre`.
 struct Place {
     id: u32,
     centre: Vector,
@@ -253,15 +221,11 @@ struct Place {
 }
 
 struct Loose {
-    /// Shards and lumps, oldest first.
     lying: Vec<Group>,
-    /// Oldest first; a spark without a body is gone.
     sparks: Vec<Group>,
-    /// Oldest first.
     worlds: Vec<Place>,
     serial: u32,
     seed: u32,
-    /// The entities of pieces that went, for the systems to despawn.
     gone: Vec<Entity>,
     tints: SlotBuffer<[f32; 4]>,
 }
@@ -284,8 +248,6 @@ fn joined(groups: &[Group], parent: Entity, kind: PieceKind) -> Option<usize> {
     groups.iter().rposition(|held| held.parent == parent && held.kind == kind && !held.ending && held.age < TOGETHER)
 }
 
-/// Makes room under `cap` in `groups` for one more piece of `kind` thrown by `parent`; false when the piece is not
-/// thrown. The oldest groups end early and stop counting.
 fn room_under_cap(groups: &mut [Group], parent: Entity, kind: PieceKind, cap: usize) -> bool {
     let (counted, sizes): (Vec<usize>, Vec<usize>) = groups.iter().enumerate().filter(|(_, held)| !held.ending).map(|(at, held)| (at, held.pieces.len())).unzip();
     if sizes.iter().sum::<usize>() < cap {
@@ -321,8 +283,6 @@ impl Loose {
         }
     }
 
-    /// Sparks have a cap of their own, so a burst of fire never takes a lying piece's place. The oldest sparks go at
-    /// once; the oldest lying pieces fade out.
     fn make_room(&mut self, parent: Entity, kind: PieceKind, cap: usize) -> bool {
         match kind {
             PieceKind::Spark => {
@@ -338,8 +298,6 @@ impl Loose {
         }
     }
 
-    /// A world goes: the oldest in which no shard or lump still flies, else the oldest. What still flies in it goes
-    /// rather than hang in the air.
     fn retire_a_world(&mut self) {
         let flying = |id: u32| self.lying.iter().flat_map(|group| &group.pieces).any(|piece| in_world(piece.body, id));
         let Some(id) = self.worlds.iter().map(|place| place.id).find(|&id| !flying(id)).or(self.worlds.first().map(|place| place.id)) else { return };
@@ -352,7 +310,6 @@ impl Loose {
         self.worlds.retain(|place| place.id != id);
     }
 
-    /// A live world whose box holds `at` with room to spare, else a new one around it.
     fn world_holding(&mut self, at: Vector, level: impl FnOnce(Vector) -> Vec<[[f32; 3]; 3]>) -> u32 {
         if let Some(place) = self.worlds.iter().rev().find(|place| <[f32; 3]>::from(at - place.centre).iter().all(|k| k.abs() <= REACH - ROOM)) {
             return place.id;
@@ -375,7 +332,6 @@ impl Loose {
         Quat::from_euler(EulerRot::XYZ, unit(), unit(), unit()).to_array()
     }
 
-    /// A lying piece gets a body again in a world that holds it.
     fn blast(&mut self, blast: &Blast, level: impl Fn(Vector) -> Vec<[[f32; 3]; 3]>) {
         let mut hits = Vec::new();
         for list in [&self.lying, &self.sparks] {
@@ -387,8 +343,6 @@ impl Loose {
         }
         let up = Vector::new(0.0, 0.0, 1.0);
         for (kind, g, entity) in hits {
-            // Found by its entity again: a world made for an earlier hit may have retired this piece's world or taken
-            // a flying piece out of its group.
             let Some((age, piece)) = self.list_mut(kind).get(g).and_then(|group| Some((group.age, *group.pieces.iter().find(|piece| piece.entity == entity)?))) else { continue };
             let off = piece.place - blast.at;
             let distance = off.size();
@@ -417,8 +371,6 @@ impl Loose {
         }
     }
 
-    /// A piece is stepped until it sleeps or has been awake too long; then its body goes. A shard or a lump lies where
-    /// it is, a spark is gone. A world with no body left is dropped.
     fn advance(&mut self, seconds: f32) {
         for place in &mut self.worlds {
             place.world.step(seconds);
@@ -461,10 +413,8 @@ struct Debris {
     loose: Loose,
     triangles: Option<LevelTriangles>,
     meshes: FxHashMap<(PieceKind, [u32; 4]), Handle<Mesh>>,
-    /// By texture and whether it adds.
     materials: FxHashMap<(AssetId<Image>, bool), Handle<ExtendedMaterial<StandardMaterial, DebrisTint>>>,
     origin: Vec3,
-    /// Bevy axes relative to the world's origin.
     eye: Vec3,
 }
 
@@ -553,8 +503,6 @@ fn piece_cap(level: u8) -> usize {
     PIECES_PER_LEVEL * usize::from(level.min(10))
 }
 
-/// How many of the oldest groups go so that one more piece fits under `cap`; `None` when the group the piece joins
-/// would have to go.
 fn groups_to_drop(sizes: &[usize], joins: Option<usize>, cap: usize) -> Option<usize> {
     let mut total: usize = sizes.iter().sum();
     let mut dropped = 0;
@@ -600,7 +548,6 @@ fn add_piece(world: &mut World, kind: PieceKind, piece: &Piece, velocity: Vector
     body
 }
 
-/// A square of the texture's rectangle in the plane a piece's box is flat in.
 fn quad([u0, v0, u1, v1]: [f32; 4]) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]]);
@@ -610,7 +557,6 @@ fn quad([u0, v0, u1, v1]: [f32; 4]) -> Mesh {
     mesh
 }
 
-/// The quad on each of the three planes through the middle, so a lump shows from every side.
 fn crossed_quads(uv: [f32; 4]) -> Mesh {
     let mut mesh = quad(uv);
     let turned = [Quat::from_rotation_x(TAU / 4.0), Quat::from_rotation_z(TAU / 4.0)];
@@ -624,7 +570,6 @@ fn chunk_height(half: f32) -> f32 {
     (half * CHUNK_FLAT).max(CHUNK_THICKNESS)
 }
 
-/// A small irregular lump with flat facets, flecked in its vertex colours; `uv`'s first word picks its shape.
 fn chunk([shape, ..]: [f32; 4]) -> Mesh {
     let mut seed = 0x2545_f491 ^ shape.to_bits();
     let mut unit = || next_unit(&mut seed);
@@ -678,7 +623,6 @@ fn piece_transform(piece: &Piece, kind: PieceKind, origin: Vec3) -> Transform {
     at
 }
 
-/// The quad stretched along the spark's velocity and turned about it to face `eye`, as long as the spark is fast.
 fn spark_transform(piece: &Piece, eye: Vec3, origin: Vec3) -> Transform {
     let place = Vec3::from(to_bevy(piece.place));
     let velocity = Vec3::from(to_bevy(piece.velocity));
@@ -689,7 +633,6 @@ fn spark_transform(piece: &Piece, eye: Vec3, origin: Vec3) -> Transform {
     Transform { translation: place + origin, rotation: Quat::from_mat3(&Mat3::from_cols(side, along.cross(side), along)), scale: Vec3::new(piece.half, 1.0, reach) }
 }
 
-/// `age` is the share of its life gone: from its own colour to red, and out over the second half.
 fn spark_color(tint: Vec3, age: f32) -> Color {
     let late = ((age - 0.5) * 2.0).clamp(0.0, 1.0);
     let fade = 1.0 - late * late * (3.0 - 2.0 * late);
@@ -729,7 +672,6 @@ fn start_pieces(
         for birth in &born {
             debris.add(&mut commands, birth, cap, facts.origin, &mut meshes, &mut materials);
         }
-        // After this frame's births: what a hit throws takes the hit too.
         if let Some(triangles) = debris.triangles.as_ref() {
             for blast in drawn.as_deref().map_or(&[][..], |drawn| &drawn.blasts) {
                 debris.loose.blast(blast, |centre| triangles.near(centre, REACH));
@@ -767,7 +709,6 @@ fn move_pieces(
     for group in lying.iter_mut() {
         let left = group.seconds - group.age;
         let alpha = if left < FADE { (left / FADE).max(0.0) } else { 1.0 };
-        // A chunk is solid, so it sinks out of sight through the floor instead of fading.
         let sinking = group.kind == PieceKind::Chunk && alpha < 1.0;
         for piece in &mut group.pieces {
             if std::mem::take(&mut piece.stirred) || shifted || sinking {

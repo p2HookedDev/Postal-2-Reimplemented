@@ -1,5 +1,5 @@
-//! Dynamic light on terrain, re-lit per frame as retail when a `bDynamicLight` light touches a sector. Modern graphics
-//! light terrain per pixel instead and read no vertex light.
+//! Dynamic light on terrain, re-lit per frame as retail does when a `bDynamicLight` light touches a sector.
+//! Modern graphics light terrain per pixel instead and read no vertex light.
 
 use p2_render_cpu::LE_SUNLIGHT;
 use bevy::asset::{Assets, Handle};

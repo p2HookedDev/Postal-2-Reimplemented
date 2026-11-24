@@ -22,10 +22,8 @@ mod lookup;
 #[cfg(test)]
 mod tests;
 
-/// A property value as the caller's object model holds it.
-///
-/// Structs are positional, members in declaration order: `Vector` (X, Y, Z), `Plane` (X, Y, Z, W), `Rotator`
-/// (Pitch, Yaw, Roll), `Range` (Min, Max), `RangeVector` (X, Y, Z ranges), `Color` (B, G, R, A),
+/// Structs are positional, members in declaration order: `Vector` (X, Y, Z), `Plane` (X, Y, Z, W),
+/// `Rotator` (Pitch, Yaw, Roll), `Range` (Min, Max), `RangeVector` (X, Y, Z ranges), `Color` (B, G, R, A),
 /// `ParticleTimeScale` (`RelativeTime`, `RelativeSize`), `ParticleColorScale` (`RelativeTime`, `Color`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {

@@ -17,7 +17,6 @@ pub fn load_settings() -> Ini {
     Ini::from_bytes(&bytes)
 }
 
-/// Through a temp file and a rename, so a crash mid-write leaves the old file whole.
 pub fn save_settings(settings: &Ini) {
     let saved = settings_file().ok_or_else(|| std::io::Error::other("no config folder")).and_then(|file| {
         if let Some(parent) = file.parent() {
@@ -181,7 +180,8 @@ pub const MODERN_GRAPHICS: &str = "ini:Engine.Engine.RenderDevice ModernGraphics
 pub const MODERN_PRESET: &str = "ini:Engine.Engine.RenderDevice ModernPreset";
 pub const MODERN_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernSunShadows";
 pub const MODERN_SHADOW_DISTANCE: &str = "ini:Engine.Engine.RenderDevice ModernShadowDistance";
-/// The shadow edge's width: 0 sharp, 1 soft, 2 softer, 3 contact hardening (sharp at contact, softer with distance).
+/// The shadow edge's width: 0 sharp, 1 soft, 2 softer, 3 contact hardening (sharp at contact, softer with
+/// distance).
 pub const MODERN_SHADOW_FILTER: &str = "ini:Engine.Engine.RenderDevice ModernShadowFilter";
 pub const MODERN_LAMP_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernLampShadows";
 pub const MODERN_CONTACT_SHADOWS: &str = "ini:Engine.Engine.RenderDevice ModernContactShadows";
@@ -223,8 +223,8 @@ pub const MODERN_FIRE_VOLUMES: &str = "ini:Engine.Engine.RenderDevice ModernFire
 pub const MODERN_VOLUMETRIC_FOG: &str = "ini:Engine.Engine.RenderDevice ModernVolumetricFog";
 pub const MODERN_GPU_PARTICLES: &str = "ini:Engine.Engine.RenderDevice ModernGpuParticles";
 pub const MODERN_TESSELLATION: &str = "ini:Engine.Engine.RenderDevice ModernTessellation";
-/// Set by the photo mode script while it is open. The photo rows stand in only for rows that act without a reload, so
-/// opening it changes `Settings` but reloads nothing and leaves the player's rows as saved.
+/// Set by the photo mode script while it is open. The photo rows stand in only for rows that act without a
+/// reload, so opening it changes `Settings` but reloads nothing and leaves the player's rows as saved.
 pub const MODERN_PHOTO_ACTIVE: &str = "ini:Engine.Engine.RenderDevice ModernPhotoActive";
 /// 0 keeps the game's field of view, else horizontal degrees.
 pub const MODERN_PHOTO_FOV: &str = "ini:Engine.Engine.RenderDevice ModernPhotoFov";
@@ -241,10 +241,8 @@ pub const MODERN_PHOTO_FRINGE: &str = "ini:Engine.Engine.RenderDevice ModernPhot
 pub const MODERN_PHOTO_SHARPEN: &str = "ini:Engine.Engine.RenderDevice ModernPhotoSharpen";
 /// A white balance while photo mode is open: `NEUTRAL_LEVEL` leaves the picture, lower is colder, higher warmer.
 pub const MODERN_PHOTO_WARMTH: &str = "ini:Engine.Engine.RenderDevice ModernPhotoWarmth";
-/// While photo mode is open, the player's pawn and what hangs on it are not drawn.
 pub const MODERN_PHOTO_HIDE_PLAYER: &str = "ini:Engine.Engine.RenderDevice ModernPhotoHidePlayer";
 
-/// While photo mode is open each picture row answers with its photo row; an unset photo row leaves the player's.
 const PHOTO_TWINS: [(&str, &str); 8] = [
     (MODERN_EXPOSURE, MODERN_PHOTO_EXPOSURE),
     (MODERN_SATURATION, MODERN_PHOTO_SATURATION),
@@ -258,10 +256,8 @@ const PHOTO_TWINS: [(&str, &str); 8] = [
 
 const PHOTO_FOV_LEAST: u8 = 10;
 
-/// The slider value that leaves saturation, contrast and exposure as they are.
 pub const NEUTRAL_LEVEL: u8 = 5;
 
-/// Each level key with its value when unset (the High preset) and its top value.
 const LEVELS: [(&str, u8, u8); 53] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
@@ -293,8 +289,9 @@ const LEVELS: [(&str, u8, u8); 53] = [
     (MODERN_FOOT_PLACEMENT, 1, 1),
     (MODERN_HIT_REACTIONS, 5, 10),
     (MODERN_LAMP_SIZE, 5, 10),
-    // Held at 0 until each is sound: the temporal resolve ghosts and flickers, the fire volume and the lamp fog were
-    // rejected in play, bounce light brightens what is lit and not what is dark. A saved value above 0 reads as 0.
+    // Held at 0 until each is sound: the temporal resolve ghosts and flickers, the fire volume and lamp fog
+    // do not look right yet, and bounce light brightens what is lit, not what is dark.
+    // A saved value above 0 reads as 0.
     (MODERN_TEMPORAL_AA, 0, 0),
     (MODERN_BOUNCE_LIGHT, 0, 0),
     (MODERN_LIQUID_FLOW, 1, 1),
@@ -321,8 +318,6 @@ const LEVELS: [(&str, u8, u8); 53] = [
 ];
 
 
-/// Read on the VM thread when a map starts and whenever a `set` changed the settings; features react to `Res<Settings>`
-/// changing.
 #[derive(Debug, Clone, Default, PartialEq, bevy::ecs::resource::Resource)]
 pub struct Settings(FxHashMap<&'static str, String>);
 
@@ -399,7 +394,6 @@ impl Settings {
         self.modern_level(MODERN_PHOTO_ACTIVE) > 0
     }
 
-    /// Degrees, while photo mode is open and its own field of view is set.
     pub fn photo_fov(&self) -> Option<u8> {
         let degrees = self.modern_level(MODERN_PHOTO_FOV);
         (degrees > 0 && self.photo_active()).then(|| degrees.max(PHOTO_FOV_LEAST))
@@ -466,7 +460,6 @@ pub fn modern_on(key: &'static str) -> impl FnMut(Option<Res<Settings>>) -> bool
     move |settings: Option<Res<Settings>>| settings.is_some_and(|settings| settings.modern_level(key) > 0)
 }
 
-/// A run condition true on the one frame the feature goes from on to off, for the system that undoes its work.
 pub fn modern_turned_off(key: &'static str) -> impl FnMut(Option<Res<Settings>>, Local<bool>) -> bool {
     move |settings: Option<Res<Settings>>, mut was_on: Local<bool>| {
         let on = settings.is_some_and(|settings| settings.modern_level(key) > 0);

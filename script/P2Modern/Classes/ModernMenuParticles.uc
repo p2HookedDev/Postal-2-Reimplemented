@@ -1,4 +1,3 @@
-// No preset writes these rows, and changing one keeps the preset.
 class ModernMenuParticles extends ModernMenuPage;
 
 var localized string    FireNames[3];

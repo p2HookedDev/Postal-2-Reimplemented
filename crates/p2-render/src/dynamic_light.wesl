@@ -34,7 +34,8 @@ fn sample_intensity(light_id: u32, position: vec3<f32>, normal: vec3<f32>) -> f3
     if (light.flags & POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE) != 0u {
         direction.y = -direction.y;
     }
-    // ((cos − sine) / (1 − sine))² inside the cone: Bevy's spot scale and offset hold 1 / (1 − sine), −sine / (1 − sine).
+    // ((cos − sine) / (1 − sine))² inside the cone: Bevy's spot scale and offset hold 1 / (1 − sine), −sine / (1 −
+    // sine).
     let falloff = saturate(dot(-direction, to_light / max(distance, 1e-6)) * light.light_custom_data.z + light.light_custom_data.w);
     return falloff * falloff * base;
 }

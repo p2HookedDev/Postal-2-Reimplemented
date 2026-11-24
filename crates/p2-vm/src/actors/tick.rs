@@ -29,7 +29,6 @@ impl<L: LoaderRef> Vm<L> {
         if self.store.is_deleted(actor) {
             return Ok(());
         }
-        // A player controller gets no `Tick` event; the local player's reads input and gets `PlayerTick`.
         let phase = self.profile_start();
         if !self.store.is_a(actor, Kind::PlayerController) {
             self.event(actor, crate::states::Event::Tick, [Value::Float(delta)])?;
@@ -40,7 +39,6 @@ impl<L: LoaderRef> Vm<L> {
         let phase = self.profile_start();
         self.tick(actor, delta)?;
         self.profile_phase("phase: state code", phase);
-        // An actor whose `LifeSpan` runs out is destroyed without its physics this frame.
         if self.store.is_deleted(actor) {
             return Ok(());
         }
@@ -83,7 +81,6 @@ impl<L: LoaderRef> Vm<L> {
             self.profile_phase("phase: movement animation", phase);
             result
         } else if self.store.is_a(actor, Kind::Mover) {
-            // Retail's mover physics turns movers too, after their move.
             self.mover_physics(actor, delta)?;
             self.actor_rotation(actor, delta)
         } else {
@@ -124,8 +121,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(true)
     }
 
-    /// [`Vm::rests`], asked again only when the actor's memory was written or its state, probes or animation were
-    /// touched since it was last found resting.
     fn still_rests(&mut self, actor: ObjectId) -> Result<bool, Error> {
         let written = self.store.object(actor).written();
         if self.script.states.rested_at(actor).is_some_and(|at| written < at) {

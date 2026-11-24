@@ -46,7 +46,6 @@ impl PendingAssets {
         }
     }
 
-    /// Fills on another thread; [`PendingAssets::merge`] takes its assets back.
     pub fn fork(&self) -> Self {
         Self {
             mesh_ids: self.mesh_ids.clone(),

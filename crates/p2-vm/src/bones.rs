@@ -19,12 +19,10 @@ pub(crate) struct PosedMesh {
     pub(crate) names: Vec<String>,
     pub(crate) parents: Vec<usize>,
     pub(crate) aliases: Vec<(String, String)>,
-    /// Bind pose relative to the parent; a ragdoll's bones without a body take it.
     pub(crate) reference: Vec<Frame>,
 }
 
 impl PosedMesh {
-    /// `name` is lower case.
     pub(crate) fn match_ref_bone(&self, name: &str) -> Option<usize> {
         let name = self.aliases.iter().find(|(alias, _)| alias == name).map_or(name, |(_, bone)| bone.as_str());
         self.names.iter().position(|n| n == name)
@@ -111,7 +109,6 @@ impl PoseKey {
     }
 }
 
-/// `None`: unreadable. Cloning shares the map, so the host's renderer reads each animation once a map.
 #[derive(Clone, Default)]
 pub struct MeshAnimations(Arc<FxHashMap<(PackageId, usize), Option<Arc<MeshAnimation>>>>);
 
@@ -247,7 +244,6 @@ impl<L: LoaderRef> Vm<L> {
         Value::Rotator(crate::natives::orthogonal_rotation(x, y, z))
     }
 
-    /// `None` without a skeletal mesh, `Some(None)` when the mesh has no such bone.
     fn bone_frame(&mut self, actor: ObjectId, bone: NameId) -> Option<Option<Frame>> {
         let mesh_object = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
@@ -259,7 +255,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(frames.get(index).copied())
     }
 
-    /// Scale included in the axes. Kept per actor and reused while nothing it is posed from changed.
     pub(crate) fn world_bone_frames(&mut self, actor: ObjectId) -> Option<(Arc<PosedMesh>, Arc<[Frame]>)> {
         let mesh_object = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
@@ -281,7 +276,6 @@ impl<L: LoaderRef> Vm<L> {
         Some((mesh, frames))
     }
 
-    /// `None` when no channel plays yet: a first animation starts at once.
     pub(crate) fn kept_pose(&mut self, actor: ObjectId) -> Option<Arc<[LocalBone]>> {
         let mesh_object = self.store.object_of(actor, Prop::Mesh)?;
         let mesh = self.posed_mesh(mesh_object)?;
@@ -371,7 +365,6 @@ impl<L: LoaderRef> Vm<L> {
             [0.0, 0.0, 0.0, (radius * radius + height * height).sqrt()]
         });
         let [x, y, z, w] = transform_sphere(&frame, sphere);
-        // `Plane`'s own member comes before the inherited ones in a struct's fields (`MemLayouts::of_class`).
         Value::Struct([w, x, y, z].map(Value::Float).to_vec())
     }
 
@@ -422,8 +415,8 @@ impl<L: LoaderRef> Vm<L> {
         self.mesh_animation_at(package, export)
     }
 
-    /// Reads ahead what is slow on first use (tens of ms on the VM's thread mid-game). For the loading thread, once the map
-    /// has begun play; caches only, nothing a script sees changes.
+    /// Reads ahead what is slow on first use (tens of ms on the VM's thread mid-game). For the loading thread, once
+    /// the map has begun play; caches only, nothing a script sees changes.
     pub fn prewarm(&mut self) {
         self.media.bone_data.prewarm_animations(&self.loader);
         self.karma_assets();

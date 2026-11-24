@@ -39,12 +39,10 @@ fn wave_duration(data: &[u8]) -> Option<f32> {
     wave_duration_by(data.len(), read_slice(data))
 }
 
-/// Id and body range per chunk, sizes padded to even; a truncated last chunk runs past the data; none if not RIFF WAVE.
 pub fn riff_chunks(data: &[u8]) -> impl Iterator<Item = ([u8; 4], Range<usize>)> + '_ {
     riff_chunks_by(data.len(), read_slice(data))
 }
 
-/// `read(offset, buffer)` only ever gets ranges inside `file_len`.
 fn riff_chunks_by(file_len: usize, mut read: impl FnMut(usize, &mut [u8])) -> impl Iterator<Item = ([u8; 4], Range<usize>)> {
     let mut get = move |at: usize, buf: &mut [u8]| (at + buf.len() <= file_len).then(|| read(at, buf));
     let mut riff = [0u8; 12];

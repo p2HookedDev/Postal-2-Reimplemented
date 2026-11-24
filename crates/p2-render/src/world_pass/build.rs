@@ -1,6 +1,5 @@
 use super::*;
 
-/// For the log: a missing asset here means nothing of the world draws.
 fn waiting_for(world: &World, draws: &WorldDraws) -> String {
     let meshes = world.resource::<RenderAssets<RenderMesh>>();
     let allocator = world.resource::<MeshAllocator>();
@@ -19,7 +18,6 @@ fn waiting_for(world: &World, draws: &WorldDraws) -> String {
     )
 }
 
-/// `None` until every mesh and material has reached the render world.
 pub(super) fn build(world: &mut World, draws: &WorldDraws) -> Option<Built> {
     let meshes = world.resource::<RenderAssets<RenderMesh>>();
     let allocator = world.resource::<MeshAllocator>();
@@ -154,7 +152,6 @@ fn is_stale(world: &World, built: &Built, draws: &WorldDraws) -> bool {
     if !Arc::ptr_eq(&built.sections, &draws.sections) {
         return true;
     }
-    // The modern look's sun mask swaps a light map's image under the same handle, and a texture setting swaps its sampler.
     let images = world.resource::<RenderAssets<GpuImage>>();
     if built.lightmap_views.iter().any(|(image, view, sampler)| images.get(*image).is_some_and(|image| image.texture_view.id() != *view || image.sampler.id() != *sampler)) {
         return true;
@@ -174,8 +171,8 @@ fn is_stale(world: &World, built: &Built, draws: &WorldDraws) -> bool {
     built.metadata_buffers.iter().any(|(slab, buffer)| allocator.buffer_for_slab(*slab).map(Buffer::id) != Some(*buffer))
 }
 
-/// A relit terrain sector is uploaded again and can land elsewhere in its slab. Only its draws' offsets change, so only those
-/// are written. `false`: a mesh left its slab, and the buckets must be built again.
+/// A relit terrain sector is uploaded again and can land elsewhere in its slab; only its draws' offsets are
+/// rewritten. `false`: a mesh left its slab, and the buckets must be built again.
 fn follow_moved_meshes(world: &mut World) -> bool {
     let Some(mut built) = world.resource_mut::<WorldPass>().built.take() else { return true };
     let allocator = world.resource::<MeshAllocator>();

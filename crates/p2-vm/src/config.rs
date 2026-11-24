@@ -75,7 +75,6 @@ impl<L: LoaderRef> Vm<L> {
         first.chain(files.values()).find_map(|ini| ini.get(section, key)).map(str::to_owned)
     }
 
-    /// Kept through every travel. The settings go over `User.ini`, because `UpdateURL` saves there.
     pub(crate) fn add_default_player_options(&self, url: &mut crate::TravelUrl) {
         let files = &self.host.configs.files;
         for ini in [SETTINGS, "user"].into_iter().filter_map(|name| files.get(name)) {
@@ -372,7 +371,6 @@ impl<L: LoaderRef> Vm<L> {
         self.refresh_audio_settings();
     }
 
-    /// A `globalconfig` property goes to its declaring class's section, so every subclass reads one value.
     pub(crate) fn save_config(&mut self, object: ObjectId, defaults: bool) {
         let Some(class) = self.store.object(object).class else { return };
         let package = self.loader.clone().package(self.store.class(class).package).name.clone();
@@ -457,7 +455,6 @@ impl<L: LoaderRef> Vm<L> {
                 if path.eq_ignore_ascii_case("None") {
                     Value::Object(None)
                 } else {
-                    // Uses the class as written, so `Sound'P.S'` finds the same object a script's `Sound'P.S'` finds.
                     let class = match ty {
                         Type::Class => "Class",
                         _ if !written.is_empty() => written,

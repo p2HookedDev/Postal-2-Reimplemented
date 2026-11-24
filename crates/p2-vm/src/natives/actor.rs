@@ -188,8 +188,8 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
     if matches!(native, Native::SetRotation | Native::SetDrawScale | Native::SetDrawScale3D) {
         vm.volume_moved(this);
     }
-    // A changed primitive (scale, mesh, rotation) of a moving actor changes its reach: re-placed too (static ones keep
-    // theirs).
+    // A changed primitive (scale, mesh, rotation) of a moving actor changes its reach: re-placed too (static ones
+    // keep theirs).
     let collision = matches!(native, Native::SetCollision | Native::SetCollisionSize);
     let reshaped = matches!(native, Native::SetDrawScale | Native::SetDrawScale3D | Native::SetStaticMesh | Native::SetDrawType | Native::SetRotation | Native::LinkMesh);
     if collision || (reshaped && !vm.store.flag_of(this, Prop::bStatic)) {

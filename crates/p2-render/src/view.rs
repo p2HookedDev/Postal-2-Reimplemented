@@ -107,7 +107,6 @@ pub enum SceneViewSystems {
     Fog,
     Zones,
     Light,
-    /// (`PostUpdate`)
     Overlays,
 }
 
@@ -169,19 +168,18 @@ impl Default for MeshView {
     }
 }
 
-/// Overlapping clustered decals blend in the order their cluster lists them, and that blend is not commutative. Bevy's
-/// GPU clustering fills the lists with atomics in an order that changes every frame, so overlaps flicker tile by tile;
-/// CPU clustering lists them in a fixed order.
+/// Overlapping clustered decals blend in cluster list order, which is not commutative. Bevy's GPU clustering
+/// fills the lists with atomics in an order that changes every frame, so overlaps flicker; CPU clustering keeps a
+/// fixed order.
 fn steady_decal_order(settings: Option<ResMut<GlobalClusterSettings>>) {
     if let Some(mut settings) = settings {
         settings.gpu_clustering = None;
     }
 }
 
-/// The cameras, 2D ones included, draw into one target, so they must agree. Off unless set, as Bevy's default 4× costs every pass (the
-/// depth prepass included); a host without settings (the asset viewer) keeps it off. Ambient occlusion needs it off.
-/// A camera spawned after the setting last changed (the HUD's, which draws over the frame) takes it too: cameras of one
-/// target with different sample counts draw into different images, and the later one's write covers the earlier's.
+/// All cameras, 2D ones included, draw into one target, so they must agree on MSAA. Off unless set, as Bevy's
+/// default 4x costs every pass; ambient occlusion needs it off. Late-spawned cameras (the HUD's) take it too:
+/// differing sample counts draw into different images, and the later write covers the earlier.
 fn follow_msaa(settings: Option<Res<Settings>>, mut cameras: Query<&mut Msaa, With<Camera>>, added: Query<(), Added<Camera>>) {
     let Some(settings) = settings.filter(|settings| settings.is_changed() || !added.is_empty()) else { return };
     let wanted = Msaa::from_samples(settings.msaa_samples());
@@ -195,8 +193,8 @@ pub struct ShadowOnly(pub EntityHashSet);
 
 impl ShownScene {
     pub fn start_view(&self) -> Option<SceneView> {
-        // Unreal yaw θ looks along (cos θ, sin θ) in X / Y, which is Bevy (cos θ, 0, sin θ); the camera looks along −Z
-        // turned by its yaw, so its yaw is −θ − 90°.
+        // Unreal yaw t looks along (cos t, sin t) in X / Y, which is Bevy (cos t, 0, sin t); the camera looks along -Z
+        // turned by its yaw, so its yaw is -t - 90 degrees.
         self.start.map(|(position, yaw)| SceneView {
             position,
             rotation: Quat::from_rotation_y(-p2_math::radians(yaw) - std::f32::consts::FRAC_PI_2),
@@ -205,7 +203,6 @@ impl ShownScene {
 }
 
 impl MeshView {
-    /// Before a frame's canvas is painted: a layer shows only in a frame that paints into it.
     pub fn hide_canvas_layers(&mut self) {
         self.canvas_below = [false; OVERLAY_LAYERS.len()];
     }
@@ -247,21 +244,18 @@ impl SceneView {
     }
 }
 
-/// The parent of the sky zone's models, apart from the level's so that it can carry the sky's placement.
 #[derive(Component)]
 struct SkyRoot;
 
 #[derive(Component)]
 pub struct MapModel;
 
-/// Retail renders each `DrawActor` call as a scene of its own and clears the depth only with `ClearZ`
+/// Retail renders each `DrawActor` call as a scene of its own and clears depth only with `ClearZ`
 /// (or `DrawActor(None, false, true)`), so a call without it is depth-tested against what came before.
 #[derive(Component, Clone, ExtractComponent)]
 #[extract_app(RenderApp)]
 pub(crate) struct OverlayCamera(pub(crate) usize);
 
-/// The camera of the window's own egui context, last of all. It also draws the last `DrawActor` slot while it
-/// may, so it is an `OverlayCamera` and takes the overlays' sun and ambient.
 #[derive(Component)]
 pub(crate) struct HudCamera;
 
@@ -270,7 +264,6 @@ pub fn hud_camera() -> impl Bundle {
     (
         Camera3d::default(),
         plain_output(),
-        // After the 3D view (0), the HUD's actors and canvas layers (1 to 8) and the gamma ramp (9).
         Camera { order: 10, output_mode, clear_color, ..Default::default() },
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 10_000.0, ..Default::default() }),
         Transform::default(),
@@ -283,7 +276,6 @@ pub fn hud_camera() -> impl Bundle {
     )
 }
 
-/// Additive canvas tiles have colour but no alpha: alone, the HUD paints over a cleared image laid over the frame.
 fn hud_alone() -> (ClearColorConfig, bevy::camera::CameraOutputMode) {
     let output = bevy::camera::CameraOutputMode::Write {
         blend_state: Some(bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -304,16 +296,14 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
     commands.spawn((
         Camera3d::default(),
         plain_output(),
-        // Below 0, where the tone pass draws the finished world image before the canvas layers.
         Camera { is_active: false, order: -1, ..Default::default() },
         Projection::Perspective(PerspectiveProjection { near: NEAR_CLIPPING_PLANE, far: 500_000.0, ..Default::default() }),
         Transform::default(),
         SceneView::default(),
-        // The sky zone too, squeezed behind the level by its materials.
         RenderLayers::from_layers(&[0, SKY_LAYER]),
         crate::world_pass::WorldCamera,
         // Assigning lights costs by the clusters they cover, on the main thread; a longer list per pixel costs far less.
-        // Bevy's first slice of 5 is meant for metres: in Unreal units it spends slices close to the eye and leaves the
+        // Bevy's first slice of 5 is meant for metres: in Unreal units it wastes slices near the eye and leaves the
         // fight's range in deep slices, whose decal lists every pixel there walks.
         ClusterConfig::FixedZ {
             total: 1536,
@@ -328,9 +318,8 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         let order = 2 * slot as isize;
         let canvas = commands
             .spawn((
-                // A 3D camera that draws nothing 3D (`RenderLayers::none()`), only its egui layer: a `Camera2d` made its
-                // depth texture single-sampled while the shared target was multisampled (`follow_msaa`), and wgpu refused
-                // the pass (else opening the map screen crashed).
+                // A 3D camera that draws nothing 3D, only its egui layer: a `Camera2d` made its depth texture single-sampled
+                // while the shared target was multisampled, and wgpu refused the pass, crashing on the map screen.
                 Camera3d::default(),
                 plain_output(),
                 RenderLayers::none(),
@@ -399,8 +388,8 @@ fn apply_change(
         *view = shown.start_view().unwrap_or_default();
     }
     let mut cache = FxHashMap::default();
-    // What does not move under one root, what moves under others: Bevy's transform propagation skips a tree none of
-    // whose transforms changed, so the static scene costs nothing while actors move.
+    // Static things under one root, moving ones under others: Bevy's transform propagation skips a tree whose
+    // transforms did not change, so the static scene costs nothing while actors move.
     let root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
     let attachments_root = commands.spawn((MapModel, Transform::from_translation(-center), Visibility::default())).id();
     let sky_root = commands.spawn((MapModel, SkyRoot, Transform::from_translation(-center), Visibility::default())).id();

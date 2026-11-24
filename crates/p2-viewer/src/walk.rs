@@ -1,6 +1,3 @@
-//! The viewer's walk mode (`G`): a simple body for looking around a map at eye height. Not the game's player: the game
-//! moves its pawn by the VM's physics. Unreal units and coordinates.
-
 use p2_collision::{Hit, Sides, box_check, mesh_line_check, terrain_line_check};
 use p2_render::level_collision::StaticCollision;
 use p2_math::Vector;
@@ -22,8 +19,6 @@ pub struct Body {
     pub grounded: bool,
 }
 
-/// The bottom is `STEP` raised, so ledges up to `STEP` pass underneath: a box against BSP, a knee-height line against
-/// terrain and meshes.
 fn sweep(world: &StaticCollision, start: Vector, end: Vector) -> Option<Hit> {
     let raise = Vector::new(0.0, 0.0, STEP / 2.0);
     let extent = Vector::new(RADIUS, RADIUS, HALF_HEIGHT - STEP / 2.0);
@@ -35,7 +30,6 @@ fn sweep(world: &StaticCollision, start: Vector, end: Vector) -> Option<Hit> {
     bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
 }
 
-/// `wish`: horizontal direction (X, Y; length up to 1); `delta`: seconds.
 pub fn step(world: &StaticCollision, body: &mut Body, wish: [f32; 2], speed: f32, jump: bool, delta: f32) {
     let mut motion = Vector::new(wish[0] * SPEED * speed * delta, wish[1] * SPEED * speed * delta, 0.0);
     for _ in 0..2 {

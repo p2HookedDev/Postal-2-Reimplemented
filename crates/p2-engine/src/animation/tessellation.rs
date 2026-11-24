@@ -1,5 +1,3 @@
-//! Modern graphics: the tessellation box acts on the models already drawn.
-
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::Assets;
 use bevy::ecs::prelude::{Local, Res, ResMut};
@@ -19,8 +17,6 @@ impl Plugin for TessellationPlugin {
     }
 }
 
-/// A model built from now on takes the level where it is built; the ones on screen are built again here, into the
-/// mesh assets they already draw.
 fn retessellate(settings: Res<Settings>, animated: Res<Animated>, mut meshes: ResMut<Assets<Mesh>>, mut last: Local<Option<u8>>) {
     let level = settings.modern_level(MODERN_TESSELLATION);
     if last.replace(level).is_none_or(|before| before == level) {

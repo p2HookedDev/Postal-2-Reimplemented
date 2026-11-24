@@ -5,8 +5,8 @@ use bevy::transform::components::Transform;
 use p2_assets::{ModelPolygon, StaticMesh, fan_triangles};
 use crate::coords::to_bevy;
 
-/// One mesh per section, so each can get its own material. Index order is kept: after the axis swap, Unreal's front
-/// faces match Bevy's (checked visually).
+/// One mesh per section, so each can get its own material. Index order is kept: after the axis swap, Unreal's
+/// front faces match Bevy's (checked visually).
 pub fn static_mesh_to_meshes(mesh: &StaticMesh) -> Vec<Mesh> {
     let positions: Vec<_> = mesh.positions.iter().copied().map(to_bevy).collect();
     let normals: Vec<_> = mesh.normals.iter().copied().map(to_bevy).collect();
@@ -29,8 +29,8 @@ pub fn static_mesh_to_meshes(mesh: &StaticMesh) -> Vec<Mesh> {
         .collect()
 }
 
-/// Whether `transform` mirrors (negative `DrawScale3D` product): its triangles turn round, so the engine flips the cull
-/// mode (`CM_CCW`) and we reverse their winding (Bevy culls by winding alone).
+/// Whether `transform` mirrors (negative `DrawScale3D` product): its triangles turn round, so the engine flips
+/// the cull mode (`CM_CCW`) and we reverse their winding (Bevy culls by winding alone).
 pub fn mirrors(transform: &Transform) -> bool {
     transform.scale.x * transform.scale.y * transform.scale.z < 0.0
 }
@@ -106,9 +106,9 @@ impl MeshBatch {
     }
 }
 
-/// `texel_scale` turns the polygons' texel UVs into texture UVs: 1 / (width, height) of the texture. Light map atlas
-/// UVs are stored as `UV_1` when every polygon has them. Unlike static meshes, BSP vertex order must be reversed after
-/// the axis swap to face front (checked visually: `Church.fuk` buildings and ground).
+/// `texel_scale` turns the polygons' texel UVs into texture UVs: 1 / (width, height) of the texture. Light map
+/// atlas UVs are stored as `UV_1` when every polygon has them. Unlike static meshes, BSP vertex order must be
+/// reversed after the axis swap to face front (checked visually: `Church.fuk` buildings and ground).
 pub fn model_polygons_to_mesh<'a>(
     polygons: impl IntoIterator<Item = (&'a ModelPolygon, Option<&'a [[f32; 2]]>)>,
     texel_scale: [f32; 2],

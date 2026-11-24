@@ -9,7 +9,6 @@ use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
 /// `FluidFriction` of a pawn without a volume (unverified).
 const DEFAULT_FLUID_FRICTION: f32 = 0.3;
 const AI_ZONE_SPEED_SQUARED: f32 = 90_000.0;
-/// A hit normal with |Z| below this may be stepped up.
 const STEP_WALL_Z: f32 = 0.2;
 const BUOYANT_RISE: f32 = 100.0;
 const BOB_SPEED: f32 = 160.0;
@@ -144,7 +143,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// `own` is the volume the mover counts as its own `PhysicsVolume` at `out_of_water`.
     pub(crate) fn find_water_line(&mut self, own: Option<ObjectId>, in_water: Vector, out_of_water: Vector) -> Vector {
         let Some((volume, time)) = self.first_water_volume(out_of_water, in_water) else { return out_of_water };
         if self.trace_world(out_of_water, in_water, Vector::ZERO).is_some_and(|hit| hit.time < time) {
@@ -153,8 +151,6 @@ impl<L: LoaderRef> Vm<L> {
         water_line_point(in_water, out_of_water, time, own == Some(volume))
     }
 
-    /// `advance` makes each further move (`MoveActor` flying, `Swim` swimming) and returns its time fraction; the result is
-    /// the product of those fractions × (1 − their hit times) (swimming's time left, the retail order of evaluation).
     fn blocked_move(
         &mut self,
         pawn: ObjectId,

@@ -1,5 +1,5 @@
-// One face of a lamp's shadow tile: the distance to the nearest static surface, over the lamp's radius. Blending takes
-// the minimum, so the pass needs no depth buffer.
+// One face of a lamp's shadow tile: the distance to the nearest static surface, over the lamp's radius. Blending
+// takes the minimum, so the pass needs no depth buffer.
 
 struct Face {
     x: vec4<f32>,
@@ -7,7 +7,6 @@ struct Face {
     z: vec4<f32>,
     // xyz the lamp, w 1 / its radius.
     lamp: vec4<f32>,
-    // x the guard band's scale; y, z the depth terms that clip at the near plane.
     terms: vec4<f32>,
 }
 

@@ -1,5 +1,3 @@
-//! Feet put down on stairs and slopes after the animation's pose, before skinning. Only the drawn pose changes.
-
 use std::sync::Arc;
 
 use bevy::app::{App, Plugin, Update};
@@ -20,18 +18,14 @@ use p2_host::display::{MODERN_FOOT_PLACEMENT, modern_on, modern_turned_off};
 use p2_render::level_collision::{LevelCollision, StaticCollision};
 use crate::play::Play;
 
-/// Unreal units; below the walk's step height, so a foot never reaches past what the walker could step on.
 const STEP: f32 = 24.0;
 const RANGE: f32 = 2048.0;
-/// A foot this far above its planted height is mid-stride and left alone.
 const PLANT_FULL: f32 = 4.0;
 const PLANT_NONE: f32 = 16.0;
 const MAX_TILT: f32 = 25.0 * std::f32::consts::PI / 180.0;
 const MIN_GROUND_Z: f32 = 0.7;
-/// Per second: about five frames at 60 to settle.
 const BLEND_RATE: f32 = 15.0;
 const SETTLED: f32 = 0.05;
-/// Seconds over which a body that became a ragdoll loses the correction it stood with.
 const HAND_OVER: f32 = 0.5;
 pub(super) const SIDES: [[&str; 3]; 2] =[[" l thigh", " l calf", " l foot"], [" r thigh", " r calf", " r foot"]];
 
@@ -63,7 +57,6 @@ struct Leg {
 
 struct Rig {
     legs: [Leg; 2],
-    /// The lowest point of the bind pose: where the animation stands on flat ground.
     sole: Vec3,
     bind_ankles: [Vec3; 2],
     bind_hips: [Vec3; 2],
@@ -78,7 +71,6 @@ struct Person {
     rig: Option<Rig>,
     place: Mat4,
     shown: Shown,
-    /// What was shown when a ragdoll took the body, and the game seconds since.
     handed: Option<(Shown, f32)>,
 }
 
@@ -149,7 +141,6 @@ pub(super) fn place_feet(
         if placed.is_none() && !known {
             continue;
         }
-        // Someone coming into view is first seen corrected; one already seen eases into it.
         let snap = !known && !feet.drawn_before.contains(&actor);
         let Some(pose) = base_pose(poses, actor) else {
             feet.layer.people.remove(&actor);
@@ -221,13 +212,11 @@ fn leg_rig(item: &AnimatedMesh) -> Option<Rig> {
 }
 
 impl Rig {
-    /// Both hips above half their bind height over the sole: a body lying down, dead or alive, is left alone.
     fn standing(&self, pose: &[Mat4], place: Mat4) -> bool {
         let height = |point: Vec3| place.transform_point3(point).z - place.transform_point3(self.sole).z;
         self.legs.iter().zip(self.bind_hips).all(|(leg, hip)| pose.get(leg.thigh).is_some_and(|bone| height(bone.w_axis.truncate()) >= 0.5 * height(hip)))
     }
 
-    /// At most one trace per foot, and none for a foot in the air.
     fn targets(&self, pose: &[Mat4], place: Mat4, statics: &StaticCollision) -> Shown {
         let floor = place.transform_point3(self.sole).z;
         let mut shown = REST;
@@ -253,7 +242,6 @@ impl Rig {
         shown
     }
 
-    /// The body drops by the lower foot's drop; each leg then reaches its own ground.
     fn apply(&self, bones: &mut [Mat4], place: Mat4, (offsets, normals): Shown) {
         let inverse = place.inverse();
         let up = inverse.transform_vector3(Vec3::Z);
@@ -284,8 +272,6 @@ fn ease((offsets, normals): Shown, (to_offsets, to_normals): Shown, blend: f32) 
     (offsets, normals)
 }
 
-/// The ragdoll starts from the uncorrected pose; the correction fades from a standstill so the body never rises
-/// faster than it starts to fall.
 fn hand_over((offsets, normals): Shown, age: f32) -> Shown {
     let t = (age / HAND_OVER).clamp(0.0, 1.0);
     let left = 1.0 - t * t * (3.0 - 2.0 * t);
@@ -312,8 +298,6 @@ fn limit_tilt(normal: Vec3, weight: f32) -> Vec3 {
     Quat::IDENTITY.slerp(turn, weight * angle.min(MAX_TILT) / angle) * Vec3::Z
 }
 
-/// The knee for a thigh and calf of unchanged length whose ankle reaches toward `target`, bent on the side it bent
-/// before, and the point the ankle reaches (the target, or the nearest the leg allows).
 fn knee_for(hip: Vec3, knee: Vec3, ankle: Vec3, target: Vec3) -> Option<(Vec3, Vec3)> {
     let (upper, lower) = (hip.distance(knee), knee.distance(ankle));
     if upper < 0.1 || lower < 0.1 {
@@ -328,7 +312,6 @@ fn knee_for(hip: Vec3, knee: Vec3, ankle: Vec3, target: Vec3) -> Option<(Vec3, V
     Some((hip + toward * (upper * cos) + bend * (upper * (1.0 - cos * cos).sqrt()), hip + toward * reach))
 }
 
-/// Two-bone solve on world (mesh-space) bone matrices; the foot keeps its animated turn, then `tilt`.
 fn solve_leg(bones: &mut [Mat4], leg: &Leg, target: Vec3, tilt: Quat) {
     let (Some(hip), Some(knee), Some(ankle)) = (posed_origin(bones, leg.thigh), posed_origin(bones, leg.calf), posed_origin(bones, leg.foot)) else { return };
     let Some((new_knee, reached)) = knee_for(hip, knee, ankle, target) else { return };

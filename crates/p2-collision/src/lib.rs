@@ -54,7 +54,6 @@ pub fn box_zones(model: &Model, min: Vector, max: Vector) -> Vec<u8> {
     zones
 }
 
-/// In tree walk order; each leaf index is in range of `model.leaves`.
 pub fn box_leaves(model: &Model, min: Vector, max: Vector) -> Vec<usize> {
     let (center, extent) = ((min + max) * 0.5, (max - min) * 0.5);
     let mut leaves = Vec::new();
@@ -93,8 +92,6 @@ pub fn line_check_node(model: &Model, start: Vector, end: Vector) -> Option<(Hit
     Some((Hit { time, location: start.lerp(end, time), normal: entry.normal }, entry.node))
 }
 
-/// Whether the child on side `front` is outside, given the parent's state. Outside means empty space;
-/// the space beyond the level (`RootOutside` false) is solid.
 fn child_outside(node: &BspNode, front: bool, outside: bool) -> bool {
     let csg = node.num_vertices != 0 && node.node_flags & NOT_CSG == 0;
     if front { outside || csg } else { outside && !csg }
@@ -155,8 +152,8 @@ fn terrain_ready(terrain: &Terrain) -> bool {
     terrain.vertices.len() == terrain.width * terrain.height && terrain.width >= 2 && terrain.height >= 2
 }
 
-/// `terrain.vertices` must be filled (rebuilt from the heightmap if the saved ones were stale). Of hits at the same time,
-/// the quad first in heightmap order (row, then column, then triangle) wins.
+/// `terrain.vertices` must be filled (rebuilt from the heightmap if the saved ones were stale). Of hits at the
+/// same time, the quad first in heightmap order (row, then column, then triangle) wins.
 pub fn terrain_line_check(terrain: &Terrain, start: Vector, end: Vector, sides: Sides) -> Option<Hit> {
     terrain_first_hit(terrain, start, end, [0.0; 2], TIE_SLACK, |triangle| {
         let [a, b, c] = triangle.map(|i| Vector::from(terrain.vertices[i]));
@@ -196,12 +193,8 @@ fn terrain_first_hit(terrain: &Terrain, start: Vector, end: Vector, extent: [f32
     best.map(|(time, _, normal)| Hit { time, location: start.lerp(end, time), normal })
 }
 
-/// Margin, in heightmap cells, by which [`terrain_rows`] widens a segment: quads it only touches along an edge or
-/// at a corner are kept, as are hits rounding puts a hair outside their quad.
 const CELL_MARGIN: f32 = 1e-3;
 
-/// Line time past the best hit for which [`terrain_line_check`] still walks a row: a hit on an edge two rows share
-/// ties, and the rows' entry times differ from it by rounding.
 const TIE_SLACK: f32 = 1e-4;
 
 fn terrain_rows(terrain: &Terrain, start: Vector, end: Vector, pad: [f32; 2]) -> impl Iterator<Item = (f32, usize, std::ops::RangeInclusive<usize>)> {
@@ -331,7 +324,6 @@ impl MeshCollision {
         Self { triangles, tree, slots: std::sync::Arc::default() }
     }
 
-    /// The `bounds` of `placed` with the same arguments, without building the mesh.
     pub fn placed_bounds(local: impl AsRef<[[[f32; 3]; 3]]>, location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vector) -> (Vector, Vector) {
         let world = to_world(location, rotation, scale, pre_pivot);
         let (min, max) = local.as_ref().iter().flatten().fold(([f32::MAX; 3], [f32::MIN; 3]), |(min, max), &p| {
@@ -345,7 +337,6 @@ impl MeshCollision {
         &self.triangles
     }
 
-    /// An empty mesh's box runs from `f32::MAX` to `f32::MIN`, so it touches nothing.
     pub fn bounds(&self) -> (Vector, Vector) {
         self.tree.root_box().map_or((Vector::new(f32::MAX, f32::MAX, f32::MAX), Vector::new(f32::MIN, f32::MIN, f32::MIN)), |(min, max)| (min.into(), max.into()))
     }
@@ -364,7 +355,6 @@ fn to_world(location: Vector, rotation: Rotator, scale: Vector, pre_pivot: Vecto
     }
 }
 
-/// A tree over the boxes of a mesh list, for line checks that skip the meshes a segment does not come near.
 #[derive(Debug, Clone, Default)]
 pub struct MeshSet {
     tree: TriangleTree,
@@ -403,7 +393,6 @@ pub fn mesh_line_check_at<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision
     found(best, start, end)
 }
 
-/// Keeps the smallest (time, mesh, triangle) in `best`, so mesh order does not matter; returns the next mesh's limit.
 fn earliest_in(mesh: &MeshCollision, index: usize, start: Vector, end: Vector, best: &mut Option<(f32, usize, usize, Vector)>) -> f32 {
     mesh.tree.along(start, end, best.map_or(1.0, |(time, ..)| time), |triangle| {
         let [a, b, c] = mesh.triangles[triangle].map(Vector::from);

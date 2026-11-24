@@ -1,5 +1,5 @@
-// Lit materials' layer bindings: data at 100 (bindless array 107), detail 101/102, specular cube
-// 103/104, 2D specular 105/106, bindless index table 108. The data is declared in `material_layers.wesl`, or by the actor shader for its own.
+// Lit materials' layer bindings: data 100 (bindless array 107), detail 101/102, specular cube 103/104,
+// 2D specular 105/106, bindless index table 108. The data is declared in `material_layers.wesl` or by the actor.
 
 import bevy_pbr::render::{
     forward_io::VertexOutput,
@@ -38,9 +38,9 @@ fn indices(in: VertexOutput) -> LayerIndices {
     return layer_indices[mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu];
 }
 
-// The base texture's tone against the texture around it, in display space: `texel`'s luma over that of mip `MEAN_LEVEL`,
-// a fixed patch of the texture whatever the view. 1 on an even surface, below 1 in grout and cracks, and 1 again once
-// the view itself samples that coarse. Assumes a white base colour factor, as the map's materials have.
+// The base texture's tone against its surroundings in display space: `texel`'s luma over mip `MEAN_LEVEL`'s.
+// 1 on an even surface, below 1 in grout and cracks, 1 again once the view samples that coarse.
+// Assumes a white base colour factor, as the map's materials have.
 const MEAN_LEVEL: f32 = 4.0;
 
 fn base_tone(in: VertexOutput, pbr_input: pbr_types::PbrInput, texel: vec3<f32>) -> f32 {
@@ -69,7 +69,8 @@ fn premultiplied(flags: u32) -> bool {
 fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: pbr_types::PbrInput, layers: ShaderLayers) -> vec4<f32> {
     let emissive = glow(in, pbr_input.material.flags);
     let mode = u32(layers.specular.x + 0.5);
-    // Bevy's pipeline has this def for the premultiplied, add and multiply alpha modes only: the others never blend so.
+    // Bevy's pipeline has this def for the premultiplied, add and multiply alpha modes only: the others never blend
+    // so.
     var multi_pass = false;
 @if(PREMULTIPLY_ALPHA) {
     multi_pass = premultiplied(pbr_input.material.flags);
@@ -141,8 +142,8 @@ fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: 
     return vec4(out, alpha);
 }
 
-// A surface's colour under `light`. An `OB_Darken` surface (`blend.x`) multiplies the frame buffer by one minus its lit
-// colour, and its texture is stored as one minus the colour, both in display space.
+// A surface's colour under `light`. An `OB_Darken` surface (`blend.x`) multiplies the frame buffer by one minus
+// its lit colour, and its texture is stored as one minus the colour, both in display space.
 fn lit_color(layers: ShaderLayers, stored: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
     if layers.blend.x == 0.0 {
         return stored * light;
@@ -151,9 +152,8 @@ fn lit_color(layers: ShaderLayers, stored: vec3<f32>, light: vec3<f32>) -> vec3<
     return to_linear(1.0 - min(to_display(lit), vec3(1.0)));
 }
 
-// Bevy's fog (`main_pass_post_lighting_processing`) on `color`. Bevy mixes towards the whole fog colour; a premultiplied
-// surface covers only its alpha's share of it, so the rest comes off (fog is affine in the colour; no tone mapping in
-// the shader). The specular fades with the fog as towards black (unverified).
+// Bevy's fog on `color`. Bevy mixes towards the whole fog colour, but a premultiplied surface covers only its
+// alpha's share, so the rest comes off (fog is affine in colour). The specular fades towards black (unverified).
 fn post_lighting(pbr_input: pbr_types::PbrInput, color: vec4<f32>) -> vec4<f32> {
 @if(SKY_VIEW) {
     if sky_before_near(pbr_input.world_position.xyz, view.world_from_view, view.clip_from_view[3][2]) {

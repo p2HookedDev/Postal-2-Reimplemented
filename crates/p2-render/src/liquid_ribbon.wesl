@@ -1,6 +1,6 @@
-// A stream. A thin jet is a round tube: an eight-sided shell around its arc, shaded as the round jet inside it so it
-// keeps its shape seen from any side, down its length too. A paste is a sheet of ropes widened to face the eye, torn
-// and lumpy. Every shape on them is fixed to the moving liquid, so it runs down the stream with the flow.
+// A stream. A thin jet is an eight-sided shell around its arc, shaded as the round jet inside so it keeps its
+// shape from any side. A paste is a torn, lumpy sheet of ropes widened to face the eye. Every shape is fixed to
+// the moving liquid, so it runs down the stream with the flow.
 
 import package::p2_render::liquid_look::{AirIn, AirOut, SHAPE_TUBE, TAU, air_shade, hash1, is_puke, noise1, noise2, optics_of, pixel_units, puke_pour, puke_pour_sampler, surface_of, texture_lod, textured_surface};
 import bevy_pbr::render::{
@@ -10,42 +10,30 @@ import bevy_pbr::render::{
 
 // How far the shell stands out of the round jet: an octagon's sides cut a circle by 1 / cos(TAU / 16).
 const TUBE_ROOM: f32 = 1.09;
-// A jet pinches into beads about nine radii apart (Plateau-Rayleigh) over the last share of its arc. A bead fills
-// this share of the gap and swells to this many radii; the thread between them thins to this, then breaks.
 const BEADS_FROM: f32 = 0.85;
 const BEADS_FULL: f32 = 0.9;
 const BEAD_RADII: f32 = 9.0;
 const BEAD_SHARE: f32 = 0.55;
 const BEAD_PEAK: f32 = 1.35;
 const NECK: f32 = 0.35;
-// A bead's mean radius over its gap, which it blurs into once it moves more than a part of the gap a frame.
 const BEAD_MEAN: f32 = 0.75;
-// The faint ripple: how much it tilts the normal, and its wavelength in radii.
 const RIPPLE: f32 = 0.12;
 const RIPPLE_RADII: f32 = 14.0;
-// The least sine of the angle between the eye and a jet it sees end on, which caps the depth through it.
 const END_ON: f32 = 0.12;
 
-// The sheet scrolls at this many Unreal units a second.
 const FLOW_SPEED: f32 = 60.0;
-// The share of its arc where a sheet starts to tear.
 const TEAR_START: f32 = 0.3;
-// Side ropes: their width against the sheet's, the radii they drift apart by the end, and their wandering.
 const STRAND_WIDTH: f32 = 0.45;
 const DIVERGE: f32 = 3.0;
 const WANDER: f32 = 1.5;
 const WANDER_RADII: f32 = 30.0;
-// How much of the sheet holes eat at its end, and how much bumps tilt its normal.
 const HOLES: f32 = 0.6;
 const BUMPS: f32 = 0.5;
-// Side ropes show only where a gush swells the sheet past this, so a paste's trickle between gushes is one thin rope.
 const ROPES_FROM: f32 = 0.7;
 // The game's puke pour strip runs across the stream and repeats every this many radii along it (unverified: its
 // orientation in the retail strip).
 const POUR_RADII: f32 = 8.0;
 
-// How much of a pattern this many units long a frame's flow moves across: 0 while it moves less than a quarter of it,
-// 1 once it moves half of it, when it would strobe instead of flow.
 fn blurred(speed: f32, units: f32) -> f32 {
     return smoothstep(0.25, 0.5, speed * globals.delta_time / max(units, 1e-4));
 }
@@ -70,7 +58,6 @@ fn tube_vertex(in: AirIn) -> AirOut {
 }
 
 fn tube_fragment(in: AirOut, front: bool) -> vec4<f32> {
-    // The shell's far side would shade the same jet again.
     if !front {
         discard;
     }
@@ -106,7 +93,6 @@ fn tube_fragment(in: AirOut, front: bool) -> vec4<f32> {
     let wave = RIPPLE_RADII * r0;
     let ripple = RIPPLE * (1.0 - blurred(speed, wave)) * (0.6 * sin(TAU * flow / wave) + 0.4 * sin(TAU * flow / (0.43 * wave) + 1.7));
     let n = normalize(s * a + facing * h + along_axis * (ripple * h));
-    // The path through a round jet: its chord across, longer as the jet is seen more end on.
     let thickness = 2.0 * r * h / max(seen_side, END_ON);
     let surface = surface_of(in.look.y, vec2(x, flow) / max(r0, 1e-4));
     return air_shade(in.world, n, thickness, in.look, in.light, in.position, cover, in.look.w, surface);
@@ -116,12 +102,10 @@ fn strand_radius(radius: f32, strand: f32) -> f32 {
     return select(radius * STRAND_WIDTH * (0.75 + 0.5 * hash1(strand)), radius, strand < 0.5);
 }
 
-// The way's length is how much a gush swells the sheet there: the main rope by all of it, the side ropes by less.
 fn strand_swell(grown: f32, strand: f32) -> f32 {
     return select(sqrt(grown), grown, strand < 0.5);
 }
 
-// The widest a ragged edge swells, against the rope's radius.
 fn widest(ragged: f32) -> f32 {
     return 1.15 * (1.0 + 0.8 * ragged);
 }
@@ -140,7 +124,6 @@ fn sheet_vertex(in: AirIn) -> AirOut {
     }
     side = normalize(side);
     let flow = in.corner.y - globals.time * FLOW_SPEED;
-    // Side ropes lean left and right in turn and wander with the flow, apart more toward the end.
     let lean = select(-1.0, 1.0, (u32(strand) & 1u) == 1u) * (0.6 + 0.8 * hash1(strand + 0.5));
     let wander = noise1(flow / (in.look.x * WANDER_RADII) + strand * 5.0) - 0.5;
     let drift = select(0.0, in.look.x * grown * (DIVERGE * lean * share * share + WANDER * wander * share), strand > 0.5);
@@ -176,10 +159,8 @@ fn sheet_fragment(in: AirOut) -> vec4<f32> {
 
     let pixel = pixel_units(in.world);
     let drawn = max(r, pixel);
-    // A sheet thinner than a pixel is drawn one pixel wide, as faint as its width.
     var cover = saturate((drawn - abs(x)) / pixel) * min(1.0, r / pixel);
     cover *= select(1.0, smoothstep(ROPES_FROM, 1.0, grown), strand > 0.5);
-    // Tears long along the flow eat holes and leave tendrils, the edges first.
     let tear = 0.65 * noise2(vec2(across * 2.2, along * 0.22)) + 0.35 * noise2(vec2(across * 5.0, along * 0.6) + 3.7);
     let eat = HOLES * (0.4 + 0.6 * ragged) * smoothstep(TEAR_START, 1.0, share);
     let edge = saturate(abs(x) / max(r, 1e-4));

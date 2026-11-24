@@ -23,7 +23,6 @@ pub struct SkeletalMesh {
     pub attach_aliases: Vec<AttachAlias>,
 }
 
-/// `AttachToBone` with the tag `alias` attaches to `bone`, offset by `coords` in the bone's frame.
 #[derive(Debug, Clone)]
 pub struct AttachAlias {
     pub alias: usize,
@@ -55,8 +54,6 @@ pub struct Bone {
     pub name: usize,
     pub parent: usize,
     pub num_children: i32,
-    /// Bind-pose orientation quaternion X, Y, Z, W, relative to the parent. As stored: the root bone rotates by
-    /// `q` (`v' = q v q*`), every other bone by its conjugate.
     pub orientation: [f32; 4],
     pub position: [f32; 3],
 }
@@ -112,7 +109,6 @@ pub fn read_skeletal_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result
 
     let version_offset = r.pos();
     if r.i32()? < 2 {
-        // Older versions store extra arrays; every mesh in the install is version 2.
         return Err(invalid("skeletal mesh internal version below 2", version_offset));
     }
     r.i32()?; // ModelVerts (unverified)
@@ -259,7 +255,8 @@ fn decode_influence(word: u32) -> Option<Influence> {
     Some(Influence { bone, weight: ((word >> 12) & 0xFFFF) as f32 / 65535.0 })
 }
 
-/// Scales weights to sum 1. The engine ignores the weight of a single influence (full weight), which this matches.
+/// Scales weights to sum 1. The engine ignores the weight of a single influence (full weight), which this
+/// matches.
 fn normalize_weights(influences: &mut [Influence]) {
     let sum: f32 = influences.iter().map(|i| i.weight).sum();
     let count = influences.len() as f32;
@@ -283,14 +280,14 @@ mod tests {
     fn decodes_new_and_shared_wedges() {
         let (u, v) = (0.25f32.to_bits(), 0.5f32.to_bits());
         let stream = [
-            0x9000_0000 | (0xC000 << 12) | 12, // point 0: shared, two influences, bone 2 weight 0.75
-            (0x4000 << 12) | 6,                // its second influence: bone 1, weight 0.25
+            0x9000_0000 | (0xC000 << 12) | 12,
+            (0x4000 << 12) | 6,
             u,
             v,
-            0x0FFF_F000, // point 1: no influences in the source (bone 0, full weight)
+            0x0FFF_F000,
             v,
             u,
-            0xF000_0000, // shared point 0 again
+            0xF000_0000,
             u,
             u,
             0xFFFF_FFFF,

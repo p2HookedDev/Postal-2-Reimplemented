@@ -48,15 +48,11 @@ struct Room {
     camera_z: f32,
     ground_half: f32,
     ambients: [f32; 2],
-    /// The side of the picture in pixels.
     view: u32,
-    /// A square that moves, this far from its middle to a side and this high over the floor: it casts and is not seen.
     mover: Option<(f32, f32, Hung)>,
-    /// A second lamp, like the first.
     fill: Option<Vec3>,
 }
 
-/// What lifts the square off the floor: its own place, or the one joint it is skinned to.
 #[derive(Clone, Copy)]
 enum Hung {
     ByItsPlace,
@@ -102,7 +98,6 @@ fn render(room: &Room) -> Vec<u8> {
     render_with_faces(room).0
 }
 
-/// The picture and whether any lamp holds a detail face at its end.
 fn render_with_faces(room: &Room) -> (Vec<u8>, bool) {
     let mut app = App::new();
     common::headless_renderer(&mut app);
@@ -209,7 +204,6 @@ fn render_with_faces(room: &Room) -> (Vec<u8>, bool) {
         if settled.is_none() && drawn && is_ready {
             settled = Some(frame);
         }
-        // A mover's tile fades in over a third of a second.
         if settled.is_some_and(|settled| frame > settled + 40) && !common::compiling(&app) && start.elapsed() > Duration::from_millis(700) {
             break;
         }
@@ -243,7 +237,6 @@ fn blocked_floor(lamp_shadows: &'static str) -> Room {
     }
 }
 
-/// A lamp high over a floor that casts too, seen from close in a large picture: the plain tile's texels would show.
 fn blocked_floor_seen_close() -> Room {
     let (near, far, height, floor) = (-10.0, -400.0, 150.0, 400.0);
     Room {
@@ -312,13 +305,11 @@ fn a_face_seen_close_gets_a_detail_square_that_shades_the_blocked_side() {
     assert!(blocked + 30 < open, "no shadow from the detail face behind the blocker: blocked {blocked}, open {open}, under {under}");
 }
 
-/// The middle of a 512 pixel picture, in linear light.
 fn linear_centre(frame: &[u8]) -> f32 {
     let byte = f32::from(frame[((256 * 512 + 256) * 4) as usize]) / 255.0;
     if byte <= 0.04045 { byte / 12.92 } else { ((byte + 0.055) / 1.055).powf(2.4) }
 }
 
-/// A lamp over an open floor with a square hanging between them.
 fn floor_under_a_mover(mover: Option<(f32, f32, Hung)>) -> Room {
     let floor = 400.0;
     Room {

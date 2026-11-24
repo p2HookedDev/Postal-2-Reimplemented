@@ -51,7 +51,7 @@ impl<L: LoaderRef> Vm<L> {
                 let seen = self.take_hit(this);
                 let (Some(world), Some(ragdoll)) = (self.karma.world.as_mut(), self.karma.ragdolls.live.get(&this)) else { return Some(Ok(None)) };
                 let target = if let Some(index) = named {
-                    // Else every shot and kick on a cut corpse's top half is lost.
+                    // Falls back to the nearest body, or every shot and kick on a cut corpse's top half is lost.
                     index.and_then(|i| ragdoll.bodies.get(i).copied().flatten()).or_else(|| ragdoll.parts.nearest_body(at))
                 } else if ragdoll.fresh {
                     ragdoll.bodies.iter().flatten().next().copied()
@@ -110,7 +110,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(ragdolls.hits.remove(index).hit)
     }
 
-    /// From flags the game's scripts already read, so a mod's damage types that set them get the same throw.
     fn throw_of(&mut self, damage_type: ObjectId, instigator: Option<ObjectId>) -> Option<Throw> {
         let class = self.class_of_object(damage_type).ok().flatten()?;
         if self.store.default_flag(class, Prop::bAllowZThrow) {

@@ -101,7 +101,6 @@ impl<L: LoaderRef> Vm<L> {
         if self.script.script_depth >= MAX_SCRIPT_DEPTH {
             return Err(Error::Recursion { calls: MAX_SCRIPT_DEPTH, chain: vec![function.object_name.clone()] });
         }
-        // `singular`: an object already inside a singular function skips the call, giving its zero value.
         let singular = function.flags & FUNC_SINGULAR != 0 && this.is_some();
         if singular && let Some(object) = this
             && !self.script.in_singular.insert(object)
@@ -138,7 +137,6 @@ impl<L: LoaderRef> Vm<L> {
             let hit: [Value; 6] = std::array::from_fn(|k| hit_arg(&*self, &args, k, function.params[k]));
             self.fluid_hit_seen(feeder, &hit);
         }
-        // Before the call: the values path hands back only the out parameters.
         let body_at = (function.hook == Some(ScriptHook::BodyLocation)).then(|| hit_arg(&*self, &args, 2, function.params[2]));
         self.script.script_depth += 1;
         let started = self.function_enter();

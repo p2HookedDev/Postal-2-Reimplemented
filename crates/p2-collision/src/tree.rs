@@ -15,10 +15,9 @@ struct Node {
 }
 
 impl Node {
-    /// The line time at which a segment from `start`, with `inverse` the reciprocal of its motion on each axis, enters
-    /// this box grown by [`SEGMENT_MARGIN`]; `None` if it does not by `limit`. On an axis the segment does not move
-    /// along, a start outside the slab gives equal infinities and one on its face a NaN that `min` and `max` skip:
-    /// either way an infinite bound rejects the box.
+    /// The line time at which a segment enters this box grown by [`SEGMENT_MARGIN`]; `None` if not by `limit`.
+    /// On an axis the segment does not move along, a start outside the slab gives equal infinities and one on
+    /// its face a NaN that `min` and `max` skip: either way an infinite bound rejects the box.
     fn entry(&self, start: Vector, inverse: [f32; 3], limit: f32) -> Option<f32> {
         let (mut enter, mut exit) = (0.0_f32, limit);
         for i in 0..3 {
@@ -38,7 +37,6 @@ pub struct TriangleTree {
 }
 
 impl TriangleTree {
-    /// Each shape is given by its corners: a triangle's three, or a box's minimum and maximum.
     pub fn new<const CORNERS: usize>(triangles: &[[[f32; 3]; CORNERS]]) -> Self {
         let mut tree = Self { nodes: Vec::new(), order: (0..triangles.len() as u32).collect() };
         if !triangles.is_empty() {
@@ -102,8 +100,6 @@ impl TriangleTree {
         false
     }
 
-    /// Visits the shapes of every leaf the segment enters before `limit` (line time, 1 at `end`), nearest boxes
-    /// first; `visit` returns the limit to go on with.
     pub fn along(&self, start: Vector, end: Vector, mut limit: f32, mut visit: impl FnMut(usize) -> f32) {
         let inverse = [0, 1, 2].map(|i| 1.0 / (end[i] - start[i]));
         let entry = |node: u32, limit: f32| self.nodes[node as usize].entry(start, inverse, limit).map(|time| (node, time));
@@ -111,7 +107,6 @@ impl TriangleTree {
             return;
         }
         let Some(root) = entry(0, limit) else { return };
-        // Each split halves a node's triangles, so the depth stays far below the stack's size.
         let mut stack = [root; 64];
         let mut top = 1;
         while top > 0 {

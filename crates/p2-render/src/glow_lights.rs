@@ -1,5 +1,3 @@
-//! Lights for fire and gun flashes under the modern look, made from the glows the game reports.
-
 use bevy::ecs::prelude::{Local, Res, ResMut, Resource};
 use p2_math::Vector;
 use p2_render_cpu::{LE_NON_INCIDENCE, LT_STEADY, LT_SUBTLE_PULSE, LightClock, MeshLight};
@@ -7,28 +5,26 @@ use p2_render_cpu::{LE_NON_INCIDENCE, LT_STEADY, LT_SUBTLE_PULSE, LightClock, Me
 use p2_host::display::{MODERN_FIRE_LIGHT, Settings};
 use crate::frame_facts::{FrameFacts, Glow, GlowSource, ScriptLight};
 
-// The scripts' own colour and brightness for a fire's light. Their radius reaches a street and their type flickers
-// frame by frame: the radius and the steady pulse here are ours.
+// The colour and brightness are the scripts' own; the radius and steady pulse are ours, since the scripts'
+// fire light reaches a whole street and flickers every frame.
 const FIRE_HUE: u8 = 15;
 const FIRE_SATURATION: u8 = 150;
 const FIRE_BRIGHTNESS: f32 = 150.0;
 const FIRE_RADIUS: f32 = 24.0;
-/// One fire lights within this distance, as the scripts mean it: a burning field is a few lights.
+/// Fires closer than this share one light, so a burning field is a few lights.
 const FIRE_SPACING: f32 = 600.0;
 const FIRE_FADE_SECONDS: f32 = 2.0;
 
-// The middle of the ranges the scripts draw a flash's light from.
 const FLASH_BRIGHTNESS: f32 = 150.0;
 const FLASH_RADIUS: f32 = 15.0;
 const FLASH_RADIUS_MOST: f32 = 20.0;
 const FLASH_FULL_SECONDS: f32 = 0.06;
 const FLASH_FADE_SECONDS: f32 = 0.08;
 
-/// This frame's fire lights, then its flash lights; none with the fire light setting off.
 #[derive(Resource, Default)]
 pub struct GlowLights(pub(super) Vec<MeshLight>);
 
-/// How much of its light a fire gives beside the fire lights already lit: none next to a full one, the rest of a fading one.
+/// How much light a fire adds beside fire lights already lit: none next to a full one, the rest of a fading one.
 fn fire_share(place: Vector, fade: f32, lit: &[MeshLight]) -> f32 {
     let shade = lit.iter().filter(|other| (other.location - place).size() < FIRE_SPACING).map(|other| other.brightness / FIRE_BRIGHTNESS).fold(0.0, f32::max);
     fade * (1.0 - shade)
@@ -62,7 +58,7 @@ fn flash(glow: &GlowSource) -> Option<MeshLight> {
     }
 }
 
-/// Touched only when they changed, as the script lights.
+/// Writes the resource only when the lights changed, as the script lights do.
 pub(crate) fn light_glows(facts: Res<FrameFacts>, settings: Option<Res<Settings>>, mut glow_lights: ResMut<GlowLights>, mut made: Local<(LightClock, Vec<MeshLight>)>) {
     let (clock, lights) = &mut *made;
     lights.clear();

@@ -11,20 +11,20 @@ use crate::particle_frame::{DrawnEmitter, DrawnParticles};
 const FIRE_WORDS: [&str; 2] = ["fire", "flame"];
 const NEVER_FIRE_WORDS: [&str; 5] = ["muzzle", "flash", "spark", "smoke", "ember"];
 
-/// Told by the texture's name and an adding blend, as retail draws flames; anything else under a fire actor (smoke,
-/// embers, glows) stays sprites.
+/// Told by the texture's name and an adding blend, as retail draws flames; anything else under a fire actor
+/// (smoke, embers, glows) stays sprites.
 pub(crate) fn is_fire(texture: &str, style: DrawStyle) -> bool {
     let texture = texture.to_ascii_lowercase();
     let named = |word: &&str| texture.contains(*word);
     matches!(style, DrawStyle::Translucent | DrawStyle::Brighten) && FIRE_WORDS.iter().any(named) && !NEVER_FIRE_WORDS.iter().any(named)
 }
 
-/// The volume draws one rising column; a fire spread wider than it is tall, such as a burning trail, stays sprites.
+/// The volume draws one rising column; a fire spread wider than it is tall, such as a burning trail, stays
+/// sprites.
 pub(crate) fn is_column(fire: &FireBox) -> bool {
     fire.half.x.max(fire.half.z) <= 2.0 * fire.half.y
 }
 
-/// The indices of the nearest `cap` distances within `reach`, nearest first.
 pub(crate) fn nearest_fires(distances: &[f32], cap: usize, reach: f32) -> Vec<usize> {
     let mut near: Vec<usize> = (0..distances.len()).filter(|&at| distances[at] <= reach).collect();
     near.sort_by(|&a, &b| distances[a].total_cmp(&distances[b]));
@@ -32,7 +32,6 @@ pub(crate) fn nearest_fires(distances: &[f32], cap: usize, reach: f32) -> Vec<us
     near
 }
 
-/// The box around the sprites, the alpha-weighted mean of their colour and their mean alpha.
 pub(crate) fn fire_box(sprites: &[SpriteParticle], origin: Vec3) -> Option<FireBox> {
     let (mut lo, mut hi) = sprites.first().map(sprite_box)?;
     let (mut colour, mut alpha) = (Vec3::ZERO, 0.0);
@@ -48,8 +47,6 @@ pub(crate) fn fire_box(sprites: &[SpriteParticle], origin: Vec3) -> Option<FireB
 }
 
 impl ParticleDraws {
-    /// The fires in `hidden`, whose sprites were hidden this frame, nearest first, to be drawn as volumes; and the
-    /// nearest fires drawn this frame, at most `cap` within `reach` of `eye`, to hide next frame.
     pub fn fire_volumes(
         &self,
         drawn: &DrawnParticles,

@@ -88,8 +88,6 @@ fn urine_streams_to_the_floor_and_makes_a_growing_puddle() {
     assert!(dude.vm.diagnostics.missing_natives.is_empty(), "missing natives {:?}", dude.vm.diagnostics.missing_natives);
 }
 
-/// `RadiusActors(class'Fluid', CollisionRadius)` finds the puddle only because the engine adds each actor's own collision
-/// radius.
 #[test]
 fn gasoline_pours_and_a_match_lights_it() {
     let Some(dir) = game_dir() else { return };

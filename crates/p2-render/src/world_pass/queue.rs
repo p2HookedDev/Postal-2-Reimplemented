@@ -1,6 +1,5 @@
 use super::*;
 
-/// Unique per bucket, so no two buckets share a bin even with the same pipeline and slabs.
 fn draw_key(bucket: usize) -> UntypedAssetId {
     AssetId::<Mesh>::Uuid { uuid: Uuid::from_u128(bucket as u128 + 1) }.untyped()
 }
@@ -112,7 +111,6 @@ fn queue_prepass(world: &mut World, buckets: &[Bucket], view: RetainedViewEntity
     }
 }
 
-/// Opaque buckets draw depth only; masked ones run their material's fragment to discard. Bucket, pipeline, depth only.
 pub(super) fn shadow_pipelines(world: &mut World, buckets: &[Bucket], light_key: MeshPipelineKey) -> Vec<(usize, CachedRenderPipelineId, bool)> {
     let mut items = Vec::new();
     for (index, bucket) in buckets.iter().enumerate() {
@@ -139,7 +137,6 @@ pub(super) fn shadow_pipelines(world: &mut World, buckets: &[Bucket], light_key:
     items
 }
 
-/// A level that redrew without the static world holds only the props' shadows until it is drawn again.
 fn redraw_levels(world: &World) {
     if let Some(stale) = world.get_resource::<StaticShadowsStale>() {
         stale.mark();

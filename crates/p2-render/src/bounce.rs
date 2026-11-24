@@ -1,6 +1,6 @@
-//! Modern graphics: screen-space bounce light. Between the opaque and the transparent passes a half-size pass gathers
-//! the lit colour of nearby surfaces that face each pixel, and a full-size pass brightens the frame by a blur of it
-//! that keeps to surfaces of like depth and facing. Within one frame only: nothing is carried over from the last.
+//! Modern graphics: screen-space bounce light. Between the opaque and transparent passes a half-size pass
+//! gathers the lit colour of nearby surfaces facing each pixel, and a full-size pass adds a blur of it that
+//! keeps to surfaces of like depth and facing. Nothing is carried over from the last frame.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -36,14 +36,14 @@ const GATHERED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 /// Tuned by eye later (unverified).
 const STRENGTH_PER_LEVEL: f32 = 0.05;
 
-/// The gathered light times the blend constant, the strength.
 const SCALED: BlendState = BlendState {
     color: BlendComponent { src_factor: BlendFactor::Constant, dst_factor: BlendFactor::Zero, operation: BlendOperation::Add },
     alpha: BlendComponent::REPLACE,
 };
 
-/// Adds the frame times the gathered light and keeps the frame's alpha, the sun rays' mask. No pass holds a surface's
-/// own colour, so the frame's lit colour stands in for it: a dark or shadowed surface takes little and stays dark.
+/// Adds the frame times the gathered light and keeps the frame's alpha, the sun rays' mask. No pass holds a
+/// surface's own colour, so the frame's lit colour stands in for it: a dark or shadowed surface takes little and
+/// stays dark.
 const ADD_BY_FRAME: BlendState = BlendState {
     color: BlendComponent { src_factor: BlendFactor::Dst, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
     alpha: BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
@@ -72,7 +72,6 @@ impl Plugin for BounceLightPlugin {
     }
 }
 
-/// On a scene camera while bounce light is on: its strength.
 #[derive(Component, Debug, Clone, Copy, PartialEq, ExtractComponent)]
 #[extract_app(RenderApp)]
 #[extract_component_sync_target((Self, BounceView))]
@@ -118,7 +117,6 @@ fn init_bounce_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader
     commands.insert_resource(BouncePipeline { layout, fullscreen: fullscreen.clone() });
 }
 
-/// `None` is the half-size gather; a view's format is the full-size pass that adds the light to that view.
 impl SpecializedRenderPipeline for BouncePipeline {
     type Key = Option<TextureFormat>;
 
@@ -142,7 +140,6 @@ impl SpecializedRenderPipeline for BouncePipeline {
     }
 }
 
-/// The half-size texture covers the viewport; the texture cache hands out a new one when the viewport's size changes.
 fn prepare_bounce_views(
     mut commands: Commands,
     pipeline_cache: Res<PipelineCache>,

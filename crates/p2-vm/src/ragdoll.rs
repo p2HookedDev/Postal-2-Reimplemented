@@ -21,11 +21,12 @@ use rig::scale_frames;
 
 /// Retail's cap for every ragdoll part: 20 Karma units a second.
 const MAX_SPEED: f32 = 20.0 * p2_physics::UNITS_PER_METER;
-/// Replaces `KFriction`. The tuned feel is 0.3 under a square-root friction combine; our pairs multiply, so sqrt(0.3).
+/// Replaces `KFriction`. The tuned feel is 0.3 under a square-root friction combine; our pairs multiply, so
+/// sqrt(0.3).
 const CORPSE_FRICTION: f32 = 0.55;
-/// Corpses sprawl rather than fold ...
+/// Joint cones are widened so corpses sprawl rather than fold.
 const CONE_SCALE: f32 = 1.3;
-/// ... but wider cones let limbs wrap around the body.
+/// Wider cones than this let limbs wrap around the body.
 const MAX_CONE: f32 = 1.55;
 /// A fixed twist held at exactly 0 fights the cone and makes limbs flip.
 const MIN_TWIST: f32 = 0.1;
@@ -68,7 +69,6 @@ impl Ragdolls {
         self.live.is_empty()
     }
 
-    /// The bodies of ragdolls made at least `ticks` game ticks ago.
     pub(crate) fn bodies_older_than(&self, ticks: u32) -> impl Iterator<Item = BodyId> + '_ {
         self.live.values().filter(move |ragdoll| ragdoll.ticks >= ticks).flat_map(|ragdoll| ragdoll.all.iter().copied())
     }
@@ -92,7 +92,6 @@ struct Ragdoll {
     fresh: bool,
     ticks: u32,
     posed_asleep: Option<bool>,
-    /// Lines and impulses test these while the world steps.
     parts: Parts,
     scales: ResolvedScales,
     cut_refused: bool,

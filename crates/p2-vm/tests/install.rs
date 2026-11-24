@@ -1382,8 +1382,6 @@ fn new_game_travels_in_the_same_vm() {
     let Some(mut loader) = loader() else { return };
     let Some(dir) = game_dir() else { return };
     let map = loader.load("Startup").unwrap();
-    // Declared before the VM: it borrows them for its whole life (its compiled closures make `Vm<&Loader>`
-    // invariant in the borrow).
     let (next_loader, monday);
     let mut vm = Vm::new(&loader);
     vm.add_config("System", ini(&dir, "Postal2.ini"));

@@ -1,6 +1,3 @@
-//! The HUD's canvas: a frame's 2D items painted through egui, each under or over the `DrawActor` calls as retail. The
-//! game reads the textures and fonts ([`CanvasSource`]); what egui knows of them is kept here.
-
 use bevy::asset::{Assets, Handle};
 use bevy::ecs::prelude::Resource;
 use bevy::image::Image;
@@ -27,8 +24,6 @@ pub struct CanvasFont {
     pub pages: Vec<Option<CanvasImage>>,
 }
 
-/// The game's reads for the canvas, asked the first time a texture or a font is painted. The outer `None`: not in
-/// this frame, ask again in the next.
 pub trait CanvasSource {
     fn texture(&mut self, material: &str, images: &mut Assets<Image>) -> Option<Option<CanvasImage>>;
     fn font(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Option<CanvasFont>>;
@@ -39,7 +34,6 @@ pub struct CanvasStores<'a, 'w, 's> {
     pub images: &'a mut Assets<Image>,
 }
 
-/// A cutscene's cover of the scene and its titles, under the HUD.
 #[derive(Clone, PartialEq)]
 pub struct Overlay {
     /// How much of the scene shows (1 = all, 0 = only the fog colour).
@@ -64,7 +58,6 @@ struct PaintedFont {
     pages: Vec<Option<(egui::TextureId, egui::Vec2)>>,
 }
 
-/// Whether an object path (`Package.Group.Name`) lies in `package`.
 pub fn in_package(path: &str, package: &str) -> bool {
     path.split_once('.').is_some_and(|(first, _)| first.eq_ignore_ascii_case(package))
 }
@@ -86,14 +79,11 @@ fn registered(kept: &mut Vec<Handle<Image>>, image: Handle<Image>, contexts: &mu
 }
 
 impl CanvasPainter {
-    /// At a map change: what the map left drew from its own package goes, and a read that failed is tried again. The
-    /// fonts and textures of the other packages, the same for every map, and the loading bar stay.
     pub fn forget_map(&mut self, map: &str) {
         self.textures.retain(|path, painted| painted.is_some() && !in_package(path, map));
         self.fonts.retain(|path, painted| painted.is_some() && !in_package(path, map));
     }
 
-    /// The texture and font paths already painted, which a map's start need not read ahead.
     pub fn painted(&self) -> std::collections::HashSet<String> {
         self.textures.keys().chain(self.fonts.keys()).cloned().collect()
     }
@@ -102,7 +92,6 @@ impl CanvasPainter {
         self.progress = Some((bar, contexts.add_image(EguiTextureHandle::Strong(image))));
     }
 
-    /// Over everything else of the frame.
     pub fn paint_progress(&self, ctx: &egui::Context, rect: egui::Rect, progress: f32) {
         if let Some((bar, texture)) = &self.progress {
             let shapes = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, "progress".into())).with_clip_rect(rect);
@@ -130,7 +119,6 @@ impl CanvasPainter {
         }
     }
 
-    /// An image that is not read from the library (a movie's frame), painted where the canvas names `material`.
     pub fn set_image(&mut self, material: String, image: &Handle<Image>, texels: [f32; 2], contexts: &mut EguiContexts) {
         let id = contexts.add_image(EguiTextureHandle::Weak(image.id()));
         self.textures.insert(material, Some((id, egui::vec2(texels[0], texels[1]))));
@@ -145,8 +133,9 @@ impl CanvasPainter {
         found
     }
 
-    /// As retail: the 2D items before the n-th `DrawActor` call go to its slot's canvas layer ([`call_slots`]), over the
-    /// scene and the calls before it, under that call; the items after the last call go to `ctx`, over everything.
+    /// As retail: the 2D items before the n-th `DrawActor` call go to its slot's canvas layer ([`call_slots`]), over
+    /// the scene and the calls before it, under that call; the items after the last call go to `ctx`, over
+    /// everything.
     pub fn paint_canvas(&mut self, ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], view: &mut MeshView, source: &mut impl CanvasSource, stores: &mut CanvasStores) {
         let is_call = |item: &CanvasItem| matches!(item, CanvasItem::Actor { .. });
         let slots = call_slots(items);

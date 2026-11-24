@@ -108,7 +108,6 @@ impl AnalogTrack {
         }
         let from = rotation(key);
         let mut to = rotation(next);
-        // Wrapping to the first key: take the shorter way (consecutive keys are stored aligned).
         if wraps && dot(from, to) < 0.0 {
             to = to.map(|c| -c);
         }

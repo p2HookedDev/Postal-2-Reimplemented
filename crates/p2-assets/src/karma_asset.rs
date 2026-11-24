@@ -26,8 +26,8 @@ pub struct KaPrimitive {
     pub tm: KaMatrix,
 }
 
-/// 16 floats as stored: rows X axis, Y axis, Z axis, origin (each with a 4th entry 0, 0, 0, 1). A point `p` of the
-/// primitive is at `p.X·X + p.Y·Y + p.Z·Z + origin` in the part frame.
+/// 16 floats as stored: rows X axis, Y axis, Z axis, origin (each with a 4th entry 0, 0, 0, 1). A point `p` of
+/// the primitive is at `p.X·X + p.Y·Y + p.Z·Z + origin` in the part frame.
 pub type KaMatrix = [f32; 16];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,8 +58,8 @@ pub struct KaPart {
     pub tm: KaMatrix,
 }
 
-/// A `JOINT` between `parts[0]` (`part1`, the child bone) and `parts[1]` (`part2`, its parent): per part the joint's
-/// position and its primary and orthogonal axes in that part's frame.
+/// A `JOINT` between `parts[0]` (`part1`, the child bone) and `parts[1]` (`part2`, its parent): per part the
+/// joint's position and its primary and orthogonal axes in that part's frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KaJoint {
     pub id: String,

@@ -1,4 +1,5 @@
-//! Hats and caps come off as loose bodies at death and when the head goes; retail keeps them on and destroys them with it.
+//! Hats and caps come off as loose bodies at death and when the head goes; retail keeps them on and destroys them
+//! with it.
 
 use std::collections::VecDeque;
 
@@ -12,10 +13,10 @@ use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
 const SLOTS: usize = 8;
 const CAP: usize = 32;
 const RETIRE_LIFE: f32 = 0.01;
-/// UU/s.
 const THROW_MAX: f32 = 1500.0;
 const DEATH_BACK: f32 = 120.0;
-/// A thrown bolt-on starts inside its owner's corpse; until then it touches only the level, so it is not shot out.
+/// A thrown bolt-on starts inside its owner's corpse; until then it touches only the level, so it is not shot
+/// out.
 const LEVEL_ONLY: f32 = 0.3;
 /// `Limb`'s default mass: a hit moves a loose bolt-on as it moves a cut limb.
 const LIMB_MASS: f32 = 90.0;
@@ -58,7 +59,6 @@ fn struck_velocity(damage: f32, momentum: Vector) -> Option<Vector> {
     (damage > 0.0 && momentum.size() > 0.0).then(|| clamp_throw(momentum * (1.0 / LIMB_MASS)))
 }
 
-/// Radius and half height about the body's origin.
 pub(crate) fn hull_size(points: &[[f32; 3]]) -> [f32; 2] {
     points.iter().fold([0.0, 0.0], |[radius, height]: [f32; 2], p| [radius.max(p[0].hypot(p[1])), height.max(p[2].abs())])
 }
@@ -68,14 +68,12 @@ fn thrown_back(velocity: Vector, yaw: i32) -> Vector {
     Vector::new(velocity[0] - yaw.cos() * DEATH_BACK, velocity[1] - yaw.sin() * DEATH_BACK, velocity[2])
 }
 
-/// The oldest body past the cap.
 fn admit(bodies: &mut VecDeque<ObjectId>, actor: ObjectId) -> Option<ObjectId> {
     bodies.push_back(actor);
     if bodies.len() > CAP { bodies.pop_front() } else { None }
 }
 
 impl<L: LoaderRef> Vm<L> {
-    /// `momentum`: the function's second argument.
     pub(crate) fn bolton_before(&mut self, hook: BoltonHook, this: ObjectId, momentum: Option<Value>) -> Result<(), Error> {
         match hook {
             BoltonHook::PopOffHead => self.karma.boltons.stash(Some(this), Throw::HeadVelocity),
@@ -148,7 +146,6 @@ impl<L: LoaderRef> Vm<L> {
         Some([member("part")?, member("bAttachToHead")?])
     }
 
-    /// Seconds; 0 is no limit.
     fn bolton_life(&self) -> f32 {
         self.level.and_then(|level| self.store.object_of(level, Prop::Game)).map_or(0.0, |game| self.store.float_of(game, "LimbsLifetimeMax"))
     }

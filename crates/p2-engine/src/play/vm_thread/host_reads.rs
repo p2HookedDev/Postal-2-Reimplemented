@@ -1,8 +1,6 @@
 use super::*;
 
 impl Simulation {
-    /// Before a pass of reads: writes from here on carry a later stamp than `mark`, so a write that comes after an
-    /// actor was read in this pass, at any time, makes the next pass read it again.
     pub(in crate::play) fn begin_reads(&mut self) {
         self.mark = self.vm.store.stamp();
         self.vm.store.next_stamp();
@@ -21,7 +19,6 @@ impl Simulation {
                 && sent.time_dilation == time_dilation
                 && sent.cull_volume == cull_volume
                 && (sent.frame.cull_distance == 0.0 || vm.beyond_cull_distance(actor, view_key.viewed) == sent.beyond)
-                // Whether its owner is the player's is in no stamp of its own.
                 && (sent.frame.emitters_disabled.is_empty() || vm.particle_time_scale(actor) == sent.frame.time_scale)
                 && store.object(actor).drawn() <= sent.read_at
                 && sent.others.iter().all(|&other| store.object(other).drawn() <= sent.read_at)
@@ -163,7 +160,6 @@ impl Simulation {
     }
 }
 
-/// The pawn itself, what it owns, and what hangs from its bones or rides on it.
 fn hangs_on(vm: &Vm<Arc<Loader>>, actor: ObjectId, pawn: ObjectId) -> bool {
     actor == pawn || vm.store.object_of(actor, Prop::Base) == Some(pawn) || vm.view_chain(actor).any(|other| other == pawn)
 }

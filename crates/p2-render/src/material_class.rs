@@ -15,7 +15,8 @@ pub fn class_of(layers: &ShaderLayers) -> MaterialClass {
     MaterialClass::from_index(layers.blend.y)
 }
 
-/// Above the three effect bits of the modern flag: the materials level in bits 3 to 6, the lamp size level in 7 to 10.
+/// Above the three effect bits of the modern flag: the materials level in bits 3 to 6, the lamp size level in 7
+/// to 10.
 pub const LEVEL_SHIFT_MATERIALS: u16 = 3;
 pub const LEVEL_SHIFT_LAMP_SIZE: u16 = 7;
 

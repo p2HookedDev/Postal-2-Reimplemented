@@ -67,7 +67,8 @@ impl OutputBlending {
     }
 }
 
-/// `FinalBlend.FrameBufferBlending`, `FB_Overwrite` 0 .. `FB_Invisible` 7; values past the enum act as `FB_Invisible`.
+/// `FinalBlend.FrameBufferBlending`, `FB_Overwrite` 0 .. `FB_Invisible` 7; values past the enum act as
+/// `FB_Invisible`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameBufferBlending {
     Overwrite,
@@ -109,7 +110,6 @@ pub enum ColorOperation {
     AlphaBlendWithMask,
     AddWithMaskModulation,
     Mask,
-    /// A value past the enum: combines as [`ColorOperation::Mask`], while the base texture walk starts from Material1.
     Other,
 }
 
@@ -232,7 +232,6 @@ impl UvModifier {
     }
 }
 
-/// The combined transform of `modifiers` (outermost first; the innermost applies first).
 pub fn uv_matrix(modifiers: &[UvModifier], seconds: f32, size: [f32; 2]) -> UvMatrix {
     modifiers.iter().rev().fold(UV_IDENTITY, |m, modifier| uv_then(m, modifier.matrix(seconds, size)))
 }
@@ -252,8 +251,8 @@ pub struct RenderState {
     pub wet: Option<i32>,
     pub color: Option<[u8; 4]>,
     pub color_blend: bool,
-    /// The blending was set by a `Shader` with `OB_Darken`: the frame buffer is multiplied by one minus the colour
-    /// (D3D `ZERO` / `INVSRCCOLOR`), drawn as [`Blending::Modulate`] of the inverted colour.
+    /// Set by a `Shader` with `OB_Darken`: the frame buffer is multiplied by one minus the colour,
+    /// drawn as [`Blending::Modulate`] of the inverted colour.
     pub darken: bool,
     pub alpha_ref: Option<u8>,
     /// The innermost `FinalBlend` of the chain: as in retail, each one met overwrites the frame buffer
@@ -269,7 +268,6 @@ pub struct RenderState {
     pub specular_uv: Vec<UvModifier>,
     pub combiner: Option<i32>,
     pub switch: Option<i32>,
-    /// The renderer's material class, from the material's names and layers; 0 is the default class.
     pub class: u8,
 }
 
@@ -337,8 +335,8 @@ pub fn read_combiner<'a, R: Resolve + ?Sized>(objects: &mut Objects<'a, R>, src:
     })
 }
 
-/// The six `Faces` of the `Cubemap` `export` (0-based) of `src`: object references in its package (0: none), in the
-/// order the D3D driver uploads them, +X −X +Y −Y +Z −Z (unverified).
+/// The six `Faces` of the `Cubemap` `export` (0-based) of `src`: object references in its package (0: none), in
+/// the order the D3D driver uploads them, +X −X +Y −Y +Z −Z (unverified).
 pub fn read_cubemap_faces<'a, R: Resolve + ?Sized>(objects: &mut Objects<'a, R>, src: Source<'a>, export: usize) -> Result<[i32; 6], Error> {
     let object = objects.read(src, export)?;
     Ok(std::array::from_fn(|face| match object.get("Faces", face as u32) {
@@ -371,7 +369,6 @@ enum MaterialClass {
 }
 
 impl MaterialClass {
-    /// Names compare ignoring case, as the engine's names do.
     fn from_name(name: &str) -> Option<Self> {
         Some(match name.to_ascii_lowercase().as_str() {
             "texture" | "movietexture" => Self::Texture,
@@ -396,8 +393,9 @@ impl MaterialClass {
     }
 }
 
-/// Follows `material` (an object reference in `pkg`) down to the texture a simple renderer should draw, adding the
-/// chain's render state to `state`. Stops at the first import; following it is the caller's job (same `state`).
+/// Follows `material` (an object reference in `pkg`) down to the texture a simple renderer should draw, adding
+/// the chain's render state to `state`. Stops at the first import; following it is the caller's job (same
+/// `state`).
 pub fn base_texture<'a, R: Resolve + ?Sized>(
     objects: &mut Objects<'a, R>,
     src: Source<'a>,
@@ -501,8 +499,6 @@ fn shader(object: &ObjectProperties, pkg: &Package, state: &mut RenderState) -> 
         state.specular.get_or_insert(SpecularLayer { material: reference("Specular"), mask, mask_is_diffuse: mask != 0 && mask == reference("Diffuse") });
     }
     let opacity = reference("Opacity") != 0;
-    // A separate opacity material gives the alpha; the same material as `Diffuse` means the
-    // diffuse alpha, which the base texture already has.
     if opacity && reference("Opacity") != reference("Diffuse") && state.opacity.is_none() {
         state.opacity = Some(reference("Opacity"));
     }

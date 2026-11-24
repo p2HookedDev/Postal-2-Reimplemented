@@ -1,6 +1,6 @@
-// A terrain sector's layers in one opaque pass: per layer its texture at its own UV, the baked
-// lighting (display space 0..1) as `Modulate2X` clamped per layer, then mixed over the layers below in linear space. Fog
-// once on the result (fog mixes towards a constant, so once on the mix equals the mix of fogged layers).
+// All of a terrain sector's layers in one opaque pass: each layer's texture at its own UV, the baked lighting as
+// `Modulate2X` clamped per layer, then mixed over the layers below in linear space. Fog is applied once on the
+// result, which equals fogging each layer since fog mixes towards a constant.
 
 import bevy_pbr::{
     render::{
@@ -154,7 +154,6 @@ fn layer_alpha(in: VertexOutput, k: u32, uv: vec2<f32>, gx: vec2<f32>, gy: vec2<
 
 @fragment
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
-    // The vertex colour is the retail lighting, applied per layer below (no lighting: the texture as is, 2 × 0.5).
     var input = vertex_output;
     var light = vec3(0.5);
     @if(VERTEX_COLORS) {
@@ -185,7 +184,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var incoming: ModernLight;
     var dynamic = vec3(0.0);
     if modern {
-        // Terrain has no material class and no darken case.
         incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false, pool, world_lookup());
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
     }

@@ -5,7 +5,6 @@ use crate::anim::MAX_PASSES;
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn update_animation(&mut self, actor: ObjectId, delta: f32) -> Result<(), Error> {
-        // The count is read each pass: a channel started by a handler in this update moves on in it too.
         let mut index = 0;
         while self.instance(actor).is_some_and(|instance| index < instance.channels.len()) {
             if let Some(state) = self.channel_mut(actor, index as i32)
@@ -102,7 +101,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Rate 0 holds the first frame; `tween` -1 tweens at the previous rate.
     pub(crate) fn play(&mut self, actor: ObjectId, channel: i32, sequence: NameId, rate: f32, tween: f32, playback: Playback) -> bool {
         let looping = playback == Playback::Looping;
         if sequence == NameId::NONE || self.skeletal_mesh(actor).is_none() {

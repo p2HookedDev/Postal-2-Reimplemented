@@ -70,7 +70,6 @@ impl World {
         BodyId(handle)
     }
 
-    /// Kinematic: pushes and carries bodies, never pushed back. Even ragdolls touching only the level touch it.
     pub fn add_mover(&mut self, shapes: &[Shape], location: p2_math::Vector, rotation: [f32; 4]) -> Result<BodyId, Error> {
         let builders: Vec<ColliderBuilder> = shapes.iter().filter_map(collider).collect();
         if builders.is_empty() {
@@ -168,8 +167,6 @@ impl World {
         }
     }
 
-    /// Rapier puts the body to sleep once it has moved slower than `speed` (Unreal units a second) and turned slower
-    /// than `spin` (radians a second) for `seconds`.
     pub fn set_sleep(&mut self, id: BodyId, speed: f32, spin: f32, seconds: f32) {
         let length_unit = self.parameters.length_unit;
         if let Some(body) = self.bodies.get_mut(id.0) {

@@ -3,14 +3,12 @@ use p2_math::Vector;
 
 use crate::lighting::{LE_SUNLIGHT, LT_NONE, MAX_HARDWARE_LIGHTS, MeshLight, SUN_DISTANCE};
 
-/// Whether a light cut off from the actor's centre by the level is dropped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Walls {
     Checked,
     Ignored,
 }
 
-/// The lights in the baked permeating lists of `leaves`, each once, in leaf order.
 pub fn leaf_lights(model: &Model, leaves: &[usize]) -> Vec<i32> {
     let mut listed = Vec::new();
     for leaf in leaves.iter().filter_map(|&leaf| model.leaves.get(leaf)) {
@@ -25,7 +23,6 @@ pub fn leaf_lights(model: &Model, leaves: &[usize]) -> Vec<i32> {
     listed
 }
 
-/// Per channel the brightest ambient of the first four distinct zones of `leaves`; black without leaves.
 pub fn leaves_ambient(model: &Model, leaves: &[usize], zone_ambients: &[[f32; 3]]) -> [f32; 3] {
     let mut zones: Vec<usize> = Vec::new();
     for zone in leaves.iter().filter_map(|&leaf| model.leaves.get(leaf)).filter_map(|leaf| usize::try_from(leaf.zone).ok()) {
@@ -36,13 +33,12 @@ pub fn leaves_ambient(model: &Model, leaves: &[usize], zone_ambients: &[[f32; 3]
     zones.iter().map(|&zone| zone_ambients.get(zone).copied().unwrap_or_default()).fold([0.0; 3], |a, b| [0, 1, 2].map(|i| a[i].max(b[i])))
 }
 
-/// The lights the renderer gives an actor: those reaching its sphere and, with `Walls::Checked`, not cut off
-/// from `center` by the level, sun lights first, the rest by (1 - d² / R²) · brightness with R the light's own
-/// radius, at most `max`. A light with a score of zero or less still counts, last. A spot takes a slot whatever
-/// its cone; the shading cuts it.
+/// The lights the renderer gives an actor: those reaching its sphere (with `Walls::Checked`, not cut off
+/// from `center`), suns first, the rest by (1 - d² / R²) · brightness with R the light's radius, at most `max`.
+/// A light scoring zero or less still counts, last. A spot takes a slot whatever its cone; the shading cuts it.
 pub fn relevant_lights<'a>(model: &Model, candidates: impl IntoIterator<Item = &'a MeshLight>, center: Vector, radius: f32, max: usize, walls: Walls) -> Vec<MeshLight> {
-    // A prop set into a wall has its centre in solid, where every trace starts blocked: it keeps its lights as before
-    // this check came in. What retail's trace answers from inside solid is (unverified).
+    // A prop set into a wall has its centre in solid, where every trace starts blocked, so it keeps its lights.
+    // What the original game's trace answers from inside solid is (unverified).
     let traced = walls == Walls::Checked && p2_collision::point_leaf(model, center).is_some();
     let mut keyed: Vec<(f32, MeshLight)> = candidates
         .into_iter()

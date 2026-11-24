@@ -8,8 +8,8 @@ pub struct Font {
     pub characters: Vec<FontCharacter>,
     pub textures: Vec<i32>,
     pub kerning: i32,
-    /// `CharRemap`: character code → index into `characters`, used when `is_remapped`. Sorted by code when read, equal
-    /// codes in file order.
+    /// `CharRemap`: character code to index into `characters`, used when `is_remapped`.
+    /// Sorted by code when read; equal codes keep their file order.
     pub remap: Vec<(u16, u16)>,
     pub is_remapped: bool,
 }

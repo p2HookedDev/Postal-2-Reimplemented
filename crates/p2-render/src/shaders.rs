@@ -9,7 +9,6 @@ use bevy::shader::{Shader, ShaderDefVal};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-/// `folder` beside the exe; a cargo build that has none reads the one in this crate's own sources.
 fn beside_exe(folder: &str, in_crate: &str) -> PathBuf {
     let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join(folder)));
     beside.filter(|dir| dir.is_dir()).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join(in_crate))
@@ -17,7 +16,6 @@ fn beside_exe(folder: &str, in_crate: &str) -> PathBuf {
 
 static SHADER_DIR: LazyLock<PathBuf> = LazyLock::new(|| beside_exe("shaders", "src"));
 
-/// A shader read from the shader folder at start-up; WESL imports reach it as `package::p2_render::<stem>`.
 pub(crate) fn shader_file(name: &str) -> Shader {
     let file = SHADER_DIR.join(name);
     let source = std::fs::read_to_string(&file).unwrap_or_else(|error| {
@@ -123,7 +121,6 @@ where
     app.add_plugins(MaterialPlugin::<M>::default());
 }
 
-/// The value of `const name` in a shader's source, for a test that holds a Rust constant to the shader's twin of it.
 #[cfg(test)]
 pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
     let head = format!("const {name}:");
@@ -137,7 +134,6 @@ pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
     parsed.unwrap_or_else(|| panic!("const {name} = {value} is not a number"))
 }
 
-/// Whether a section material draws the sky zone and whether it hands its pools to the screen reflections.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkyKey {
     pub sky: bool,
@@ -150,7 +146,6 @@ pub(crate) fn mark_sky(descriptor: &mut RenderPipelineDescriptor, key: SkyKey) {
     }
 }
 
-/// A sky material's vertex stage squeezes it behind the level and draws nothing in a prepass.
 pub(crate) fn sky_vertex(descriptor: &mut RenderPipelineDescriptor) {
     let prepass = descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
     descriptor.vertex.shader = SKY_VERTEX_SHADER;
@@ -158,7 +153,6 @@ pub(crate) fn sky_vertex(descriptor: &mut RenderPipelineDescriptor) {
     sky_view_defs(descriptor);
 }
 
-/// The sky view's shader def; the sky takes no scene fog.
 pub(crate) fn sky_view_defs(descriptor: &mut RenderPipelineDescriptor) {
     descriptor.vertex.shader_defs.push("SKY_VIEW".into());
     if let Some(fragment) = descriptor.fragment.as_mut() {
@@ -167,15 +161,16 @@ pub(crate) fn sky_view_defs(descriptor: &mut RenderPipelineDescriptor) {
     }
 }
 
-/// A lit material's normal map slot holds the lamps' screen shadows (`lamps/shadow_mask.rs`), not a normal map; Bevy's
-/// def for one would stop the back face of a two-sided surface turning its normal around.
+/// A lit material's normal map slot holds the lamps' screen shadows, not a normal map; Bevy's def for one
+/// would stop a two-sided surface's back face flipping its normal.
 pub(crate) fn unmark_normal_map(descriptor: &mut RenderPipelineDescriptor) {
     if let Some(fragment) = descriptor.fragment.as_mut() {
         fragment.shader_defs.retain(|def| !matches!(def, ShaderDefVal::Bool(name, _) if name.starts_with("STANDARD_MATERIAL_NORMAL_MAP")));
     }
 }
 
-/// Bevy gives an alpha-blend pipeline no def of its own; the lit surfaces' see-through path is compiled into those only.
+/// Bevy gives an alpha-blend pipeline no def of its own; the lit surfaces' see-through path is compiled into
+/// those only.
 pub(crate) fn mark_see_through(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
     if key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA
         && let Some(fragment) = descriptor.fragment.as_mut()
@@ -184,9 +179,9 @@ pub(crate) fn mark_see_through(descriptor: &mut RenderPipelineDescriptor, key: M
     }
 }
 
-/// The pool record rides in the frame's alpha, which any blend (or alpha to coverage) would misread, and the sky's alpha
-/// of 0 is the sun-ray mask; so only opaque and masked pipelines of the world write it, and only in views without MSAA,
-/// the only ones the reflection pass runs in to put the alpha back.
+/// The pool record rides in the frame's alpha, which any blend or alpha to coverage would misread, and the sky's
+/// alpha 0 is the sun-ray mask; so only opaque and masked world pipelines write it, and only in views without
+/// MSAA.
 pub(crate) fn mark_pool_mirror(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
     if key.mirror
         && !key.sky
@@ -198,16 +193,15 @@ pub(crate) fn mark_pool_mirror(descriptor: &mut RenderPipelineDescriptor, mesh_k
     }
 }
 
-/// A main pipeline of an opaque or masked world surface, drawn over a depth prepass and not sky.
 fn over_prepass(descriptor: &RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) -> bool {
     let main = !descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
     let opaque = mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_OPAQUE;
     main && opaque && !key.sky && mesh_key.contains(MeshPipelineKey::DEPTH_PREPASS)
 }
 
-/// With a depth prepass the depth already holds every opaque and masked surface of the world, and each lit main pass
-/// discards at least what its prepass did; so a main pipeline that may discard writes no depth, and the GPU can drop
-/// its hidden fragments before the shader instead of after it. Sky surfaces draw nothing in a prepass.
+/// With a depth prepass the depth already holds every opaque and masked world surface, so a main pipeline that
+/// may discard writes no depth and the GPU can drop hidden fragments before the shader. Sky draws nothing in a
+/// prepass.
 pub(crate) fn test_depth_early(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
     let discards = mesh_key.intersects(MeshPipelineKey::MAY_DISCARD | MeshPipelineKey::VISIBILITY_RANGE_DITHER);
     if discards && over_prepass(descriptor, mesh_key, key)
@@ -217,8 +211,8 @@ pub(crate) fn test_depth_early(descriptor: &mut RenderPipelineDescriptor, mesh_k
     }
 }
 
-/// Only the world camera has both prepasses, and with them and no MSAA the lamps' screen pass casts for each of its
-/// pixels: its lit surfaces then carry no shadow code of their own, which held up the rest of their work.
+/// Only the world camera has both prepasses; with them and no MSAA the lamps' screen pass casts per pixel,
+/// so its lit surfaces carry no shadow code of their own.
 pub(crate) fn mark_screen_shadows_only(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
     let screen = mesh_key.contains(MeshPipelineKey::NORMAL_PREPASS) && mesh_key.msaa_samples() == 1;
     if screen
@@ -230,7 +224,7 @@ pub(crate) fn mark_screen_shadows_only(descriptor: &mut RenderPipelineDescriptor
     }
 }
 
-/// Bevy's shadow pass takes the material's cull mode, and a level's faces look into its empty space: from the sun's side
+/// Bevy's shadow pass takes the material's cull mode, but a level's faces look inward: from the sun's side
 /// a sealed room's roof is a back face. Only directional shadow views have this key.
 pub(crate) fn cast_both_sides(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
     if key.contains(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO) {

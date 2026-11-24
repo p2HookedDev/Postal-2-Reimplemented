@@ -1,5 +1,5 @@
-//! Our own passes of one stage record into one command encoder, handed on after them in the stage's place: the frame's
-//! submit checks each command buffer against every live texture, and each system with its own encoder made one more.
+//! Our passes of one stage record into one shared command encoder: the frame's submit checks each command buffer
+//! against every live texture, so each extra encoder added cost.
 
 use std::marker::PhantomData;
 
@@ -14,11 +14,8 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 
 use crate::MainPassExtraSystems;
 
-/// The lamp atlas, the movers' tiles and the liquid layer, drawn before the cameras' passes.
 pub(crate) struct Prepared;
-/// The decal bins and the lamp shadow mask, between the depth prepass and the main pass.
 pub(crate) struct BeforeMain;
-/// The screen passes between the opaque and the transparent pass.
 pub(crate) struct AfterOpaque;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -42,7 +39,6 @@ impl<S: Send + Sync + 'static> StageEncoder<S> {
     }
 }
 
-/// Called by each plugin with a pass of a stage; registers the stages once.
 pub(crate) fn build(app: &mut App) {
     let Some(render) = app.get_sub_app_mut(RenderApp) else { return };
     if render.world().contains_resource::<StageEncoder<Prepared>>() {
@@ -71,7 +67,6 @@ pub(crate) fn build(app: &mut App) {
         );
 }
 
-/// Handed on unfinished, so Bevy encodes it beside the frame's other buffers off the render thread.
 fn submit_stage<S: Send + Sync + 'static>(mut stage: ResMut<StageEncoder<S>>, mut ctx: RenderContext) {
     if let Some(mut encoder) = stage.encoder.take() {
         std::mem::swap(ctx.command_encoder(), &mut encoder);

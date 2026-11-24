@@ -157,8 +157,6 @@ impl<L: LoaderRef> Vm<L> {
         false
     }
 
-    /// The other actors whose memory decides [`Vm::filtered_from_view`]: the actor's owners, and the bases it hangs
-    /// from by a bone with theirs.
     pub fn view_chain(&self, actor: ObjectId) -> impl Iterator<Item = ObjectId> {
         std::iter::successors(Some(actor), |&at| self.base_by_bone(at)).take(9).flat_map(|at| self.owner_chain(at)).skip(1)
     }
@@ -187,7 +185,6 @@ impl<L: LoaderRef> Vm<L> {
                 && (matches!(self.store.get(actor, Prop::Tag), Some(Value::Name(tag)) if self.host.input.cull_tags.contains(&tag)) || self.beyond_cull_distance(actor, viewer)))
     }
 
-    /// Whether retail's cut at `CullDistance` hides the actor: measured from the view target, not from the eye.
     pub fn beyond_cull_distance(&self, actor: ObjectId, view_target: Option<ObjectId>) -> bool {
         let limit = self.store.float_of(actor, Prop::CullDistance);
         view_target.filter(|_| limit != 0.0).is_some_and(|target| cut_by_distance(limit, (self.store.location(actor) - self.store.location(target)).size()))
@@ -270,8 +267,8 @@ impl<L: LoaderRef> Vm<L> {
         if self.interactions_key_event(key, code, delta)? {
             return Ok(());
         }
-        // With the cursor shown, mouse movement is for the interactions (a menu, the inventory selector) and does not turn
-        // the player: retail's own rule here is (unverified).
+        // With the cursor shown, mouse movement is for the interactions (a menu, the inventory selector) and does not
+        // turn the player: retail's own rule here is (unverified).
         if action == Action::Axis && self.shows_mouse() {
             return Ok(());
         }
@@ -446,7 +443,6 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    /// The last string parameter takes the line's rest; a missing required one logs and calls nothing.
     fn script_console_exec(&mut self, object: ObjectId, command: &str) -> Result<bool, Error> {
         let Some(class) = self.store.object(object).class else { return Ok(false) };
         let (name, mut rest) = split_word(command);
@@ -482,7 +478,6 @@ impl<L: LoaderRef> Vm<L> {
     }
 }
 
-/// A limit of 0 never cuts, a positive one cuts what is farther, a negative one what is nearer than its size.
 fn cut_by_distance(limit: f32, distance: f32) -> bool {
     if limit > 0.0 { distance > limit } else { limit < 0.0 && distance < -limit }
 }

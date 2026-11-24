@@ -1,6 +1,6 @@
-//! Temporal anti-aliasing on the scene camera in place of SMAA. The static world writes its motion vectors from the
-//! world pass (its previous transform is its current one), everything else from Bevy's own prepass. The held weapon
-//! and the HUD are drawn by later cameras, after the resolve, and are never jittered.
+//! Temporal anti-aliasing on the scene camera in place of SMAA. The static world writes its motion vectors from
+//! the world pass, everything else from Bevy's prepass. The held weapon and HUD draw after the resolve, never
+//! jittered.
 
 use std::f32::consts::FRAC_PI_3;
 
@@ -28,7 +28,6 @@ impl Plugin for TemporalAaPlugin {
     }
 }
 
-/// In world units: a jump this far or a turn this sharp in one frame is a cut, and the history is dropped.
 const CUT_DISTANCE: f32 = 256.0;
 const CUT_TURN: f32 = FRAC_PI_3;
 
@@ -36,9 +35,8 @@ pub(crate) fn is_cut((was_at, was_facing): (Vec3, Quat), (at, facing): (Vec3, Qu
     was_at.distance_squared(at) > CUT_DISTANCE * CUT_DISTANCE || was_facing.angle_between(facing) > CUT_TURN
 }
 
-/// Runs after the systems that drop the depth prepass when nothing else of theirs needs it, and puts it back while
-/// the resolve is on. Turning off leaves the depth prepass to them. The motion vector prepass is decided here alone,
-/// for the resolve and for the cutscene motion blur.
+/// Runs after the systems that drop the depth prepass when they no longer need it, and restores it while the
+/// resolve is on. The motion vector prepass is decided here alone, for the resolve and the cutscene motion blur.
 fn follow_temporal_aa(
     mut commands: Commands,
     settings: Option<Res<Settings>>,

@@ -41,8 +41,6 @@ pub(crate) struct PreparedScene {
     switches: Vec<((PackageId, usize), SwitchImage)>,
 }
 
-/// `LevelInfo.SkyZone` (`ZoneInfo.LinkToSkybox` picks it as play begins; every zone links the same one), else the first
-/// `SkyZoneInfo`. Its location and rotation.
 pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option<(Vector, Rotator)> {
     let prefix = format!("{}.", map.to_ascii_lowercase());
     let live = || vm.actors().filter(|&o| !vm.store.is_deleted(o) && vm.store.object(o).path.to_ascii_lowercase().starts_with(&prefix));
@@ -54,11 +52,8 @@ pub(super) fn sky_zone_info(vm: &Vm<impl p2_vm::LoaderRef>, map: &str) -> Option
     Some(location_rotation(vm, sky))
 }
 
-/// Where the scene build starts on the load bar, after the packages and the VM.
 pub(super) const SCENE_START: f32 = 0.1;
 const BAKE_PHASE: &str = "lamps and probes";
-/// The scene build's phases and their time in ms on a large map (suburbs-3), so the bar moves as the time goes. The
-/// engine weights its loading phases too. The BSP and the terrain build beside them on threads of their own.
 const SCENE_PHASES: [(&str, f32); 9] = [
     ("map file", 7.0),
     ("HUD", 10.0),
@@ -149,9 +144,6 @@ struct BspBuilt {
     polygons: usize,
 }
 
-/// The level's BSP surfaces build on their own thread while the actors, terrain, static meshes and pawns build on this
-/// one. Its copy of the game loads no package, so every package id it hands out is ours; the material cache is shared,
-/// so no texture is made twice.
 fn spawn_bsp(
     game: &Game,
     t: &PendingAssets,
@@ -261,7 +253,6 @@ impl PreparedScene {
         let lights = LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).suns_of_one_zone(|at| p2_collision::point_zone(&model, at));
         let vm_animations = VmAnimations::of(&played.0, &played.1);
         let mut animations = HashMap::new();
-        // The terrain builds on a thread of its own, with a copy of the game that loads no package (as the BSP's).
         let (terrain, (parts, static_missing, static_batches), pawn_parts) = std::thread::scope(|scope| {
             let terrain = {
                 let (mut game, mut t, materials, zones) = (game.frozen_clone(), t.fork(), &materials, &zones);

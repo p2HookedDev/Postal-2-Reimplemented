@@ -1,6 +1,5 @@
-//! Writes real `.u` package bytes (version 118, licensee 2) from declarations in test code, so a test can run the normal
-//! load path without the game install. Object references follow the package format: an export is `index + 1`, an import
-//! is `-index - 1`, and 0 is none.
+//! Writes real `.u` package bytes (version 118, licensee 2) from declarations in test code, so a test can run the
+//! normal load path without the game install. An export reference is `index + 1`, an import `-index - 1`, 0 none.
 
 #![forbid(unsafe_code)]
 
@@ -26,7 +25,6 @@ const SUMMARY_SIZE: usize = 64;
 const NONE: i32 = 0;
 const NO_LABEL: i32 = 0xffff;
 
-/// Bytecode under assembly. A reference takes 4 bytes of the script's size but a compact index on disk, so both are counted.
 #[derive(Default)]
 pub struct Script {
     bytes: Vec<u8>,
@@ -57,7 +55,6 @@ impl Script {
         self
     }
 
-    /// Ends state code. `labels` holds a name index from [`PackageBuilder::name`] and that label's offset in the script's size.
     pub fn label_table(mut self, labels: &[(usize, u32)]) -> Self {
         self.label_table = self.size as u16;
         self.bytes.push(0x0c);
@@ -84,7 +81,6 @@ pub enum PropertyType {
     Struct(i32),
 }
 
-/// `Name` holds an index from [`PackageBuilder::name`], `Object` an object reference.
 pub enum DefaultValue {
     Int(i32),
     Float(f32),
@@ -139,7 +135,6 @@ impl PackageBuilder {
         package
     }
 
-    /// Index of `text` in the name table, added if new.
     pub fn name(&mut self, text: &str) -> usize {
         if let Some(index) = self.names.iter().position(|name| name.eq_ignore_ascii_case(text)) {
             return index;
@@ -152,7 +147,6 @@ impl PackageBuilder {
         self.declare(0, parent.unwrap_or(0), 0, name, Kind::Class)
     }
 
-    /// `owner` is a class, or a function for a parameter or return value.
     pub fn int_property(&mut self, owner: i32, name: &str, flags: u32) -> i32 {
         self.property(owner, name, PropertyType::Int, flags)
     }
@@ -171,13 +165,11 @@ impl PackageBuilder {
         self.declare(class, 0, owner, name, Kind::Property { flags, reference })
     }
 
-    /// Give it members with [`Self::property`]. `Vector` and `Rotator` are read as binary, in declaration order.
     pub fn struct_type(&mut self, name: &str) -> i32 {
         let class = self.core_class("Struct");
         self.declare(class, 0, 0, name, Kind::Struct)
     }
 
-    /// Marks `class` as handling the probe `bit`, as a compiled class does for an event it declares.
     pub fn probe(&mut self, class: i32, bit: u32) {
         self.exports[class as usize - 1].probe_mask |= 1 << bit;
     }
@@ -269,8 +261,6 @@ impl PackageBuilder {
         out
     }
 
-    /// Writes `<package name>.u` into a directory named after `dir` under the system temp dir, for
-    /// `Loader::new(path, &["*.u".into()])`. The file is rewritten on each run, so give each test its own `dir`.
     pub fn write_to_temp(&self, dir: &str) -> std::io::Result<PathBuf> {
         let dir = std::env::temp_dir().join(format!("p2-test-package-{dir}"));
         std::fs::create_dir_all(&dir)?;
@@ -316,7 +306,6 @@ impl PackageBuilder {
         out
     }
 
-    /// A dynamic array of `element`, as an `array<...>` declaration compiles to.
     pub fn array_property(&mut self, owner: i32, name: &str, element: PropertyType, flags: u32) -> i32 {
         let class = self.core_class("ArrayProperty");
         let array = self.declare(class, 0, owner, name, Kind::Property { flags, reference: Some(NONE) });

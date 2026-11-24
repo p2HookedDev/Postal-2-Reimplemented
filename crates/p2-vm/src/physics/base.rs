@@ -81,7 +81,6 @@ impl<L: LoaderRef> Vm<L> {
         std::iter::successors(self.store.object_of(actor, Prop::Owner), |&o| self.store.object_of(o, Prop::Owner)).take(MAX_OWNER_CHAIN).any(|o| o == other)
     }
 
-    /// Relative rotation is not updated. Without a base, or on world geometry, the actor leaves any bone.
     pub(crate) fn set_base(&mut self, actor: ObjectId, base: Option<ObjectId>, floor: Vector) -> Result<(), Error> {
         if self.store.is_a(actor, Kind::Pawn) {
             self.set_vector(actor, Prop::Floor, floor);
@@ -126,8 +125,6 @@ impl<L: LoaderRef> Vm<L> {
         matches!(self.store.get(actor, Prop::AttachmentBone), Some(Value::Name(bone)) if bone != crate::NameId::NONE)
     }
 
-    /// Also for actors on a bone or `bHardAttach`: one put on a bone and then set to a base-keeping mode
-    /// stays on only if the base is right below it.
     pub(crate) fn set_physics(&mut self, actor: ObjectId, physics: EPhysics, floor: Option<(Option<ObjectId>, Vector)>) -> Result<(), Error> {
         self.set_physics_byte(actor, physics as u8, floor)
     }

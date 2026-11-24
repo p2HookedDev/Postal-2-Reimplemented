@@ -21,8 +21,8 @@ fn stair_pitch_falling(pitch: i32, first_down: f32, second_down: f32) -> i32 {
     if first_down + STAIR_STEP < second_down { STAIR_PITCH_DOWN } else { pitch.min(0) }
 }
 
-/// The new pitch, and whether `GroundPitchTime` restarts. Retail tests `stair` itself against 10, without its absolute
-/// value, so a settled downward pitch restarts the time too.
+/// The new pitch, and whether `GroundPitchTime` restarts. Retail tests `stair` itself against 10, without its
+/// absolute value, so a settled downward pitch restarts the time too.
 fn stair_step(pitch: i32, stair: i32, delta: f32, since_ground_pitch: f32) -> (i32, bool) {
     let difference = (pitch - stair).abs();
     if difference > 0 && since_ground_pitch > 0.25 {
@@ -49,7 +49,6 @@ pub(crate) fn suggest_jump_velocity(to: Vector, mut xy_speed: f32, base_z: f32, 
             if flight < 0.05 {
                 flight = 0.05;
             }
-            // Written out: a negative root gives NaN, and then retail takes `ground_speed`.
             xy_speed = if distance / flight < ground_speed { distance / flight } else { ground_speed };
             z = base_z;
         }

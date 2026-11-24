@@ -18,9 +18,7 @@ pub struct StaticCollision {
     pub hulls: BspHulls,
     pub terrains: Vec<Terrain>,
     pub meshes: Vec<MeshCollision>,
-    /// Built from `meshes`.
     pub mesh_set: MeshSet,
-    /// Opaque triangles of static meshes that never move: what stops a lamp's light, blocking or not.
     pub lamp_casters: Vec<[[f32; 3]; 3]>,
     pub lamp_masked: Vec<MaskedCaster>,
     pub albedos: LevelAlbedos,
@@ -34,8 +32,6 @@ impl StaticCollision {
         bsp.into_iter().chain(terrain).chain(mesh).min_by(|a, b| a.time.total_cmp(&b.time))
     }
 
-    /// Whether light gets from `from` to `to`: the sky's backdrop surfaces let it through, and what stands before
-    /// them still blocks.
     pub fn light_passes(&self, from: Vector, to: Vector) -> bool {
         let reach = match p2_collision::line_check_node(&self.model, from, to) {
             None => 1.0,
@@ -47,16 +43,13 @@ impl StaticCollision {
     }
 }
 
-/// Mean texture colours in linear light.
 #[derive(Default)]
 pub struct LevelAlbedos {
     pub bsp: FxHashMap<i32, [f32; 3]>,
-    /// One per triangle of `lamp_casters`.
     pub casters: Vec<[f32; 3]>,
     pub terrains: Vec<[f32; 3]>,
 }
 
-/// Alpha-tested triangles sharing one texture, in the scene's space before its origin. Each corner is x, y, z, u, v.
 pub struct MaskedCaster {
     pub image: Handle<Image>,
     pub cutoff: f32,
@@ -64,7 +57,6 @@ pub struct MaskedCaster {
 }
 
 pub(crate) const GREY_ALBEDO: [f32; 3] = [0.3; 3];
-/// Blocks read from a texture's largest mip for its mean.
 const MEAN_SAMPLES: usize = 4096;
 
 /// In linear light by gamma 2. Compressed blocks count only their two end colours: enough for bounced light.
@@ -104,7 +96,6 @@ pub(crate) fn mean_albedo(image: &Image) -> [f32; 3] {
     if count == 0.0 { GREY_ALBEDO } else { (sum / count).to_array() }
 }
 
-/// A section's triangles as corners of x, y, z, u, v, placed by `transform`.
 pub(crate) fn masked_triangles(mesh: &Mesh, transform: &Transform) -> Vec<[[f32; 5]; 3]> {
     let (Some(VertexAttributeValues::Float32x3(positions)), Some(VertexAttributeValues::Float32x2(uvs)), Some(indices)) =
         (mesh.attribute(Mesh::ATTRIBUTE_POSITION), mesh.attribute(Mesh::ATTRIBUTE_UV_0), mesh.indices())
@@ -135,15 +126,10 @@ impl LevelCollision {
     }
 }
 
-/// The node flag of a BSP node that does not divide solid from empty space.
 const NOT_CSG: u8 = 0x01;
-/// The side of a cell of the triangle grid, in Unreal units.
 const CELL: f32 = 500.0;
-/// A triangle whose bounds cover more cells than this is tested for every box instead of listed in each cell.
 const CELLS_MOST: i64 = 4096;
 
-/// The level's triangles by place, for small physics worlds: the BSP's sorted once into a grid, kept with the
-/// collision they were taken from.
 pub(crate) struct LevelTriangles {
     collision: Arc<StaticCollision>,
     bsp: TriangleGrid,
@@ -158,7 +144,6 @@ impl LevelTriangles {
         Arc::ptr_eq(&self.collision, collision)
     }
 
-    /// The BSP's, the static meshes' and the terrains' triangles reaching into the box `reach` around `centre`.
     pub(crate) fn near(&self, centre: Vector, reach: f32) -> Vec<[[f32; 3]; 3]> {
         let centre: [f32; 3] = centre.into();
         let (min, max) = (centre.map(|c| c - reach), centre.map(|c| c + reach));
@@ -203,7 +188,6 @@ fn each_cell([xs, ys, zs]: [RangeInclusive<i32>; 3]) -> impl Iterator<Item = [i3
     })
 }
 
-/// The map's BSP triangles, sorted once into a grid so a box tests only those near it.
 #[derive(Default)]
 struct TriangleGrid {
     triangles: Vec<[[f32; 3]; 3]>,
@@ -231,7 +215,6 @@ impl TriangleGrid {
         grid
     }
 
-    /// The same triangles in the same order as `reaching` over the whole list.
     fn reaching(&self, min: [f32; 3], max: [f32; 3]) -> impl Iterator<Item = [[f32; 3]; 3]> {
         let mut listed = self.wide.clone();
         for cell in each_cell(cells_of(min, max)) {

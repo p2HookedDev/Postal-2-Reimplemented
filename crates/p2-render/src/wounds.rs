@@ -19,35 +19,31 @@ use p2_host::display::{MODERN_DECAL_AGING, MODERN_LIQUIDS, MODERN_WOUNDS, Settin
 use crate::frame_facts::FrameFacts;
 use crate::screen_pass::modern_level;
 
-/// Blood drying in projector tag bits 3..7 (the frame buffer blend keeps bits 0..3); `projector.wesl` reads the same.
+/// Blood drying in projector tag bits 3..7 (the frame buffer blend keeps bits 0..3); `projector.wesl` reads the
+/// same.
 const DRY_SHIFT: u32 = 3;
 const DRY_STEPS: f32 = 15.0;
 const DRYING_SECONDS: f32 = 4.0;
 /// A projector (bit 31) aimed at actors (bit 19), with the wound bit 15: it also takes the bodies that refuse the
 /// game's projectors, and only the faces turned to the shot.
 const WOUND_TAG: u32 = 1 << 31 | 1 << 19 | 1 << 15;
-/// What a wound keeps of a blood splat's tag: the frame buffer blend, the material blend and the alpha test.
 const SPLAT_BLEND: u32 = 0x7 | 0x300 | 0x3fe0_0000;
 const WOUNDS_PER_BODY: usize = 8;
-/// A wound is this wide in world units, and up to `WOUND_GROWTH` wider: a splash across a chest, not a wall's.
 const WOUND_SIZE: f32 = 12.0;
 const WOUND_GROWTH: f32 = 8.0;
 const WOUND_SIZES: u32 = 5;
-/// A hit farther than this from every bone (a hit without a place) leaves no mark.
 const BONE_REACH: f32 = 48.0;
 const BACK_REACH: f32 = 2.0;
 
-/// 0 = wet, towards 1 = dry, `age` game seconds after the blood landed.
 fn dryness(age: f32) -> f32 {
     1.0 - (-age.max(0.0) / DRYING_SECONDS).exp()
 }
 
-// Fading in projector tag bits 10..15 (material blend keeps 8..10, bit 15 marks a wound); the shader reads the same.
+// Fading in projector tag bits 10..15 (material blend keeps 8..10, bit 15 marks a wound); the shader reads the
+// same.
 const FADE_SHIFT: u32 = 10;
 const FADE_STEPS: f32 = 31.0;
 
-/// 0 = drawn as ever, 1 = gone, over the last second of `life`. Without a life span the script removes it
-/// some other way, so it never fades.
 fn fade(life: f32, age: f32) -> f32 {
     if life <= 0.0 {
         return 0.0;
@@ -55,7 +51,6 @@ fn fade(life: f32, age: f32) -> f32 {
     (1.0 - (life - age)).clamp(0.0, 1.0)
 }
 
-/// A projector's decal `tag` faded by its `life` and `age`, and dried by `blood_age` when it is blood.
 fn aged_tag(tag: u32, life: f32, age: f32, blood_age: Option<f32>) -> u32 {
     let fade = (fade(life, age) * FADE_STEPS).round() as u32;
     let dry = blood_age.map_or(0, |age| (dryness(age) * DRY_STEPS).round() as u32);
@@ -82,15 +77,12 @@ impl Plugin for WoundsPlugin {
     }
 }
 
-/// The images of the game's wall blood decals, each with its blend as a projector tag: a wound draws one of them.
-/// Never the floor drips or the fluids' sprites.
 #[derive(Resource, Default)]
 pub struct WoundSplats(pub Vec<(Handle<Image>, u32)>);
 
 struct Wound {
     decal: Entity,
     joint: Entity,
-    /// The decal's box in the joint's space.
     local: Mat4,
     tag: u32,
     age: f32,
@@ -102,7 +94,6 @@ pub struct Wounds {
     made: u32,
 }
 
-/// Past [`WOUNDS_PER_BODY`] the oldest gives way and is returned.
 fn add_oldest_out<T>(list: &mut Vec<T>, item: T, age: impl Fn(&T) -> f32) -> Option<T> {
     if list.len() < WOUNDS_PER_BODY {
         list.push(item);
@@ -112,9 +103,6 @@ fn add_oldest_out<T>(list: &mut Vec<T>, item: T, age: impl Fn(&T) -> f32) -> Opt
     Some(std::mem::replace(oldest, item))
 }
 
-/// The joint nearest `hit` among `joints` (joint-to-world) and, in that joint's space, a projector box `size` across
-/// shooting along `toward` (unit) from just before the hit to the joint's depth: the near half of the limb only.
-/// `roll` turns the splash about the shot, as the game turns a wall splat about the wall's normal.
 fn wound_frame(joints: &[Mat4], hit: Vec3, toward: Vec3, size: f32, roll: f32) -> Option<(usize, Mat4)> {
     let distance = |joint: &Mat4| joint.w_axis.truncate().distance(hit);
     let (index, joint) = joints.iter().enumerate().min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))?;
@@ -134,7 +122,6 @@ fn wound_tag(splat: u32, age: f32) -> u32 {
     WOUND_TAG | splat & SPLAT_BLEND | ((dryness(age) * DRY_STEPS).round() as u32) << DRY_SHIFT
 }
 
-/// After this frame's joints are placed, the transform written straight through: a wound does not trail its body.
 fn place_wounds(wounds: Res<Wounds>, joints: Query<&GlobalTransform, Without<ClusteredDecal>>, mut decals: Query<(&mut Transform, &mut GlobalTransform), With<ClusteredDecal>>) {
     for wound in wounds.bodies.values().flatten() {
         let (Ok(joint), Ok((mut transform, mut global))) = (joints.get(wound.joint), decals.get_mut(wound.decal)) else { continue };
@@ -144,8 +131,8 @@ fn place_wounds(wounds: Res<Wounds>, joints: Query<&GlobalTransform, Without<Clu
     }
 }
 
-/// Each hit on a person that pushes it (a shot or a blow, not fire or a splash) leaves one of the game's wall blood
-/// decals on the bone nearest it, each wound its own size and turn.
+/// Each hit on a person that pushes it (a shot or a blow, not fire or a splash) leaves one of the game's wall
+/// blood decals on the nearest bone, each wound its own size and turn.
 pub fn present_wounds(
     (facts, splats): (Res<FrameFacts>, Res<WoundSplats>),
     mut wounds: ResMut<Wounds>,
@@ -209,8 +196,6 @@ fn drop_wounds(mut wounds: ResMut<Wounds>, mut commands: Commands) {
     }
 }
 
-/// A spawned projector's decal: `tag` is the one `projector_tag` made, `life` the seconds the script gave it to live
-/// when it attached.
 #[derive(Component)]
 pub struct DecalAge {
     tag: u32,
@@ -225,16 +210,13 @@ impl DecalAge {
     }
 }
 
-/// A decal of the game's blood placed with the map, drawn as our blood while our liquids are on.
 #[derive(Component)]
 pub struct BloodDecal;
 
-/// The retail splat textures name blood in their package, group or name.
 pub fn is_blood(texture: &str) -> bool {
     texture.to_ascii_lowercase().contains("blood")
 }
 
-/// Ages count only while the setting is on and the game runs.
 fn age_decals(facts: Res<FrameFacts>, mut decals: Query<(&mut ClusteredDecal, &mut DecalAge)>) {
     let step = facts.step();
     for (mut decal, mut age) in &mut decals {
@@ -267,7 +249,6 @@ fn mark_blood_decals(
         *marker = Some(images.add(flat));
     }
     for (mut decal, age, placed) in &mut decals {
-        // Our liquid's decals carry their data as a metallic-roughness map and share the wound's tag bits.
         let wound = decal.tag & WOUND_TAG == WOUND_TAG && decal.metallic_roughness_texture.is_none();
         let blood = age.is_some_and(|age| age.blood) || placed || wound;
         let wanted = marker.as_ref().filter(|_| on && blood);

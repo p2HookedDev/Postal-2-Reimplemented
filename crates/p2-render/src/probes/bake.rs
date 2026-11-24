@@ -1,5 +1,3 @@
-//! The probe bake: a ray tree of the level, the light each grid point sees second hand, and the atlas that holds it.
-
 
 use bevy::math::{IVec3, Vec3};
 use p2_assets::Model;
@@ -23,9 +21,9 @@ const LAMP_CELL: f32 = 1024.0;
 const OPEN_SKY: f32 = 0.875;
 const CELLS_PER_BATCH: usize = 1024;
 
-/// The grid wraps around the world, so the shader needs only its spacing and the atlas size. Each volume of the atlas
-/// holds one tile per layer of the grid, a tile the grid's columns with a repeat of the first at each side so filtering
-/// across the wrap reads the right neighbour. Half as many layers as columns.
+/// The grid wraps around the world, so the shader needs only its spacing and the atlas size. Each volume of the
+/// atlas holds one tile per layer of the grid, a tile the grid's columns with a repeat of the first at each side
+/// so filtering across the wrap reads the right neighbour. Half as many layers as columns.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ProbeGrid {
     pub(super) columns: i32,
@@ -51,7 +49,6 @@ impl ProbeGrid {
         (2 * self.volume_width(), self.tile() * (self.layers() as usize).div_ceil(TILES_WIDE))
     }
 
-    /// Wide enough that the map's box fits the grid once and at most `most_probes` bake.
     fn spacing(self, min: Vec3, max: Vec3) -> f32 {
         let inside = Vec3::new((self.columns - 2) as f32, (self.layers() - 2) as f32, (self.columns - 2) as f32);
         let mut spacing = ((max - min) / inside).max_element().max(self.smallest_spacing);
@@ -150,21 +147,16 @@ fn ray_ways() -> [Vec3; RAYS] {
     })
 }
 
-/// In the scene's space.
 pub(super) struct ProbeWorld<'a> {
     pub(super) triangles: &'a [[[f32; 3]; 3]],
-    /// One per triangle, in linear light. Short or empty leaves the rest grey.
     pub(super) albedos: &'a [[f32; 3]],
     /// Triangles from here on are terrain: a point with one above it is in the ground.
     pub(super) terrain_from: usize,
     pub(super) lamps: &'a [MeshLight],
     pub(super) level_brightness: f32,
     pub(super) origin: Vec3,
-    /// The way to the sun, and its linear colour.
     pub(super) sun: Option<(Vec3, [f32; 3])>,
-    /// The level's BSP, in Unreal's space, for the zone each probe stands in.
     pub(super) model: &'a Model,
-    /// One per zone, in display light.
     pub(super) zone_ambients: &'a [[f32; 3]],
 }
 
@@ -314,13 +306,11 @@ fn write_probe(pixels: &mut [u8], grid: ProbeGrid, cell: IVec3, probe: &Probe) {
     }
 }
 
-/// In the light bakes' pool, in batches; a thread that drew closed probes takes more.
 fn in_parallel<T: Send>(cells: &[IVec3], each: impl Fn(IVec3) -> T + Sync + Send) -> Vec<T> {
     use rayon::prelude::*;
     crate::lamps::in_bake_pool(|| cells.par_iter().with_min_len(CELLS_PER_BATCH).map(|&cell| each(cell)).collect())
 }
 
-/// `solid` tells whether a point in the scene's space is inside the level's walls.
 pub(super) fn bake_probes(world: &ProbeWorld, grid: ProbeGrid, solid: impl Fn(Vec3) -> bool + Sync + Send) -> Option<ProbeBake> {
     let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
     for corner in world.triangles.iter().flatten() {

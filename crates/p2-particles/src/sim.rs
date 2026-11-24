@@ -52,19 +52,21 @@ pub type Collide<'a> = dyn FnMut(Vector, Vector) -> Option<CollisionHit> + 'a;
 
 const SURFACE_OFFSET: f32 = 0.01;
 
-/// The most particle slots an emitter gets, whatever `MaxParticles` says: a bad value must not abort on allocation.
+/// The most particle slots an emitter gets, whatever `MaxParticles` says: a bad value must not abort on
+/// allocation.
 const MAX_PARTICLE_SLOTS: usize = 65_536;
 
-/// The most times one spawn starts a particle over because its age passed its lifetime. Values that settle do so long
-/// before this (each pass takes the age modulo the lifetime); `InitialTimeRange` above `LifetimeRange` never does.
+/// The most times one spawn starts a particle over because its age passed its lifetime. Values that settle do so
+/// long before this (each pass takes the age modulo the lifetime); `InitialTimeRange` above `LifetimeRange` never
+/// does.
 const MAX_SPAWN_PASSES: u32 = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Particle {
     location: Vector,
     old_location: Vector,
-    /// The way its last move went. A bounce leaves the particle where it stood for that tick, and a sprite drawn along
-    /// its motion took no direction from that and vanished (unverified for POSTAL 2).
+    /// The way its last move went. A bounce leaves the particle where it stood for that tick, and a sprite drawn
+    /// along its motion took no direction from that and vanished (unverified for POSTAL 2).
     heading: Vector,
     velocity: Vector,
     start_size: Vector,
@@ -89,19 +91,15 @@ struct Particle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteParticle {
     pub location: Vector,
-    /// Where the particle stood before the newest tick moved it: its birth place on the tick it was born, `location` once
-    /// it bounced or stopped.
     pub previous: Vector,
     pub size: [f32; 2],
-    /// Half axes of the quad, world coordinates, spin applied: the corners are `location ∓ up ∓ right`; the texture's
-    /// `v0` edge is at `-up`, its `u0` edge at `-right`. Camera-facing sprites (`PTDU_None`) are squares of half size
-    /// `Size.X` with `-up` at the top of the screen; oriented ones (`UseDirectionAs`) are `Size.Y` along `up` and
-    /// `Size.X` along `right`.
+    /// Half axes of the quad in world space, spin applied: the corners are `location ∓ up ∓ right`, with the
+    /// texture's `v0` edge at `-up` and `u0` at `-right`. Camera-facing sprites are squares of half size `Size.X`
+    /// with `-up` at the screen's top; oriented ones are `Size.Y` along `up` and `Size.X` along `right`.
     pub up: Vector,
     pub right: Vector,
     pub color: [u8; 4],
     pub uv: [f32; 4],
-    /// The emitter's count of particles when this one was spawned, from 1: a higher one than any seen is newborn.
     pub serial: u32,
     /// `BlendBetweenSubdivisions`: the next frame's rectangle and the blend factor (0..=255). The engine writes the
     /// factor into the vertex alpha in place of the particle's alpha.

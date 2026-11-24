@@ -167,8 +167,6 @@ fn sector_sections(
     (sections, handles)
 }
 
-/// Each decoration's colour (terrain light × colour map) is drawn on its material with `Modulate2X`:
-/// one tinted, unlit copy of the sections per colour, rounded to steps of 8.
 fn decoration_models(
     game: &mut Game,
     t: &mut PendingAssets,
@@ -252,7 +250,6 @@ pub fn terrain_models(
             continue;
         }
         terrains += 1;
-        // Its first layer stands for all of them: the layers' maps stay unread here.
         let base = terrain.layers.iter().find(|layer| layer.texture != 0).and_then(|layer| texture(game, t, id, layer.texture));
         terrain_albedos.push(base.and_then(|base| t.albedo(base.image.id())).unwrap_or(GREY_ALBEDO));
         // A terrain belongs to the zone its `TerrainInfo` stands in (`ZoneInfo.Terrains`): in the sky zone it is part

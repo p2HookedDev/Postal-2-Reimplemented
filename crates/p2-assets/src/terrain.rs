@@ -31,7 +31,8 @@ pub struct Terrain {
 pub struct TerrainLayer {
     pub texture: i32,
     pub alpha_map: i32,
-    /// `TerrainMatrix` rows (`XPlane`, `YPlane`, `ZPlane`, `WPlane`): texture UV = (x, y, z, 1) · rows, first two columns.
+    /// `TerrainMatrix` rows (`XPlane`, `YPlane`, `ZPlane`, `WPlane`): texture UV = (x, y, z, 1) · rows, first two
+    /// columns.
     pub matrix: [[f32; 4]; 4],
 }
 
@@ -191,11 +192,9 @@ impl Terrain {
     }
 }
 
-/// Most elements a per-element tag of `Layers` / `DecoLayers` may name: far above the 32 layers `TerrainInfo`
-/// declares, so a damaged index cannot allocate without bound.
 const MAX_LAYER_TAGS: usize = 256;
-/// Largest heightmap side read: engine textures stop at 2048 and retail terrains are far smaller (unverified), while
-/// `triangles` and `sectors` loop over width x height, so a damaged size must not get near 2^31.
+/// Largest heightmap side read: engine textures stop at 2048 and retail terrains are far smaller (unverified),
+/// while `triangles` and `sectors` loop over width x height, so a damaged size must not get near 2^31.
 const MAX_TERRAIN_SIZE: usize = 4096;
 const MAX_DECO_PER_QUAD: i32 = 1024;
 
@@ -228,7 +227,6 @@ pub fn read_terrain(pkg: &Package, file: &[u8], export: &Export, layout: &Struct
         }
     }
 
-    // A bad count must not cost the terrain and its collision, only some decorations.
     for layer in &mut deco_layers {
         let layer: &mut DecoLayer = layer;
         layer.max_per_quad = layer.max_per_quad.min(MAX_DECO_PER_QUAD);

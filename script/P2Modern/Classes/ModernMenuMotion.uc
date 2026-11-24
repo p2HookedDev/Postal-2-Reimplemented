@@ -1,4 +1,3 @@
-// No preset writes these rows, and changing one keeps the preset.
 class ModernMenuMotion extends ModernMenuPage;
 
 function CreateMenuContents()

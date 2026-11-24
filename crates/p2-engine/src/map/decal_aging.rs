@@ -29,8 +29,6 @@ impl Plugin for DecalAgingPlugin {
     }
 }
 
-/// The decals the game's wall blood splat picks from. Its floor drips and its fluids' sprites are other pictures and
-/// are left out: a wound is a splash, not a drop.
 const WOUND_SPLATS: [&str; 5] = [
     "nathans.Skins.bloodsplatblend1",
     "nathans.Skins.bloodsplatblend2",
@@ -39,12 +37,10 @@ const WOUND_SPLATS: [&str; 5] = [
     "nathans.Skins.bloodsplatblend6",
 ];
 
-/// The puke fluid's own pictures: its puddle, trail and splat sprite, its pour's strip, and its splash.
 const PUKE_SPLAT: &str = "nathans.Skins.pukesplat";
 const PUKE_POUR: &str = "nathans.Skins.pukepour";
 const PUKE_SPLASH: &str = "nathans.Skins.pukesplash";
 
-/// A retail texture as a projector reads it, from the install once and from the cache after, found or not.
 fn decal_image(session: &mut super::Session, projectors: &mut super::Projectors, images: &mut Assets<Image>, name: &str) -> Option<(Handle<Image>, Vec2, Option<FinalBlend>)> {
     if let Some(found) = projectors.decal_images.get(name) {
         return found.clone();
@@ -54,7 +50,6 @@ fn decal_image(session: &mut super::Session, projectors: &mut super::Projectors,
     found
 }
 
-/// Read from the install on the first hit on a person, so a wound needs no splat on a wall first.
 fn load_wound_splats(
     settings: Option<Res<Settings>>,
     play: Res<Play>,
@@ -73,7 +68,6 @@ fn load_wound_splats(
     }
 }
 
-/// Read from the install once a level plays with our liquids; a texture the install lacks leaves puke as it was.
 fn load_liquid_textures(
     settings: Option<Res<Settings>>,
     play: Res<Play>,

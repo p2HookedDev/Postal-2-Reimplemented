@@ -64,7 +64,6 @@ fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f
         .insert_resource(Session::new(root.to_path_buf()))
         .insert_resource(Holder { frame: 0, url: None, loading: false })
         .insert_resource(OtherWork(0.0))
-        // The game waits for neither: without both, which frame a tick or a built model lands on depends on the machine.
         .add_systems(Update, (|mut play: ResMut<Play>| play.wait_for_tick()).before(PlaySystems::Tick))
         .add_systems(PostUpdate, (|spawned: Res<SpawnedActors>| {
             while spawned.building() {
@@ -203,9 +202,6 @@ fn threaded_frames_match_inline_frames_one_frame_later() {
     let (shown_inline, shown_threaded) = (run(&mut inline, frames), run(&mut threaded, frames));
     run(&mut again, frames);
     let (state_inline, state_again, state_threaded) = (vm_state(&mut inline), vm_state(&mut again), vm_state(&mut threaded));
-    // The VM is deterministic for the same input, but for what scripts read from the system clock (`GetMillisecondsFrom`:
-    // the level's time of day, times the game state records): two inline runs differ only there, and the threaded run
-    // from the inline one nowhere else.
     let clock = differences(&state_inline, &state_again);
     assert!(clock.len() < 16, "{clock:?}");
     let threaded_only: Vec<_> = differences(&state_inline, &state_threaded).difference(&clock).cloned().collect();
@@ -294,9 +290,6 @@ fn mismatch(path: &[(f32, bevy::math::Vec3)], range: std::ops::Range<usize>, lag
     (worst, shares.map(|share| (share - 1.0).abs()).fold(0.0, f32::max))
 }
 
-/// Which frame time a picture stays up for is not known when its step is taken. With each frame's own time as its step,
-/// the view advances by that time, wrong for a picture shown a frame later; averaged (`StepClock`) it advances evenly,
-/// whatever the lag.
 #[test]
 fn walking_moves_evenly_over_uneven_frame_times() {
     let Some(root) = game_dir() else { return };

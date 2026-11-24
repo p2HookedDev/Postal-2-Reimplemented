@@ -8,8 +8,6 @@ use bevy::pbr::PendingMeshMaterialQueues;
 use bevy::render::render_resource::{CachedPipelineState, PipelineCache};
 use bevy::render::{Render, RenderApp, RenderSystems};
 
-/// What the render world still lacked at the end of its last frame, shared by both worlds: a draw whose pipeline is
-/// not built, or whose material or an image it names is not on the GPU yet, is skipped.
 #[derive(Resource, Clone, Default)]
 pub struct CompilingPipelines {
     creating: Arc<AtomicUsize>,
@@ -45,7 +43,6 @@ fn count_compiling(cache: Res<PipelineCache>, shared: Res<CompilingPipelines>) {
     shared.creating.store(compiling, Ordering::Relaxed);
 }
 
-/// Visible meshes the main pass skipped this frame because their material, or an image it names, is not prepared yet.
 fn count_waiting(pending: Option<Res<PendingMeshMaterialQueues>>, shared: Res<CompilingPipelines>) {
     let waiting = pending.map_or(0, |queues| queues.0.values().map(|view| view.current_frame.len()).sum());
     shared.waiting.store(waiting, Ordering::Relaxed);

@@ -1,6 +1,6 @@
-//! Modern graphics, sharp HUD level 2: a font page's glyph shapes as a signed distance field, made on the CPU the first
-//! time the page is drawn magnified, and the page drawn again from it at the pixel size the HUD asks for, so magnified
-//! text keeps smooth edges without a shader of its own.
+//! Modern graphics, sharp HUD level 2: a font page's glyph shapes as a signed distance field, made on the CPU the
+//! first time the page is drawn magnified, and the page drawn again from it at the pixel size the HUD asks for,
+//! so magnified text keeps smooth edges without a shader of its own.
 
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::image::Image;
@@ -11,7 +11,6 @@ use rustc_hash::FxHashMap;
 
 use super::sharp::source_of;
 
-/// Pages are drawn again at sizes this many steps apart per pixel per texel.
 const STEPS_PER_PIXEL: f32 = 4.0;
 const LARGEST_PAGE: u32 = 4096;
 const INSIDE_FROM: u8 = 128;
@@ -24,7 +23,6 @@ pub(super) struct DistancePages {
 }
 
 impl DistancePages {
-    /// `None` where the page cannot be drawn again: its pixels are not kept, have no plain alpha byte, or it would be too large.
     pub(super) fn page(&mut self, id: egui::TextureId, factor: f32, sources: &[Handle<Image>], contexts: &mut EguiContexts, images: &mut Assets<Image>) -> Option<egui::TextureId> {
         let steps = (factor * STEPS_PER_PIXEL).round() as u32;
         if let Some((found, _)) = self.sized.get(&(id, steps)) {
@@ -50,7 +48,6 @@ impl DistancePages {
         if size.width > LARGEST_PAGE || size.height > LARGEST_PAGE {
             return None;
         }
-        // Mip levels follow the first in the data.
         let rgba = &rgba[..texels * 4];
         let field = self.fields.entry(id).or_insert_with(|| {
             let inside: Vec<bool> = rgba.as_chunks::<4>().0.iter().map(|texel| texel[3] >= INSIDE_FROM).collect();
@@ -63,7 +60,6 @@ impl DistancePages {
     }
 }
 
-/// In texels from each texel's centre to the edge between inside and outside: negative inside.
 pub(super) fn signed_distance(inside: &[bool], width: usize, height: usize) -> Vec<f32> {
     let outside: Vec<bool> = inside.iter().map(|&inside| !inside).collect();
     let to_inside = squared_distances(inside, width, height);
@@ -71,8 +67,6 @@ pub(super) fn signed_distance(inside: &[bool], width: usize, height: usize) -> V
     inside.iter().zip(to_inside.iter().zip(&to_outside)).map(|(&inside, (&to_inside, &to_outside))| if inside { 0.5 - to_outside.sqrt() } else { to_inside.sqrt() - 0.5 }).collect()
 }
 
-/// The squared distance from each texel to the nearest site: exact, separable, one column and one row at a time
-/// (lower envelope of parabolas).
 fn squared_distances(sites: &[bool], width: usize, height: usize) -> Vec<f32> {
     let mut grid: Vec<f32> = sites.iter().map(|&site| if site { 0.0 } else { FAR }).collect();
     let longest = width.max(height);
@@ -125,8 +119,6 @@ fn squared_line(f: &[f32], d: &mut [f32], lowest: &mut [usize], bounds: &mut [f3
     }
 }
 
-/// The page at `factor` pixels per texel, premultiplied like its source: colour blended from the texels inside the
-/// glyphs, alpha from the field.
 pub(super) fn redraw(rgba: &[u8], field: &[f32], [width, height]: [usize; 2], factor: f32, [out_width, out_height]: [usize; 2]) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(out_width * out_height * 4);
     for y in 0..out_height {

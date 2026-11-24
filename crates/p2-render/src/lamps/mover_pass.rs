@@ -1,5 +1,3 @@
-//! Draws each mover into its tiles of the lamp atlas, and writes the tiles and each lamp's run of them into the book.
-
 use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
@@ -47,7 +45,6 @@ enum Skin {
     Skinned,
 }
 
-/// The first five rows of the view a lamp's square is drawn with, as `lamp_atlas.wesl` and `mover_caster.wesl` read them.
 pub(super) fn view_rows(axes: [[f32; 3]; 3], lamp_at: [f32; 3], radius: f32, size: u32, tan_half: f32, first_joint: f32) -> [[f32; 4]; 5] {
     let half = 0.5 * size as f32;
     let depth_a = radius / (radius - NEAR).max(1.0);
@@ -56,7 +53,6 @@ pub(super) fn view_rows(axes: [[f32; 3]; 3], lamp_at: [f32; 3], radius: f32, siz
     [[ax, ay, az, 0.0], [bx, by, bz, 0.0], [cx, cy, cz, 0.0], [px, py, pz, 1.0 / radius], [(half - GUARD_TEXELS) / half / tan_half, depth_a, -NEAR * depth_a, first_joint]]
 }
 
-/// What `mover_caster.wesl` draws one caster into one tile with.
 fn caster_uniform(bytes: &mut Vec<u8>, tile: &MoverTile, caster: &MoverCaster) {
     let (right, up) = tile.sides();
     let first_joint = caster.joints.as_ref().map_or(0, |joints| joints.start);
@@ -87,8 +83,8 @@ impl Held {
     }
 }
 
-/// Drops every held square that shares texels with `square`. Squares are powers of two aligned to their size, so one
-/// that overlaps another has its corner inside it or sits at the other's corner rounded down to its own size.
+/// Drops every held square that shares texels with `square`. Squares are powers of two aligned to their size, so
+/// one that overlaps another has its corner inside it or sits at the other's corner rounded down to its own size.
 fn forget_under(held: &mut FxHashMap<(u32, u32), Held>, square: &Held) {
     let units = square.size / DETAIL_UNIT;
     for corner in (0..units).flat_map(|y| (0..units).map(move |x| (square.x + x * DETAIL_UNIT, square.y + y * DETAIL_UNIT))) {
@@ -118,7 +114,6 @@ fn lamp_ranges(tiles: &[MoverTile]) -> impl Iterator<Item = LampRange> + '_ {
     })
 }
 
-/// The sixth texel of each lamp's record that must change: its run of tiles, or zero for a lamp that lost them.
 fn changed_ranges<'a>(before: &'a [LampRange], now: &'a [LampRange]) -> impl Iterator<Item = (u32, [f32; 4])> + 'a {
     let lost = before.iter().filter(move |old| now.iter().all(|range| range.lamp != old.lamp)).map(|old| (old.lamp, [0.0; 4]));
     let fresh = now.iter().filter(move |range| !before.contains(range)).map(|range| (range.lamp, [range.first as f32, range.count as f32, 0.0, 0.0]));
@@ -133,21 +128,17 @@ struct CasterLayouts {
 
 #[derive(Default)]
 pub(super) struct MoverDraw {
-    /// The capsules' rows as the book holds them.
     grounding: Vec<[f32; 4]>,
     tile_grid: Vec<[f32; 4]>,
     tile_row: Vec<[f32; 4]>,
     layouts: Option<CasterLayouts>,
-    /// By [`Skin`]; `None` for a mesh layout without the attributes its entry point reads.
     pipelines: [FxHashMap<MeshVertexBufferLayoutRef, Option<CachedRenderPipelineId>>; 2],
     uniforms: Option<(Buffer, BindGroup)>,
     joints: Option<(Buffer, BindGroup)>,
     key: Option<(usize, AssetId<Image>, AssetId<Image>)>,
-    /// By corner.
     held: FxHashMap<(u32, u32), Held>,
     ranges: Vec<LampRange>,
     next_ranges: Vec<LampRange>,
-    /// The casters' places, ordered by mover.
     by_mover: Vec<usize>,
     bytes: Vec<u8>,
     row: Vec<[f32; 4]>,
@@ -200,7 +191,6 @@ fn caster_pipeline(cache: &PipelineCache, layouts: &CasterLayouts, layout: &Mesh
     Some(pipeline(cache, MOVER_CASTER_SHADER, "mover tile", groups, [entry, "fragment"], vec![buffer], Some(NEAREST)))
 }
 
-/// A buffer kept across frames, replaced by one of the next power of two in bytes once it is too small.
 fn kept<'a>(slot: &'a mut Option<(Buffer, BindGroup)>, device: &RenderDevice, label: &'static str, size: u64, usage: BufferUsages, group: impl FnOnce(&Buffer) -> BindGroup) -> &'a (Buffer, BindGroup) {
     *slot = slot.take().filter(|(buffer, _)| buffer.size() >= size);
     slot.get_or_insert_with(|| {

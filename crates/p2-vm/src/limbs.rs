@@ -15,19 +15,22 @@ const FRICTION: f32 = 0.7;
 const RESTITUTION: f32 = 0.3;
 const LINEAR_DAMPING: f32 = 0.1;
 const ANGULAR_DAMPING: f32 = 0.3;
-/// A velocity the script wrote (`GiveMomentum`, a kick, a shot) differs from the last one written by more (UU/s).
+/// A script-written velocity (`GiveMomentum`, a kick, a shot) differs from the last one written by more than this
+/// (Unreal units per second).
 const SCRIPT_WROTE: f32 = 5.0;
 /// A script move farther than this from the body teleports the body (`CutInHalf`'s `SetLocation`).
 const STRAY: f32 = 100.0;
-/// A change of velocity over a step that gravity does not explain, above this, is an impact (UU/s).
+/// A velocity change over a step that gravity does not explain, above this, is an impact (Unreal units per
+/// second).
 const IMPACT: f32 = 120.0;
 const HEARD: f32 = 200.0;
 /// A hit this hard reports [`SPLAT`]: 0.3 of it clears the script's 200, which leaves blood on the wall.
 const HARD_HIT: f32 = 150.0;
 const SPLAT: f32 = 700.0;
 const SPLAT_TICKS: u64 = 12;
-/// A limb lying asleep that its script still flies (a head, a bolt-on) is told so this many ticks, then left alone
-/// until it moves again: told every tick, each such limb cost a script call, a move and a touch test for nothing.
+/// A limb lying asleep that its script still flies (a head, a bolt-on) is told so this many ticks, then left
+/// alone until it moves again: told every tick, each such limb cost a script call, a move and a touch test for
+/// nothing.
 const ASLEEP_TOLD: u8 = 8;
 
 #[derive(Default)]
@@ -114,9 +117,9 @@ impl<L: LoaderRef> Vm<L> {
         errors
     }
 
-    /// After the step. `bCollideWorld` off: the hull is its collision. An impact goes to the script as `HitWall` with the
-    /// velocity it came in at (at least 200, or 700 for a hard hit, so the script makes its sound and blood; zero once
-    /// asleep, so it settles).
+    /// After the step. `bCollideWorld` off: the hull is its collision. An impact goes to the script as `HitWall` with
+    /// the velocity it came in at (at least 200, or 700 for a hard hit, so the script makes its sound and blood; zero
+    /// once asleep, so it settles).
     pub(crate) fn limbs_after_step(&mut self) -> Vec<(String, Error)> {
         let driven: Vec<(ObjectId, BodyId)> = self
             .karma

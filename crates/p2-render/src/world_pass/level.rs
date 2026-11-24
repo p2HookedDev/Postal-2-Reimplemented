@@ -1,5 +1,5 @@
-//! A cached sun level drawn on its redraw frame as Bevy would draw its shadow view, into a scratch depth target, then
-//! copied into its tile of our atlas. The record row follows the levels every frame.
+//! A cached sun level is drawn on its redraw frame as Bevy would draw its shadow view, into a scratch depth
+//! target, then copied into its tile of our atlas. The record row follows the levels every frame.
 
 use super::*;
 use super::cull::cull_world;
@@ -24,7 +24,6 @@ use crate::sun_levels::{AtlasLayout, LEVEL_CASTER_SHADER, PropCaster, SunLevelAt
 
 const CASTER_STRIDE: u64 = 256;
 const CASTER_SIZE: u64 = 144;
-/// The key Bevy gives every directional shadow view.
 const LEVEL_LIGHT_KEY: MeshPipelineKey = MeshPipelineKey::DEPTH_PREPASS.union(MeshPipelineKey::VIEW_PROJECTION_ORTHOGRAPHIC).union(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO);
 const EMULATION: &str = "UNCLIPPED_DEPTH_ORTHO_EMULATION";
 
@@ -37,7 +36,6 @@ enum Cut {
 #[derive(Default)]
 pub(super) struct LevelDraw {
     pub(super) slot: Option<u32>,
-    /// Bucket, pipeline, and whether it draws depth only.
     pipelines: Vec<(usize, CachedRenderPipelineId, bool)>,
     pipelines_for: Option<Entity>,
 }
@@ -84,7 +82,6 @@ fn prop_pipeline(cache: &PipelineCache, layouts: &Layouts, layout: &MeshVertexBu
     };
     let buffer = layout.0.get_layout(&attributes).ok()?;
     let shader_defs: Vec<ShaderDefVal> = if emulated { vec![EMULATION.into()] } else { Vec::new() };
-    // No culling, as every prop material gives a directional shadow view through `cast_both_sides`.
     Some(cache.queue_render_pipeline(RenderPipelineDescriptor {
         label: Some("sun level prop".into()),
         layout: groups,
@@ -119,7 +116,6 @@ fn copy_pipeline(cache: &PipelineCache, layouts: &Layouts, format: TextureFormat
     })
 }
 
-/// What `level_caster.wesl` draws one prop with.
 fn prop_uniform(bytes: &mut Vec<u8>, clip_from_world: Mat4, prop: &PropCaster) {
     let start = bytes.len();
     let cut = [prop.cut.map_or(0.0, |(_, cutoff)| cutoff), 0.0, 0.0, 0.0];
@@ -165,7 +161,6 @@ pub(super) struct LevelSources<'w, 's> {
     state: Local<'s, LevelState>,
 }
 
-/// The view Bevy's `prepare_view_uniforms` would give the level's cascade view.
 fn level_view(record: &SunLevelRecord, size: u32, camera: Option<&ExtractedView>, frame_count: u32) -> ViewUniform {
     let world_from_view = record.world_from_view;
     let view_from_world = world_from_view.inverse();
@@ -191,7 +186,6 @@ fn level_view(record: &SunLevelRecord, size: u32, camera: Option<&ExtractedView>
     }
 }
 
-/// One system, so the cull and the level that reads its draws share one command buffer at the frame's submit.
 pub(super) fn cull_and_draw_level(_view: ViewQuery<Entity, With<WorldCamera>>, sources: LevelSources, mut context: RenderContext) {
     cull_world(&sources.pass, &sources.cache, &mut context);
     draw_level(sources, &mut context);
@@ -201,7 +195,6 @@ fn draw_level(sources: LevelSources, context: &mut RenderContext<'_, '_>) {
     let LevelSources { pass, frame, atlas, props, images, meshes, allocator, materials, cache, device, queue, bindings, mut state } = sources;
     let (Some(frame), Some(atlas)) = (frame, atlas) else { return };
     let (Some(image), Some((layout, format))) = (&atlas.image, atlas.made) else { return };
-    // A level due now that cannot draw yet must not pass for drawn.
     let redraw_later = || if frame.drawing.is_some() && let Some(stale) = &bindings.stale { stale.mark() };
     let Some(target) = images.get(image).filter(|_| layout.tiles as usize == frame.records.len() && layout.tile_size == frame.map_size) else {
         redraw_later();
@@ -210,7 +203,6 @@ fn draw_level(sources: LevelSources, context: &mut RenderContext<'_, '_>) {
     let state = &mut *state;
     state.write_records(&queue, target, image.id(), &layout, &frame.records);
     let Some(drawing) = frame.drawing else { return };
-    // Without the world pass built the level still takes the settled props.
     let world = pass.built.as_ref().zip(pass.level.slot);
     let record = frame.records[drawing];
     let size = frame.map_size;
@@ -339,7 +331,6 @@ fn copy_to_tile(encoder: &mut CommandEncoder, device: &RenderDevice, atlas: &Tex
 }
 
 impl LevelDraw {
-    /// Each casting bucket with its pipeline and material group, and whether any is still being built.
     fn world_draws<'w>(&self, built: &'w Built, materials: &'w MaterialBindGroupAllocators, cache: &'w PipelineCache, empty: &'w BindGroup) -> (Vec<(usize, &'w RenderPipeline, &'w BindGroup)>, bool) {
         let mut waiting = false;
         let mut draws = Vec::new();
@@ -371,7 +362,6 @@ impl LevelState {
         self.written = Some((image, texels));
     }
 
-    /// Group 0 as Bevy's prepass gives a cascade view, from a view uniform of our own filled the way it fills one.
     fn view_group(&mut self, device: &RenderDevice, queue: &RenderQueue, cache: &PipelineCache, bindings: &LevelBindings<'_, '_>, record: &SunLevelRecord, size: u32) -> Option<BindGroup> {
         self.view.clear();
         self.view.push(&level_view(record, size, bindings.cameras.iter().next(), bindings.frame_count.0));

@@ -1,7 +1,6 @@
 use crate::Expr;
 
 impl Expr {
-    /// Pre-order.
     pub fn visit(&self, f: &mut impl FnMut(&Self)) {
         f(self);
         match self {

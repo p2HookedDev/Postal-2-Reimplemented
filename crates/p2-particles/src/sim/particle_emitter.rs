@@ -100,7 +100,6 @@ impl ParticleEmitter {
         self.time_till_reset = self.props.auto_reset_time_range.rand(rng);
     }
 
-    /// No collision planes, sounds or actor forces. `hits` gets (hit, this step, count) for `SpawnFromOtherEmitter`.
     pub(super) fn update(&mut self, dt: f32, owner: &Owner, rng: &mut Rng, others: &Others, collide: &mut Collide, hits: &mut Vec<(CollisionHit, f32, usize)>) {
         let max = self.particles.len();
         let pps = if self.active_particles < max {

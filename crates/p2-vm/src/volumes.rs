@@ -33,8 +33,9 @@ impl<L: LoaderRef> Vm<L> {
         Ok(Some(volume))
     }
 
-    /// With `touching` only the physics volumes on that actor's touch list are looked at, in its order; without, every
-    /// physics volume of the level. `Priority` is read live: a script may change it between two calls of a frame.
+    /// With `touching` only the physics volumes on that actor's touch list are looked at, in its order; without,
+    /// every physics volume of the level. `Priority` is read live: a script may change it between two calls of a
+    /// frame.
     pub(crate) fn physics_volume_at(&mut self, point: Vector, touching: Option<ObjectId>) -> Result<Option<ObjectId>, Error> {
         let Some(default) = self.default_physics_volume()? else { return Ok(None) };
         let default = (default, self.priority(default));
@@ -133,8 +134,6 @@ impl<L: LoaderRef> Vm<L> {
         true
     }
 
-    /// `actor` may have moved, turned or been rescaled: a physics volume's next test checks its place again and the next
-    /// [`Vm::physics_volume_at`] takes its box anew.
     pub(crate) fn volume_moved(&mut self, actor: ObjectId) {
         if let Some(place) = self.world.primitives.volumes.get_mut(&actor) {
             place.checked = None;
@@ -162,7 +161,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// When the line from `start` to `end` first is inside the volume's brush: 0 for a start inside.
     pub(crate) fn volume_line_time(&mut self, volume: ObjectId, start: Vector, end: Vector) -> Option<f32> {
         let frame = self.world.frame;
         if !self.check_volume_place(volume, frame) {
@@ -224,7 +222,6 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(actor, Prop::PhysicsVolume, Value::Object(Some(actor)));
             return Ok(());
         }
-        // The volume part reads `Location` again: a warp zone's `ActorEntered` may have moved the actor.
         let location = self.store.vector(actor, Prop::Location);
         let new = self.physics_volume_at(location, touching)?;
         let old = self.store.object_of(actor, Prop::PhysicsVolume);
@@ -321,8 +318,8 @@ impl VolumePlace {
         Self { brush, placement, checked: Some(frame), axes, model, bounds, world_bounds }
     }
 
-    /// `point` is world and already inside `world_bounds`; 1 unit around the bounds still goes to the BSP (points on a plane
-    /// count as inside).
+    /// `point` is world and already inside `world_bounds`; 1 unit around the bounds still goes to the BSP (points on
+    /// a plane count as inside).
     fn encompasses(&self, point: Vector) -> bool {
         let Placement { location, scale, pre_pivot, .. } = self.placement;
         let Some(local) = p2_collision::world_to_local(point, location, &self.axes, scale, pre_pivot) else { return false };
@@ -347,9 +344,6 @@ fn box_holds(bounds: Option<(Vector, Vector)>, point: Vector) -> bool {
     bounds.is_none_or(|(min, max)| !(0..3).any(|i| point[i] < min[i] || point[i] > max[i]))
 }
 
-/// World = location + Σₖ axes[k] · scale[k] · (local[k] − pre-pivot[k]), the inverse of
-/// [`p2_collision::world_to_local`]; plus 1 unit and 1e-5 of the coordinates' size for rounding, so that a point outside
-/// it is also outside `local` as `world_to_local` takes it there.
 fn world_box(local: (Vector, Vector), placement: Placement, axes: &[Vector; 3]) -> (Vector, Vector) {
     let Placement { location, scale, pre_pivot, .. } = placement;
     let (min, max) = local;
@@ -390,8 +384,9 @@ pub fn warp_view(this_side: [Vector; 4], other_side: [Vector; 4], location: Vect
     (location, rotation)
 }
 
-/// The plane that cuts a far view (from `eye`, carried by [`warp_view`]) at the other side's portal: what lies between
-/// `eye` and its portal must not show. Normal and distance: a point is kept where `normal.dot(point) >= distance`.
+/// The plane that cuts a far view (from `eye`, carried by [`warp_view`]) at the other side's portal: what lies
+/// between `eye` and its portal must not show. Normal and distance: a point is kept where `normal.dot(point) >=
+/// distance`.
 pub fn warp_clip_plane(other_side: [Vector; 4], eye: Vector) -> (Vector, f32) {
     let [origin, _, _, z] = other_side;
     let normal = if (eye - origin).dot(z) > 0.0 { -z } else { z };

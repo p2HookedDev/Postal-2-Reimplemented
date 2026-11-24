@@ -2,7 +2,6 @@ use p2_math::Vector;
 use super::{FluidVertex, FluidSurface};
 
 impl FluidSurface {
-    /// Heights between the last two steps, so the water moves at any frame rate, one step behind the simulation.
     pub(super) fn lerp_drawn(&mut self) {
         let (old, new) = (&self.verts[1 - self.latest], &self.verts[self.latest]);
         let t = (self.rollover * self.settings.update_rate).clamp(0.0, 1.0);

@@ -10,7 +10,6 @@ use crate::{Error, PropertyKind, ScriptObject, read_child, read_export};
 /// Struct and array nesting limit; deeper means a reference cycle.
 const MAX_DEPTH: usize = 64;
 
-/// Structs serialized as raw fields instead of tagged properties (version >= 118).
 const BINARY_STRUCTS: [&str; 3] = ["Vector", "Rotator", "Color"];
 
 #[derive(Clone, Copy)]
@@ -37,10 +36,7 @@ impl Resolve for Loader {
 #[derive(Debug)]
 pub struct StructLayout {
     pub name: String,
-    /// Own properties in children-chain order, then the super struct's, recursively
-    /// (the order of the engine's field iterator).
     pub properties: Vec<FieldLayout>,
-    /// The struct or class it extends, an object reference of its package; 0 = none.
     pub super_field: i32,
     pub defaults_offset: Option<usize>,
     pub(crate) binary: bool,
@@ -74,8 +70,8 @@ pub enum Type {
 }
 
 impl Type {
-    /// Tag type id the engine compares a tag against; `None` for delegates, whose id depends on a runtime
-    /// name index (unverified).
+    /// Tag type id the engine compares a tag against; `None` for delegates, whose id depends on a runtime name index
+    /// (unverified).
     pub fn id(&self) -> Option<u8> {
         Some(match self {
             Self::Byte => tag::BYTE,
@@ -111,14 +107,13 @@ impl StructLayout {
         Self { name, properties, super_field, defaults_offset, binary, first_by_name }
     }
 
-    /// First property named `name` (case-insensitive). Equal names have equal hashes, so no entry means no
-    /// such property, and an entry whose name matches is the first of that name.
+    /// First property named `name` (case-insensitive). Equal names have equal hashes, so no entry means no such
+    /// property, and an entry whose name matches is the first of that name.
     pub fn find(&self, name: &str) -> Option<&FieldLayout> {
         let first = &self.properties[*self.first_by_name.get(&name_hash(name))? as usize];
         if first.name.eq_ignore_ascii_case(name) {
             return Some(first);
         }
-        // Another name with the same hash came first.
         self.properties.iter().find(|p| p.name.eq_ignore_ascii_case(name))
     }
 }
@@ -127,7 +122,8 @@ fn name_hash(name: &str) -> u64 {
     name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3))
 }
 
-/// Keyed by package address: reuse only with a resolver whose packages outlive the cache, as freed addresses recur.
+/// Keyed by package address: reuse only with a resolver whose packages outlive the cache, as freed addresses
+/// recur.
 #[derive(Default, Clone)]
 pub struct LayoutCache(FxHashMap<(usize, usize), Arc<StructLayout>>);
 

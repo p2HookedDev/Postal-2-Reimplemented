@@ -30,7 +30,6 @@ pub(super) struct PoolMaterialKey {
     two_sided: bool,
 }
 
-/// One entity a section for each mesh particle shown at once, kept and hidden when fewer are shown.
 pub(super) struct MeshPool {
     sections: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     slots: Vec<Vec<Entity>>,

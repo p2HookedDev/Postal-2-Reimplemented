@@ -1,6 +1,5 @@
-//! The static world's sun shadow, cached in levels around the eye. A level is a record and a tile of our own atlas
-//! (`sun_levels`), not a light: it draws only on the frame it is stale, and keeps its tile otherwise. Movers stay in the
-//! real sun's cascades.
+//! The static world's sun shadow, cached in levels around the eye. A level is a record and a tile of our own
+//! atlas, not a light: it draws only on the frame it is stale. Movers stay in the real sun's cascades.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,23 +30,20 @@ use crate::modern::{StillProp, shadow_reach, sun_quality};
 use crate::world_pass::StaticShadowsStale;
 use crate::sun_levels::{SunLevelFrame, SunLevelKind, SunLevelRecord, SunLevelsPlugin, follow_level_atlas};
 
-/// The level looking straight down, which tells a room from open sky. Not a power of two, so it never shares a size with
-/// another level and the two never redraw on one frame.
+/// The level looking straight down, which tells a room from open sky. Not a power of two, so it never shares a
+/// size with another level and the two never redraw on the same frame.
 const SKY_HALF_WIDTH: f32 = 24576.0;
 
 /// Redraws asked for closer than this merge into one, unless the texture is gone and nothing else can show.
 const SECONDS_BETWEEN_REDRAWS: f32 = 0.5;
 
-/// The coarsest level a prop's change redraws.
 const NEAR_REDRAW_HALF_WIDTH: f32 = 8192.0;
 
-/// A level moves in steps of this share of its half width, once the eye is three quarters of a step off.
 const STEP_SHARE: f32 = 0.25;
 const MOVE_AT_STEPS: f32 = 0.75;
 
 const DEPTH_REACH: f32 = 120_000.0;
 
-/// Shared by both worlds: `whole` redraws every level, `near` the fine ones, `lost` everything at once (a new texture).
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct SunCacheStale {
@@ -61,7 +57,6 @@ impl SunCacheStale {
         self.whole.store(true, Ordering::Relaxed);
     }
 
-    /// For one prop: the coarser levels' texels are as wide as it is, so its change is not worth their redraw.
     pub fn mark_near(&self) {
         self.near.store(true, Ordering::Relaxed);
     }
@@ -71,7 +66,6 @@ impl SunCacheStale {
     }
 }
 
-/// On an entity whose transform faces the way the level looks.
 #[derive(Component, Clone)]
 pub struct CachedSunLevel {
     half_width: f32,
@@ -85,8 +79,8 @@ impl CachedSunLevel {
     }
 }
 
-/// Outermost first, each a quarter of the one before. Powers of two keep a level's moves whole texels, so its shadows do
-/// not shimmer when it redraws.
+/// Outermost first, each a quarter of the one before. Powers of two keep a level's moves whole texels,
+/// so its shadows do not shimmer when it redraws.
 fn level_half_widths(settings: &Settings) -> impl Iterator<Item = f32> {
     let outermost = shadow_reach(settings.modern_level(MODERN_SHADOW_DISTANCE));
     std::iter::successors(Some(outermost), |width| Some(width / 4.0)).take(sun_quality(settings.modern_level(MODERN_SHADOWS)).1)
@@ -102,7 +96,6 @@ fn needs_move(center: Vec3, eye: Vec3, half_width: f32) -> bool {
     (Vec2::new(eye.x, eye.y) - Vec2::new(center.x, center.y)).abs().max_element() > half_width * STEP_SHARE * MOVE_AT_STEPS
 }
 
-/// As Bevy's own cascade, for a square of fixed size around `center`, which is in the light's space.
 fn level_cascade(world_from_light: Mat4, center: Vec3, half_width: f32, map_size: f32) -> Cascade {
     let near_center = Vec3::new(center.x, center.y, center.z + DEPTH_REACH);
     let light_from_world = world_from_light.transpose();
@@ -125,7 +118,6 @@ struct RedrawRequests {
 }
 
 impl RedrawRequests {
-    /// Whether the whole cache and the near levels redraw now.
     fn step(&mut self, lost: bool, now: f32) -> (bool, bool) {
         let rested = self.last.is_none_or(|last| now - last >= SECONDS_BETWEEN_REDRAWS);
         if !lost && !(rested && (self.whole || self.near)) {
@@ -140,7 +132,6 @@ impl RedrawRequests {
     }
 }
 
-/// At most one level draws a frame, the finest that is due; the others keep their tile.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn place_levels(
     stale: Res<SunCacheStale>,
@@ -157,7 +148,6 @@ fn place_levels(
     if casters.iter().any(|layers| layers.intersects(&static_casters)) {
         stale.mark();
     }
-    // Before the requests are taken: without a camera no level can answer them.
     let Some((eye, _)) = cameras.iter().find(|(_, camera)| camera.is_active) else { return };
     asked.whole |= stale.whole.swap(false, Ordering::Relaxed) | world_stale.0.swap(false, Ordering::Relaxed);
     asked.near |= stale.near.swap(false, Ordering::Relaxed);
@@ -200,7 +190,6 @@ fn place_levels(
     frame.map_size = map.size as u32;
 }
 
-/// Keeps one level per size, and the sky level, while the real sun casts. Runs after the system that owns that sun.
 pub(crate) fn follow_sun(
     settings: Res<Settings>,
     stale: Res<SunCacheStale>,
@@ -238,8 +227,8 @@ pub(crate) fn follow_sun(
     }
 }
 
-/// A shadow view with nothing to draw still costs a render pass. Its layer needs one clear after its last draw, which a
-/// pass without draws does; from then on the view is skipped.
+/// A shadow view with nothing to draw still costs a render pass. Its layer needs one clear after its last draw,
+/// which an empty pass does; after that the view is skipped.
 fn skip_idle_shadow_views(
     phases: Res<ViewBinnedRenderPhases<Shadow>>,
     views: Query<(Entity, &ExtractedView, &ShadowView)>,

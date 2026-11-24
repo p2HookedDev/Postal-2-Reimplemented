@@ -1,6 +1,3 @@
-//! A person flinches where a hit lands: a damped spring turn on the hit bone and, weaker, up its parents, added to the
-//! drawn pose after the animation and before skinning. Nothing the game reads changes.
-
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::prelude::{Res, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -15,21 +12,17 @@ use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate};
 use p2_host::display::{MODERN_HIT_REACTIONS, Settings, modern_on, modern_turned_off};
 use crate::play::{Play, PlayWorld};
 
-/// A natural frequency of 16 per second at three quarters of critical damping: settled in about 0.45 seconds.
 const STIFFNESS: f32 = 256.0;
 const DAMPING: f32 = 24.0;
 const SUBSTEP: f32 = 1.0 / 240.0;
 const LONGEST_STEP: f32 = 0.1;
-/// Radians per second at level 10: a full hit peaks near 7 degrees at the hit bone, half that at each parent.
 const KICK: f32 = 4.5;
-/// The drawn turn of the hit bone eases toward this and never reaches it; a parent's limit falls off like its kick.
 const MAX_ANGLE: f32 = 0.2;
 /// The momentum of a full kick (unverified against the weapons' values); a lighter hit still kicks this share.
 const FULL_MOMENTUM: f32 = 50_000.0;
 const LIGHTEST: f32 = 0.3;
 const CHAIN: usize = 4;
 const FALLOFF: f32 = 0.5;
-/// Unreal units; a hit farther than this from every bone has no place on the body.
 const REACH: f32 = 48.0;
 const LIFE: f32 = 1.0;
 const SETTLED: f32 = 1e-3;
@@ -51,14 +44,12 @@ impl Plugin for HitReactionPlugin {
     }
 }
 
-/// A turn as axis times angle in mesh space, and its rate.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Spring {
     angle: Vec3,
     speed: Vec3,
 }
 
-/// `reach` is the level's strength times the bone's share of the kick.
 impl Spring {
     fn kick(&mut self, speed: Vec3, reach: f32) {
         self.speed = (self.speed + speed).clamp_length_max(2.0 * KICK * reach);
@@ -74,7 +65,6 @@ impl Spring {
         }
     }
 
-    /// A soft limit: a hard one would stop the swing dead at the clamp.
     fn shown(&self, reach: f32) -> Vec3 {
         let (angle, limit) = (self.angle.length(), MAX_ANGLE * reach);
         if angle < 1e-6 || limit <= 0.0 {
@@ -97,7 +87,6 @@ struct Bone {
 
 #[derive(Default)]
 struct Flinch {
-    /// By bone index, so a parent turns before its children.
     bones: Vec<Bone>,
     age: f32,
 }
@@ -159,7 +148,6 @@ fn flinch(
         }
     }
     let seconds = world.game_seconds(time.delta_secs());
-    // A body that became a ragdoll keeps its flinch while it settles: cutting it would jump the first ragdoll frame.
     flinches.layer.people.retain(|&actor, person| {
         person.age += seconds;
         person.bones.iter_mut().for_each(|bone| bone.spring.step(seconds, strength * bone.share));
@@ -174,7 +162,6 @@ fn flinch(
     });
 }
 
-/// The bones a hit kicks, from the one nearest it up its parents, each with its turn rate in mesh space and its share.
 fn kicks(world: &PlayWorld, item: &AnimatedMesh, bones: &[Mat4], hit: &PersonHit, strength: f32) -> Vec<(usize, Vec3, f32)> {
     let Some(place) = mesh_place(world, item, hit.person) else { return Vec::new() };
     let (at, momentum) = (Vec3::from(<[f32; 3]>::from(hit.at)), Vec3::from(<[f32; 3]>::from(hit.momentum)));
@@ -193,8 +180,8 @@ fn kicks(world: &PlayWorld, item: &AnimatedMesh, bones: &[Mat4], hit: &PersonHit
         .collect()
 }
 
-/// From the hit bone up its parents with each one's share. A bone holding a foot (a leg, the pelvis) or hanging from
-/// the root is never turned: that would lift the planted feet and swing the whole body.
+/// From the hit bone up its parents with each one's share. A bone holding a foot (a leg, the pelvis) or hanging
+/// from the root is never turned: that would lift the planted feet and swing the whole body.
 fn bone_chain(parents: &[usize], feet: &[usize], mut bone: usize) -> Vec<(usize, f32)> {
     let mut chain = Vec::new();
     let mut share = 1.0;
@@ -214,7 +201,6 @@ fn bone_chain(parents: &[usize], feet: &[usize], mut bone: usize) -> Vec<(usize,
     chain
 }
 
-/// A turn's axis through a mirroring frame turns the other way.
 fn mesh_axis(place: Mat4, axis: Vec3) -> Vec3 {
     (place.inverse().transform_vector3(axis) * place.determinant().signum()).normalize_or_zero()
 }
@@ -288,7 +274,6 @@ mod tests {
 
     #[test]
     fn the_chain_climbs_the_spine_and_never_turns_the_pelvis_or_a_leg() {
-        // root, pelvis, spine, spine1, neck, head, thigh, calf, foot
         let parents = [0, 0, 1, 2, 3, 4, 1, 6, 7];
         let feet = [8];
         assert_eq!(bone_chain(&parents, &feet, 5), vec![(5, 1.0), (4, FALLOFF), (3, FALLOFF * FALLOFF), (2, FALLOFF * FALLOFF * FALLOFF)]);

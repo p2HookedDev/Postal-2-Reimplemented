@@ -9,7 +9,6 @@ use super::{CORPSE_FRICTION, Corpse, MAX_JOINT_ERROR, MAX_SPEED, Ragdoll, Resolv
 use super::rig::{build, cut_of, frame_scale, orthonormal, scale_frames};
 
 impl<L: LoaderRef> Vm<L> {
-    /// Now, so that `KSetSkelVel` and `KAddImpulse` right after it reach the bodies.
     pub(crate) fn ragdoll_physics_changed(&mut self, actor: ObjectId, old: Option<EPhysics>) {
         let physics = self.store.physics_of(actor);
         if old == Some(EPhysics::KarmaRagDoll) && physics != Some(EPhysics::KarmaRagDoll) {
@@ -188,7 +187,6 @@ impl<L: LoaderRef> Vm<L> {
             self.karma.ragdolls.failed.insert(actor);
             return;
         };
-        // Or the cut limb shows again until the first step.
         let frames: Arc<[Frame]> = match pose.filter(|pose| pose.len() == animated.len()) {
             Some(mut pose) => {
                 if let Some(own) = self.bone_scale_factors(actor, &mesh) {
@@ -202,7 +200,7 @@ impl<L: LoaderRef> Vm<L> {
         let cut = cut_of(own.as_deref(), &mesh.parents);
         let k = |name: Prop, default: f32| self.store.get(params, name).as_ref().map_or(default, crate::interp::float);
         let (linear_damping, angular_damping) = (k(Prop::KLinearDamping, 0.2), k(Prop::KAngularDamping, 0.2));
-        // `KRestitution` made corpses hop.
+        // No `KRestitution`: it made corpses hop.
         let (friction, restitution) = (CORPSE_FRICTION, 0.0);
         let asleep = !self.store.flag_of(params, Prop::KStartEnabled);
         let velocity = self.store.vector(actor, Prop::Velocity);

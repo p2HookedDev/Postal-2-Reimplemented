@@ -46,7 +46,6 @@ pub(super) fn material_group<'w>(built: &'w Built, allocators: &'w MaterialBindG
     allocators.get(&bucket.type_id)?.get(bucket.group)?.bind_group()
 }
 
-/// The bucket's culled chunks, from the indirect arguments of view slot `slot`.
 pub(super) fn draw_bucket<'w>(pass: &mut TrackedRenderPass<'w>, built: &'w Built, allocator: &'w MeshAllocator, index: usize, slot: u32) -> RenderCommandResult {
     let bucket = &built.buckets[index];
     let (Some(vertices), Some(indices)) = (allocator.mesh_vertex_slice(&bucket.mesh), allocator.mesh_index_slice(&bucket.mesh)) else { return RenderCommandResult::Skip };

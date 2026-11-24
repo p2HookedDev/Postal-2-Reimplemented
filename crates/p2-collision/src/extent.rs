@@ -9,7 +9,6 @@ use crate::{Hit, MAX_TREE_DEPTH, child, child_outside, dot_plane, line_check};
 
 /// The engine stops reading a hull's node list after this many planes.
 const MAX_HULL_PLANES: usize = 64;
-/// Hull entry flag: use the node's plane flipped.
 const HULL_FLIPPED: i32 = 0x4000_0000;
 /// Box extent is scaled by this while walking the tree (a conservative margin; hull tests use the exact extent).
 const WALK_SCALE: f32 = 1.1;
@@ -26,7 +25,6 @@ pub fn box_check(model: &Model, hulls: &BspHulls, start: Vector, end: Vector, ex
     let mut sweep = Sweep { model, hulls, start, end, extent, walk: extent * WALK_SCALE, best: None, steps: model.nodes.len() };
     sweep.node(0, Some(0), model.root_outside, MAX_TREE_DEPTH);
     let (time, normal) = sweep.best?;
-    // Pull the hit back along the sweep: 0.1 of the distance, at least 0.1 and at most 4 units.
     let dist = (end - start).size();
     let back = if 0.1 / dist > 0.1 {
         0.1 / dist
@@ -40,8 +38,9 @@ pub fn box_check(model: &Model, hulls: &BspHulls, start: Vector, end: Vector, ex
     (time != 1.0).then(|| Hit { time, location: start.lerp(end, time), normal })
 }
 
-/// The hit's `location` is `point` pushed out of the nearest overlapping plane (×1.02), `normal` that plane's normal;
-/// `time` is 0. Zero extent tests the point alone (solid space, with points on a plane counted behind it).
+/// The hit's `location` is `point` pushed out of the nearest overlapping plane (×1.02), `normal` that plane's
+/// normal; `time` is 0. Zero extent tests the point alone (solid space, with points on a plane counted behind
+/// it).
 pub fn point_check(model: &Model, hulls: &BspHulls, point: Vector, extent: Vector) -> Option<Hit> {
     let blocked = Hit { time: 0.0, location: point, normal: Vector::ZERO };
     if model.nodes.is_empty() || extent == Vector::ZERO {
@@ -51,7 +50,6 @@ pub fn point_check(model: &Model, hulls: &BspHulls, point: Vector, extent: Vecto
     (!overlap.node(0, Some(0), model.root_outside, MAX_TREE_DEPTH)).then_some(overlap.hit)
 }
 
-/// [`point_check`] with zero extent; a point on a plane counts as behind it.
 pub fn point_solid(model: &Model, point: Vector) -> bool {
     let mut outside = model.root_outside;
     let mut node = Some(0);
@@ -128,7 +126,6 @@ impl Clip {
         let r = radius(plane, extent);
         let (d1, d2) = (dot_plane(plane, start), dot_plane(plane, end));
         let mut num = d1 - r;
-        // Starting within the box's reach of the plane but not behind it, moving in: enter at once.
         if d1 > d2 && num >= -r && num < 0.0 {
             num = 0.0;
         }
@@ -201,11 +198,11 @@ impl Overlap<'_> {
     }
 }
 
-/// In the engine's test order: hull planes, six box planes (0.1 out on −X −Y −Z +Z, 0.1 in on +X +Y), edge bevels.
+/// In the engine's test order: hull planes, six box planes (0.1 out on −X −Y −Z +Z, 0.1 in on +X +Y), edge
+/// bevels.
 #[derive(Default)]
 pub struct BspHulls {
     planes: Vec<Plane>,
-    /// Per node: the `planes` range, `None` if the node has no hull or its data is out of range.
     nodes: Vec<Option<(usize, usize)>>,
 }
 
@@ -230,8 +227,8 @@ impl BspHulls {
     }
 }
 
-/// Reads `Model::leaf_hulls` from the node's `collision_bound`: node indices (bit 30 = flipped) up to −1, then the
-/// bounding box as six floats. `None` if the node has no hull or the data is out of range.
+/// Reads `Model::leaf_hulls` from the node's `collision_bound`: node indices (bit 30 = flipped) up to −1, then
+/// the bounding box as six floats. `None` if the node has no hull or the data is out of range.
 fn hull_planes(model: &Model, node: &BspNode, planes: &mut Vec<Plane>, signs: &mut Vec<u8>) -> Option<()> {
     const EPS: f64 = 0.1;
     let first = node.collision_bound?;
@@ -269,8 +266,6 @@ fn hull_planes(model: &Model, node: &BspNode, planes: &mut Vec<Plane>, signs: &m
         [0.0, -1.0, 0.0, (EPS - min[1]) as f32],
         [0.0, 1.0, 0.0, (max[1] - EPS) as f32],
     ]);
-    // Bevels: for two hull planes whose normals point opposite ways along an axis, the plane through their
-    // common edge that contains the axis, facing like the later plane.
     for i in 0..count {
         for j in 0..i {
             let either = signs[i] | signs[j];

@@ -47,7 +47,6 @@ const MAX_VOLUMES: usize = 8;
 /// In Unreal units (about 2 cm each): a fire farther from the eye stays sprites.
 const REACH: f32 = 2048.0;
 
-/// Adds the marched flame light, whose alpha is 0, to the frame and keeps the frame's alpha, the sun rays' mask.
 const OVER: BlendState = BlendState {
     color: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add },
     alpha: BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
@@ -79,7 +78,6 @@ impl Plugin for FireVolumePlugin {
     }
 }
 
-/// One fire's box in world space; `tint` is its sprites' mean colour, and their mean alpha in `w`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FireBox {
     pub centre: Vec3,
@@ -101,7 +99,6 @@ fn quality(level: u8) -> Option<Quality> {
     }
 }
 
-/// On a scene camera while fire volumes are on: this frame's fires, nearest first.
 #[derive(Component, Debug, Clone, PartialEq, ExtractComponent)]
 #[extract_app(RenderApp)]
 #[extract_component_sync_target((Self, FireView))]
@@ -111,12 +108,11 @@ pub struct FireVolumes {
     volumes: Vec<FireBox>,
 }
 
-/// The emitters, by parent and order, drawn as volumes this frame: the particle drawing hides their sprites.
 #[derive(Resource, Default)]
 pub struct VolumeFires(pub(crate) FxHashSet<(Entity, u32)>);
 
-/// Hides the sprites only of fires a view will draw. The fires hidden this frame are the ones picked last frame, so no
-/// frame draws a fire as both.
+/// Hides the sprites only of fires a view will draw. The fires hidden this frame are the ones picked last frame,
+/// so no frame draws a fire as both.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn follow_fires(
     mut commands: Commands,
@@ -149,7 +145,6 @@ fn follow_fires(
     }
 }
 
-/// `Volume` in `fire_volume.wesl`.
 #[derive(ShaderType, Clone, Copy, Default)]
 struct Volume {
     centre: Vec4,
@@ -157,7 +152,6 @@ struct Volume {
     tint: Vec4,
 }
 
-/// `Fires` in `fire_volume.wesl`.
 #[derive(ShaderType)]
 struct Fires {
     volumes: [Volume; MAX_VOLUMES],
@@ -208,7 +202,6 @@ fn init_fire_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>)
     commands.insert_resource(FirePipeline { layout, fullscreen: fullscreen.clone() });
 }
 
-/// `None` is the half-size march; a view's format is the full-size pass that lays the volumes over that view.
 impl SpecializedRenderPipeline for FirePipeline {
     type Key = Option<TextureFormat>;
 
@@ -232,7 +225,6 @@ impl SpecializedRenderPipeline for FirePipeline {
     }
 }
 
-/// The texture cache hands out a new texture when the view's size changes.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn prepare_fire_views(
     mut commands: Commands,
@@ -245,7 +237,6 @@ fn prepare_fire_views(
     views: Query<(Entity, &ExtractedView, &FireVolumes, Option<&FireView>)>,
 ) {
     for (entity, view, fires, prepared) in &views {
-        // Asked for before the first fire is near: its sprites are hidden from the frame its volume is picked.
         let march = pipelines.specialize(&pipeline_cache, &pipeline, None);
         let composite = pipelines.specialize(&pipeline_cache, &pipeline, Some(view.target_format));
         if fires.volumes.is_empty() {

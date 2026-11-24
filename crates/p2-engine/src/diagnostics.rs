@@ -1,5 +1,5 @@
-//! Always-on diagnostics: every log event appended to `diagnostics.txt` beside the executable, and the F10 egui overlay.
-//! Release builds have no console, so this is the file a player sends.
+//! Always-on diagnostics: every log event appended to `diagnostics.txt` beside the executable, and the F10 egui
+//! overlay. Release builds have no console, so this is the file a player sends.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -81,8 +81,6 @@ impl DiagnosticsLog {
         }
     }
 
-    /// A panic elsewhere must not lose them, so a poisoned lock still reads (and no code panics while it holds the lock, so
-    /// the panic hook cannot wait for itself).
     fn take_pending(&self) -> String {
         let mut text = String::new();
         let mut log = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
@@ -161,8 +159,8 @@ pub fn capture_layer(app: &mut App) -> Option<BoxedLayer> {
     Some(Box::new(Capture(log).and_then(SpanTiming(spans))))
 }
 
-/// The terminal gets warnings and errors only. Every line is in `diagnostics.txt`, and a line written to a Windows
-/// console costs the logging thread a fraction of a millisecond: a burst of lines in one frame was a hitch.
+/// The terminal gets warnings and errors only: every line is in `diagnostics.txt`, and a line written to a
+/// Windows console costs the logging thread a fraction of a millisecond, so a burst of lines would hitch.
 pub fn console_layer(_: &mut App) -> Option<bevy::log::BoxedFmtLayer> {
     use bevy::log::tracing_subscriber::{filter::LevelFilter, fmt};
     Some(Box::new(fmt::Layer::default().with_writer(std::io::stderr).with_filter(LevelFilter::WARN)))
@@ -255,8 +253,6 @@ fn flush_on_exit(mut exits: MessageReader<AppExit>, log: Res<DiagnosticsLog>) {
     }
 }
 
-/// The file stays open between writes (opening it is what a virus scanner or a slow disk holds up), in append mode:
-/// [`append_now`] and the flushes write beside it.
 fn write_file(
     time: Res<Time<Real>>,
     log: Res<DiagnosticsLog>,

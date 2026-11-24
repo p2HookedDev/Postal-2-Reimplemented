@@ -1,5 +1,5 @@
-//! Tagged properties decoded by declaration: each tag is matched by name to a declared property and
-//! read by that property's type. The tag's Size is used only to skip tags the engine skips.
+//! Tagged properties decoded by declaration: each tag is matched by name to a declared property and read by that
+//! property's type. The tag's Size is used only to skip tags the engine skips.
 
 use std::sync::Arc;
 
@@ -18,8 +18,8 @@ pub struct Properties {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyValue {
     pub name: Arc<str>,
-    /// Static array index. For a dynamic array saved one tag per element (the engine
-    /// accepts this), the element index, with [`PropertyValue::value`] holding the element.
+    /// Static array index. For a dynamic array saved one tag per element (the engine accepts this), the element
+    /// index, with [`PropertyValue::value`] holding the element.
     pub array_index: u32,
     pub value: StoredValue,
 }
@@ -160,7 +160,6 @@ fn read_item(pkg: &Package, r: &mut Reader, ty: &Type) -> Result<StoredValue, Er
 fn read_binary(pkg: &Package, r: &mut Reader, layout: &StructLayout) -> Result<Properties, Error> {
     let mut values = Vec::new();
     for field in layout.properties.iter().filter(|f| f.is_serialized()) {
-        // One value of a type that takes no bytes is harmless; a declared count of them is not.
         check_elements(&field.ty, i64::from(field.array_dim) - 1, r.pos())?;
         for array_index in 0..field.array_dim {
             values.push(PropertyValue { name: field.name.clone(), array_index, value: read_item(pkg, r, &field.ty)? });
@@ -169,8 +168,8 @@ fn read_binary(pkg: &Package, r: &mut Reader, layout: &StructLayout) -> Result<P
     Ok(Properties { values, skipped: Vec::new() })
 }
 
-/// Rejects `count` elements of `inner` when an element takes no bytes: nothing but the declaration would then limit
-/// how many values a few damaged bytes ask for.
+/// Rejects `count` elements of `inner` when an element takes no bytes: nothing but the declaration would then
+/// limit how many values a few damaged bytes ask for.
 fn check_elements(inner: &Type, count: i64, offset: usize) -> Result<(), Error> {
     if count > 0 && reads_nothing(inner) {
         return Err(p2_package::Error::Invalid { what: "array of values that take no bytes", offset }.into());

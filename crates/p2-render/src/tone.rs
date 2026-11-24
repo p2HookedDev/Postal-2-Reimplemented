@@ -1,6 +1,6 @@
-//! Modern graphics: the world's cameras draw linear light, bloom included, into a half-float image; one full-screen quad
-//! draws it through the tone curve into the frame the HUD's actors, canvas layers and the gamma ramp then draw on. The
-//! same quad adds the sun's rays, the colour settings, the vignette and the colour fringe.
+//! Modern graphics: the world's cameras draw linear light, bloom included, into a half-float image; one
+//! full-screen quad maps it through the tone curve into the frame the HUD and gamma ramp then draw on. The same
+//! quad adds the sun's rays, the colour settings, the vignette and the colour fringe.
 
 use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
 use bevy::asset::{Asset, AssetEventSystems, Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -33,7 +33,6 @@ use crate::shaders::{add_libraries, add_shaders, shader_file};
 
 const TONE_SHADER: Handle<Shader> = uuid_handle!("6d1f3a92-5b0e-4c87-a2d4-8e7c19b05f3a");
 const TONE_LAYER: usize = 9;
-/// After the view (-1), before the HUD's actors and canvas layers (1 to 8).
 const TONE_ORDER: isize = 0;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -67,7 +66,6 @@ pub(crate) struct ToneMaterial {
     post: ToneEffects,
 }
 
-/// As `tone.wesl` reads it.
 #[derive(ShaderType, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ToneEffects {
     sun: Vec4,
@@ -83,11 +81,9 @@ impl Default for ToneEffects {
     }
 }
 
-/// Red up and blue down for each level of warmth above neutral.
 const WARMTH_PER_LEVEL: Vec3 = Vec3::new(0.03, 0.0, -0.04);
 const LUMINANCE: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
 
-/// Gains for the colour channels, warmer above 0 and colder below; a grey keeps its brightness.
 pub(crate) fn white_balance(warmth: f32) -> Vec3 {
     let gains = Vec3::ONE + WARMTH_PER_LEVEL * warmth;
     gains / gains.dot(LUMINANCE)
@@ -99,10 +95,8 @@ const FRINGE_PER_LEVEL: f32 = 0.0005;
 const SATURATION_PER_LEVEL: f32 = 0.1;
 const CONTRAST_PER_LEVEL: f32 = 0.05;
 const EXPOSURE_STOPS_PER_LEVEL: f32 = 0.2;
-/// The rays fade in as the view turns towards the sun, over these cosines of the angle between them.
 const RAYS_FACING: (f32, f32) = (0.1, 0.45);
 
-/// Where the sun stands on the screen, in uv, and how much of its rays the view's turn leaves. `None` behind the eye.
 pub(crate) fn sun_on_screen(clip_from_world: Mat4, forward: Vec3, to_sun: Vec3) -> Option<(Vec2, f32)> {
     let clip = clip_from_world * to_sun.extend(0.0);
     if clip.w <= 0.0 {
@@ -177,7 +171,6 @@ impl Material2d for ToneMaterial {
 #[derive(Component)]
 pub struct ToneCamera;
 
-/// The image the world's cameras draw into under modern graphics: window sized while modern is on, else 1 by 1.
 #[derive(Resource)]
 pub(crate) struct ToneFrame {
     pub(crate) image: Handle<Image>,
@@ -187,14 +180,13 @@ pub(crate) struct ToneFrame {
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<ToneMaterial>>, mut meshes: ResMut<Assets<Mesh>>) {
     let mut image = Image::new_target_texture(1, 1, TextureFormat::Rgba16Float, None);
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    // A resize copies the old image into the new one.
     image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     let image = images.add(image);
     let material = materials.add(ToneMaterial { scene: image.clone(), post: ToneEffects::default() });
     let layers = RenderLayers::layer(TONE_LAYER);
     commands.spawn((Mesh2d(meshes.add(Rectangle::new(2.0, 2.0))), MeshMaterial2d(material.clone()), layers.clone(), NoFrustumCulling));
-    // Bevy shares a main texture between cameras on one target only while their `Msaa` and `Hdr` agree: these match
-    // the canvas layers' so they draw on top of the quad.
+    // Bevy shares a main texture between cameras on one target only while their `Msaa` and `Hdr` agree:
+    // these match the canvas layers' so they draw on top of the quad.
     commands.spawn((
         Camera2d,
         ToneCamera,

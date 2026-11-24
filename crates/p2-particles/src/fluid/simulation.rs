@@ -98,7 +98,6 @@ impl FluidSurface {
         self.smooth((VISCOSITY * step).min(MAX_SMOOTHING));
     }
 
-    /// The wave step, into the older buffer. Edge vertices never change here.
     pub(super) fn wave_step(&mut self, step: f32) {
         let s = &self.settings;
         let (nx, ny) = (s.x_size, s.y_size);
@@ -128,7 +127,8 @@ impl FluidSurface {
         }
     }
 
-    /// Retail has no such step. Filtering only the new heights damps sharp ripples most, which hides single-vertex wiggles.
+    /// Retail has no such step. Filtering only the new heights damps sharp ripples most, which hides single-vertex
+    /// wiggles.
     fn smooth(&mut self, amount: f32) {
         let s = &self.settings;
         let (ny, width) = (s.y_size, s.x_size as usize);

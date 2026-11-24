@@ -177,8 +177,8 @@ impl<L: LoaderRef> Vm<L> {
         self.find_class(package, name).ok()
     }
 
-    /// It must have every package of the current one at the same id (a clone of it that loaded more), so classes, functions
-    /// and caches stay valid.
+    /// It must have every package of the current one at the same id (a clone of it that loaded more), so classes,
+    /// functions and caches stay valid.
     pub fn set_loader(&mut self, loader: L) {
         self.layouts = p2_script::Layouts::new(loader.clone());
         self.loader = loader;
@@ -186,8 +186,8 @@ impl<L: LoaderRef> Vm<L> {
         self.media.bone_data.parsed = crate::bones::MeshAnimations::default();
     }
 
-    /// References between travelled actors follow them; other actor references become `None` (unverified). The items join the
-    /// pawn's inventory in their `TravelPreAccept` (`GiveTo`), as in the engine.
+    /// References between travelled actors follow them; other actor references become `None` (unverified). The items
+    /// join the pawn's inventory in their `TravelPreAccept` (`GiveTo`), as in the engine.
     pub(crate) fn arrive(&mut self, pawn: ObjectId) -> Result<Vec<ObjectId>, Error> {
         let travelling = std::mem::take(&mut self.travelling);
         let Some((first, items)) = travelling.split_first() else { return Ok(Vec::new()) };

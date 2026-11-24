@@ -1,8 +1,6 @@
 use super::*;
 use p2_render::canvas::{CanvasFont, CanvasImage, CanvasSource};
 
-/// The least and the most main-thread time one frame gives to first reads of HUD textures and fonts (half the frame
-/// before, within these): what does not fit is drawn a frame later instead of holding this one.
 const FIRST_READS: [std::time::Duration; 2] = [std::time::Duration::from_millis(1), std::time::Duration::from_millis(8)];
 
 #[derive(Resource, Default)]
@@ -19,8 +17,6 @@ pub struct Hud {
 }
 
 impl Hud {
-    /// The last image and the loading bar stay: the load screen is drawn from them. Fonts and textures read ahead and
-    /// not yet painted stay too, except the map's own.
     pub(super) fn leave_map(&mut self, map: Option<&str>, commands: &mut Commands) {
         if let Some(map) = map {
             self.hud_assets.fonts.retain(|path, _| !p2_render::canvas::in_package(path, map));
@@ -36,7 +32,6 @@ impl Hud {
         self.first_reads_left = self.painted_at.replace(now).map_or(most, |before| ((now - before) / 2).clamp(least, most));
     }
 
-    /// `None` when this frame's time for first reads is spent.
     fn first_read<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> Option<T> {
         if self.first_reads_left.is_zero() {
             return None;
@@ -64,7 +59,6 @@ impl HudAssets {
         self.textures.extend(read.textures);
     }
 
-    /// `painted` are paths the canvas or an earlier read already holds.
     pub(super) fn read(game: &mut Game, vm: &Vm<Arc<Loader>>, painted: &HashSet<String>, mut add: impl FnMut(Image) -> Handle<Image>) -> Self {
         let mut found = Vec::new();
         for hud in vm.actors().filter(|&actor| vm.store.is_a(actor, "HUD")) {
@@ -122,7 +116,6 @@ fn read_ui_image(game: &mut Game, package: PackageId, reference: i32, mut add: i
     Some(CanvasImage { image: add(texture.image), texels: egui::vec2(size.x, size.y) })
 }
 
-/// The canvas's reads: what the map's start read ahead, else the library, inside the frame's time for first reads.
 pub(super) struct LibraryReads<'a> {
     pub(super) session: &'a mut Session,
     pub(super) hud: &'a mut Hud,

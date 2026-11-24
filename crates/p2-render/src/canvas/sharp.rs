@@ -1,13 +1,11 @@
-//! Modern graphics, sharp HUD: where the canvas magnifies a texture it is drawn at a whole number of pixels per texel,
-//! on whole pixels, sampling the nearest texel.
+//! Modern graphics, sharp HUD: where the canvas magnifies a texture it is drawn at a whole number of pixels per
+//! texel, on whole pixels, sampling the nearest texel.
 
 use bevy::asset::{Assets, Handle};
 use bevy::image::{Image, ImageFilterMode};
 use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
 use rustc_hash::FxHashMap;
 
-/// Copies of the HUD's images that sample the nearest texel, made the first time one is drawn magnified; an image egui
-/// has no source for (a movie) is drawn as it is.
 #[derive(Default)]
 pub(super) struct NearestImages(FxHashMap<egui::TextureId, (egui::TextureId, Option<Handle<Image>>)>, super::distance::DistancePages);
 
@@ -33,7 +31,6 @@ impl NearestImages {
 }
 
 impl NearestImages {
-    /// A font page magnified `factor` times, drawn again from its distance field; where it cannot be, the page as it is.
     pub(super) fn text_page(&mut self, id: egui::TextureId, factor: f32, sources: &[Handle<Image>], contexts: &mut EguiContexts, images: &mut Assets<Image>) -> egui::TextureId {
         self.1.page(id, factor, sources, contexts, images).unwrap_or(id)
     }
@@ -43,8 +40,6 @@ pub(super) fn source_of<'a>(id: egui::TextureId, sources: &'a [Handle<Image>], c
     sources.iter().find(|handle| contexts.image_id(handle.id()) == Some(id))
 }
 
-/// Whether `pixels` over `texels` is a whole number of pixels per texel, one or more: only then does sampling the nearest
-/// texel keep every texel the same size.
 pub(super) fn whole_per_texel(pixels: f32, texels: f32) -> bool {
     let factor = pixels / texels;
     texels > 0.0 && factor >= 1.0 - WHOLE && (factor - factor.round()).abs() < WHOLE

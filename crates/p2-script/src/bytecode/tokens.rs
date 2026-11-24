@@ -80,7 +80,6 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
                 B::node(|| Expr::NativeParm(property))
             }
             0x2a => B::node(|| Expr::NoObject),
-            // A bool variable token runs the next expression (the variable).
             0x2d => {
                 let variable = self.child()?;
                 B::node(|| Expr::BoolVariable(B::boxed(variable)))
@@ -131,8 +130,8 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
                 let (version, line, position, opcode) = (self.int()?, self.int()?, self.int()?, self.c_string()?);
                 B::node(|| Expr::DebugInfo { version, line, position, opcode: latin1(opcode) })
             }
-            // A delegate call: property, name, then call parameters. The serializer reads these linearly and
-            // attaches no debug info.
+            // A delegate call: property, name, then call parameters. The serializer reads these linearly and attaches no
+            // debug info.
             0x43 => {
                 let property = self.object()?;
                 let name = self.name()?;

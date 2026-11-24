@@ -79,9 +79,9 @@ pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
 pub use profiling::{FunctionProfiling, FunctionTime};
 
-/// Stack of every thread that runs scripts (bytes): scripts call by recursion, up to the engine's 1000 nested calls.
-/// The VM's thread and the host's system threads get it; each program's `build.rs` gives the main thread the same by
-/// hand (`/STACK:67108864`): the three must match.
+/// Stack size in bytes of every thread that runs scripts: scripts call by recursion, up to the engine's 1000
+/// nested calls. The VM's thread and the host's system threads get it; each program's main thread gets the same
+/// through its linker flag (`/STACK:67108864`), and the three must match.
 pub const SCRIPT_STACK: usize = 64 << 20;
 pub use memory::Mem as PropertyBlock;
 pub use object_store::ObjectStore;
@@ -110,7 +110,6 @@ pub enum Error {
     Recursion { calls: u32, chain: Vec<String> },
 }
 
-/// Equal names, ignoring ASCII case, share one id. The default is `None`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct NameId(u32);
 
@@ -140,7 +139,6 @@ pub enum Value {
     Name(NameId),
     Str(String),
     Array(Vec<Self>),
-    /// Members in struct layout order (every struct but `Vector` and `Rotator`).
     Struct(Vec<Self>),
     Vector(p2_math::Vector),
     Rotator(p2_math::Rotator),
@@ -178,7 +176,6 @@ pub struct Class {
     lower_index: std::sync::OnceLock<FxHashMap<String, usize>>,
     resolved: props::Resolved,
     class_object: Option<ObjectId>,
-    /// `Object`'s native `Name` and `Class` properties in the layout: the last of their name.
     name_slot: Option<usize>,
     class_slot: Option<usize>,
 }
@@ -190,7 +187,6 @@ impl Class {
 }
 
 pub trait LoaderRef: Deref<Target = Loader> + Clone + Send + Sync {
-    /// This loader with package `name` and its imports added; existing ids stay valid. `None` where it cannot grow.
     fn with_package(&self, name: &str) -> Option<Result<Self, p2_package::ResolveError>>;
 }
 
@@ -261,7 +257,6 @@ pub(crate) struct ScriptRuntime {
     pub(crate) latent: states::Latent,
 }
 
-/// `loader` must have the script packages loaded ([`Loader::load_scripts`]).
 pub struct Vm<L> {
     loader: L,
     layouts: Layouts<L>,
@@ -343,8 +338,6 @@ pub(crate) struct Lookups {
     pub(crate) class_objects: FxHashMap<ObjectId, Option<ClassId>>,
     pub(crate) hole_splats: FxHashMap<u32, Option<ClassId>>,
     pub(crate) casts: FxHashMap<(ClassId, PackageId, i32, bool), bool>,
-    /// Ancestry is then tested by `NameId`: interning is case-insensitive, so this is `UnrealScript`'s by-name test without
-    /// strings, and stays right while classes load lazily.
     pub(crate) cast_targets: FxHashMap<(PackageId, i32), NameId>,
     pub(crate) class_tests: FxHashMap<NameId, FxHashMap<ClassId, bool>>,
     pub(crate) functions: FxHashMap<(ClassId, Option<(PackageId, usize)>, NameId), Option<Arc<interp::Function>>>,
@@ -479,8 +472,8 @@ impl<L: LoaderRef> Vm<L> {
 
 const MAX_CLASS_DEPTH: u32 = 256;
 
-/// `RF_LoadForEdit` without `RF_LoadForClient` / `RF_LoadForServer` (the editor's viewport `Camera`s saved in maps): the
-/// game's linker does not create it, and references to it are None.
+/// `RF_LoadForEdit` without `RF_LoadForClient` / `RF_LoadForServer` (the editor's viewport `Camera`s saved in
+/// maps): the game's linker does not create it, and references to it are None.
 fn editor_only(pkg: &Package, export: usize) -> bool {
     pkg.exports.get(export).is_some_and(|e| e.object_flags & RF_LOAD_FOR_ANY != 0 && e.object_flags & RF_LOAD_FOR_GAME == 0)
 }
@@ -493,7 +486,6 @@ fn lowercase_index(layout: &StructLayout) -> FxHashMap<String, usize> {
     index
 }
 
-/// Avoids allocating for names up to 64 bytes.
 fn lower_lookup(index: &FxHashMap<String, usize>, name: &str) -> Option<usize> {
     let mut lower = [0u8; 64];
     match lower.get_mut(..name.len()) {

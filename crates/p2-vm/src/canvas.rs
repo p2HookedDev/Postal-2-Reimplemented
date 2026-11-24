@@ -20,8 +20,8 @@ const CHAR_HEIGHT: f32 = 16.0;
 pub enum CanvasItem {
     Tile { material: Arc<str>, position: [f32; 2], size: [f32; 2], uv: [f32; 4], color: [u8; 4], style: u8 },
     Text { text: String, position: [f32; 2], scale: [f32; 2], color: [u8; 4], font: Option<Arc<str>> },
-    /// `DrawActor` (first-person weapons): `fov` 0 is the view's. Placed as it was at the call (`scale`: `DrawScale` ×
-    /// `DrawScale3D`): `MapScreen` draws one marker actor at every point of its trail, moving it between the calls.
+    /// `DrawActor` (first-person weapons): `fov` 0 is the view's. Placed as it was at the call (`scale`: `DrawScale`
+    /// × `DrawScale3D`): `MapScreen` draws one marker actor at every point of its trail, moving it between the calls.
     Actor { actor: ObjectId, clear_z: bool, fov: f32, location: Vector, rotation: Rotator, scale: Vector },
 }
 
@@ -29,7 +29,6 @@ pub enum CanvasItem {
 pub(crate) struct Canvas {
     pub(crate) object: Option<ObjectId>,
     items: Vec<CanvasItem>,
-    /// `DrawActor(None, _, true)` cleared the depth: the next call takes `ClearZ`.
     clear_next: bool,
     paths: FxHashMap<ObjectId, Arc<str>>,
     fonts: FxHashMap<ObjectId, Option<Arc<Font>>>,
@@ -37,8 +36,6 @@ pub(crate) struct Canvas {
 }
 
 impl<L: LoaderRef> Vm<L> {
-    /// How far the HUD's own drawing stays in from the left and right sides; interactions (menus, the map, loading
-    /// and day screens) keep the whole canvas.
     pub fn set_hud_inset(&mut self, inset: f32) {
         self.media.canvas.hud_inset = inset;
     }
@@ -104,7 +101,6 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     pub(crate) fn canvas_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
-        // Reading a font can open a side package, which needs `Vm`; `Canvas` then finds it in `fonts`.
         if matches!(native, Native::StrLen | Native::TextSize | Native::DrawTextClipped | Native::DrawText)
             && let Some(font) = this.and_then(|canvas| self.store.object_of(canvas, Prop::Font))
         {
@@ -147,7 +143,7 @@ impl Canvas {
             _ => 1,
         };
         match native {
-            // Sizes of a string: `StrLen` (wrapped) and `TextSize` (clipped) alike for now.
+            // `StrLen` (wrapped) and `TextSize` (clipped) give the same size.
             Native::StrLen | Native::TextSize => {
                 let [width, height] = self.canvas_font(store, canvas).size(&string(args));
                 for (slot, value) in args.iter_mut().skip(1).zip([width, height]) {
@@ -155,7 +151,7 @@ impl Canvas {
                 }
             }
             // At the whole-pixel position; `bCenter` is ignored and the position does not move.
-            // Retail cuts a glyph at the clip edge; we draw it whole (dropping it hid text in tight menus).
+            // Retail cuts a glyph at the clip edge; we draw it whole, as dropping it hid text in tight menus.
             Native::DrawTextClipped => {
                 let text = string(args);
                 let font = self.canvas_font(store, canvas);
@@ -268,7 +264,6 @@ impl CanvasFont {
     }
 }
 
-/// Widths truncate to whole pixels; an ESC colour code (ESC and three bytes) takes no room.
 fn glyph_advances<'a>(font: Option<&'a Font>, text: &'a str, scale: f32, space_x: f32) -> impl Iterator<Item = (char, f32)> + 'a {
     let spacing = font.map_or(0.0, |font| space_x + font.kerning as f32);
     let mut chars = text.chars();
@@ -290,8 +285,6 @@ fn glyph_advances<'a>(font: Option<&'a Font>, text: &'a str, scale: f32, space_x
     })
 }
 
-/// A tile across the whole narrowed canvas (a full-screen fill or overlay) still covers the whole window, at the same
-/// texels per pixel; everything else moves in by the inset.
 fn inset_hud_items(items: &mut [CanvasItem], inset: f32, narrowed: f32) {
     for item in items {
         match item {
@@ -341,9 +334,9 @@ fn clip_text(mut x: f32, glyphs: &[(char, f32)], clip: f32) -> (String, Option<f
     (kept, start)
 }
 
-/// A call shares the previous call's slot when nothing was painted between them, it does not clear the depth and its
-/// field of view is the same: retail draws it into that call's depth, with nothing over the first (`MapScreen`'s trail:
-/// up to 10 calls).
+/// A call shares the previous call's slot when nothing was painted between them, it does not clear the depth and
+/// its field of view is the same: retail draws it into that call's depth, with nothing over the first
+/// (`MapScreen`'s trail: up to 10 calls).
 pub fn call_slots(items: &[CanvasItem]) -> Vec<usize> {
     let mut slots: Vec<usize> = Vec::new();
     let mut previous = None;

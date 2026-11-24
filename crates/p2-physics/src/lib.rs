@@ -1,6 +1,6 @@
-//! Rigid-body physics for the game's Karma actors, on Rapier. Engine-agnostic: positions are Unreal
-//! units and axes (Z up), rotations quaternions (X, Y, Z, W); the VM converts rotators and owns which actor a body
-//! belongs to.
+//! Rigid-body physics for the game's Karma actors, on Rapier. Engine-agnostic: positions are Unreal units and
+//! axes (Z up), rotations quaternions (X, Y, Z, W); the VM converts rotators and owns which actor a body belongs
+//! to.
 
 #![forbid(unsafe_code)]
 
@@ -21,21 +21,18 @@ pub use parts::{Parts, SegmentHit};
 pub use ragdoll::{JointLimit, JointParams, PartParams, RagdollParams, shapes_inertia};
 
 pub const UNITS_PER_METER: f32 = 50.0;
-/// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing.
-/// Every step has this length: a step whose length changes from one to the next leaves resting bodies trembling, so a
-/// pile of corpses never falls asleep. Time not stepped yet is owed to the next call.
+/// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing. Every step has this length:
+/// a step whose length changes from one to the next leaves resting bodies trembling, so a pile of corpses never
+/// falls asleep. Time not stepped yet is owed to the next call.
 const STEP: f32 = 1.0 / 60.0;
 const MAX_STEPS: u32 = 30;
 
-/// The whole steps `owed` holds, and what stays owed. A call past the limit loses time.
 fn steps_owed(owed: f32) -> (u32, f32) {
     let steps = (owed / STEP + 1e-3) as u32;
     if steps > MAX_STEPS { (MAX_STEPS, 0.0) } else { (steps, (owed - steps as f32 * STEP).max(0.0)) }
 }
-/// Pairs multiply their coefficients, so the level leaves a body's own values in charge.
 const LEVEL_FRICTION: f32 = 1.0;
 const LEVEL_RESTITUTION: f32 = 1.0;
-/// Unreal units past a mover's swept bounds within which its move wakes resting bodies.
 const MOVER_REACH: f32 = 16.0;
 
 fn to_rapier(v: p2_math::Vector) -> Vector {
@@ -82,7 +79,6 @@ pub enum Shape {
     Sphere(p2_math::Vector, f32),
     Capsule(p2_math::Vector, p2_math::Vector, f32),
     Hull(Vec<[f32; 3]>),
-    /// Kinematic movers only: a triangle mesh has no mass.
     Mesh(Vec<[[f32; 3]; 3]>),
 }
 
@@ -199,12 +195,9 @@ pub struct World {
     /// Each ragdoll's parts. A ragdoll at rest goes dormant on its own: Rapier sleeps touching bodies only all at
     /// once, so one moving corpse kept every corpse of its pile awake.
     ragdolls: Vec<ragdoll::Resting>,
-    /// Rest marks moved since the profile log last asked: by a part's place, by its turn.
     pub rest_broken: [u32; 2],
     pub wakes: u32,
     owed: f32,
-    /// Where each moving body was before the last step: its pose is given between that and the step's, by the time
-    /// owed, so bodies move evenly however the calls fall on the steps.
     before: FxHashMap<RigidBodyHandle, Pose>,
 }
 
@@ -213,7 +206,6 @@ impl World {
         Self::with_threads(gravity, std::thread::available_parallelism().map_or(2, |cores| cores.get() / 4).clamp(2, 4))
     }
 
-    /// A world of a few bodies gains nothing from more than one thread.
     pub fn with_threads(gravity: p2_math::Vector, threads: usize) -> Self {
         let parameters = IntegrationParameters { length_unit: UNITS_PER_METER, ..IntegrationParameters::default() };
         let mut pipeline = PhysicsPipeline::new();
@@ -246,7 +238,6 @@ impl World {
         }
     }
 
-    /// Up to one step late: between the last two steps' poses, by the time owed.
     pub fn pose(&self, id: BodyId) -> Option<(p2_math::Vector, [f32; 4])> {
         let body = self.bodies.get(id.0)?;
         let now = body.position();

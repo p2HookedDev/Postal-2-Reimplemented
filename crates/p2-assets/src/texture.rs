@@ -21,7 +21,6 @@ pub enum TextureFormat {
 }
 
 impl TextureFormat {
-    /// 0 for the formats nothing decodes.
     pub fn mip_bytes(self, width: u32, height: u32) -> usize {
         let (width, height) = (width as usize, height as usize);
         let blocks = width.div_ceil(4) * height.div_ceil(4);

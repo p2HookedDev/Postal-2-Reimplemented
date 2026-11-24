@@ -41,7 +41,6 @@ impl TextureQuality {
         skip.clamp(0, (mips - 1).max(0)) as u32
     }
 
-    /// `None` for an image whose sampler [`Self::sampler`] did not make.
     pub fn refreshed_sampler(&self, image: &Image) -> Option<ImageSamplerDescriptor> {
         let ImageSampler::Descriptor(now) = &image.sampler else { return None };
         let lod_set = now.label.as_deref()?.strip_prefix(LOD_SET_LABEL)?.parse().ok()?;
@@ -52,8 +51,6 @@ impl TextureQuality {
         }
     }
 
-    /// Skipped mips become the lowest level used. `UseTrilinear` picks the mip filter, `LevelOfAnisotropy`
-    /// the min and mag filter; Bevy needs every filter linear then.
     pub fn sampler(&self, lod_set: u8, mips: u32, wrap: [ImageAddressMode; 2]) -> ImageSampler {
         let anisotropy = self.anisotropy.clamp(1, 16);
         let mipmap_filter = if self.trilinear || anisotropy > 1 { ImageFilterMode::Linear } else { ImageFilterMode::Nearest };
@@ -69,7 +66,6 @@ impl TextureQuality {
     }
 }
 
-/// The quality new images are made with; `render::sampler_refresh` brings the ones already made up to it.
 static QUALITY: Mutex<TextureQuality> = Mutex::new(TextureQuality::DEFAULT);
 
 pub fn set_texture_quality(quality: TextureQuality) {

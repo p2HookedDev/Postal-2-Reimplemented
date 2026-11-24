@@ -95,7 +95,6 @@ fn saved_light(pkg: &Package, data: &[u8], reference: i32) -> Option<MeshLight> 
     Some(light)
 }
 
-/// `ZoneInfo` defaults: saturation 255, hue and brightness 0.
 fn saved_ambient(pkg: &Package, data: &[u8], export: &p2_package::Export) -> [f32; 3] {
     let object = pkg.read_object(data, export).unwrap();
     let byte = |name, default| match object.property(pkg, name) {

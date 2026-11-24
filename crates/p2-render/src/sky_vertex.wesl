@@ -1,6 +1,3 @@
-// The vertex stage of a sky-zone material: Bevy's mesh vertex stage with the sky's depth squeeze, and in a prepass no
-// triangle, so the depth, normal and motion textures at sky pixels stay as the level left them.
-
 import bevy_pbr::{
     render::{
         mesh_bindings::mesh,

@@ -22,7 +22,6 @@ const PROBE_NAMES: [&str; 64] = [
     "Probe54", "Probe55", "Probe56", "Probe57", "Probe58", "Probe59", "Probe60", "Probe61", "Probe62", "All",
 ];
 
-/// Callers pass the script spelling, so an exact match is tried first (about 1 700 events a frame).
 pub(crate) fn probe_bit(name: &str) -> Option<u32> {
     PROBE_NAMES
         .iter()
@@ -123,7 +122,6 @@ pub(crate) enum Event {
     PostSaveGame,
 }
 
-/// Script spellings of [`Event`], in the same order as its variants.
 pub(crate) const EVENT_NAMES: [&str; 87] = [
     "Tick", "Timer", "PlayerTick", "Touch", "UnTouch", "Bump", "HitWall", "Landed", "Falling", "BeginState", "EndState",
     "BaseChange", "Attach", "Detach", "AnimEnd", "EndedRotation", "EncroachingOn", "EncroachedBy", "UpdateEyeHeight",
@@ -140,7 +138,6 @@ pub(crate) const EVENT_NAMES: [&str; 87] = [
     "PreSaveGame", "PostSaveGame",
 ];
 
-/// An event's name and probe bit: from its script spelling, or interned once for a fixed engine event.
 pub trait EventKey {
     fn resolve<L: LoaderRef>(self, vm: &mut Vm<L>) -> (NameId, Option<u32>);
 }
@@ -176,16 +173,11 @@ pub(crate) struct Latent {
 #[derive(Debug, Default)]
 pub(crate) struct States {
     objects: Vec<Option<ObjectState>>,
-    /// By object index, the [`ObjectState::key`] of its state (0: none, or past the end): what every virtual call reads.
     keys: Vec<u32>,
     pub probes_disabled: FxHashMap<ObjectId, u64>,
-    /// Objects running their `EndState`: a `GotoState` from there does not call `EndState` again.
     pub in_end_state: FxHashSet<ObjectId>,
     pub changed: FxHashSet<ObjectId>,
     generations: u32,
-    /// By object index: the store's stamp, plus one, when the actor was last found resting; 0 when it was not, or
-    /// when its state, probes or animation were touched since. With no write to its memory since that stamp either,
-    /// it still rests.
     rested: Vec<u64>,
 }
 
@@ -199,14 +191,12 @@ impl States {
         self.objects.get_mut(object.0 as usize)?.as_mut()
     }
 
-    /// Something a resting actor's rest depends on, outside its memory, may have changed.
     pub(crate) fn stir(&mut self, object: ObjectId) {
         if let Some(rested) = self.rested.get_mut(object.0 as usize) {
             *rested = 0;
         }
     }
 
-    /// The stamp the actor was found resting at, if nothing stirred it since.
     pub(crate) fn rested_at(&self, object: ObjectId) -> Option<u64> {
         self.rested.get(object.0 as usize)?.checked_sub(1)
     }
@@ -265,7 +255,6 @@ pub(crate) struct ObjectState {
     pub finish_anim: Option<(ObjectId, i32)>,
     pub finish_interpolation: Option<ObjectId>,
     pub latent_move: Option<crate::ai_move::LatentMove>,
-    /// Changes on every `GotoState`, so running state code notices it was replaced.
     pub generation: u32,
     pub key: u32,
 }
@@ -346,7 +335,6 @@ impl<L: LoaderRef> Vm<L> {
         };
         let current = self.script.states.of(object).map(|s| s.state);
         let changed = current != target;
-        // A `GotoState` inside `EndState` skips `EndState`; if it entered a state, this one is preempted.
         if changed && current.is_some() && !self.script.states.in_end_state.contains(&object) {
             self.script.states.changed.remove(&object);
             self.script.states.in_end_state.insert(object);

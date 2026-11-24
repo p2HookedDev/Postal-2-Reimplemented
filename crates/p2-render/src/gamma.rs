@@ -1,5 +1,5 @@
-//! Video menu's Brightness, Contrast and Gamma: away from identity, 3D cameras render to an image
-//! drawn through the ramp. `bevy_egui` input needs window cameras, so HUD and menus are not ramped.
+//! Brightness, contrast and gamma: away from identity, 3D cameras render to an image drawn through the ramp.
+//! The HUD and menus are not ramped because `bevy_egui` input needs window cameras.
 
 use bevy::app::{App, Plugin, Startup, Update};
 use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -99,7 +99,6 @@ fn apply(
     window: Single<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<GammaMaterial>>,
-    // The HUD stays on the window, after the ramp.
     mut cameras: Query<(&mut RenderTarget, Has<SceneView>), (Or<(With<Camera3d>, With<CanvasLayer>, With<ToneCamera>)>, Without<HudCamera>)>,
     mut ramp_camera: Query<&mut Camera>,
 ) {

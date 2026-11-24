@@ -1,4 +1,3 @@
-// Carries photo mode's view. Hidden, touching nothing, moved only by ModernPhotoMode and gone when it closes.
 class ModernPhotoCamera extends Actor
 	notplaceable
 	transient;

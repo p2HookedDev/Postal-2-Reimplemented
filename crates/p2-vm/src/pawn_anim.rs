@@ -4,8 +4,6 @@ use crate::enums::{ENetRole, EPhysics, EProbe};
 use crate::anim::Playback;
 use crate::{Encroachment, Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop, Kind};
 
-/// Channels: turning right / left in place, then `MovementAnims` forward, back, left, right; the four after those
-/// hold the previous movement set while it blends out.
 const RIGHT_TURN_CHANNEL: i32 = 2;
 const LEFT_TURN_CHANNEL: i32 = 3;
 const FIRST_MOVEMENT_CHANNEL: i32 = 4;
@@ -183,7 +181,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// `ViewPitch` is a signed 16-bit rotation; the half turn stays positive.
     fn update_twist_look(&mut self, pawn: ObjectId, delta: f32) {
         let yaw = self.store.rotator_of(pawn, Prop::Rotation).yaw;
         let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));

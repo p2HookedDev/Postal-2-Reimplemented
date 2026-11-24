@@ -1,4 +1,3 @@
-// Photo mode's picture page: the eight picture sliders and the warmth, each on its photo key.
 class ModernMenuPhotoPicture extends ModernMenuPhoto;
 
 var string                  PageKeys[9];

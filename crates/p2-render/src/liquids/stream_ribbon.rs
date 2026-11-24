@@ -9,45 +9,33 @@ use p2_vm::FluidType;
 use super::air_draw::{AirMesh, Shape};
 
 pub const RINGS: usize = 21;
-/// Sides of a jet's tube.
 pub const SIDES: u32 = 8;
-/// Arc points made between two strip points.
 const SUBDIVIDE: usize = 4;
-/// Where a blood stream breaks into drops, as a share of its arc, between beats and at the systole.
 const BREAK: (f32, f32) = (0.55, 0.9);
-/// A puke gush's length in seconds, the share of it where its surge peaks, and the trickle between surges, against the
-/// stream's mean flow. Bending the clock by `GUSH_WARP` keeps the gushes from beating like a metronome.
+/// A puke gush's length in seconds, the share of it where its surge peaks, and the trickle between surges,
+/// against the stream's mean flow. Bending the clock by `GUSH_WARP` keeps the gushes from beating like a
+/// metronome.
 const GUSH_SECONDS: f32 = 0.6;
 const GUSH_PEAK: f32 = 0.15;
 pub const TRICKLE: f32 = 0.2;
 const GUSH_WARP: f32 = 0.12;
-/// Unreal units a second a gush runs down a stream whose pour has no speed, and the least speed a jet thins from.
 const LEAST_POUR: f32 = 100.0;
-/// Ropes a paste's sheet is drawn with: the main one, then thinner ones that drift apart along the arc.
 const SHEET_STRANDS: u32 = 4;
-/// Unreal units over which the burning front fades in.
 const FRONT_SOFT: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ring {
     pub at: Vec3,
     pub way: Vec3,
-    /// Unreal units from the nozzle.
     pub along: f32,
 }
 
-/// One frame of a stream as it is drawn.
 pub struct StreamDraw {
     pub kind: FluidType,
-    /// How far back from where it lands it burns, in Unreal units, once it has caught fire.
     pub burn_reach: Option<f32>,
-    /// Display brightness.
     pub light: Vec3,
-    /// Seconds into its retch.
     pub retch: f32,
-    /// Unreal units a second it leaves the nozzle at.
     pub speed: f32,
-    /// Its gravity, Unreal units a second squared downward.
     pub fall: f32,
 }
 
@@ -60,13 +48,12 @@ pub fn stream_radius(kind: FluidType) -> f32 {
     }
 }
 
-/// Whether a liquid is a paste: its stream surges in gushes and throws chunks.
 pub fn paste(kind: FluidType) -> bool {
     matches!(kind, FluidType::Puke | FluidType::BloodyPuke)
 }
 
-/// A stream's flow against its mean `seconds` into its retch: 1 for a steady stream. A paste surges in gushes, each a
-/// fast surge and a slow ebb into a trickle; the mean stays 1, so it pours what a steady stream would.
+/// A stream's flow against its mean `seconds` into its retch: 1 for a steady stream. A paste surges in gushes,
+/// each a fast surge and a slow ebb into a trickle; the mean stays 1, so it pours what a steady stream would.
 pub fn gush(kind: FluidType, seconds: f32) -> f32 {
     if !paste(kind) {
         return 1.0;
@@ -76,12 +63,10 @@ pub fn gush(kind: FluidType, seconds: f32) -> f32 {
     TRICKLE + (1.0 - TRICKLE) * x * (1.0 - x).exp() / (GUSH_PEAK * E)
 }
 
-/// The share of the arc drawn: a blood stream breaks into drops, which beat with the wound.
 pub fn reach(kind: FluidType, beat: f32) -> f32 {
     if kind == FluidType::Blood { BREAK.0 + (BREAK.1 - BREAK.0) * beat } else { 1.0 }
 }
 
-/// `points` from the end nearer `nozzle`, ending where the first segment between two of them meets the level.
 pub fn cut_at_hit(nozzle: Vec3, points: &[Vec3], hit: &impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>) -> Vec<Vec3> {
     let mut path = points.to_vec();
     if path.last().is_some_and(|last| last.distance_squared(nozzle) < path[0].distance_squared(nozzle)) {
@@ -98,8 +83,6 @@ fn catmull([a, b, c, d]: [Vec3; 4], t: f32) -> Vec3 {
     0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t * t + (3.0 * b - a - 3.0 * c + d) * t * t * t)
 }
 
-/// `RINGS` rings along the arc through `path` from its first point, cut at `reach` of its length; none for fewer
-/// than two points.
 pub fn stream_arc(path: &[Vec3], reach: f32) -> Vec<Ring> {
     if path.len() < 2 {
         return Vec::new();
@@ -131,18 +114,19 @@ pub fn stream_arc(path: &[Vec3], reach: f32) -> Vec<Ring> {
         .collect()
 }
 
-/// How much a ring burns, 0 to 1. Fire climbs in a straight line from where the stream lands, as the game's starter does.
+/// How much a ring burns, 0 to 1. Fire climbs in a straight line from where the stream lands, as the game's
+/// starter does.
 fn burning(stream: &StreamDraw, ring: &Ring, landing: &Ring) -> f32 {
     stream.burn_reach.map_or(0.0, |reach| ((reach - ring.at.distance(landing.at)) / FRONT_SOFT + 0.5).clamp(0.0, 1.0))
 }
 
-/// The stream's vertices: a tube for a jet, a sheet for a paste. The seed word is the ring's share of the arc.
 pub fn ring_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
     if paste(stream.kind) { sheet_vertices(rings, stream, mesh) } else { tube_vertices(rings, stream, mesh) }
 }
 
-/// `SIDES` vertices a ring around a frame carried along the arc without twisting. A vertex's way is its offset from
-/// the axis: the jet's radius, thinned as it speeds up so the same flow passes every ring (r = r0 sqrt(v0 / v)).
+/// `SIDES` vertices a ring around a frame carried along the arc without twisting. A vertex's way is its offset
+/// from the axis: the jet's radius, thinned as it speeds up so the same flow passes every ring (r = r0 sqrt(v0 /
+/// v)).
 fn tube_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
     let (Some(first_ring), Some(last_ring)) = (rings.first(), rings.last()) else { return };
     let end = last_ring.along.max(1e-6);
@@ -172,9 +156,9 @@ fn tube_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
     }
 }
 
-/// Two vertices a ring for each rope, widened to face the eye. A corner's x is its side times one more than its rope.
-/// The way's length is the stream's width there against its mean: the gush that left the nozzle `along / speed`
-/// seconds before, `retch` seconds in.
+/// Two vertices a ring for each rope, widened to face the eye. A corner's x is its side times one more than its
+/// rope. The way's length is the stream's width there against its mean: the gush that left the nozzle `along /
+/// speed` seconds before, `retch` seconds in.
 fn sheet_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
     let Some(last_ring) = rings.last() else { return };
     let end = last_ring.along.max(1e-6);

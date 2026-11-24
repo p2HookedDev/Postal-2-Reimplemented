@@ -111,9 +111,9 @@ pub(crate) fn skin_paths(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<Option
     vm.store.objects_of(actor, Prop::Skins).map(|skin| skin.map(|skin| vm.store.object(skin).path.clone())).collect()
 }
 
-/// Key of what `actor`'s model is built from. Retail draws whatever the actor holds each frame, so scripts change looks
-/// live (`P2Pawn.SwapToBurnVictim`); the host rebuilds a model when its key changes ([`look_key`]). `AmbientGlow` is
-/// left out: it changes the light, not the model.
+/// Key of what `actor`'s model is built from. Retail draws whatever the actor holds each frame, so scripts change
+/// looks live (`P2Pawn.SwapToBurnVictim`); the host rebuilds a model when its key changes ([`look_key`]).
+/// `AmbientGlow` is left out: it changes the light, not the model.
 pub fn actor_look(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u64 {
     let skins = vm.store.objects_of(actor, Prop::Skins);
     let draw_type = vm.store.byte_of(actor, Prop::DrawType);
@@ -121,7 +121,8 @@ pub fn actor_look(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u64 {
     look_key([vm.store.object_of(actor, Prop::Mesh), vm.store.object_of(actor, Prop::StaticMesh)].into_iter().chain(skins), draw_type, unlit)
 }
 
-/// Applied to the transform as it changes: scripts grow puddles and streams every frame, so not part of [`actor_look`].
+/// Applied to the transform as it changes: scripts grow puddles and streams every frame, so not part of
+/// [`actor_look`].
 pub fn actor_scale(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vector {
     let draw_scale = match vm.store.get(actor, Prop::DrawScale) {
         Some(Value::Float(scale)) => scale,
@@ -141,7 +142,6 @@ pub fn look_key<T: std::hash::Hash>(objects: impl IntoIterator<Item = Option<T>>
 }
 
 pub fn skeletal_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SkeletalActor> {
-    // Hidden ones too: scripts may show them later (the followers' visibility follows `bHidden`).
     let mesh = drawn_mesh(vm, actor, EDrawType::Mesh, Prop::Mesh)?;
     let (location, rotation, scale, pre_pivot) = actor_placement(vm, actor);
     Some(SkeletalActor {
@@ -251,8 +251,8 @@ pub struct SpriteActor {
     pub hidden: bool,
 }
 
-/// Hidden ones that can move are kept (scripts may show them later); static hidden ones (lights, navigation points:
-/// editor-only sprites retail hides in game through `bHidden`) are not.
+/// Hidden ones that can move are kept (scripts may show them later); static hidden ones (lights, navigation
+/// points: editor-only sprites retail hides in game through `bHidden`) are not.
 pub fn sprite_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SpriteActor> {
     if vm.draw_type_of(actor) != Some(EDrawType::Sprite) || vm.store.is_deleted(actor) || (vm.store.flag_of(actor, Prop::bHidden) && vm.store.flag_of(actor, Prop::bStatic)) {
         return None;
@@ -279,7 +279,6 @@ pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight>
     (vm.store.byte_of(actor, Prop::LightType) != 0 && !vm.store.is_deleted(actor)).then(|| light_values(vm, actor))
 }
 
-/// The actor's light properties, whether its `LightType` has it lit or not.
 pub fn light_values(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> MeshLight {
     let (location, rotation) = location_rotation(vm, actor);
     MeshLight {
@@ -323,7 +322,6 @@ pub fn zone_fog(vm: &Vm<impl LoaderRef>, zone: ObjectId) -> Option<ZoneFog> {
 pub struct AmbientActor {
     pub sound: ObjectId,
     pub location: Vector,
-    /// `SoundRadius`; 0 = the audio default radius.
     pub radius: f32,
     pub volume: f32,
     pub pitch: f32,
@@ -355,7 +353,6 @@ pub struct EmitterActor {
     pub meshes: Vec<Option<String>>,
     pub name: String,
     pub liquid: Option<LiquidRole>,
-    /// An explosion's `ExplosionRadius` and `ExplosionMag`, when the scripts gave it both.
     pub blast: Option<(f32, f32)>,
 }
 
@@ -390,7 +387,6 @@ pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Emitter
     Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone(), liquid: liquid_role(|kind| vm.store.is_a(actor, kind)), blast })
 }
 
-/// A drip feeder is a feeder too, and a flow trail a trail: the narrower class is tested first.
 fn liquid_role(is_a: impl Fn(Kind) -> bool) -> Option<LiquidRole> {
     Some(if is_a(Kind::FluidPuddle) {
         LiquidRole::Puddle
@@ -477,14 +473,12 @@ pub struct ProjectorActor {
     pub rotation: Rotator,
     pub draw_scale: f32,
     pub max_trace: f32,
-    /// `FOV`: 0 = orthographic.
     pub fov: i32,
     pub blending: ProjectorBlending,
     pub material_blending: ProjectorBlending,
     pub targets: ProjectTargets,
     pub tagged: bool,
     pub follows: Option<ObjectId>,
-    /// `LifeSpan` when the frame was sent, else the time a splat keeps its projection (its `UseLife`): 0 = neither.
     pub life: f32,
 }
 

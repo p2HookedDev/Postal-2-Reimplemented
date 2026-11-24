@@ -1,5 +1,5 @@
-//! What a hit leaves as liquid beyond its GPU spray: heavy drops that fly with the other drops and pour nothing where
-//! they land; the scripts' splats mark the ground.
+//! What a hit leaves as liquid beyond its GPU spray: heavy drops that fly with the other drops and pour nothing
+//! where they land; the scripts' splats mark the ground.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::message::MessageReader;

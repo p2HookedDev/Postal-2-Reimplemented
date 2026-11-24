@@ -96,8 +96,8 @@ fn restyle<M: bevy::asset::Asset>(
     restyled
 }
 
-/// A prepared material holds the view of the texture it was prepared with, so it shows a switched image's new texture
-/// only once prepared again.
+/// A prepared material holds the view of the texture it was prepared with,
+/// so it shows a switched image's new texture only once prepared again.
 pub fn rebind_materials(world: &mut bevy::ecs::world::World, images: &HashSet<AssetId<Image>>) {
     touch_drawing::<StandardMaterial>(world, images, |material| material);
     touch_drawing::<SkyStandardMaterial>(world, images, |material| &material.base);

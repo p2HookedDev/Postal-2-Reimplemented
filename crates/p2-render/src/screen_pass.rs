@@ -1,6 +1,3 @@
-//! What the modern full-screen passes share: the views they draw in, the settings level they follow and one uniform
-//! per view, carried on the camera as the pass's own component.
-
 use std::marker::PhantomData;
 
 use bevy::app::{App, Plugin, PostUpdate};
@@ -31,13 +28,10 @@ use bevy::render::RenderApp;
 use crate::components::SceneView;
 use p2_host::display::Settings;
 
-/// A modern setting's level; 0 without settings.
 pub fn modern_level(settings: Option<&Settings>, name: &str) -> u8 {
     settings.map_or(0, |settings| settings.modern_level(name))
 }
 
-/// On a scene view the passes draw in: active, single-sampled (they bind the prepass textures as such) and with a
-/// depth prepass.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct PassView;
 
@@ -49,7 +43,6 @@ impl Plugin for PassViewPlugin {
     }
 }
 
-/// Extracts the pass's `T` from the views; the views are tagged once however many passes ask.
 pub fn add_view_pass<T: ExtractComponent<RenderApp>>(app: &mut App) {
     if !app.is_plugin_added::<PassViewPlugin>() {
         app.add_plugins(PassViewPlugin);
@@ -64,7 +57,6 @@ pub fn tag_pass_views(mut commands: Commands, views: Query<(Entity, &Camera, &Ms
     }
 }
 
-/// Puts the pass's `wanted` on the view only when it differs from what is there, or takes the pass off.
 pub fn follow_view_pass<T: Component + PartialEq>(mut view: EntityCommands, shown: Option<&T>, wanted: Option<T>) {
     match wanted {
         Some(wanted) if shown != Some(&wanted) => {
@@ -77,7 +69,6 @@ pub fn follow_view_pass<T: Component + PartialEq>(mut view: EntityCommands, show
     }
 }
 
-/// `value` laid out as WGSL lays it out; empty only when memory runs out.
 pub(crate) fn shader_bytes<T: ShaderType + WriteInto + ?Sized>(value: &T) -> Vec<u8> {
     let mut bytes = encase::StorageBuffer::new(Vec::new());
     bytes.write(value).map(|()| bytes.into_inner()).unwrap_or_default()
@@ -92,7 +83,6 @@ impl<T: ShaderType + WriteInto + Send + Sync + 'static> Default for PassUniforms
     }
 }
 
-/// Where a view's `T` sits in its `PassUniforms<T>`.
 #[derive(Component)]
 pub struct PassUniformOffset<T: Send + Sync + 'static>(pub u32, PhantomData<fn() -> T>);
 
@@ -112,8 +102,8 @@ pub fn prepare_pass_uniforms<T: Component + ShaderType + WriteInto>(
     }
 }
 
-/// A pass's bind group for each view, made again only when `K`, the ids of what it holds, changes. The depth prepass
-/// goes in `K` by its texture's id, as Bevy makes a new view of it every frame.
+/// Rebuilt only when `K` changes. The depth prepass goes in `K` by its texture's id,
+/// as Bevy makes a new view of it every frame.
 pub struct ViewBindGroups<K>(EntityHashMap<Option<(K, BindGroup)>>);
 
 impl<K> Default for ViewBindGroups<K> {
@@ -137,13 +127,11 @@ fn half_size(full: UVec2) -> UVec2 {
     (full + UVec2::ONE) / 2
 }
 
-/// The size of a half-size texture over the view's viewport, `None` while the viewport is empty.
 pub(crate) fn half_viewport(view: &ExtractedView) -> Option<UVec2> {
     let size = UVec2::new(view.viewport.z, view.viewport.w);
     (size.min_element() > 0).then(|| half_size(size))
 }
 
-/// A texture to march into, from Bevy's texture cache, which hands out a new one when `size` changes.
 pub fn half_texture(cache: &mut TextureCache, render_device: &RenderDevice, label: &'static str, format: TextureFormat, size: UVec2) -> CachedTexture {
     cache.get(
         render_device,
@@ -166,8 +154,6 @@ pub struct ScreenStep<'a> {
     pub bind_group: &'a BindGroup,
 }
 
-/// A half-size march into `half`, then a full-size composite onto the frame within the camera's viewport, both bound
-/// at the same dynamic `offset` and timed as one span.
 pub struct HalfThenFull<'a> {
     pub span: &'static str,
     pub half: &'a TextureView,
@@ -218,7 +204,6 @@ impl HalfThenFull<'_> {
     }
 }
 
-/// A filtered colour texture and the sampler that filters it, as a pass's bind group reads them.
 pub(crate) fn filtered_texture_and_sampler() -> (BindGroupLayoutEntryBuilder, BindGroupLayoutEntryBuilder) {
     (binding_types::texture_2d(TextureSampleType::Float { filterable: true }), binding_types::sampler(SamplerBindingType::Filtering))
 }
@@ -238,7 +223,6 @@ mod tests {
     #[derive(Component, Debug, Clone, Copy, PartialEq)]
     struct Pass(u8);
 
-    /// Whether the follow wrote the pass this step.
     fn follow(world: &mut World, view: Entity, wanted: Option<Pass>) -> bool {
         world.clear_trackers();
         let shown = world.get::<Pass>(view).copied();

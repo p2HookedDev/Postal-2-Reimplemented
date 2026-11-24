@@ -2,17 +2,14 @@ use std::ops::Range;
 
 use crate::{ClassId, NameId, memory};
 
-/// What a write moves: `written` always, `drawn` too when it lands on a property the host draws from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Stamp {
     Written,
     Drawn,
 }
 
-/// The longest run of words compared before a write moves `drawn`: a vector, a rotator, a colour.
 const COMPARED_WORDS: usize = 4;
 
-/// Where a write lands in an object's memory: `words` words from `word`, `heaps` heap slots from `heap`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Span {
     pub(crate) word: u32,
@@ -35,15 +32,12 @@ impl Span {
     }
 }
 
-/// An object. Objects that script data references but the VM has not loaded or created (textures, classes,
-/// sounds, ...) are stubs: no `class`, no properties.
 #[derive(Debug, Clone)]
 pub struct Object {
     pub name: NameId,
     pub class_name: NameId,
     pub path: String,
     pub class: Option<ClassId>,
-    /// Private, so every write passes [`Object::mem_mut`] and leaves its stamp.
     mem: memory::Mem,
     written: u64,
     drawn: u64,
@@ -95,13 +89,11 @@ impl Object {
         &mut self.mem
     }
 
-    /// The store's stamp at the last write to the object's memory, whether or not the write changed a value.
     #[inline]
     pub fn written(&self) -> u64 {
         self.written
     }
 
-    /// The store's stamp at the last write that changed a property the host draws from (the drawn list).
     #[inline]
     pub fn drawn(&self) -> u64 {
         self.drawn

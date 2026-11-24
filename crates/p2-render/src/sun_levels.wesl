@@ -1,6 +1,5 @@
-// The cached sun levels as `sun_levels.rs` lays them out: tiles of depth, and under them one row of records. A
-// material binds the image in its depth map slot, a particle in its own group (`P2_PARTICLE_LEVELS`); Bevy's 1 x 1
-// default image stands for no levels. The image is fetched at each read, as `lamp_shadow.wesl` fetches its atlas.
+// The cached sun levels as `sun_levels.rs` lays them out: depth tiles with one row of records under them.
+// Bevy's 1 x 1 default image stands for no levels. The image is fetched at each read.
 @if(!P2_PARTICLE_LEVELS && !BINDLESS)
 import bevy_pbr::render::pbr_bindings;
 @if(!P2_PARTICLE_LEVELS && BINDLESS)
@@ -17,10 +16,8 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 
 const HEADER_TEXELS: u32 = 1u;
 const RECORD_TEXELS: u32 = 24u;
-// Hardware filtering weighs its four compares with 8-bit fractions on desktop GPUs; the gather does the same.
 const WEIGHT_STEPS: f32 = 256.0;
 
-// The material's bindless texture and sampler; unread without bindless.
 struct LevelSource {
     texture: u32,
     sampling: u32,
@@ -29,7 +26,6 @@ struct LevelSource {
 struct LevelAtlas {
     source: LevelSource,
     size: vec2<u32>,
-    // Without a filterable 32-bit float format each float's bits fill the four bytes of a texel.
     packed: bool,
 }
 
@@ -87,7 +83,6 @@ fn source_gather(source: LevelSource, uv: vec2<f32>) -> vec4<f32> {
 }
 }
 
-// Columns r, g, b and a of the four texels.
 fn source_gather_bytes(source: LevelSource, uv: vec2<f32>) -> mat4x4<f32> {
 @if(LAMP_MASK_PASS) {
     return mat4x4<f32>(
@@ -132,7 +127,6 @@ fn unpacked(texel: vec4<f32>, packed: bool) -> f32 {
 
 fn level_atlas(source: LevelSource) -> LevelAtlas {
     let size = source_size(source);
-    // A float texel loads with alpha 1; a packed level count's high byte is never 255.
     let packed = size.x > 1u && source_load(source, vec2(0u, size.y - 1u)).w < 1.0;
     return LevelAtlas(source, size, packed);
 }
@@ -164,7 +158,6 @@ fn level_texel_size(atlas: LevelAtlas, level: u32) -> f32 {
     return record_texel(atlas, level_first(level) + 16u);
 }
 
-// The matrix is stored by rows: the first two give a point's place in the level, all a cheap test needs.
 fn level_rows_xy(atlas: LevelAtlas, level: u32) -> mat2x4<f32> {
     let first = level_first(level);
     return mat2x4<f32>(record_row(atlas, first), record_row(atlas, first + 4u));
@@ -187,7 +180,6 @@ fn level_record(atlas: LevelAtlas, level: u32) -> LevelRecord {
     );
 }
 
-// As Bevy's `world_to_directional_light_local`: xy the tile's uv, z the depth, w 0 outside the level.
 fn level_local(record: LevelRecord, position: vec4<f32>) -> vec4<f32> {
     let clip = record.clip_from_world * position;
     if clip.w <= 0.0 {
@@ -214,8 +206,6 @@ fn atlas_quad(atlas: LevelAtlas, at: vec2<f32>) -> vec4<f32> {
     );
 }
 
-// One 2 x 2 compare filter in the level's tile, as a comparison sampler with reverse Z gives it: a texel is lit when the
-// depth is at or in front of it. Taps stay half a texel inside the tile, as the tile's own edge would clamp them.
 fn level_tap(atlas: LevelAtlas, record: LevelRecord, uv: vec2<f32>, depth: f32) -> f32 {
     let spot = clamp(uv * record.size - 0.5, vec2(0.0), vec2(record.size - 1.0 - 1.0 / WEIGHT_STEPS));
     let base = floor(spot);

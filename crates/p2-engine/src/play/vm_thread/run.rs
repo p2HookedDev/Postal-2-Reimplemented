@@ -65,8 +65,6 @@ impl Simulation {
             }
         }
         let started = Instant::now();
-        // Played, the player's controller decides the view (`PlayerCalcView`: first person, a Matinee camera, ...),
-        // before the actors are read: what is drawn depends on it.
         if job.playing {
             match self.vm.player_view() {
                 Ok(Some(view)) => {
@@ -128,8 +126,6 @@ impl Simulation {
         }
         self.recent_read = recent;
         frame.times.push(("vm read poses", started.elapsed()));
-        // The client's input (menus, console), then the HUD; a map change goes first, as retail loads the
-        // map before it draws again.
         self.vm.set_video_modes(p2_host::display::video_modes());
         if let Some([x, y]) = job.cursor {
             self.vm.set_mouse_position(x, y);

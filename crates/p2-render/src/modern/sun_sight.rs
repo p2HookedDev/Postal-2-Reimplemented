@@ -1,6 +1,6 @@
-//! Bevy's check of what each shadowed sun's cascades see. Our sun's cascades hold only the movers (the static world's
-//! sun shadow is our own cache), and only a mover's mesh carries the sun's layers, so for our sun the walk takes the
-//! movers alone instead of every mesh in the level. Any other shadowed sun is walked as Bevy walks it.
+//! Bevy's check of what each shadowed sun's cascades see. Our sun's cascades hold only movers (the static world's
+//! sun shadow is our own cache) and only movers carry the sun's layers, so for our sun the walk takes the movers
+//! alone instead of every mesh in the level. Any other shadowed sun is walked as Bevy walks it.
 
 use bevy::camera::primitives::{Aabb, CascadesFrusta, Frustum};
 use bevy::camera::visibility::{

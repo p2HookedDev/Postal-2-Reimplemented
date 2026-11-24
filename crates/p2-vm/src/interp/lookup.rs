@@ -53,7 +53,6 @@ impl<L: LoaderRef> Vm<L> {
             let loaded = self.loader.package(package);
             let definition = read_export(&loaded.package, &loaded.data, export)?;
             let mut child = definition.as_ref().and_then(ScriptObject::as_struct).map_or(0, |s| s.children);
-            // Bounded: a malformed `next` chain may loop.
             for _ in 0..=loaded.package.imports.len() + loaded.package.exports.len() {
                 let Some((child_package, child_export)) = self.loader.loaded_export(package, child) else { break };
                 let child_pkg = self.loader.package(child_package);
@@ -89,7 +88,6 @@ impl<L: LoaderRef> Vm<L> {
         };
         let layout = self.layouts.layout(Source { package: pkg, data: &loaded.data }, export)?;
         let (statements, links) = decode_script_linked(pkg, &base.script, base.script_size)?;
-        // The layout repeats the overridden function's properties after the function's own: first names win.
         let mut seen = FxHashSet::default();
         let (mut params, mut return_value) = (Vec::new(), None);
         for (index, field) in layout.properties.iter().enumerate() {

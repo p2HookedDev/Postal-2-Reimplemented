@@ -1,7 +1,7 @@
 use super::*;
 
-/// `images` holds each texture's image, shared by every decal of that texture: all the decal images in view go into one
-/// bind group, which holds 1024 at most.
+/// `images` holds each texture's image, shared by every decal of that texture: all the decal images in view go
+/// into one bind group, which holds 1024 at most.
 pub(crate) fn projector_decal(
     game: &mut Game,
     t: &mut impl SceneAssets,
@@ -36,8 +36,6 @@ fn blend_bits(blending: u8, alpha_ref: Option<u8>) -> u32 {
     alpha_ref.map_or(0, |alpha_ref| ALPHA_TEST_TAG | u32::from(alpha_ref) << 22) | u32::from(blending)
 }
 
-/// The blend bits of [`projector_tag`] for a projector that leaves both blending properties as the class has them, as
-/// the game's blood splats do: its texture's `FinalBlend`, else modulate.
 pub(crate) fn plain_projector_blend(final_blend: Option<FinalBlend>) -> u32 {
     final_blend.map_or(u32::from(FB_MODULATE), |inner| blend_bits(inner.blending.byte(), inner.alpha_ref))
 }
@@ -63,17 +61,14 @@ pub(crate) fn projector_transform(projector: &ProjectorActor, texels: Vec2) -> T
 
 const DECAL_BACK_REACH: f32 = 2.0;
 
-/// In Bevy space. Splats are spawned at the trace's hit: the surface lies in the plane of the projector. A box starting
-/// there would have it on its face, where Bevy's inside test (`clustered_decal_iterator_next`, |p| ≤ 0.5) is decided by
-/// float rounding pixel by pixel: grainy splats that come and go as the camera turns.
+/// In Bevy space. Splats spawn at the trace's hit, so the surface lies in the projector's plane; a box
+/// starting there would have the surface on its face, where Bevy's inside test is decided by float rounding
+/// pixel by pixel: grainy splats that come and go as the camera turns.
 pub fn projector_box(location: Vector, rotation: Rotator, side: f32, trace: f32) -> Transform {
     let axes = rotator_matrix(rotation);
     let (x, y, z) = (axes.x_axis.truncate(), axes.y_axis.truncate(), axes.z_axis.truncate());
     let depth = trace + DECAL_BACK_REACH;
     let center = Vec3::from_array(location.into()) + x * (trace - DECAL_BACK_REACH) / 2.0;
-    // The decal's local axes are Bevy's (it projects along local −Z), so the Unreal → Bevy axis swap applies on the
-    // world side only. Local X along the texture's U (Y), local Y along Z, local −Z along the projection (X); this
-    // basis is mirrored in Unreal terms, which the swap undoes.
     let matrix = Mat4::from_cols((y * side).extend(0.0), (z * side).extend(0.0), (-x * depth).extend(0.0), center.extend(1.0));
     let swap = Mat4::from_cols(Vec4::X, Vec4::Z, Vec4::Y, Vec4::W);
     Transform::from_matrix(swap * matrix)

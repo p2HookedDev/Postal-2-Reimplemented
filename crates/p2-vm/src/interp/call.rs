@@ -23,8 +23,8 @@ impl<L: LoaderRef> Vm<L> {
         self.call_resolved(frame, &function, args, context, class)
     }
 
-    /// A stub loads its export first, as the engine has every object loaded (`MaterialSwitch.SetCurrent`); one without an
-    /// export or a script class cannot run: true (counted), and the call gives zero, like Accessed None.
+    /// A stub loads its export first, as the engine has every object loaded (`MaterialSwitch.SetCurrent`); one
+    /// without an export or a script class cannot run: true (counted), and the call gives zero, like Accessed None.
     pub(super) fn call_on_stub(&mut self, frame: &Frame, callee: Callee, context: Option<ObjectId>) -> bool {
         if let (Callee::Virtual(name), Some(target)) = (callee, context)
             && self.store.object(target).class.is_none()
@@ -59,7 +59,6 @@ impl<L: LoaderRef> Vm<L> {
         context: Option<ObjectId>,
         class: ClassId,
     ) -> Result<Option<Value>, Error> {
-        // Arguments belong to the calling frame, whatever object the call goes to.
         let this = frame.this;
         if let [first, Expr::Skip { value: second, .. }] = args {
             let first = truthy(&self.eval(frame, first, this)?);

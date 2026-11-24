@@ -8,14 +8,10 @@ mod run;
 mod sounds;
 use sounds::read_song;
 
-/// Read in the frame's own order: after the tick the view, sounds and followed actors; after the HUD's scripts what it
-/// drew, spawned actors, projections and particles. Its buffers are reused: the host sends the frame it presented last
-/// back with the next job.
 #[derive(Default)]
 pub struct VmFrame {
     pub(super) step: f32,
     pub(super) view: Option<p2_vm::PlayerView>,
-    /// The view the HUD in `hud` was drawn for: the tick's own, or an earlier tick's while the HUD is kept.
     pub(super) hud_view: Option<p2_vm::PlayerView>,
     pub(super) sounds: Vec<(PlayedSound, Option<Vector>)>,
     pub(super) sound_files: Vec<(String, Option<p2_assets::Sound>)>,
@@ -62,33 +58,22 @@ pub struct VmFrame {
     pub(super) job_buffers: JobBuffers,
 }
 
-/// What the host was last told of an actor, and what lets the next pass skip reading it again.
 pub(super) struct Sent {
     pub(super) frame: ActorFrame,
-    /// The pass's mark when it was read: a later write to the actor or to `others` has a later stamp.
     pub(super) read_at: u64,
-    /// Whether the frame depends on nothing but the actor's and its emitters' own memory and `time_dilation`: not
-    /// hung on a bone (its base's flags and the HUD's list decide whether it shows) and with no owner-only flag (the
-    /// view decides).
     pub(super) steady: bool,
     pub(super) view: ViewKey,
     pub(super) time_dilation: u32,
     pub(super) cull_volume: Option<ObjectId>,
-    /// Whether it stood past its `CullDistance` from the view target: that changes as the target moves, with no write
-    /// to the actor.
     pub(super) beyond: bool,
-    /// Its emitters and, unless `steady`, its owners and bone bases with theirs.
     pub(super) others: Vec<ObjectId>,
 }
 
-/// What of the view decides whether an actor shows.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct ViewKey {
     pub(super) viewed: Option<ObjectId>,
     pub(super) behind: bool,
-    /// A hash of the HUD-drawn list.
     pub(super) hud: u64,
-    /// Photo mode's hidden player: a change re-reads every actor, steady ones too.
     pub(super) hidden_pawn: Option<ObjectId>,
 }
 
@@ -131,9 +116,9 @@ pub(super) struct JobBuffers {
     pub(super) watched: Vec<ObjectId>,
 }
 
-/// The HUD's scripts run at most this often (seconds of game time); between runs the last HUD is shown again, under
-/// the view it was drawn for. Retail runs them once a frame; at more than 60 game ticks a second every second run
-/// drew what no display shows apart.
+/// The HUD's scripts run at most this often (seconds of game time); between runs the last HUD is shown
+/// again under the view it was drawn for. Retail runs them once a frame; above 60 game ticks a second,
+/// every second run would draw what no display shows apart.
 pub(super) const HUD_PERIOD: f32 = 1.0 / 61.0;
 
 impl VmFrame {
@@ -180,7 +165,6 @@ pub(super) struct Job {
     pub(super) canvas: HudCanvas,
     pub(super) followed: FxHashSet<ObjectId>,
     pub(super) visible: FxHashSet<ObjectId>,
-    /// Actors no camera drew whose shadow a light did: they keep their pose moving, and the game is not told.
     pub(super) casting: FxHashSet<ObjectId>,
     pub(super) placed: Vec<(ObjectId, BoneFrame)>,
     pub(super) watched: Vec<ObjectId>,
@@ -197,8 +181,6 @@ pub(super) struct Simulation {
     pub(super) view: Option<p2_vm::PlayerView>,
     pub(super) hud_drawn: Vec<ObjectId>,
     pub(super) view_key: ViewKey,
-    /// The HUD its scripts last drew, the view they drew it for (the held weapon is placed for that view), the canvas
-    /// size, and the game time since.
     pub(super) hud_kept: Arc<[CanvasItem]>,
     pub(super) hud_view: Option<p2_vm::PlayerView>,
     pub(super) hud_canvas: HudCanvas,
@@ -209,7 +191,6 @@ pub(super) struct Simulation {
     pub(super) recent: [Vec<ObjectId>; 2],
     pub(super) recent_read: Vec<ObjectId>,
     pub(super) lights: Vec<ObjectId>,
-    /// Fires and gun flashes: what the modern look lights.
     pub(super) glows: Vec<ObjectId>,
     pub(super) light_clock: p2_render_cpu::LightClock,
     pub(super) volumes: Vec<ObjectId>,
@@ -221,15 +202,10 @@ pub(super) struct Simulation {
     pub(super) sequences: FxHashMap<(ObjectId, p2_vm::NameId), Option<usize>>,
     pub(super) emitter_values: crate::emitter_changes::EmitterValues,
     pub(super) sent: FxHashMap<ObjectId, Sent>,
-    /// The store's stamp as the running pass of reads began ([`Simulation::begin_reads`]).
     pub(super) mark: u64,
-    /// The level's `TimeDilation` (its bits) as the running pass of reads began.
     pub(super) time_dilation: u32,
     pub(super) cull_volume: Option<ObjectId>,
-    /// For the profile log, since its last line: actor reads skipped, made because of a write (or a first read), and
-    /// made for an actor the view or another actor decides.
     pub(super) reads: [u32; 3],
-    /// With the tick profile on, the reads made by the actor's class: of a steady actor, of another.
     pub(super) reads_by_class: FxHashMap<p2_vm::ClassId, [u32; 2]>,
     pub(super) lower_names: FxHashMap<p2_vm::NameId, Arc<str>>,
     pub(super) settings_sent: bool,

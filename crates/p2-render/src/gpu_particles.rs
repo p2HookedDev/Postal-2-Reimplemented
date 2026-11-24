@@ -1,5 +1,5 @@
-//! Modern graphics: detail particles. The droplets the scripts' chunks throw live in a ring on the GPU, which moves
-//! them, bounces them on the depth prepass and draws them. They are seen only; nothing reads them back.
+//! Detail particles: chunk droplets live in a GPU ring that moves them, bounces them off the depth prepass
+//! and draws them. Nothing reads them back.
 
 use std::collections::VecDeque;
 
@@ -61,18 +61,15 @@ const POOL_CAP: u32 = 40960;
 const PUSHES: usize = 8;
 /// Matches `@workgroup_size` in `gpu_particles.wesl`.
 const WORKGROUP: u32 = 64;
-/// The sun's share of a puff's light and the most light it takes, as the lit sprites' shader has them.
 const PUFF_SUN: f32 = 0.5;
 const LIGHT_LIMIT: f32 = 2.0;
-/// How far a line to the sun is followed, in Unreal units.
 const SUN_REACH: f32 = 30_000.0;
 /// What a droplet is, in its `shape.y`, as `gpu_particles.wesl` has them; 0 is a chunk.
 pub(crate) const STREAK: f32 = 1.0;
 pub(crate) const MIST: f32 = 2.0;
-/// In a droplet's `rest.w`, as `gpu_particles.wesl` has it: a blood hit's droplet, which dies where it lands and which
-/// no later push moves.
+/// In a droplet's `rest.w`, as `gpu_particles.wesl` has it: a blood hit's droplet, which dies where it lands and
+/// which no later push moves.
 pub(crate) const UNPUSHED: f32 = 1.0;
-/// Seconds the pool is still stepped and drawn after its last droplet should have died.
 const LIFE_MARGIN: f64 = 1.0;
 
 /// Premultiplied colour over the frame; the frame's alpha, the sun rays' mask, is kept.
@@ -119,7 +116,7 @@ impl Plugin for GpuParticlesPlugin {
     }
 }
 
-/// `Droplet` in `gpu_particles.wesl`.
+/// Matches `Droplet` in `gpu_particles.wesl`.
 #[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Droplet {
     /// Age in seconds in `w`.
@@ -135,14 +132,16 @@ pub(crate) struct Droplet {
     pub(crate) rest: Vec4,
 }
 
-/// `Push` in `gpu_particles.wesl`: the place as the droplets' and the reach in `w`, then the speed and the hit's way.
+/// `Push` in `gpu_particles.wesl`: the place as the droplets' and the reach in `w`, then the speed and the hit's
+/// way.
 #[derive(ShaderType, Clone, Copy, Debug, Default, PartialEq)]
 struct Push {
     place: Vec4,
     speed: Vec4,
 }
 
-/// `Frame` in `gpu_particles.wesl`: `count` slots from `first` on, around the ring, may hold a droplet that lives.
+/// `Frame` in `gpu_particles.wesl`: `count` slots from `first` on, around the ring, may hold a droplet that
+/// lives.
 #[derive(ShaderType)]
 struct Frame {
     seconds: f32,
@@ -156,8 +155,6 @@ pub(crate) fn pool_size(level: u8) -> u32 {
     (POOL_PER_LEVEL * u32::from(level)).min(POOL_CAP)
 }
 
-/// On a scene camera while detail particles are on: the pool's size, the map it belongs to, the frame's seconds, the
-/// droplets born this frame and the textures by slot.
 #[derive(Component, Debug, Clone, PartialEq, ExtractComponent)]
 #[extract_app(RenderApp)]
 #[extract_component_sync_target((Self, DropletPool))]
@@ -170,7 +167,7 @@ pub struct GpuDroplets {
     textures: Vec<AssetId<Image>>,
 }
 
-/// What lights a chunk as its sprite is lit: the light at its emitter and the sun where a line to it is free.
+/// Lights a chunk as its sprite is lit: the light at its emitter, plus the sun where the line to it is clear.
 #[derive(SystemParam)]
 struct RoomLight<'w> {
     draws: Option<Res<'w, ParticleDraws>>,
@@ -179,7 +176,6 @@ struct RoomLight<'w> {
 }
 
 impl RoomLight<'_> {
-    /// In display light; `None` for an emitter the drawing does not know.
     fn at(&self, parent: Entity, location: Vector) -> Option<Vec3> {
         let emitter = self.draws.as_deref()?.light_of(parent)?;
         let level = self.level.as_deref().and_then(|level| level.0.as_deref());
@@ -197,7 +193,7 @@ fn note_sources(drawn: Option<Res<DrawnParticles>>, mut spawner: ResMut<Spawner>
     }
 }
 
-/// Only a view that is active, single sampled and has a depth prepass draws droplets.
+/// Only an active, single-sampled view with a depth prepass draws droplets.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn throw_droplets(
     mut commands: Commands,
@@ -213,7 +209,6 @@ fn throw_droplets(
 ) {
     let level = modern_level(settings.as_deref(), MODERN_GPU_PARTICLES);
     let any_view = level > 0 && views.iter().any(|(_, drawn_in, _)| drawn_in);
-    // With the particles' light off a sprite is drawn as its texture is, and so is its chunk.
     let lit = facts.in_play && modern_level(settings.as_deref(), MODERN_PARTICLE_LIGHT) > 0;
     let light_at = |parent: Entity, location: Vector| room.at(parent, location).filter(|_| lit).unwrap_or(Vec3::ONE);
     let newborn = match drawn.as_deref() {
@@ -238,8 +233,8 @@ pub(crate) struct RingWrite {
     pub(crate) len: usize,
 }
 
-/// Where `count` newborn droplets go in a ring of `size` slots from `cursor`, and the next cursor; when more are born
-/// than the ring holds, the newest are kept.
+/// Where `count` newborn droplets go in a ring of `size` slots from `cursor`, and the next cursor; when more are
+/// born than the ring holds, the newest are kept.
 pub(crate) fn ring_writes(cursor: u32, size: u32, count: usize) -> (Vec<RingWrite>, u32) {
     let size = size as usize;
     if size == 0 {
@@ -273,11 +268,9 @@ pub struct DropletPipeline {
     simulate_layout: BindGroupLayoutDescriptor,
     draw_layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
-    /// Queued when a view first draws droplets, so nothing is built while the feature is off.
     simulate: Option<CachedComputePipelineId>,
 }
 
-/// A view's ring of droplets; a new, zeroed one is made when the level or the map changes.
 #[derive(Component)]
 pub struct DropletPool {
     buffer: Buffer,
@@ -287,12 +280,11 @@ pub struct DropletPool {
     map: u32,
     cursor: u32,
     lives: Lives,
-    /// The first slot and how many after it, around the ring, may hold a droplet that lives.
     span: (u32, u32),
 }
 
-/// When the pool's droplets die, on a clock of the seconds the droplets were stepped with, so a pause stops it: each
-/// frame's births, oldest first, with the clock past which all of them are dead.
+/// When the pool's droplets die, on a clock of the seconds they were stepped with, so a pause stops it:
+/// each frame's births, oldest first, with the time after which all of them are dead.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Lives {
     clock: f64,
@@ -310,7 +302,6 @@ impl Lives {
         }
     }
 
-    /// How many slots just before the ring's cursor may still hold a droplet that lives.
     fn live(&self, size: u32) -> u32 {
         self.births.iter().fold(0_u32, |sum, &(_, born)| sum.saturating_add(born)).min(size)
     }
@@ -504,7 +495,7 @@ fn gpu_particles(
     }));
     pass.set_render_pipeline(draw);
     pass.set_bind_group(0, shown, &[offset.offset]);
-    // In the slots' order, as the whole pool was drawn, so overlapping droplets blend as before.
+    // Drawn in slot order so overlapping droplets blend the same as when the whole pool is drawn.
     let end = first + live;
     if end > pool.size {
         pass.draw(0..(end - pool.size) * 6, 0..1);

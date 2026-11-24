@@ -4,8 +4,6 @@ use crate::{ClassId, Error, HostCommand, InteractionOrder, Kind, ObjectId, Loade
 use super::{MAX_TICK, MIN_TICK, add_time};
 
 impl<L: LoaderRef> Vm<L> {
-    /// `options` are a URL's (`?Name=Value...`), with the portal after a `#`; the `[DefaultPlayer]`
-    /// options of `User.ini` it lacks are added (`Name=` is how `Login` finds a saved game's player).
     pub fn login(&mut self, options: &str) -> Result<Option<(ObjectId, Option<ObjectId>)>, Error> {
         let Some(level) = self.level() else { return Ok(None) };
         let Some(Value::Object(Some(game))) = self.store.get(level, Prop::Game) else { return Ok(None) };
@@ -138,7 +136,6 @@ impl<L: LoaderRef> Vm<L> {
                 self.store.set(level, Prop::TimeSeconds, Value::Float(self.store.float_of(level, Prop::TimeSeconds) + delta));
             }
             self.store.set(level, Prop::TimeSecondsAlways, Value::Float(self.store.float_of(level, Prop::TimeSecondsAlways) + delta));
-            // `ServerTravel` set `NextURL`: the host travels, from `Vm::travel`, once `NextSwitchCountdown` runs out.
             if let Some(Value::Str(url)) = self.store.get(level, Prop::NextURL)
                 && !url.is_empty()
             {
@@ -188,8 +185,8 @@ impl<L: LoaderRef> Vm<L> {
         }
         let Some((package, name)) = self.store.object(object).path.split_once('.') else { return Ok(None) };
         let (package, name) = (package.to_owned(), name.to_owned());
-        // Not found is kept too (each miss scanned the package's exports by name, ~18 us a `ClassIsChildOf`): the
-        // loaded packages only change with the loader, which clears the cache (`travel.rs`).
+        // Misses are cached too, since each scanned the package's exports by name: the loaded packages only change
+        // with the loader, which clears the cache.
         let class = match self.find_class(&package, &name) {
             Ok(class) => Some(class),
             Err(Error::ClassNotFound(_) | Error::PackageNotLoaded(_)) => None,

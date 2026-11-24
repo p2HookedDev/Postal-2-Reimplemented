@@ -1,6 +1,6 @@
-//! Detail faces: a face of a lamp's cube whose plain tile would show its texels on screen gets a square of its own in
-//! the atlas's last quarter, sized so a texel is no larger on screen than the shadow's soft edge. Squares are powers of
-//! two, split from and merged back into the largest; a face no longer wanted keeps its square until another needs it.
+//! Detail faces: a lamp cube face whose plain tile would show its texels gets its own square in the atlas's
+//! last quarter, sized so a texel is no larger on screen than the shadow's soft edge. Squares are powers of two,
+//! split from and merged back into the largest; an unwanted face keeps its square until another needs it.
 
 use bevy::math::Vec3;
 use rustc_hash::FxHashMap;
@@ -13,8 +13,8 @@ const LEVELS: usize = 5;
 const ROOTS_ACROSS: u32 = 16;
 const ROOTS_DOWN: u32 = 4;
 
-/// Half the shadow's soft edge in world units (`SOFT_EDGE_UNITS` in `sun_shadow.wesl`): texels finer than this show
-/// nothing more.
+/// Half the shadow's soft edge in world units (`SOFT_EDGE_UNITS` in `sun_shadow.wesl`): texels finer than this
+/// show nothing more.
 pub(super) const FINEST_TEXEL: f32 = 0.75;
 
 /// A cube face reaches 45 degrees from its axis at the middle of a side and this far at a corner.
@@ -24,7 +24,6 @@ const FACE_REACH: f32 = 0.955_316_6;
 pub(super) struct FaceSlot {
     pub(super) lamp: u32,
     pub(super) face: u8,
-    /// The corner in [`DETAIL_UNIT`]s.
     pub(super) x: u16,
     pub(super) y: u16,
     pub(super) level: u8,
@@ -35,7 +34,6 @@ impl FaceSlot {
         DETAIL_UNIT << self.level
     }
 
-    /// As the book holds it: above 0, exact as a float.
     pub(super) fn packed(self) -> f32 {
         (1 + u32::from(self.x) + (u32::from(self.y) << 8) + (u32::from(self.level) << 16)) as f32
     }
@@ -86,20 +84,15 @@ impl Region {
 
 pub(super) struct Eye {
     pub(super) at: Vec3,
-    /// A pixel's width in world units a unit of distance away, times the pixels a texel may cover.
     pub(super) texel_spread: f32,
 }
 
 pub(super) struct FaceLamp {
     pub(super) number: u32,
     pub(super) at: Vec3,
-    /// A spot's direction and the cosine of its cone's half angle.
     pub(super) spot: Option<(Vec3, f32)>,
-    /// How far the static world it lights lies from it through each face.
     pub(super) reach: [f32; 6],
-    /// The side of a face of its plain tile, in texels.
     pub(super) plain_face: u32,
-    /// For a lamp not yet in sight, the portal the eye would first see its zone through.
     pub(super) ahead: Option<Vec3>,
 }
 
@@ -109,9 +102,9 @@ impl FaceLamp {
     }
 }
 
-/// The level a face of a lamp wants and how far off it is, or nothing when its plain tile is fine enough. Every bound
-/// errs towards the larger square. How far off counts the lamp's distance as well as the face's: indoors the eye stands
-/// inside the reach of a hundred lamps, and the near ones light what it sees close up.
+/// The level a lamp face wants and how far off it is, or nothing when its plain tile is fine enough. Bounds err
+/// towards the larger square. Distance counts the lamp's as well as the face's: indoors the eye stands inside
+/// the reach of a hundred lamps, and the near ones light what it sees close up.
 fn wanted(eye: &Eye, lamp: &FaceLamp, face: usize, top: usize) -> Option<(usize, f32)> {
     let axis = Vec3::from(FACE_AXES[face][2]);
     if let Some((along, cone)) = lamp.spot
@@ -134,7 +127,6 @@ fn wanted(eye: &Eye, lamp: &FaceLamp, face: usize, top: usize) -> Option<(usize,
     Some(((level as usize).min(top), distance + nearest))
 }
 
-/// A face's request for a square: `least` is the smallest level worth more than what it reads now.
 #[derive(Clone, Copy)]
 struct Want {
     lamp: u32,
@@ -152,18 +144,15 @@ enum Sight {
 struct Held {
     slot: FaceSlot,
     wanted_at: u32,
-    /// What it asked for at the last pick that wanted it, and the smallest level worth more than its plain tile.
     level: usize,
     least: usize,
     sight: Sight,
 }
 
-/// New squares a pick may give faces not yet in sight, so a room coming into reach is drawn over several picks.
 const AHEAD_A_PICK: usize = 3;
 
-/// How many levels under the largest a face may ask for by its place among the wanted faces, nearest first: each
-/// level's faces fill a quarter of the squares, so a crowded view grows coarser with distance and no face goes without
-/// while a nearer one holds more than its share.
+/// How many levels under the largest a face may ask for by its rank among wanted faces, nearest first. Each
+/// level's faces fill a quarter of the squares, so a crowded view grows coarser with distance.
 fn levels_down(place: usize) -> usize {
     match place {
         0..16 => 0,
@@ -176,7 +165,6 @@ fn levels_down(place: usize) -> usize {
 pub(super) struct FaceBook {
     region: Region,
     held: Vec<Held>,
-    /// Each held face's place in `held`, by its lamp and face.
     places: FxHashMap<(u32, u8), usize>,
     picks: u32,
     ahead: Vec<(Want, f32)>,
@@ -191,8 +179,6 @@ impl FaceBook {
         self.held.iter().map(|held| held.slot).collect()
     }
 
-    /// A square for a mover's tile, its corner in [`DETAIL_UNIT`]s: a face may lose its square to it, and asks again
-    /// at the next pick.
     pub(super) fn take_square(&mut self, level: usize) -> Option<(u16, u16)> {
         self.take(level, Sight::Seen, &mut std::collections::VecDeque::new())
     }
@@ -224,9 +210,9 @@ impl FaceBook {
         gone
     }
 
-    /// A square for a face. With none free it comes from the faces held only for lying ahead, then the faces longest
-    /// unwanted, then, for a face in sight, from a face that holds more than it asks for now, which goes back among the
-    /// `waiting` for a square of what it asks. A face ahead never takes a square wanted at this pick.
+    /// A square for a face. With none free it comes from faces held only for lying ahead, then the longest unwanted,
+    /// then, for a face in sight, from a face holding more than it asks now, which goes back to `waiting`.
+    /// A face ahead never takes a square wanted at this pick.
     fn take(&mut self, level: usize, by: Sight, waiting: &mut std::collections::VecDeque<Want>) -> Option<(u16, u16)> {
         loop {
             if let Some(corner) = self.region.take(level) {
@@ -245,8 +231,6 @@ impl FaceBook {
         }
     }
 
-    /// New squares for the faces nearest the eye first, up to `budget` texels of them; the rest wait for the next pick.
-    /// Faces of lamps ahead, sized as seen from their portal, get what squares are left, a few a pick.
     pub(super) fn pick(&mut self, eye: &Eye, lamps: impl Iterator<Item = FaceLamp>, budget: u32) {
         self.picks += 1;
         let top = self.region.top;
@@ -283,7 +267,6 @@ impl FaceBook {
             if spent + side * side > budget {
                 break;
             }
-            // A full atlas gives a smaller square before none.
             let Some((level, (x, y))) = (want.least..=want.level).rev().find_map(|level| Some((level, self.take(level, Sight::Seen, &mut waiting)?))) else { continue };
             let side = DETAIL_UNIT << level;
             spent += side * side;

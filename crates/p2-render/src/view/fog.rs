@@ -49,9 +49,6 @@ fn blend_zone_fog(
 /// Retail snaps zone fog at a zone crossing; ours fades in both looks.
 const FOG_BLEND_SECONDS: f32 = 0.35;
 
-/// `target` `None` = no fog: the colour fades out where it is. Fog coming from none starts at the target's colour and
-/// distances, fully transparent, so only its strength fades in; within 1/512 it lands on the target (no fog lands on
-/// [`LinearRgba::NONE`], as retail shows it).
 pub(super) fn blend_fog(shown: (LinearRgba, f32, f32), target: Option<(LinearRgba, f32, f32)>, t: f32) -> (LinearRgba, f32, f32) {
     let (color, start, end) = shown;
     let landed = target.map_or(LinearRgba::NONE, |(to, _, _)| to);

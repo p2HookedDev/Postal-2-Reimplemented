@@ -26,8 +26,8 @@ pub fn spawn_actor_sections(
                 .collect();
             SkinnedMesh { inverse_bindposes, joints }
         });
-        // Bounds follow the posed joints (frustum and occlusion culling), not the bind pose: recomputed when the
-        // actor's pose changes (`animation::skinned_bounds`), not every frame as Bevy's `DynamicSkinnedMeshBounds`.
+        // Bounds follow the posed joints, not the bind pose, for frustum and occlusion culling: recomputed when the
+        // actor's pose changes, not every frame as Bevy's `DynamicSkinnedMeshBounds` does.
         commands.entity(entity).insert(skinned.clone());
     }
 }

@@ -9,7 +9,6 @@ struct ShaderLayers {
     blend: vec4<f32>,
 }
 
-// A bindless material's index table entry; a terrain layer's table holds its alpha map too.
 struct LayerIndices {
     data: u32,
     detail: u32,

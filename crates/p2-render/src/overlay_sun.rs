@@ -1,5 +1,5 @@
-//! The overlay cameras (the weapon, the foot) read the scene camera's sun cascades, so their actors take per-pixel sun
-//! shadows without shadow passes of their own.
+//! The overlay cameras (the weapon, the foot) read the scene camera's sun cascades, so their actors take per-
+//! pixel sun shadows without shadow passes of their own.
 
 use bevy::app::{App, Plugin};
 use bevy::ecs::prelude::{Entity, Query, With};
@@ -25,13 +25,14 @@ impl Plugin for OverlaySunPlugin {
     }
 }
 
-/// Every view starts its cascades at layer 0 of the one shared texture, so a second shadowed sun would not line up.
+/// Every view starts its cascades at layer 0 of the one shared texture, so a second shadowed sun would not line
+/// up.
 fn one_shadowed_sun<'a>(mut shadowed: impl Iterator<Item = &'a ExtractedDirectionalLight>) -> bool {
     shadowed.next().is_some() && shadowed.next().is_none()
 }
 
-/// The main world builds no cascades for the overlays, and `prepare_lights` unwraps a view's entry for every shadowed sun
-/// it sees. A missing scene entry still gets an empty list rather than that panic.
+/// The main world builds no cascades for the overlays, and `prepare_lights` unwraps a view's entry for every
+/// shadowed sun it sees. A missing scene entry still gets an empty list rather than that panic.
 fn share_sun_cascades(mut lights: Query<&mut ExtractedDirectionalLight>, scenes: Query<Entity, With<WorldCamera>>, overlays: Query<Entity, With<OverlayCamera>>) {
     if !one_shadowed_sun(lights.iter().filter(|light| light.shadow_maps_enabled)) {
         return;
@@ -50,9 +51,9 @@ fn share_sun_cascades(mut lights: Query<&mut ExtractedDirectionalLight>, scenes:
     }
 }
 
-/// The overlays' own cascade views would clear the shared layers before the overlays draw; they have nothing to draw.
-/// Bevy's shadow systems still look up every light view's visible entities, which the main world never culls for an
-/// overlay, so each gets an empty list (the extract drops it again every frame).
+/// The overlays' own cascade views would clear the shared layers before the overlays draw; they have nothing to
+/// draw. Bevy's shadow systems still look up every light view's visible entities, which the main world never
+/// culls for an overlay, so each gets an empty list (the extract drops it again every frame).
 fn hold_overlay_sun_passes(
     ticks: SystemChangeTick,
     lights: Query<&ExtractedDirectionalLight>,

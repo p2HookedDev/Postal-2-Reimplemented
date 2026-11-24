@@ -244,7 +244,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// `Trace(out HitLocation, out HitNormal, TraceEnd, TraceStart, bTraceActors, Extent, out Material)`.
     #[expect(clippy::unnecessary_wraps, reason = "every native dispatcher has this shape: `natives::call` returns its result")]
     pub(crate) fn trace_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let here = this.map_or(Vector::ZERO, |this| self.store.vector(this, Prop::Location));

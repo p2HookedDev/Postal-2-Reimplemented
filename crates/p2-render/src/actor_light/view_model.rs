@@ -1,5 +1,6 @@
-//! The first-person weapon's light under the modern look. Its camera sees neither the sun, the fills nor the map's lamps,
-//! so the light the world takes at the eye is picked here and `actor_light.wesl` lights the weapon as a world surface.
+//! The first-person weapon's light under the modern look. Its camera sees neither the sun, the fills nor the
+//! map's lamps, so the light the world takes at the eye is picked here and `actor_light.wesl` lights the weapon
+//! as a world surface.
 
 use bevy::math::{BVec3, Vec3, Vec4};
 use p2_assets::poly_flags::FAKE_BACKDROP;
@@ -21,7 +22,6 @@ const LAMP_KIND: u32 = 3;
 const FILL_KIND: u32 = 4;
 
 const SUN_TRACE: f32 = 200_000.0;
-/// In world units around the eye, about a weapon's size: a shadow's edge dims it in steps as it passes.
 const SUN_SPREAD: f32 = 24.0;
 const LAMP_CHECKS: usize = 12;
 /// A lamp's fitting often holds it inside its own collision, so the trace stops this short of it.
@@ -29,7 +29,6 @@ const LAMP_CLEARANCE: f32 = 16.0;
 /// Matches `lamp_shadow.wesl`.
 const LAMP_SOURCE_SHARE: f32 = 0.08;
 
-/// A fake backdrop is the sky, however solid the level is behind it. Terrain and static meshes stop the ray before it.
 fn reaches_sky(level: &StaticCollision, from: Vector, way: Vector) -> bool {
     let to = from + way * SUN_TRACE;
     let model = &level.model;
@@ -41,7 +40,6 @@ fn reaches_sky(level: &StaticCollision, from: Vector, way: Vector) -> bool {
         && level.mesh_set.line_check_at(&level.meshes, from, to).is_none_or(|(hit, ..)| hit.time >= reach)
 }
 
-/// How much of the weapon a sky along `way` reaches, from rays around the eye.
 pub(super) fn sun_share(level: &StaticCollision, eye: Vector, way: Vector) -> f32 {
     let along = Vec3::from(<[f32; 3]>::from(way)).normalize_or_zero();
     let side = along.any_orthonormal_vector() * SUN_SPREAD;
@@ -76,8 +74,6 @@ fn nearest_lamps<'a>(environment: &'a LightEnvironment, level: &StaticCollision,
     lamps.into_iter().take(LAMP_CHECKS).filter(|(_, lamp)| reaches_lamp(level, eye, lamp.location)).map(|(_, lamp)| lamp).collect()
 }
 
-/// In world units from the eye: how far the level leaves free of walls, and that plus the most any part of the weapon
-/// runs on past its wall.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct WeaponReach {
     pub(crate) reach: f32,
@@ -85,10 +81,8 @@ pub(crate) struct WeaponReach {
 }
 
 const WALL_MARGIN: f32 = 8.0;
-/// An open level's room eases toward this instead of its unbounded room; no weapon reaches that far.
 const REACH_SETTLED: f32 = 0.05;
 
-/// The centre and corners of the weapon's box under its place; without a mesh box, of the box inside its sphere.
 pub(crate) fn weapon_points(bounds: Option<[Vec3; 2]>, location: Vector, rotation: Rotator, radius: f32) -> [Vector; 9] {
     let half = Vec3::splat(radius / 3.0f32.sqrt());
     let [low, high] = bounds.unwrap_or([-half, half]);
@@ -99,8 +93,6 @@ pub(crate) fn weapon_points(bounds: Option<[Vec3; 2]>, location: Vector, rotatio
     })
 }
 
-/// `reach` past `free` is how far the deepest trace runs on past its own wall, from 0 as a part first touches one, so
-/// a wall beside the weapon that no part of it passes adds nothing.
 pub(crate) fn weapon_reach(level: &StaticCollision, eye: Vector, points: &[Vector]) -> WeaponReach {
     let mut free = f32::MAX;
     let mut past = 0.0f32;
@@ -118,8 +110,6 @@ pub(crate) fn weapon_reach(level: &StaticCollision, eye: Vector, points: &[Vecto
     WeaponReach { reach: free + past, free }
 }
 
-/// One step of `shown` toward `target`, eased by its free room and its depth past a wall, and whether it arrived. Room
-/// past `farthest` (the weapon's farthest point from the eye) pulls nothing, so it eases from there, not from far off.
 pub(crate) fn ease_reach(shown: WeaponReach, target: WeaponReach, farthest: f32, step: f32) -> (WeaponReach, bool) {
     let parts = |reach: WeaponReach| (reach.free.min(farthest), (reach.reach - reach.free).max(0.0));
     let ((free, past), (to_free, to_past)) = (parts(shown), parts(target));
@@ -131,7 +121,6 @@ pub(crate) fn ease_reach(shown: WeaponReach, target: WeaponReach, farthest: f32,
     (WeaponReach { reach: free + past, free }, free == to_free && past == to_past)
 }
 
-/// Colours in linear light and the ambient in display light, as the world's lights carry them.
 pub fn view_model_lighting(environment: &LightEnvironment, map: &MapLights, level: &StaticCollision, origin: Vec3, eye: Vector, glow: u8) -> SkinnedLighting {
     let ambient = environment.ambient(p2_collision::point_zone(&level.model, eye), glow);
     let brightness = environment.level_brightness;

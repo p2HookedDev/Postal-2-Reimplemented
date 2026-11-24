@@ -1,5 +1,5 @@
-//! Which of the movers' tiles can shade each column of a grid around the eye, so a pixel walks only those its column
-//! names. `lamp_shadow.wesl` reads the grid from the rows before the tiles' row.
+//! Which of the movers' tiles can shade each column of a grid around the eye, so a pixel walks only those its
+//! column names. `lamp_shadow.wesl` reads the grid from the rows before the tiles' row.
 
 use bevy::math::{Vec2, Vec3};
 
@@ -14,13 +14,12 @@ const COLUMN_UNITS: f32 = 128.0;
 const COLUMN_TEXELS: usize = 8;
 const GRID_ROWS: usize = (1 + COLUMN_TEXELS * GRID_SIDE * GRID_SIDE).div_ceil(BOOK_WIDTH);
 const _: () = assert!(GRID_ROWS == (TILE_GRID_FROM_END - TILES_FROM_END) as usize && 2 * MOST_MOVER_TILES <= BOOK_WIDTH);
-/// How much wider than its tangent `lamp_shadow.wesl` lets a tile reach. `lamp_shadow.wesl` holds the same number.
+/// How much wider than its tangent a tile may reach. `lamp_shadow.wesl` holds the same number.
 const REACH_WIDENING: f32 = 1.4143;
 
-/// Fills `rows` with the grid: its low corner in x and z, a column's side and 1; then `COLUMN_TEXELS` a column, naming
-/// up to four times as many tiles by their place in `tiles` from 1, or -1 first when more cross it. A column may name a
-/// tile that does not shade it, never the reverse. Leaves `rows` as they are when `made_from` holds the bits of the same
-/// inputs, and says whether it built them.
+/// Fills `rows` with the grid: low corner in x and z, column side and 1; then `COLUMN_TEXELS` a column naming
+/// tiles by their place in `tiles` from 1, or -1 first when more cross it. A column may name a tile that does
+/// not shade it, never the reverse. Skips the rebuild when `made_from` matches the inputs; says whether it built.
 pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32; 4]>, made_from: &mut Vec<u32>) -> bool {
     let low = Vec2::from([eye.x, eye.z].map(|at| ((at / COLUMN_UNITS).floor() - (GRID_SIDE / 2) as f32) * COLUMN_UNITS));
     let tiles = &tiles[..tiles.len().min(MOST_MOVER_TILES)];
@@ -53,8 +52,6 @@ pub(super) fn tile_grid_rows(eye: Vec3, tiles: &[MoverTile], rows: &mut Vec<[f32
         for z in columns(1) {
             for x in columns(0) {
                 let to = low + (Vec2::new(x as f32, z as f32) + 0.5) * COLUMN_UNITS - from;
-                // The cone's circle that comes nearest the column's middle. The gap to a circle is convex along the axis,
-                // so it is least where its slope is 0, or at an end.
                 let along = if flat <= widening * widening {
                     far
                 } else {

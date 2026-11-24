@@ -3,16 +3,11 @@ use bevy::math::Vec3;
 use p2_assets::{Influence, SkelMeshSection, SkeletalMesh, Wedge};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-/// Half of full Phong rounding is about where a circle through the two ends would pass.
 const ROUNDING: f32 = 0.5;
-/// Cosine of 60 degrees.
 const CREASE_COS: f32 = 0.5;
 /// Share of the edge length a new point may move, so thin parts such as fingers cannot puff.
 const MOVE_CAP: f32 = 0.1;
 
-/// One level of subdivision of the drawn mesh: each face becomes four, new points rounded toward the surface the
-/// point normals describe, original points kept. `None` when the result would not fit 16-bit indices or the mesh
-/// is malformed.
 pub fn smoothed_skeletal_mesh(mesh: &SkeletalMesh) -> Option<SkeletalMesh> {
     let point_count = mesh.positions.len();
     let well_formed = mesh.influence_starts.len() == point_count + 1
@@ -42,8 +37,6 @@ pub fn smoothed_skeletal_mesh(mesh: &SkeletalMesh) -> Option<SkeletalMesh> {
         }
     }
     let normals: Vec<Vec3> = normals.into_iter().map(Vec3::normalize_or_zero).collect();
-    // A point where one of its faces turns far from its normal sits on a hard edge, so long edges leaving it (a
-    // barrel side between its two end rims) stay straight.
     let mut sharp = vec![false; point_count];
     for (points, normal) in face_points.iter().zip(&face_normals) {
         let Some(normal) = normal.try_normalize() else { continue };
@@ -131,8 +124,6 @@ fn low_first<T: Ord + Copy>(a: T, b: T) -> (T, T) {
     (a.min(b), a.max(b))
 }
 
-/// Phong tessellation at the edge middle: toward the mean of the middle's projections onto the two ends' tangent
-/// planes. An edge whose end normals differ by more than 60 degrees is a crease and stays straight.
 fn rounded_midpoint([a, b]: [Vec3; 2], [na, nb]: [Vec3; 2]) -> Vec3 {
     let middle = (a + b) * 0.5;
     if na.dot(nb) < CREASE_COS {

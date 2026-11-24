@@ -282,12 +282,10 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Only for walking pawns. Returns true once the destination is reached.
     pub(crate) fn move_toward(&mut self, pawn: ObjectId, destination: Vector, goal: Option<ObjectId>) -> Result<bool, Error> {
         self.move_toward_with(pawn, destination, goal, None)
     }
 
-    /// Unlike `move_toward`, accelerates straight at `AccelRate` with no blending.
     pub(crate) fn move_toward_with_radius(&mut self, pawn: ObjectId, destination: Vector, goal: Option<ObjectId>, radius: f32) -> Result<bool, Error> {
         self.move_toward_with(pawn, destination, goal, Some(radius))
     }

@@ -21,10 +21,9 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 const LE_NONE: u32 = 0u;
 
-// The retail light pass of one dynamic light, without the texture: colour ×
-// sqrt(1 − h / R) saturated, times the attenuation texture's falloff (64 texels, edge at 30.5 from the centre) at the
-// distance from the light's foot in the surface's plane, over the radius of the circle its sphere cuts there. Only
-// lights with `LE_None` (0) or `LE_NonIncidence` (13), which bsp_light.rs puts in the point light's radius.
+// The original light pass of one dynamic light, without texture: colour times sqrt(1 - h / R) saturated, times
+// the attenuation texture's falloff (64 texels, edge 30.5 from centre) at the distance from the light's foot
+// over its circle's radius in the surface plane. Only for `LE_None` and `LE_NonIncidence` lights.
 fn light_pass(light_id: u32, position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     let light = clustered_lights.data[light_id];
     let effect = u32(light.position_radius.w + 0.5);
@@ -87,7 +86,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         passes += light_pass(clustering::get_clusterable_object_id(i), pbr_input.world_position.xyz, normal);
     }
     if any(passes > vec3(0.0)) {
-        // Lamps light the wet surface where liquid lies.
         let shown = select(color.rgb, wet_color(color.rgb, pool), pooled);
         let texture = to_display(shown);
         if layers.blend.x != 0.0 {

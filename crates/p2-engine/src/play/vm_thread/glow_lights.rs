@@ -1,5 +1,6 @@
-//! Fires and gun flashes, which the modern look lights. The game's scripts hold these lights and leave them off: a
-//! fire lights only where a flag no script sets allows it, a flash only with an option of the game's patch menu.
+//! Fires and gun flashes, which the modern look lights. The game's scripts hold these lights and leave them off:
+//! a fire lights only where a flag no script sets allows it, a flash only with an option of the game's patch
+//! menu.
 
 use super::*;
 use p2_render::frame_facts::{Glow, GlowSource, ScriptLight};
@@ -28,7 +29,6 @@ fn glow(vm: &Vm<Arc<Loader>>, actor: ObjectId) -> Option<GlowSource> {
         return (!hidden && light.brightness > 0.0).then_some(GlowSource { location: values.location, kind: Glow::ShotFlash(light) });
     }
     let Some(p2_vm::Value::Float(whole)) = vm.store.default_value(vm.store.object(actor).class?, Prop::LifeSpan) else { return None };
-    // Hung on the held weapon, which has no place of its own in the world: its holder's.
     let location = vm.store.object_of(actor, Prop::Owner).map_or(values.location, |holder| vm.store.location(holder));
     Some(GlowSource { location, kind: Glow::Flash { light, age: whole - vm.store.float_of(actor, Prop::LifeSpan) } })
 }

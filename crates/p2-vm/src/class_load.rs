@@ -32,8 +32,6 @@ impl<L: LoaderRef> Vm<L> {
         let phase = self.profile_start();
         let layout = self.layouts.layout(source, export)?;
 
-        // The layout lists the class's own properties first, then the superclass's (whose defaults apply). In memory
-        // the superclass's come first, at the superclass's offsets, as in the engine.
         let base = super_class.map(|id| (self.store.class(id).mem, self.store.class(id).layout.properties.len()));
         let mem_layout = self.store.memory.of_class(&layout, base);
         let mut defaults = self.store.memory.zero(mem_layout);
@@ -56,8 +54,6 @@ impl<L: LoaderRef> Vm<L> {
         self.load_config(class.flags, &config_file, &class_path, super_class, &layout, mem_layout, &mut defaults);
 
         let name = self.intern(source.package.name(entry.object_name));
-        // The default object's native `Class` is the class (`Default.Class` in static functions, e.g.
-        // `P2GameInfoSingle.GetStartURL`).
         let class_object = self.stub(&class_path, "Class");
         let id = ClassId(self.store.classes.len() as u32);
         let mut index = FxHashMap::default();

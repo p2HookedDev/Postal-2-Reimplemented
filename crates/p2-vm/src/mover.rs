@@ -38,7 +38,6 @@ impl<L: LoaderRef> Vm<L> {
             let target: Vector = self.key_members(mover, Prop::KeyPos, key).map_or(Vector::ZERO, |members| members.map(|m| float(&m)).into());
             let (base, old) = (self.store.vec3_of(mover, Prop::BasePos), self.store.vec3_of(mover, Prop::OldPos));
             let location = [0, 1, 2].map(|i| old[i] + (base[i] + target[i] - old[i]) * eased);
-            // Rotators: integer components, wrapping; the scaled difference truncates.
             let target: Rotator = self.key_members(mover, Prop::KeyRot, key).map_or(Rotator::new(0, 0, 0), |members| members.map(|m| int(&m)).into());
             let (base, old) = (self.store.rotator_of(mover, Prop::BaseRot), self.store.rotator_of(mover, Prop::OldRot));
             let rotation = [0, 1, 2].map(|i| {
@@ -50,7 +49,6 @@ impl<L: LoaderRef> Vm<L> {
             } else {
                 self.place_far_moved(mover, location.into(), Encroachment::Ignored)?;
                 self.store.set(mover, Prop::Rotation, Value::Rotator(rotation.into()));
-                // Retail's move touches; `place_far_moved` does not, so the touch update is here.
                 self.update_touching(mover)?;
                 true
             };

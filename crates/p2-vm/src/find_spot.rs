@@ -18,7 +18,6 @@ impl<L: LoaderRef> WorldQuery for Vm<L> {
     }
 }
 
-/// `extent` is a half size; `location` moves to where the box fits.
 pub(crate) fn find_spot(world: &impl WorldQuery, extent: Vector, location: &mut Vector) -> bool {
     if !world.encroached(*location, extent) {
         return true;
@@ -34,7 +33,6 @@ pub(crate) fn find_spot(world: &impl WorldQuery, extent: Vector, location: &mut 
     if !slice_blocked {
         return false;
     }
-    // Quarter boxes (0.5 Ex, 0.5 Ey, 1) at 0.55 of the extent from the start; each clear one adds 1.1x its offset.
     let quarter = Vector::new(0.5 * extent.x, 0.5 * extent.y, 1.0);
     let mut clear = 0;
     for i in [-1.0, 1.0] {

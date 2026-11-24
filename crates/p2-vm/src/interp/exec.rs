@@ -152,7 +152,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(iteration.next < iteration.items.len())
     }
 
-    /// An actor destroyed since the iterator ran is passed over; retail tests this at each step.
     fn advance(&mut self, frame: &mut Frame, iteration: &mut Iteration, more: Flow, done: Flow) -> Result<Flow, Error> {
         let item = loop {
             let Some(item) = iteration.items.get(iteration.next).cloned() else {

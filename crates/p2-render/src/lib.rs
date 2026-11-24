@@ -70,8 +70,6 @@ pub enum MainPassExtraSystems {
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RenderFollowSystems;
 
-/// What every host that draws a scene needs. `GammaPlugin` and `ModernGraphicsPlugin` are added beside it by a
-/// host with the game's window and settings.
 pub struct P2RenderPlugins;
 
 impl bevy::app::PluginGroup for P2RenderPlugins {

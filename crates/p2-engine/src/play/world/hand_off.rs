@@ -45,17 +45,14 @@ impl PlayWorld {
         self.frame.step
     }
 
-    /// [`Self::step`] in game seconds, as `LifeSpan` and timers count them: `TimeDilation` slows them.
     pub fn game_step(&self) -> f32 {
         self.frame.step * self.frame.time_dilation
     }
 
-    /// `real` host seconds in game seconds: none while paused, slowed by `TimeDilation`.
     pub fn game_seconds(&self, real: f32) -> f32 {
         if self.frame.paused { 0.0 } else { real * self.frame.time_dilation }
     }
 
-    /// The hits on people in the tick now shown, each on one host frame only.
     pub fn person_hits(&self) -> &[p2_vm::PersonHit] {
         if self.fresh { &self.frame.person_hits } else { &[] }
     }
@@ -120,9 +117,9 @@ impl PlayWorld {
         self.frame.pointer
     }
 
-    /// In seconds, once: later calls return 0 until the next frame (egui may run a frame's UI pass twice, which must not
-    /// advance what follows the game twice).
-    /// The time particles move by: none while the game is paused, as its own emitters stand still then.
+    /// In seconds, once: later calls return 0 until the next frame (egui may run a frame's UI pass twice, which must
+    /// not advance what follows the game twice). The time particles move by: none while the game is paused, as its
+    /// own emitters stand still then.
     pub fn take_step(&mut self) -> f32 {
         let step = std::mem::take(&mut self.frame.step);
         if self.frame.paused { 0.0 } else { step }

@@ -1,7 +1,6 @@
-// Bevy's material prepass, changed in two things: the normal's alpha holds the surface's reflecting class for the
-// screen-space reflections, 0 tile or glass, 1/3 metal, 2/3 wood, 1 nothing (matches `reflections.wesl`); and an unlit
-// static surface's back face turns its normal round too, as the vertex-lit shader that draws it does (an actor's
-// shading lights by the vertex normal as it is).
+// Bevy's material prepass with two changes: the normal's alpha holds the reflecting class (0 tile or glass,
+// 1/3 metal, 2/3 wood, 1 none; matches `reflections.wesl`), and an unlit static surface's back face flips its
+// normal, as the vertex-lit shader that draws it does.
 
 import bevy_pbr::{
     render::{
@@ -46,7 +45,6 @@ fn blend_of(in: prepass_io::VertexOutput) -> vec4<f32> {
     return layers_data.blend;
 }
 
-// `blend.y` is the class index of `material_class.rs`; a zero `blend.z` is a material without a class.
 fn class_code(blend: vec4<f32>) -> f32 {
     if blend.z <= 0.0 {
         return 1.0;

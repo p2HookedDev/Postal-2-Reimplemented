@@ -95,7 +95,6 @@ impl Game {
         Some((source, state))
     }
 
-    /// From the material's package, its own name and its groups.
     fn material_class(&mut self, id: PackageId, material: i32) -> MaterialClass {
         let Some((package, export)) = self.export_of(id, material) else { return MaterialClass::Default };
         let pkg = self.data(package).0;
@@ -141,7 +140,6 @@ impl Game {
         Some((self.specular_image(specular)?, specular_params(source)?))
     }
 
-    /// Reads only `image`, `combine`, `cube` and `tint`: sources that differ elsewhere share the image.
     pub fn specular_image(&mut self, specular: SpecularSource) -> Option<Image> {
         let (id, export) = specular.image;
         Some(if specular.cube {
@@ -256,7 +254,6 @@ impl Game {
             return Some((image, wet));
         }
         if let Some(wet) = wet {
-            // The animation rewrites the pixels every step (`wet.rs`): the main world keeps them.
             let mut image = texture_image(&wet.texture, Some(wet.palette.as_slice()), Compression::Off)?;
             image.asset_usage = bevy::asset::RenderAssetUsages::all();
             return Some((image, Some(wet)));
@@ -311,7 +308,6 @@ impl Game {
         mut material: i32,
         state: &mut RenderState,
     ) -> Option<Walk> {
-        // `RenderState::opacity` is a reference in the package of the shader that set it; so are `wet` and `combiner`.
         let mut opacity = None;
         let mut wet = None;
         let mut combiner = None;
@@ -374,8 +370,8 @@ fn view((width, height, texels): &(u32, u32, Vec<[u8; 4]>)) -> (u32, u32, &[[u8;
     (*width, *height, texels.as_slice())
 }
 
-/// `OB_Darken`: one minus the colour in display space; multiplied with the frame buffer it darkens as the driver's
-/// `INVSRCCOLOR` does (an sRGB byte's product converts exactly). The alpha stays.
+/// `OB_Darken`: one minus the colour in display space; multiplied with the frame buffer it darkens as the
+/// driver's `INVSRCCOLOR` does (an sRGB byte's product converts exactly). The alpha stays.
 fn invert_color(image: &mut Image) {
     if let Some(data) = image.data.as_mut() {
         for texel in data.as_chunks_mut::<4>().0 {

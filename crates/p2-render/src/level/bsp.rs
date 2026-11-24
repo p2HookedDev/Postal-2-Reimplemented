@@ -24,10 +24,9 @@ pub struct BspKey {
     cell: [i32; 2],
 }
 
-/// Invisible surfaces and portals are left out; fake backdrop surfaces too where a sky zone shows
-/// through them (unverified). Surfaces are split by zone for culling, a node by its front zone and a two-sided one by
-/// both: a backdrop is a hole, and without culling the zones behind it showed where the sky is. Opaque and masked
-/// surfaces of zone 0 stay unsplit and always drawn. Translucent ones are split by place too.
+/// Invisible surfaces, portals and fake backdrops a sky zone shows through (unverified) are left out.
+/// Surfaces split by zone for culling, two-sided ones by both, since zones behind a backdrop showed in the sky.
+/// Zone 0 opaque and masked surfaces stay whole and always drawn; translucent ones also split by place.
 pub fn bsp_groups<'a>(
     model: &Model,
     polygons: &'a [ModelPolygon],

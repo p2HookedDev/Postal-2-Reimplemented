@@ -1,6 +1,3 @@
-// Bevy's bloom as compute steps over one texture: layer 0 holds the downsampled mips, layer 1 sums them from the
-// smallest up, and a fragment pass adds the top of that sum to the frame.
-
 const WORKGROUP: u32 = 8u;
 
 struct BloomStep {
@@ -62,7 +59,6 @@ fn taps_13(uv: vec2<f32>) -> Taps {
     );
 }
 
-// Each group weighted by its brightness, so a single very bright pixel does not bloom.
 fn downsample_karis(uv: vec2<f32>) -> vec3<f32> {
     let t = taps_13(uv);
     let group0 = (t.a + t.b + t.d + t.e) * (0.125 / 4.0);

@@ -1,5 +1,3 @@
-//! Reads script byte properties as enums; a byte that names no value reads as `None` and stays a byte.
-
 pub(crate) use p2_assets::EDrawType;
 
 use crate::{LoaderRef, ObjectId, Prop, Vm};
@@ -47,7 +45,6 @@ impl EPhysics {
     }
 }
 
-/// The scripts' `Fluid.FluidTypeEnum`; `FLUID_TYPE_None` reads as `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FluidType {

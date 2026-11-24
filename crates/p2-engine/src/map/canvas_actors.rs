@@ -46,8 +46,6 @@ impl Session {
         self.show_canvas_actors(&drawn, t);
     }
 
-    /// The models are placed where the HUD's scripts put their actors at the call (`RenderOverlays` moves the weapon to the
-    /// view, `MapScreen` moves its trail marker from point to point), not where they were before the HUD.
     pub(super) fn show_canvas_actors(&mut self, drawn: &[(&CanvasItem, usize)], t: &mut HudParams) {
         let Some(world) = t.play.world() else { return };
         t.hud.canvas_actors.retain(|shown| {
@@ -104,8 +102,6 @@ impl Session {
                 *transform = placed;
             }
         }
-        // Retail draws a skeletal actor's attachments in its own scene node, so they go on the overlay layer
-        // of its first call. With the base no longer HUD-drawn (dropped, detached), they return to the world.
         let Some(world) = t.play.world() else { return };
         let moves: FxHashMap<ObjectId, Mat4> = t.canvas.canvas_models.iter()
             .filter(|(_, drawn, _)| drawn.0 == 0)

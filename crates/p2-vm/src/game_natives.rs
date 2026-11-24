@@ -1,5 +1,3 @@
-//! The host simulates emitters, so these natives set script properties and queue the rest.
-
 use p2_math::Vector;
 use p2_package::MAP_EXTENSION;
 use crate::native_id::Native;
@@ -12,12 +10,7 @@ const LENGTH_SPAWN_LIMIT: usize = 5;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParticleCommand<Properties = ()> {
     Reset(ObjectId, Properties),
-    /// `SpawnParticle(ParticleIndex, 0, ...)`. The engine spawns nothing while the emitter has no `Owner` (not ticked yet)
-    /// or no free slot count. `line`: `LineStart` / `LineEnd` at that moment (`SpawnParticleLength` moves `LineStart`
-    /// between its particles).
     Spawn { emitter: ObjectId, offset: Vector, line: Option<[Vector; 2]> },
-    /// `AllParticlesDead` cleared without a spawn: `SpawnParticleLength` does so on every call (emitter with slots),
-    /// so a trail still too short for its first particle is not taken for finished (`AutoDestroy`).
     KeepAlive(ObjectId),
     CapTime { emitter: ObjectId, time: f32 },
     Kill(ObjectId),
@@ -114,7 +107,6 @@ impl<L: LoaderRef> Vm<L> {
     /// `ActiveParticles` saturates at `MaxParticles`; a full pee trail makes `FluidFeeder` start another.
     fn spawn_particle_length(&mut self, emitter: ObjectId, start: Vector, end: Vector, size_step: f32) {
         let length = end - start;
-        // As retail, a vector of squared size below 1e-8 is left unnormalized.
         let step = (if length.size_squared() < 1e-8 { length } else { length.safe_normal() }) * size_step;
         let max = self.store.get(emitter, Prop::MaxParticles).as_ref().map_or(0, crate::interp::int);
         let mut active = self.store.get(emitter, Prop::ActiveParticles).as_ref().map_or(0, crate::interp::int);

@@ -1,12 +1,9 @@
 use super::*;
 
-/// With pipelined rendering, time waiting for the GPU falls in the render stage.
 pub struct StageTimingPlugin;
 
-/// `present` is what the game hands the frame before Bevy moves anything: our own systems and the commands they queue.
 const MAIN_STAGES: [&str; 7] = ["present", "transforms", "bounds and frusta", "camera culling", "clusters", "cascades and frusta", "light visibility"];
 const UPDATE_STAGES: [&str; 2] = ["whole update", "wait for render thread and extract"];
-/// The window's next frame is taken in the view stage, which waits there while the GPU is behind.
 const RENDER_STAGES: [&str; 8] = ["wait for main and extract", "assets and views", "specialize", "views and the wait for a frame", "queue", "sort and prepare", "bind groups", "render"];
 const GRAPH_STAGES: [&str; 5] = ["all cameras", "finish encoders", "submit", "gpu timers", "last submit and present"];
 const PASS_STAGES: [&str; 3] = ["shadows and prepass", "main", "post"];
@@ -71,7 +68,6 @@ fn graph_mark<const STAGE: i32>(clock: Res<RenderGraphClock>) {
     tick(&clock.0, usize::try_from(STAGE).ok());
 }
 
-/// The core 3D schedule runs once per camera: a frame's time is the sum over its cameras.
 fn pass_mark<const STAGE: i32>(clock: Res<RenderPassClock>) {
     tick(&clock.0, usize::try_from(STAGE).ok());
 }
@@ -103,7 +99,6 @@ fn count_draw_groups(
         views.iter().len(),
         shadow.values().filter(|phase| !phase.is_empty()).count(),
     ]);
-    // wgpu sizes every pass's and every command buffer's resource tracker by the live textures and buffers.
     *frames = frames.wrapping_add(1);
     if *frames % 30 == 1
         && let Some(report) = instance.generate_report()
@@ -271,11 +266,9 @@ fn log_scene_counts(
     );
 }
 
-/// A pass that draws only in some frames keeps its old samples; past this age they say nothing of now.
 #[cfg(feature = "gpu-timers")]
 const STALE_PASS: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// A pass runs once per camera and each run adds a sample, so a path's time per frame is its samples' rate over the frame rate.
 #[cfg(feature = "gpu-timers")]
 fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, mut since: Local<f32>, mut frames: Local<u32>) {
     *frames += 1;

@@ -77,7 +77,6 @@ fn point_noise(previous: Vector, plain: &RangeVector, keys: Option<&[BeamScale]>
     }
 }
 
-/// Where along the scale keys point `i` of `count` is: its share of `count` (not `count - 1`), repeated.
 fn scale_fraction(i: usize, count: usize, repeats: f32) -> f32 {
     fractional(i as f32 * (1.0 / count as f32) * (repeats + 1.0))
 }
@@ -135,7 +134,7 @@ impl ParticleEmitter {
         let mut noise = Vector::ZERO;
         for i in 1..low {
             let keys = beam.use_low_scale.then_some(beam.low_scales.as_slice());
-            // With the low scale on, retail draws from the high frequency range: kept.
+            // With the low scale on, retail draws from the high frequency range; we keep that.
             noise = point_noise(noise, &beam.low_noise, keys, scale_fraction(i, low, beam.low_scale_repeats), &beam.high_noise, rng);
             lows.push((location + (end * (i as f32 * low_step))) + noise);
         }

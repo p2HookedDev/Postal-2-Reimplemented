@@ -7,7 +7,6 @@ struct Chunk {
     index_count: u32,
     base_vertex: i32,
     flags: u32,
-    // One bit per zone the chunk is in, read with `ZONED`.
     zones: array<u32, 8>,
 }
 
@@ -25,7 +24,6 @@ struct CullView {
     first_count: u32,
     casters_only: u32,
     unused: u32,
-    // All set for a shadow view.
     seen_zones: array<vec4<u32>, 2>,
 }
 

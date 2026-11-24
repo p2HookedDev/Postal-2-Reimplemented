@@ -78,7 +78,6 @@ impl<L: LoaderRef> Vm<L> {
         self.store.get_path(object, path).as_ref().map_or(0.0, float)
     }
 
-    /// The interpolator is done at value 1, so an orientation without ease-in time applies at once.
     pub(crate) fn construct_scene_manager(&mut self, scene: ObjectId) {
         for orientation in ["CamOrientation", "PrevOrientation"] {
             self.store.set_path(scene, &[orientation, "CamOrientation"], Value::Byte(ECamOrientation::Interpolate as u8));

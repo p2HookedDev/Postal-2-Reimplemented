@@ -107,12 +107,9 @@ pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
         // Movers are not level collision: retail particles trace only the level and its static geometry.
         let fixed = (!actor.movable).then_some(Placement { location: actor.location, rotation: actor.rotation, scale: actor.scale, pre_pivot: actor.pre_pivot });
         let placement = fixed.filter(|_| actor.blocks);
-        // Merged sections take every untagged projector and no tagged one: a model of its own carries the actor's own answer
-        // (`Session::update_projections`).
         let aimed_at = matches!(vm.store.get(actor.object, p2_vm::Prop::Tag), Some(p2_vm::Value::Name(tag)) if project_tags.contains(&tag));
         // An actor a volume's `CullTag` names is hidden and shown by the game: it keeps a model of its own.
         let cullable = vm.store.get(actor.object, p2_vm::Prop::Tag).is_some_and(|tag| cull_tags.contains(&tag));
-        // The game cuts each placed mesh at its own `CullDistance`: one with a distance keeps a model of its own too.
         let distant = vm.store.float_of(actor.object, p2_vm::Prop::CullDistance) != 0.0;
         let own_model = (!actor.accepts_projectors || aimed_at || cullable || distant) && actor.forced_zone_tag.is_none();
         let follow =

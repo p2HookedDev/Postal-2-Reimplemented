@@ -43,8 +43,8 @@ pub struct MeshPlacing<I> {
     pub only_from: Option<Vec<u8>>,
 }
 
-/// The placed mesh's box in Unreal space. The engine files an actor under the zone of each BSP leaf this box touches,
-/// wherever its pivot is.
+/// The placed mesh's box in Unreal space. The engine files an actor under the zone of each BSP leaf this box
+/// touches, wherever its pivot is.
 pub(super) fn placed_box(local: Option<([f32; 3], [f32; 3])>, transform: &Transform) -> Option<([f32; 3], [f32; 3])> {
     let (min, max) = local?;
     let affine = transform.compute_affine();
@@ -68,7 +68,6 @@ struct BatchKey {
     material: String,
     has_uvs: bool,
     has_colors: bool,
-    /// The zones its actors' boxes touch: the batch is culled by them. `None` for actors in no leaf, always drawn.
     zones: Option<Vec<u8>>,
 }
 

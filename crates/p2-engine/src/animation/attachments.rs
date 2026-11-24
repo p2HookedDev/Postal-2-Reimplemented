@@ -42,7 +42,6 @@ pub(super) fn follow_bones(
             let skeletal = Some((follow.mesh_scale, follow.origin, follow.rot_origin));
             let mut detached = commands.entity(entity);
             detached.remove::<FollowBone>().insert(FollowActor { actor: follow.actor, scale: follow.scale, pre_pivot: follow.pre_pivot, skeletal });
-            // It left the view with the model it was on, which no longer decides for it.
             if let Some(layers) = layers.filter(|layers| layers.intersects(&RenderLayers::layer(UNSEEN_LAYER))) {
                 detached.insert(layers.clone().without(UNSEEN_LAYER).with(0));
             }
@@ -67,7 +66,6 @@ pub(super) fn follow_bones(
     }
 }
 
-/// They sit at the bone's current frame instead of their actor's `Location`, which the VM does not move with the bone.
 pub(super) fn place_attached(
     mut poses: ResMut<Poses>,
     mut play: ResMut<Play>,
@@ -88,8 +86,7 @@ pub(super) fn place_attached(
     bases.clear();
     due_models.clear();
     emitters.clear();
-    // Bases themselves on a bone (a map pawn's head, drawn as `FollowBone`): without these a bolt-on hat stayed at its spawn
-    // point in the air.
+    // Bases that are themselves on a bone (a map pawn's head drawn as `FollowBone`), so a bolt-on hat follows it.
     bone_bodies.extend(on_bones.iter().filter_map(|follow| {
         let place = world.shown.places.bone_frame(follow.actor)?;
         let rotation = axes_matrix(place.axes, Vec3::ZERO);
@@ -97,8 +94,7 @@ pub(super) fn place_attached(
         Some((follow.actor, body))
     }));
     let bone_bodies = &*bone_bodies;
-    // Emitters on a bone have no model but are placed the same way. The first-person muzzle flash is one:
-    // left at the weapon's origin, its sprite filled the screen.
+    // Emitters on a bone have no model but are placed the same way; the first-person muzzle flash is one.
     emitters.extend(world.watched().filter_map(|actor| Some((actor, world.actor(actor)?.attachment.as_ref()?.base))));
     for (entity, follow, ..) in &models {
         if let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) {
@@ -118,13 +114,11 @@ pub(super) fn place_attached(
         }
     }
     let (slots, names, aliases, bones, animated) = (&mut poses.slots, &poses.names, &poses.aliases, &poses.bones, &poses.animated);
-    // The game is told the frame from the animation's own pose; the model is drawn on the corrected one.
     let mut frame_of = |attachment: &crate::actors::BoneAttachment| {
         let (index, tag) = bone_slot(slots, names, aliases, attachment)?;
         let drawn = *bones.get(&attachment.base)?.get(index)?;
         let told = told_bone(animated, attachment.base, index, drawn);
         let body = match bases.get(&attachment.base).copied().flatten() {
-            // What the scripts draw themselves stands at the newest tick's place; the rest where it is shown.
             Some((base, canvas_drawn)) => {
                 let (location, rotation) = if canvas_drawn { world.tick_place(attachment.base) } else { world.place(attachment.base) }?;
                 base.mesh_matrix(location, rotation)?
@@ -198,7 +192,6 @@ pub(crate) fn attached_transform(follow: &FollowActor, frame: Mat4) -> Transform
 
 pub fn attachment_frame(body: Mat4, bone: Mat4, relative_location: Vector, relative_rotation: Rotator) -> Mat4 {
     let (_, rotation, position) = (body * bone).to_scale_rotation_translation();
-    // A bone scaled to nothing has no rotation (NaN from glam).
     let rotation = if rotation.is_finite() { rotation } else { Quat::IDENTITY };
     Mat4::from_rotation_translation(rotation, position)
         * Mat4::from_translation(Vec3::from_array(relative_location.into()))

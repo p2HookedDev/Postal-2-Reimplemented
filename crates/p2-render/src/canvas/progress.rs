@@ -6,7 +6,6 @@ const FOV: f32 = 85.0;
 /// Most progress the engine draws: at 1 the panner would wrap back to empty.
 const MAX_PROGRESS: f32 = 0.99;
 
-/// The loading screen's bar: its polygon as the loading view sees it. `corners`: right, up, forward of the view.
 pub struct ProgressBar {
     pub corners: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,

@@ -1,6 +1,6 @@
-//! The static world's shadow of every lamp, drawn once a map into one atlas of six square tiles a lamp. Tiles are
-//! packed in units of the atlas side over [`ATLAS_UNITS`], the same at every atlas size, in its upper three quarters;
-//! the last holds the detail faces ([`super::faces`]), each drawn in the frame it gets its square.
+//! The static world's shadow of every lamp, drawn once a map into one atlas of six square tiles a lamp.
+//! Tiles pack in units of the atlas side over [`ATLAS_UNITS`] in its upper three quarters; the last quarter
+//! holds the detail faces ([`super::faces`]), each drawn in the frame it gets its square.
 
 use std::num::NonZero;
 use std::ops::Range;
@@ -36,7 +36,8 @@ use crate::level_collision::{GREY_ALBEDO, MaskedCaster, StaticCollision};
 
 pub(super) const ATLAS_SHADER: Handle<Shader> = uuid_handle!("6d2f91c4-3e7a-4b58-9a10-c7e45f28d316");
 
-/// The atlas side in packing units; a tile's corner is stored in 8 bits an axis. `lamp_shadow.wesl` holds the same number.
+/// The atlas side in packing units; a tile's corner is stored in 8 bits an axis. `lamp_shadow.wesl` holds the
+/// same number.
 pub(super) const ATLAS_UNITS: u32 = 128;
 const ATLAS_ROWS: u32 = ATLAS_UNITS * 3 / 4;
 const TOP_LEVEL: u32 = 3;
@@ -161,7 +162,6 @@ pub(super) struct LampBake {
     masked_indices: Vec<u32>,
     masked_ranges: Vec<MaskedRange>,
     masked_images: Vec<Handle<Image>>,
-    /// The book's rows that hold the lamp records, whole, as the bake wrote them.
     records: Vec<[f32; 4]>,
 }
 
@@ -175,25 +175,21 @@ impl LampBake {
         self.tiles.get(lamp).copied().flatten().map_or(UNMAPPED, Tile::packed)
     }
 
-    /// The side of a face of a lamp's plain tile, in texels.
     pub(super) fn plain_face(&self, lamp: usize, unit: u32) -> Option<u32> {
         Some(self.tiles.get(lamp)?.as_ref()?.size(unit))
     }
 
-    /// For each lamp the side of a face of its tile in texels and its casters' corners in the vertices.
     pub(super) fn drawn(&self, unit: u32) -> impl Iterator<Item = Option<(u32, &[u32])>> {
         let mut draws = self.draws.iter();
         self.tiles.iter().map(move |tile| tile.and_then(|_| draws.next()).map(|draw| (draw.tile.size(unit), &self.indices[draw.first as usize..(draw.first + draw.count) as usize])))
     }
 }
 
-/// Where each lamp is among the draws, which hold only lamps with a tile.
 fn draw_index(tiles: &[Option<Tile>]) -> Vec<Option<usize>> {
     let mut next = 0;
     tiles.iter().map(|tile| tile.map(|_| { next += 1; next - 1 })).collect()
 }
 
-/// Lamp positions and triangles in the scene's space.
 pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], lamps: &[([f32; 3], f32)]) -> LampBake {
     let radii: Vec<f32> = lamps.iter().map(|&(_, radius)| radius).collect();
     let tiles = pack(&radii);
@@ -248,7 +244,6 @@ pub(crate) struct WorldTriangles {
     pub(crate) terrain_from: usize,
 }
 
-/// Level, then static meshes, then terrain.
 pub(crate) fn world_triangles(collision: &StaticCollision, origin: Vec3) -> WorldTriangles {
     let moved = |point: [f32; 3]| -> [f32; 3] { (Vec3::from(p2_bevy_assets::to_bevy(Vector::from(point))) + origin).into() };
     let albedos = &collision.albedos;
@@ -296,7 +291,6 @@ pub(super) const FACE_AXES: [[[f32; 3]; 3]; 6] = [
     [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]],
 ];
 
-/// What `lamp_atlas.wesl` draws one face of a lamp with, a face `size` texels a side.
 fn face_uniform(bytes: &mut Vec<u8>, draw: &LampDraw, axes: [[f32; 3]; 3], size: u32) {
     let start = bytes.len();
     bytes.extend(view_rows(axes, draw.position, draw.radius, size, 1.0, 0.0).iter().flatten().flat_map(|value| value.to_le_bytes()));
@@ -313,7 +307,6 @@ fn plain_uniforms(draws: &[LampDraw], unit: u32) -> Vec<u8> {
     bytes
 }
 
-/// Where a lamp's face lands in the atlas, in texels.
 fn face_corner(tile: Tile, face: u32, unit: u32) -> (u32, u32) {
     let size = tile.size(unit);
     (tile.x * unit + (face % 3) * size, tile.y * unit + (face / 3) * size)
@@ -327,7 +320,6 @@ pub(super) struct AtlasPipelines {
     clear: CachedRenderPipelineId,
 }
 
-/// Kept for the map: the detail faces are drawn from them long after the plain tiles.
 struct AtlasBuffers {
     faces: BindGroup,
     vertices: Buffer,
@@ -336,7 +328,6 @@ struct AtlasBuffers {
     image_groups: Vec<Option<BindGroup>>,
 }
 
-/// The bake whose plain tiles the atlas holds: until they are drawn the atlas is not yet cleared for them.
 #[derive(Resource, Default)]
 pub(super) struct PlainTilesDrawn(pub(super) Option<usize>);
 
@@ -346,7 +337,6 @@ pub(super) struct AtlasDraw {
     drawn: Option<(usize, AssetId<Image>)>,
     waited: u32,
     buffers: Option<AtlasBuffers>,
-    /// The detail faces drawn and written in the book.
     detail: Vec<FaceSlot>,
 }
 
@@ -397,7 +387,6 @@ fn index_bytes(values: &[u32]) -> Vec<u8> {
     values.iter().flat_map(|value| value.to_le_bytes()).collect()
 }
 
-/// A face's square in the atlas, in texels, and where its uniform lies in the job's buffer.
 struct FaceView {
     uniform: u32,
     x: u32,
@@ -407,7 +396,6 @@ struct FaceView {
 
 enum Before {
     Keep,
-    /// What the squares held goes first: white is open, as the atlas starts.
     Whiten,
 }
 
@@ -478,7 +466,6 @@ fn draw_tiles(encoder: &mut CommandEncoder, ready: &Ready, bake: &LampBake, load
     }
 }
 
-/// Book rows from `row` on, whole rows in one write and a short last row in a second.
 pub(super) fn write_rows(queue: &RenderQueue, book: &GpuImage, row: u32, texels: &[[f32; 4]]) {
     let whole = texels.len() / BOOK_WIDTH;
     let (full, rest) = texels.split_at(whole * BOOK_WIDTH);
@@ -495,8 +482,6 @@ pub(super) fn write_rows(queue: &RenderQueue, book: &GpuImage, row: u32, texels:
     }
 }
 
-/// The book's record rows as the GPU holds them. Every write makes a staging buffer of its own, so the lamps' changed
-/// texels are set here and the rows they fall in go out in one write.
 #[derive(Resource, Default)]
 pub(super) struct BookRecords {
     key: Option<(usize, AssetId<Image>)>,
@@ -527,8 +512,6 @@ impl BookRecords {
     }
 }
 
-/// The fourth and fifth texels of a lamp's record in the book: the square of each of its six faces that has one, 0 for
-/// a face that reads the plain tile.
 fn set_faces(records: &mut BookRecords, bake: &Arc<LampBake>, book: AssetId<Image>, lamp: u32, faces: &[FaceSlot]) {
     let mut packed = [[0.0f32; 4]; 2];
     for slot in faces.iter().filter(|slot| slot.lamp == lamp) {

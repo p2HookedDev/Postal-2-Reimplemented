@@ -1,5 +1,5 @@
-// Shared by the Modern Graphics pages. Each row is one render device key, read with `get` and written with
-// `set ini:Engine.Engine.RenderDevice`. Combos and sliders store numbers, boxes True or False; an empty key reads as
+// Shared by the Modern Graphics pages. Each row is one render device key, read with `get` and written with `set
+// ini:Engine.Engine.RenderDevice`. Combos and sliders store numbers, boxes True or False; an empty key reads as
 // the High preset's value. While the master is off every row is grey, and a change is undone.
 class ModernMenuPage extends ShellMenuCW;
 
@@ -147,7 +147,6 @@ function WriteRow(int i)
 		WriteKey(RowKeys[i], string(int(UWindowHSliderControl(Rows[i]).GetValue())));
 }
 
-// A row changed by hand makes the preset Custom; the main page's preset row overrides this.
 function RowChanged(int i)
 {
 	WriteKey(PresetKey, string(CustomPreset));

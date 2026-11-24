@@ -1,7 +1,6 @@
-// Screen-space bounce light. `gather` runs at half size: each pixel walks a few screen directions through the depth
-// prepass, and a bitmask over the hemisphere's angles in each direction keeps a surface hidden behind a nearer one
-// from adding its light. `composite` runs at full size and blurs that along a cross, weighted by like depth and facing.
-// The half-size texture covers the viewport; the depth prepass and the lit scene cover the whole target.
+// Screen-space bounce light. `gather` runs at half size: each pixel walks a few screen directions through
+// the depth prepass, with a bitmask over the hemisphere's angles so a hidden surface adds no light.
+// `composite` runs at full size and blurs that along a cross, weighted by like depth and facing.
 
 import bevy_render::view::View;
 import package::p2_render::screen_pass::{pattern, view_at, viewport_uv};
@@ -11,7 +10,6 @@ struct FullscreenOutput {
     @location(0) uv: vec2<f32>,
 }
 
-// The lit scene for `gather`, the gathered light for `composite`.
 @group(0) @binding(0) var lit: texture_2d<f32>;
 @group(0) @binding(1) var depth: texture_depth_2d;
 @group(0) @binding(2) var normals: texture_2d<f32>;
@@ -22,7 +20,8 @@ const HALF_PI: f32 = 1.57079633;
 const SLICES: u32 = 2u;
 const STEPS: u32 = 6u;
 const SECTORS: f32 = 32.0;
-// In Unreal units (about 2 cm each), tuned by eye later (unverified): how far light bounces, how thick a surface is.
+// In Unreal units (about 2 cm each), tuned by eye later (unverified): how far light bounces, how thick a surface
+// is.
 const RADIUS: f32 = 192.0;
 const THICKNESS: f32 = 32.0;
 const MAX_REACH_PIXELS: f32 = 192.0;
@@ -33,7 +32,6 @@ fn view_position(texel: vec2<i32>, z: f32) -> vec3<f32> {
     return view_at(view.view_from_clip, viewport_uv(vec2<f32>(texel) + 0.5, view.viewport), z);
 }
 
-// The viewport's corner in the target.
 fn corner() -> vec2<i32> {
     return vec2<i32>(view.viewport.xy);
 }
@@ -46,7 +44,6 @@ fn view_normal(texel: vec2<i32>) -> vec3<f32> {
     return normalize((view.view_from_world * vec4(world_normal(texel), 0.0)).xyz);
 }
 
-// The sectors from `lo` to `hi`, fractions of the hemisphere's half circle around the normal.
 fn sector_bits(lo: f32, hi: f32) -> u32 {
     let start = u32(clamp(lo * SECTORS, 0.0, SECTORS));
     let count = min(u32(clamp(ceil((hi - lo) * SECTORS), 0.0, SECTORS)), 32u - start);
@@ -133,7 +130,6 @@ fn tap(centre: vec2<i32>, offset: vec2<i32>, here_z: f32, normal: vec3<f32>) -> 
     return vec4(textureLoad(lit, at, 0).rgb * weight, weight);
 }
 
-// Alpha 0: the blend keeps the frame's own alpha.
 @fragment
 fn composite(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let texel = min(vec2<i32>(in.position.xy), vec2<i32>(textureDimensions(depth)) - 1);

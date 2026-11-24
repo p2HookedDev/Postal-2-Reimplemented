@@ -96,7 +96,6 @@ impl<L: LoaderRef> Vm<L> {
         skeletal.then_some(mesh)
     }
 
-    /// Also true for a stub of class `Mesh` with a skeletal mesh export at its path.
     fn is_skeletal_mesh(&self, mesh: ObjectId) -> bool {
         let object = self.store.object(mesh);
         if self.store.name(object.class_name).eq_ignore_ascii_case("SkeletalMesh") {

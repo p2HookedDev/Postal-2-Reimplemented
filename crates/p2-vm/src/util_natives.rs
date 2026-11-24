@@ -64,8 +64,8 @@ pub(crate) fn subtitle_index(tags: Option<&Value>, tag: &str) -> Option<i32> {
     i32::try_from(index).ok()
 }
 
-/// `SubSound` (a config array, thousands long) by lower-case sound path. Script only reads that array's length; a console
-/// `set`, a restored save and leaving the level drop this.
+/// `SubSound` (a config array, thousands long) by lower-case sound path. Script only reads that array's length; a
+/// console `set`, a restored save and leaving the level drop this.
 #[derive(Debug, Default)]
 pub(crate) struct SubtitleSounds {
     manager: Option<ObjectId>,
@@ -79,7 +79,6 @@ fn subtitle_member(entry: &Value, member: usize) -> Option<&Value> {
     members.get(member)
 }
 
-/// As in retail's loops, a removal steps over the entry after it, which waits for the next pass.
 fn take_expired(entries: &mut Vec<Value>, time: usize, now: f32) -> Vec<Value> {
     let (mut expired, mut at) = (Vec::new(), 0);
     while at < entries.len() {
@@ -103,8 +102,6 @@ fn insert_pending(pending: &mut Vec<Value>, actor: Option<ObjectId>, entry: Valu
     }
 }
 
-/// `dir` 0 is `current`, -1 the one before (none before the first), anything else the one after
-/// (past the end, the first). An unknown `current` gives the last.
 fn next_skin<'a>(names: impl Iterator<Item = &'a str>, prefix: &str, current: &str, dir: i32) -> Option<usize> {
     let (mut first, mut last, mut take_next) = (None, None, false);
     for (index, name) in names.enumerate() {
@@ -298,8 +295,6 @@ impl<L: LoaderRef> Vm<L> {
             Native::GetPlayerNetworkAddress => Value::Str("127.0.0.1".to_owned()),
             // The default URL's options come from `[URL]` (unverified).
             Native::GetDefaultURL => Value::Str(self.config_value("URL", &text_arg(args, 0)).unwrap_or_default()),
-            // The VM keeps no URL and nothing reads its options yet; with `bSaveDefault` the option is saved
-            // to `[DefaultPlayer]` in the settings.
             Native::UpdateURL => {
                 if args.get(2).is_some_and(truthy) {
                     self.save_setting("DefaultPlayer", &text_arg(args, 0), &text_arg(args, 1));
@@ -444,8 +439,6 @@ impl<L: LoaderRef> Vm<L> {
         self.media.subtitle_sounds.by_path.get(&sound.to_ascii_lowercase()).copied()
     }
 
-    /// The manager's array of that name hides `Actor.ActorID` (retail reads by offset), so it is taken by place in the
-    /// layout.
     fn subtitle_actor_index(&self, manager: ObjectId, actor: ObjectId) -> i32 {
         let Some(Value::Name(id)) = self.store.get(actor, "ActorID") else { return -1 };
         let Some(class) = self.store.object(manager).class else { return -1 };

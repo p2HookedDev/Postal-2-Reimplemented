@@ -8,7 +8,6 @@ pub(crate) fn count(r: &mut Reader) -> Result<usize, Error> {
     Ok(r.count()?)
 }
 
-/// An `INT` that must not be negative; a negative value is `what` invalid at its offset.
 pub(crate) fn unsigned(r: &mut Reader, what: &'static str) -> Result<usize, Error> {
     let offset = r.pos();
     usize::try_from(r.i32()?).map_err(|_| invalid(what, offset))
@@ -16,7 +15,6 @@ pub(crate) fn unsigned(r: &mut Reader, what: &'static str) -> Result<usize, Erro
 
 pub(crate) fn array<T>(r: &mut Reader, mut element: impl FnMut(&mut Reader) -> Result<T, Error>) -> Result<Vec<T>, Error> {
     let count = count(r)?;
-    // Reserves no more than the data left could hold, whatever a damaged count says.
     let mut elements = Vec::with_capacity(count.min(r.remaining() / size_of::<T>().max(1)));
     for _ in 0..count {
         elements.push(element(r)?);
@@ -56,7 +54,6 @@ pub(crate) fn skip_primitive(r: &mut Reader) -> Result<(), Error> {
     Ok(())
 }
 
-/// A lazy array's header (version >= 62): the `INT` file offset just past the array, and where it was read.
 fn lazy_skip(r: &mut Reader) -> Result<(usize, usize), Error> {
     let offset = r.pos();
     Ok((unsigned(r, "lazy array skip offset")?, offset))

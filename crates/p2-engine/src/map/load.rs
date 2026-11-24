@@ -15,18 +15,15 @@ pub enum MapState {
     Shown,
 }
 
-/// `url` is the travel a script asked for; without one the map starts fresh.
 #[derive(Message, Debug, Clone)]
 pub struct LoadMap {
     pub package: String,
     pub url: Option<String>,
 }
 
-/// The map could not be loaded or its script thread stopped. The text is for the player.
 #[derive(Message, Debug, Clone)]
 pub struct MapFailed(pub String);
 
-/// The asset viewer loads on its own thread and does not add this.
 pub struct MapLoadPlugin;
 
 impl Plugin for MapLoadPlugin {
@@ -49,7 +46,6 @@ impl Session {
 
 fn request_travel(mut play: ResMut<Play>, session: Res<Session>, mut loads: MessageWriter<LoadMap>) {
     let Some(url) = play.world_mut().and_then(PlayWorld::take_travel) else { return };
-    // A URL that names no map restarts the one shown.
     let Some(package) = travel_package(&url).or_else(|| session.map().map(str::to_owned)) else { return };
     loads.write(LoadMap { package, url: Some(url) });
 }
@@ -107,8 +103,6 @@ pub(super) fn play_loader(game: &Game, map: &str) -> Result<(Arc<Loader>, Packag
     Game::add_map(Game::script_loader(&game.system, p2_host::game_dir::config_folder())?, map, &LoadProgress::default())
 }
 
-/// After travel, `played` with the new map added, so every package keeps its id (`Vm::set_loader`). Package loading
-/// reports 0 to 0.45 to `progress`.
 pub(super) fn spawn_play_loader<T: Send + 'static>(
     game: &Game,
     map: &str,
@@ -119,7 +113,6 @@ pub(super) fn spawn_play_loader<T: Send + 'static>(
     let (system, map) = (game.system.clone(), map.to_owned());
     std::thread::Builder::new()
         .name("map loading".into())
-        // The VM's script recursion (`start_vm` runs the map's start-up scripts here).
         .stack_size(p2_vm::SCRIPT_STACK)
         .spawn(move || {
             let started = std::time::Instant::now();

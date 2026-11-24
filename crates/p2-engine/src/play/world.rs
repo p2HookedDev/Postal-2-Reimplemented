@@ -18,26 +18,19 @@ pub(super) use tick_clock::Glide;
 
 #[derive(Clone, PartialEq)]
 pub struct ActorFrame {
-    /// Where the game keeps it at the newest tick; where it is drawn is [`PlayWorld::place`].
     pub(in crate::play) location: Vector,
     pub(in crate::play) rotation: Rotator,
     pub scale: Vector,
     pub pre_pivot: Vector,
-    /// An emitter spawns its particles along its path through the frame.
     pub velocity: Vector,
-    /// Player-owned emitters ignore `TimeDilation` (`Vm::particle_time_scale`).
     pub time_scale: f32,
     pub gone: bool,
-    /// Not drawn for the player: `bHidden`, or the owner rules (the player's own pawn in first person).
     pub hidden: bool,
     pub attachment: Option<BoneAttachment>,
     pub emitters_disabled: Vec<bool>,
-    /// When it changes, the host rebuilds the model ([`Spawned::restyled`]).
     pub look: u64,
     pub glow: u8,
-    /// In Unreal units; 0 culls nothing.
     pub cull_distance: f32,
-    /// A `Fluid`'s `MyType`: the scripts set it after the spawn.
     pub fluid: Option<p2_vm::FluidType>,
     pub burning: bool,
 }
@@ -63,7 +56,6 @@ pub struct Spawned {
 
 #[cfg(test)]
 impl ActorFrame {
-    /// One the game keeps at `location`, hung on a bone of `on`.
     pub(crate) fn kept_at(location: [f32; 3], on: Option<ObjectId>) -> Self {
         let attachment = on.map(|base| BoneAttachment {
             base,
@@ -94,7 +86,6 @@ impl ActorFrame {
 
 #[cfg(test)]
 impl PlayWorld {
-    /// A world with no game behind it but these actors.
     pub(crate) fn with_actors(actors: impl IntoIterator<Item = (ObjectId, ActorFrame)>) -> Self {
         let loader = Arc::new(Loader::new(&std::env::temp_dir(), &[]).expect("an empty folder loads"));
         let mut world = Self::new(Vm::new(Arc::clone(&loader)), loader, Vec3::ZERO, None, Vec::new(), PathBuf::new());
@@ -102,7 +93,6 @@ impl PlayWorld {
         world
     }
 
-    /// As if a game tick `step` seconds long had just been presented.
     pub(crate) fn present_step(&mut self, step: f32) {
         self.frame.step = step;
     }
@@ -130,11 +120,9 @@ pub struct PlayWorld {
     pub(crate) finished: Vec<ObjectId>,
     pub(crate) movie_status: Vec<MovieStatus>,
     pub(super) seconds: f32,
-    /// A frame of the game was presented in this update.
     pub(super) fresh: bool,
 }
 
-/// A move longer than this in one tick is a jump (a teleport, a camera cut), shown at once.
 const GLIDE_REACH: f32 = 600.0;
 
 pub(super) fn glided(from: (Vector, Rotator), to: (Vector, Rotator), t: f32) -> (Vector, Rotator) {
@@ -147,7 +135,6 @@ fn channels(pose: &ActorPose) -> impl Iterator<Item = &ChannelPose> {
     pose.base.iter().chain(pose.blends.iter().map(|(channel, ..)| channel))
 }
 
-/// Each axis keeps its length (a scaled mesh's bones are not unit) while it turns.
 pub(super) fn glided_bones(from: &[p2_assets::pose::Frame], to: &[p2_assets::pose::Frame], t: f32) -> Vec<p2_assets::pose::Frame> {
     if from.len() != to.len() {
         return to.to_vec();
@@ -270,7 +257,6 @@ impl PlayWorld {
         }
     }
 
-    /// Whether the VM is back from its job. A frame only looks: while the job runs the host draws frames of its own.
     pub(super) fn wait(&mut self, wait: VmWait) -> bool {
         if !matches!(self.sim, Slot::Away) {
             return true;
@@ -396,13 +382,10 @@ impl PlayWorld {
         self.changed.contains(&actor)
     }
 
-    /// Where the actor is drawn this frame: on its way between the last ticks, or on its bone. `None` for one the
-    /// game does not have, or on a bone that has no place yet: it is not drawn.
     pub fn place(&self, actor: ObjectId) -> Option<(Vector, Rotator)> {
         self.shown.actor_place(actor, self.actors.get(&actor)?)
     }
 
-    /// Its place at the newest tick: for what the game's scripts draw themselves, and for what is made once.
     pub fn tick_place(&self, actor: ObjectId) -> Option<(Vector, Rotator)> {
         self.shown.places.newest(actor, self.actors.get(&actor)?)
     }
@@ -411,7 +394,6 @@ impl PlayWorld {
         self.attached.contains(&actor)
     }
 
-    /// `Some(None)` if it does not animate, `None` if not read (no camera saw it).
     pub fn pose(&self, actor: ObjectId) -> Option<Option<&ActorPose>> {
         self.frame.poses.get(&actor).map(Option::as_ref)
     }
@@ -438,12 +420,10 @@ impl PlayWorld {
         self.frame.fov
     }
 
-    /// A Matinee shot drives the camera.
     pub fn cutscene(&self) -> bool {
         self.frame.view.as_ref().is_some_and(|view| view.interpolating)
     }
 
-    /// Drawn by a camera at the last hand-off to the game.
     pub fn drawn(&self, actor: ObjectId) -> bool {
         self.visible.contains(&actor)
     }
@@ -456,8 +436,6 @@ impl PlayWorld {
         self.frame.view.as_ref().map(|view| view.location)
     }
 
-    /// How far the eye stands from the actor the view follows: a first-person eye above its pawn, a cutscene camera
-    /// anywhere.
     pub fn eye_to_view_target(&self) -> Option<f32> {
         let view = self.frame.view.as_ref()?;
         Some((self.actor(view.actor?)?.location - view.location).size())

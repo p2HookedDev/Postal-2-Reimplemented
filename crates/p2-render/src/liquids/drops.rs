@@ -1,5 +1,5 @@
-//! Drops in the air, simulated on the CPU in world space (Bevy coordinates from the world's origin, Unreal units):
-//! thrown drops and a wound's heartbeat spurts.
+//! Drops in the air, simulated on the CPU in world space (Bevy coordinates from the world's origin, Unreal
+//! units): thrown drops and a wound's heartbeat spurts.
 
 use std::f32::consts::PI;
 
@@ -15,10 +15,8 @@ const DROPS_PER_LEVEL: usize = 128;
 const MOST_DROPS: usize = 1024;
 /// A drop that has not landed by then fell out of the world.
 const MOST_AGE: f32 = 4.0;
-/// Seconds a beat, and where in it the systole peaks and how wide it is.
 const BEAT_SECONDS: f32 = 0.85;
 const SYSTOLE: (f32, f32) = (0.1, 0.07);
-/// What a wound keeps flowing between beats.
 const DIASTOLE: f32 = 0.2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,9 +26,7 @@ pub struct Drop {
     pub radius: f32,
     pub age: f32,
     pub kind: FluidType,
-    /// Poured into the pools where it lands; 0 for a drop that is only seen.
     pub volume: f32,
-    /// The feeder it came from, as `Entity::to_bits`.
     pub source: u64,
 }
 
@@ -40,16 +36,13 @@ impl Drop {
     }
 }
 
-/// Where a feeder throws drops from, in Bevy coordinates from the world's origin.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Feed {
     pub source: u64,
     pub kind: FluidType,
     pub from: Vec3,
-    /// The low and high ends of the throw, Unreal units a second.
     pub velocity: [Vec3; 2],
     pub radius: [f32; 2],
-    /// Whether its drops carry volume to the pools.
     pub pours: bool,
 }
 
@@ -61,14 +54,12 @@ pub fn sphere_volume(radius: f32) -> f32 {
     4.0 / 3.0 * PI * radius.powi(3)
 }
 
-/// A wound's flow at `seconds` on its clock: 1 at the systole, `DIASTOLE` between beats.
 pub fn heartbeat(seconds: f32) -> f32 {
     let phase = (seconds / BEAT_SECONDS).rem_euclid(1.0);
     let systole = ((phase - SYSTOLE.0) / SYSTOLE.1).powi(2);
     DIASTOLE + (1.0 - DIASTOLE) * (-systole).exp()
 }
 
-/// Whole drops due this frame at `per_second`; `owed` carries the part of a drop to the next frame.
 pub fn due(owed: &mut f32, per_second: f32, seconds: f32) -> usize {
     let total = *owed + per_second.max(0.0) * seconds;
     let count = total.floor();
@@ -89,13 +80,10 @@ impl Drops {
         }
     }
 
-    /// A random number in 0..1 from the drops' own sequence.
     pub fn unit(&mut self) -> f32 {
         next_unit(&mut self.seed)
     }
 
-    /// `count` drops thrown over the last `seconds`, the oldest farthest out, their speed scaled by `strength`. Most
-    /// are small and a few large, as a real spray is.
     pub fn throw_from(&mut self, feed: &Feed, strength: f32, count: usize, seconds: f32, cap: usize) {
         let [low, high] = feed.velocity;
         for made in 0..count {
@@ -108,8 +96,8 @@ impl Drops {
         }
     }
 
-    /// Moves every drop on by `seconds`, sweeping its motion through `hit` (from, to: the surface's place and normal).
-    /// A drop that meets a surface is gone; one that carries volume lands in `landed`.
+    /// Moves every drop on by `seconds`, sweeping its motion through `hit` (from, to: the surface's place and
+    /// normal). A drop that meets a surface is gone; one that carries volume lands in `landed`.
     pub fn step(&mut self, seconds: f32, hit: impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>, landed: &mut Vec<LiquidLanding>) {
         let gravity = Vec3::NEG_Y * GRAVITY;
         self.list.retain_mut(|drop| {

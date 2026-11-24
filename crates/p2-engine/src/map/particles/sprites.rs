@@ -1,6 +1,7 @@
 use super::*;
 
-/// The scripts rewrite the first emitter's `StartVelocityRange` every frame; it reaches the simulation's properties.
+/// The scripts rewrite the first emitter's `StartVelocityRange` every frame; it reaches the simulation's
+/// properties.
 fn pour(p: &ParticleActor) -> Option<Pour> {
     let props = p.simulation.emitters().first()?.props();
     let RangeVector { x, y, z } = props.start_velocity_range;
@@ -62,8 +63,6 @@ pub(super) fn fill_draw_buffers(p: &ParticleActor, buffers: &mut DrawBuffers, sl
         .reduce(|(lo, hi), (min, max)| (lo.min(min), hi.max(max)));
 }
 
-/// `shown` 1 is the newest tick's place and 0 the one before. Below 0 the sprite is taken back along its last step, to
-/// the time the world is shown at: the simulation keeps no older place.
 pub(super) fn drawn_location(previous: Vector, newest: Vector, shown: f32) -> Vector {
     previous + (newest - previous) * shown
 }

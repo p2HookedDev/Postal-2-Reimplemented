@@ -131,8 +131,6 @@ fn quadrants(half: usize) -> [(usize, usize); 4] {
     [(0, 0), (half, 0), (0, half), (half, half)]
 }
 
-/// Next 2-bit block code; a fresh u16 code word is read only when the last one is used up,
-/// so code words and block data interleave in the stream.
 #[derive(Default)]
 struct Codes {
     word: u16,
@@ -202,10 +200,9 @@ impl Video {
         }
     }
 
-    /// Codebook chunk: argument high byte = 2x2 cell count, low byte = 4x4 cell count.
-    /// A zero 2x2 count means 256; a zero 4x4 count means 256 only when the payload holds bytes
-    /// past the 2x2 cells (unverified against the install's files). Cells not in the chunk keep
-    /// their old contents.
+    /// Codebook chunk: argument high byte = 2x2 cell count, low byte = 4x4 cell count; a zero 2x2 count means 256.
+    /// A zero 4x4 count means 256 only when the payload holds bytes past the 2x2 cells (unverified).
+    /// Cells not in the chunk keep their old contents.
     fn load_codebook(&mut self, mut r: Reader, arg: u16) -> Result<(), RoqError> {
         let count2 = match arg >> 8 {
             0 => 256,
@@ -299,9 +296,9 @@ impl Video {
         Ok(())
     }
 
-    /// VQ chunk: 16x16 macroblocks in raster order, each four 8x8 blocks (TL, TR, BL, BR).
-    /// Decoding stops when the frame ends or the payload ends between macroblocks; blocks not reached keep their pixels.
-    /// A payload ending inside a macroblock is [`RoqError::Truncated`], and the frame is lost.
+    /// VQ chunk: 16x16 macroblocks in raster order, each four 8x8 blocks (TL, TR, BL, BR). Decoding stops when the
+    /// frame ends or the payload ends between macroblocks; blocks not reached keep their pixels. A payload ending
+    /// inside a macroblock is [`RoqError::Truncated`], and the frame is lost.
     fn decode_vq(&mut self, mut r: Reader, arg: u16) -> Result<(), RoqError> {
         // The second frame starts from a copy of the first, so "skip" there shows frame 0
         // (unverified); later, "skip" keeps the frame from two frames back, as the buffers swap.
@@ -327,10 +324,9 @@ impl Video {
     }
 }
 
-/// DPCM sound: each byte is a delta, bit 7 the sign and bits 0-6 squared the size, added to the
-/// channel's predictor and clamped to i16. Mono: the argument is the starting predictor.
-/// Stereo: argument high byte (as the high byte of an i16) starts left, low byte starts right,
-/// and bytes alternate left, right.
+/// DPCM sound: each byte is a delta, bit 7 the sign and bits 0-6 squared the size, added to the channel's
+/// predictor and clamped to i16. Mono: the argument is the starting predictor. Stereo: the argument's high
+/// byte (as an i16's high byte) starts left, the low byte starts right, and bytes alternate left, right.
 fn decode_sound(bytes: &[u8], arg: u16, stereo: bool, out: &mut Vec<i16>) {
     let mut predictor = if stereo {
         [i32::from((arg & 0xFF00).cast_signed()), i32::from((arg << 8).cast_signed())]
@@ -508,8 +504,6 @@ mod tests {
 
     #[test]
     fn subdivided_blocks() {
-        // Codes (one word): 8x8 subdivide, 4x4 subdivide, 4x4 vector, skip, skip, then three
-        // skipped 8x8 blocks -> 0b11_11_10_00_00_00_00_00 = 0xF800. Data: four 2x2 cells, one 4x4 cell.
         let data = movie(&[codebook(), chunk(ID_VQ, 0, &[0x00, 0xF8, 1, 0, 0, 1, 1])]);
         let mut dec = RoqDecoder::new(&data).unwrap();
         let f = dec.next_frame().unwrap().unwrap();

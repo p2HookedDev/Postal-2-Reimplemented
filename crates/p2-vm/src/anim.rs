@@ -30,12 +30,9 @@ struct Sequence {
     frames: f32,
     rate: f32,
     has_notifies: bool,
-    /// Time as a fraction of the sequence, and the notify export (`None`: none, or package not loaded).
     notifies: Vec<(f32, Option<(PackageId, usize)>)>,
 }
 
-/// Frames are fractions of the sequence: 0 is its first frame, 1 is one past its last.
-/// A negative frame tweens from the previous pose to frame 0.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[expect(clippy::struct_excessive_bools, reason = "mirrors `MeshAnimChannel`")]
 pub struct AnimChannel {
@@ -46,7 +43,6 @@ pub struct AnimChannel {
     pub frame: f32,
     pub last: f32,
     pub tween_rate: f32,
-    /// The rate before the latest `PlayAnim`, used for a tween time of -1.
     pub old_rate: f32,
     pub orig_rate: f32,
     pub looping: bool,
@@ -105,7 +101,6 @@ impl Anims {
         }
     }
 
-    /// The loader changed: a mesh stub may have a skeletal mesh export now.
     pub(crate) fn forget_skeletal_meshes(&mut self) {
         self.skeletal_meshes.clear();
     }

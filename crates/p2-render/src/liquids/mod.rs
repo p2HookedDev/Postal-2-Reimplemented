@@ -1,7 +1,6 @@
-//! Modern graphics: our own liquids. The scripts still decide where a stream lands, where puddles and trails lie and
-//! what burns; with `MODERN_LIQUIDS` above 0 streams, spurts and drips are simulated in world space against the level
-//! and drawn in place of the scripts' strip and droplet sprites, and what lands pools where it lands: floor, wall or
-//! ceiling.
+//! Modern graphics: our own liquids. The scripts still decide where a stream lands, where puddles and trails lie
+//! and what burns; with `MODERN_LIQUIDS` above 0, streams, spurts and drips are simulated against the level in
+//! place of the scripts' strip and droplet sprites, and what lands pools on floor, wall or ceiling.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::Handle;
@@ -24,31 +23,23 @@ pub mod spray;
 pub mod stream_ribbon;
 pub mod world;
 
-/// Liquid that reached a surface this frame; drops and stream ends write it, the pools pour it in.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct LiquidLanding {
     /// Bevy coordinates relative to the world's origin.
     pub at: Vec3,
-    /// The surface's normal there, of length 1.
     pub normal: Vec3,
     pub kind: FluidType,
-    /// In the pools' unit of volume.
     pub volume: f32,
     /// Bevy coordinates a second, as it landed.
     pub velocity: Vec3,
 }
 
-/// A heavy drop a hit throws, to fly as the other drops do and land in the pools or on a wall.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct LiquidSpray {
-    /// Bevy coordinates relative to the world's origin.
     pub at: Vec3,
-    /// Bevy coordinates a second.
     pub velocity: Vec3,
-    /// Unreal units.
     pub radius: f32,
     pub kind: FluidType,
-    /// What threw it, as `Entity::to_bits`.
     pub source: u64,
 }
 
@@ -60,15 +51,14 @@ pub struct LiquidTextures {
     pub puke_splash: Option<Handle<Image>>,
 }
 
-/// `PUKE_SPLAT` in `projector.wesl`: a liquid decal (frame buffer blending 7, so `project` skips it) that carries the
-/// puke splat in its metallic-roughness slot.
+/// `PUKE_SPLAT` in `projector.wesl`: a liquid decal (frame buffer blending 7, so `project` skips it) that carries
+/// the puke splat in its metallic-roughness slot.
 pub const PUKE_SPLAT_TAG: u32 = 0x8000_0000 | 0x40_0000 | 7;
 
 pub fn is_puke(kind: FluidType) -> bool {
     matches!(kind, FluidType::Puke | FluidType::BloodyPuke)
 }
 
-/// The puke splat's decal over the liquid decal `over`, in its box and despawned with it.
 pub fn puke_decal(splat: &Handle<Image>, over: Entity) -> impl Bundle {
     (ClusteredDecal { metallic_roughness_texture: Some(splat.clone()), tag: PUKE_SPLAT_TAG, ..Default::default() }, Transform::IDENTITY, ChildOf(over))
 }

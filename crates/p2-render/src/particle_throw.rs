@@ -1,6 +1,6 @@
-//! Modern graphics: what a newborn sprite of the scripts' chunks, shards and sparks throws. A chunk throws droplets
-//! for the GPU pool; a shard, a spark and a piece of skull or brain throw rigid pieces instead. A blood emitter's first
-//! burst also throws a mist puff, fast streaks and a few heavy drops, along and as hard as the person hit that bled.
+//! Modern graphics: what a newborn sprite of the scripts' chunks, shards and sparks throws. A chunk throws GPU
+//! droplets; a shard, spark or piece of skull or brain throws rigid pieces. A blood emitter's first burst also
+//! throws a mist puff, fast streaks and a few heavy drops, along and as hard as the hit that bled.
 
 use bevy::asset::Handle;
 use bevy::ecs::entity::Entity;
@@ -18,9 +18,7 @@ use crate::gpu_particles::{Droplet, MIST, STREAK, TEXTURE_SLOTS, UNPUSHED, pool_
 use crate::liquids::LiquidSpray;
 use crate::particle_frame::DrawnParticles;
 
-/// Past this many emitters the ones whose actor is gone are dropped.
 const SOURCES_KEPT: usize = 4096;
-/// A droplet lives its kind's `seconds` times between `LIFE_LEAST` and `LIFE_LEAST + LIFE_SPREAD`.
 const LIFE_LEAST: f32 = 0.7;
 const LIFE_SPREAD: f32 = 0.6;
 /// A droplet's gravity, in Unreal units a second squared. How a chunk lands matches `RESTITUTION` and `KEEP` in
@@ -29,10 +27,9 @@ const DROPLET_GRAVITY: f32 = 800.0;
 
 /// Unreal units in a metre (unverified).
 const METRE: f32 = 52.5;
-/// Newborn sprites in a blood burst with no known hit that make it as big a hit as the spray gets.
 const BIG_HIT: f32 = 15.0;
-/// A hit's damage that makes the smallest spray and the one that makes the biggest; between them the spray follows
-/// the damage's logarithm.
+/// A hit's damage that makes the smallest spray and the one that makes the biggest; between them the spray
+/// follows the damage's logarithm.
 const LEAST_DAMAGE: f32 = 5.0;
 const MOST_DAMAGE: f32 = 100.0;
 /// A body shot's spray scales to this at the most damage, so that only retail's headshot sprays in full.
@@ -41,13 +38,9 @@ const BODY_MOST: f32 = 0.8;
 const HIT_REACH: f32 = 48.0;
 /// About a body's depth: the main spray of a shot leaves past it, or the body it came through would stop it.
 const EXIT: f32 = 16.0;
-/// Game seconds a person hit waits for the scripts' blood to show.
 const HIT_MEMORY: f32 = 0.25;
-/// A burst whose sprites' mean velocity is less than this share of their mean speed has no way: it is thrown all round.
 const RADIAL: f32 = 0.35;
-/// Sprites whose mean level speed is under this, in Unreal units a second, give their burst no way.
 const WAYLESS: f32 = 20.0;
-/// Ranges below go from a small hit to a big one, or from least to most.
 const MISTS: [f32; 2] = [1.0, 2.0];
 const RADIAL_MISTS: [f32; 2] = [2.0, 4.0];
 const MIST_SECONDS: [f32; 2] = [0.16, 0.2];
@@ -56,9 +49,7 @@ const MIST_HALF: f32 = 0.05 * METRE;
 const MIST_DRIFT: f32 = 0.5 * METRE;
 const STREAKS: [f32; 2] = [24.0, 120.0];
 const RADIAL_STREAKS: [f32; 2] = [180.0, 360.0];
-/// The share of a hit's streaks thrown back toward the shooter.
 const BACK_SHARE: f32 = 0.2;
-/// Half the cone's angle in degrees.
 const CONE: [f32; 2] = [17.5, 12.5];
 const SMALL_HIT_SPEED: [f32; 2] = [4.0 * METRE, 10.0 * METRE];
 const BIG_HIT_SPEED: [f32; 2] = [8.0 * METRE, 18.0 * METRE];
@@ -66,15 +57,14 @@ const STREAK_SECONDS: [f32; 2] = [0.12, 0.3];
 const STREAK_HALF: [f32; 2] = [0.05, 0.12];
 const HEAVY: [f32; 2] = [1.0, 4.0];
 const RADIAL_HEAVY: [f32; 2] = [5.0, 12.0];
-/// A heavy drop's speed against a streak's.
 const HEAVY_SPEED: [f32; 2] = [0.2, 0.35];
 const HEAVY_RADIUS: [f32; 2] = [0.08, 0.2];
-/// Blood's linear colour, before the sprite's tint and light: `BLOOD_BODY` of `color.wesl`, as the pools and streams.
+/// Blood's linear colour, before the sprite's tint and light: `BLOOD_BODY` of `color.wesl`, as the pools and
+/// streams.
 const BLOOD: Vec3 = Vec3::new(0.114, 0.0006, 0.0006);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Throws {
-    /// A piece of blood, dirt, concrete, bone or kevlar: a spinning cell of its texture in the GPU pool.
     Droplets,
     Pieces(PieceKind),
 }
@@ -91,10 +81,9 @@ const SPARK_WORD: &str = "softwhitedot";
 const FUSE_WORD: &str = "sparkler";
 const SPARK: Throws = Throws::Pieces(PieceKind::Spark);
 
-/// Told by the texture's name and how the scripts draw it: their breakage is glass shards and plywood parts, their
-/// chunk textures hold `chunk` or `concrete`, both blended by their alpha; their sparks are the soft white dot drawn
-/// along its motion (the same dot facing the eye is a glow or a trail) and a fuse's sparkler. A piece drawn flat on a
-/// surface already lies where it fell and throws nothing.
+/// Told by the texture's name and how the scripts draw it: breakage is glass shards and plywood, chunk textures
+/// hold `chunk` or `concrete` (alpha blended), sparks are the soft white dot drawn along its motion and a fuse's
+/// sparkler. A piece drawn flat on a surface already lies where it fell and throws nothing.
 fn detail_of(texture: &str, props: &EmitterProperties) -> Option<Throws> {
     let texture = texture.to_ascii_lowercase();
     if texture.contains(FUSE_WORD) {
@@ -114,20 +103,15 @@ fn detail_of(texture: &str, props: &EmitterProperties) -> Option<Throws> {
 #[derive(Clone, Copy)]
 struct Throw {
     per_level: f32,
-    /// Unreal units a second, when the sprite's own motion is not known.
     speed: f32,
     seconds: f32,
-    /// The share of the sprite's half size a piece takes, least and most.
     size: [f32; 2],
-    /// The smallest and the largest half size, in Unreal units.
     least: f32,
     most: f32,
-    /// The share of the sprite's speed a piece takes, least and most.
     fling: [f32; 2],
 }
 
 const CHUNK: Throw = Throw { per_level: 0.6, speed: 160.0, seconds: 8.0, size: [0.2, 0.45], least: 0.3, most: 3.0, fling: [0.5, 1.2] };
-/// A blood chunk's droplets are a fine spatter that is gone within half a second.
 const BLOOD_CHUNK: Throw = Throw { seconds: 0.38, size: [0.03, 0.06], least: 0.08, most: 0.25, ..CHUNK };
 
 /// The longest a droplet in the pool can live: only chunks reach it.
@@ -159,9 +143,7 @@ pub(crate) struct Spawner {
     sources: FxHashMap<(Entity, u32), Source>,
     /// The highest spawn serial seen of each emitter: a sprite past it is newborn.
     seen: FxHashMap<(Entity, u32), u32>,
-    /// The textures the droplets are drawn with, by slot; an emitter whose texture finds no slot throws nothing.
     pub(crate) textures: Vec<Handle<Image>>,
-    /// Heavy drops thrown since the caller last took them.
     pub(crate) sprays: Vec<LiquidSpray>,
     hits: Vec<RecentHit>,
     /// Last frame's hits by place: a hit stays readable for a game tick, over several frames.
@@ -178,8 +160,8 @@ pub(crate) fn next_unit(seed: &mut u32) -> f32 {
     (x >> 8) as f32 / 16_777_216.0
 }
 
-/// Where a piece thrown from `sprite` starts, in Bevy axes before the world's origin, its velocity and its half size.
-/// `step` is the game's seconds this frame: the sprite's first move over it is its speed.
+/// Where a piece thrown from `sprite` starts, in Bevy axes before the world's origin, its velocity and its half
+/// size. `step` is the game's seconds this frame: the sprite's first move over it is its speed.
 fn thrown(sprite: &SpriteParticle, throw: &Throw, step: f32, seed: &mut u32) -> (Vec3, Vec3, f32) {
     let here = Vec3::from(to_bevy(sprite.location));
     let moved = here - Vec3::from(to_bevy(sprite.previous));
@@ -197,7 +179,6 @@ fn sprite_rgb(sprite: &SpriteParticle) -> Vec3 {
     Vec3::new(r, g, b)
 }
 
-/// `light` is in display light, as the sprite's own.
 fn droplet(sprite: &SpriteParticle, chunk: &Throw, slot: u32, origin: Vec3, step: f32, light: Vec3, seed: &mut u32) -> Droplet {
     let (at, velocity, half) = thrown(sprite, chunk, step, seed);
     let seconds = chunk.seconds * (LIFE_LEAST + LIFE_SPREAD * next_unit(seed));
@@ -216,14 +197,12 @@ fn between([low, high]: [f32; 2], t: f32) -> f32 {
     low + (high - low) * t
 }
 
-/// A person hit of the last moments in the sprites' Bevy axes, the pellets that struck one body in one frame summed.
 #[derive(Clone, Copy, Debug)]
 struct RecentHit {
     person: ObjectId,
     at: Vec3,
     momentum: Vec3,
     damage: f32,
-    /// How far the farthest pellet summed into it lies from `at`.
     spread: f32,
     age: f32,
     sprayed: bool,
@@ -232,12 +211,10 @@ struct RecentHit {
 
 enum Claim {
     Fresh(RecentHit),
-    /// Only hits that have already sprayed are near: the burst is another emitter of the same hit.
     Sprayed,
     Unknown,
 }
 
-/// The nearest hit within reach that has not sprayed yet, now marked as sprayed.
 fn claim(hits: &mut [RecentHit], at: Vec3) -> Claim {
     let near = |hit: &RecentHit| hit.at.distance(at) < HIT_REACH + hit.spread;
     let fresh = hits.iter_mut().filter(|hit| !hit.sprayed && near(hit)).min_by(|a, b| a.at.distance(at).total_cmp(&b.at.distance(at)));
@@ -250,12 +227,9 @@ fn claim(hits: &mut [RecentHit], at: Vec3) -> Claim {
 
 #[derive(Clone, Copy, Debug)]
 struct Burst {
-    /// Zero for no way: it is thrown all round, as few as along a way.
     axis: Vec3,
     radial: bool,
-    /// Some of it is thrown back along `-axis`, toward the shooter.
     back: bool,
-    /// 0 for a small hit to 1 for a big one.
     big: f32,
 }
 
@@ -281,7 +255,6 @@ fn burst_of(sprites: &[&SpriteParticle], step: f32, hit: Option<&RecentHit>) -> 
     Burst { axis: if radial { Vec3::ZERO } else { axis }, radial, back: back && !radial, big }
 }
 
-/// A way within `degrees` of `axis`, evenly over the cone's cap; 180 is any way.
 fn in_cone(axis: Vec3, degrees: f32, seed: &mut u32) -> Vec3 {
     let cos = 1.0 - next_unit(seed) * (1.0 - degrees.to_radians().cos());
     let sin = (1.0 - cos * cos).max(0.0).sqrt();
@@ -290,7 +263,6 @@ fn in_cone(axis: Vec3, degrees: f32, seed: &mut u32) -> Vec3 {
     axis * cos + (a * turn.cos() + b * turn.sin()) * sin
 }
 
-/// Where a blood burst is in the world's coordinates and its colour in linear light.
 struct Hit {
     at: Vec3,
     colour: Vec3,
@@ -381,7 +353,6 @@ impl Spawner {
         self.heard.extend(hits.iter().map(key));
     }
 
-    /// Before the drawing takes the frame's newborn emitters.
     pub(crate) fn note(&mut self, drawn: &DrawnParticles) {
         if self.map != drawn.level {
             self.map = drawn.level;

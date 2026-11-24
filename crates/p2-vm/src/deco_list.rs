@@ -15,7 +15,6 @@ impl<L: LoaderRef> Vm<L> {
             let local = [0, 1, 2].map(|k| (p[k] - placement.pre_pivot[k]) * placement.scale[k]);
             placement.location + axes[0] * local[0] + axes[1] * local[1] + axes[2] * local[2]
         };
-        // The extent is taken from the box already placed in the world, then placed a second time with each point.
         let extent = (to_world(Vector::new(x1, y1, z1)) - to_world(Vector::new(x0, y0, z0))) * 0.5;
         let class = self.find_class("Engine", "DecoVolumeObject")?;
         for index in 0.. {
@@ -76,7 +75,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(true)
     }
 
-    /// The local bounding box (min then max) and bounding sphere a model or mesh saves first in its own data.
     fn saved_bounds(&self, primitive: ObjectId, class: &str) -> Option<([f32; 6], [f32; 4])> {
         let (package, export) = self.loader.loaded_export_by_path_of_class(&self.store.object(primitive).path, class)?;
         let loaded = self.loader.package(package);

@@ -139,7 +139,6 @@ mod monday {
         run_with(occlusion, warmup, count, |_| (Vec::new(), [turn, 0.0]))
     }
 
-    /// The game's map host drawing Suburbs-3 into an image of `size`, before its first frame.
     fn host<M>(size: UVec2, settings: p2_host::display::Settings, look: impl bevy::app::Plugins<M>) -> Option<(App, bevy::asset::Handle<Image>)> {
         let root = common::game_dir()?;
         let mut app = App::new();
@@ -149,7 +148,6 @@ mod monday {
         .insert_resource(settings)
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
         .insert_resource(Session::new(root))
-        // The game waits for neither: without both, which frame a tick or a built model lands on depends on the machine.
         .add_systems(Update, (|mut play: ResMut<Play>| play.wait_for_tick()).before(PlaySystems::Tick))
         .add_systems(PostUpdate, (|spawned: Res<SpawnedActors>| {
             while spawned.building() {
@@ -182,7 +180,6 @@ mod monday {
         Some((app, target))
     }
 
-    /// The first frame makes the cameras; they draw into `target` from the next.
     fn first_frame(app: &mut App, target: &bevy::asset::Handle<Image>) {
         app.update();
         let world = app.world_mut();
@@ -205,8 +202,6 @@ mod monday {
         for _ in 0..warmup {
             app.update();
         }
-        // A frame is read back some frames after it is drawn, how many depends on the machine: frames are told
-        // apart by their count since the read-back began, one an update.
         let first = 1 + warmup;
         let mut placed = Vec::new();
         for frame in 0..count {
@@ -234,7 +229,6 @@ mod monday {
         Some(Run { frames, cameras: placed })
     }
 
-    /// GPU milliseconds a frame of each timed pass, over `frames` frames after `settle` frames.
     fn pass_costs(app: &mut App, settle: usize, frames: usize) -> std::collections::BTreeMap<String, f64> {
         use bevy::diagnostic::DiagnosticsStore;
         let mut seen = std::time::Instant::now();
@@ -255,7 +249,6 @@ mod monday {
         spent
     }
 
-    /// The player's settings file with `changes` over it; `None` without the file.
     fn player_settings(changes: &[(&str, &str)]) -> Option<p2_host::display::Settings> {
         let path = Path::new(&std::env::var_os("APPDATA")?).join("p2-reimplemented").join("Settings.ini");
         let text = std::fs::read_to_string(path).ok()?;
@@ -303,7 +296,6 @@ mod monday {
             (costs.get("main_opaque_pass_3d").copied().unwrap_or(0.0), costs.values().sum::<f64>())
         };
         cost(&mut app, &[], 240, 1);
-        // A row's first switch compiles its shaders, and a pass draws nothing meanwhile.
         for row in ROWS {
             cost(&mut app, &[row], 60, 1);
         }
@@ -317,9 +309,6 @@ mod monday {
         Some(())
     }
 
-    /// The game's own blood spawned on the floor ahead of the player on Suburbs-3, drawn at the player's settings:
-    /// a neck spout pouring, a puddle and a machine-gun splat. Writes the frame to look at; `None` without the game.
-    /// `close`: the pools a few steps ahead, looked at from above as a player stands over them.
     pub fn blood_picture(size: UVec2, close: bool) -> Option<Vec<u8>> {
         use p2_math::{Rotator, Vector};
         use p2_render::frame_facts::FrameFacts;
@@ -334,7 +323,6 @@ mod monday {
         });
         first_frame(&mut app, &target);
         for frame in 0..660 {
-            // Look down at the floor ahead for the last frames before the spawn.
             let down_from = if close { 520 } else { 620 };
             app.world_mut().resource_mut::<PlayerInput>().mouse = if frame >= down_from { [0.0, -3.0] } else { [0.0; 2] };
             app.update();
@@ -367,15 +355,12 @@ mod monday {
             };
             put("FX", "BloodPuddle", puddle + Vector::new(0.0, 0.0, 1.0), Rotator::ZERO);
             put("FX", "BloodPuddle", shaded + Vector::new(0.0, 0.0, 1.0), Rotator::ZERO);
-            // A splat maker turns its splat to face back along its rotation: up, so the splat projects down.
             put("Postal2Game", "BloodMachinegunSplatMaker", splat + Vector::new(0.0, 0.0, 10.0), Rotator { pitch: 16384, yaw: 0, roll: 0 });
-            // Close up, a fight's splats lie around and under the pool.
             if close {
                 for (x, y) in [(0.0, 0.0), (18.0, 6.0), (-16.0, 10.0), (6.0, -18.0), (-10.0, -14.0), (26.0, -10.0)] {
                     put("Postal2Game", "BloodMachinegunSplatMaker", puddle + Vector::new(x, y, 10.0), Rotator { pitch: 16384, yaw: 0, roll: 0 });
                 }
             }
-            // As a cut throat starts: the game calls these on the spout it spawns.
             let neck = spout + Vector::new(0.0, 0.0, 45.0);
             if let Some((made, class)) = put("BasePeople", "BloodSpoutFeeder", neck, Rotator::ZERO) {
                 let start = vm.find_function(class, "SetStartSpeeds").ok().flatten().expect("SetStartSpeeds");
@@ -392,10 +377,6 @@ mod monday {
         (frame.len() == (size.x * size.y * 4) as usize).then_some(frame)
     }
 
-    /// Suburbs-3 at the player's settings and `size`, looking at the floor ahead, then a fight's leftovers put in view:
-    /// the game's machine-gun splats and puddles, bystanders cut up and killed, a burning car's fire. `pile`: the
-    /// splats heaped on one spot at the player's feet, as a machine gun leaves them on a body, and no one killed.
-    /// The app after the fight settled, the opaque pass's GPU milliseconds before it, and the image it draws into.
     fn fight_scene(size: UVec2, pile: bool) -> Option<(App, f64, bevy::asset::Handle<Image>)> {
         use bevy::ecs::query::With;
         use p2_math::{Rotator, Vector};
@@ -471,8 +452,6 @@ mod monday {
         Some((app, calm, target))
     }
 
-    /// The opaque pass's GPU milliseconds, printed with the frame's, SSAO's and the movers' lamp tiles. Drawn at 3840 x
-    /// 2160 the GPU is always busy: one that waits on the CPU lowers its clock and draws the same work slower.
     fn opaque_cost(app: &mut App) -> f64 {
         let start = std::time::Instant::now();
         let costs = pass_costs(app, 90, 60);
@@ -483,7 +462,6 @@ mod monday {
         opaque
     }
 
-    /// The opaque pass before the fight and over the half minute after it.
     pub fn fight_opaque_cost(pile: bool) -> Option<()> {
         let (mut app, calm, _) = fight_scene(UVec2::new(3840, 2160), pile)?;
         let fought: f64 = (0..16).map(|_| opaque_cost(&mut app)).sum::<f64>() / 16.0;
@@ -494,7 +472,6 @@ mod monday {
         Some(())
     }
 
-    /// A frame of the staged fight at `size`, after it settled.
     pub fn fight_picture(size: UVec2) -> Option<Vec<u8>> {
         let (mut app, _, target) = fight_scene(size, false)?;
         let latest = Arc::new(Mutex::new(Vec::new()));
@@ -513,7 +490,6 @@ mod monday {
         Some(frame)
     }
 
-    /// The fight's opaque pass against each modern row taken down.
     pub fn fight_cost_by_row() -> Option<()> {
         const ROWS: [(&str, &str); 8] = [
             ("ModernSunShadows", "0"),
@@ -632,7 +608,6 @@ fn monday_peeing_flicker_report() {
     }
 }
 
-/// Not a check of a number: the game's blood on the real map at the player's settings, written to look at.
 #[test]
 #[ignore = "needs a GPU and the game; writes a picture to look at"]
 fn monday_blood_picture() {
@@ -923,8 +898,6 @@ fn floor_sprites_do_not_z_fight() {
     }
 }
 
-/// Particle meshes have no bounds (`NoFrustumCulling`): Bevy's GPU occlusion culling gives them an infinite box, which
-/// its culling shader turns into NaN screen bounds; whether such a mesh is drawn is then up to the GPU.
 #[test]
 #[ignore = "needs a GPU"]
 fn particles_drawn_every_frame_with_occlusion_culling() {
@@ -934,7 +907,6 @@ fn particles_drawn_every_frame_with_occlusion_culling() {
     assert_eq!(missing, 0);
 }
 
-/// The frames, counted from the first one held, that differ from the one before, and how many pairs were held.
 fn decal_frames_changing(gpu_clustering: bool, frames_wanted: usize) -> (Vec<usize>, usize) {
     use bevy::light::ClusteredDecal;
     use bevy::light::cluster::GlobalClusterSettings;

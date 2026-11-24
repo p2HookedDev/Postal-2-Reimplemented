@@ -5,8 +5,8 @@ use crate::components::{OVERLAY_LAYERS, SUN_VIEW_LAYER};
 use crate::overlay_route::overlay_routes;
 use bevy::camera::{CameraOutputMode, RenderTarget};
 
-/// The Bevy camera rotation of an Unreal view rotation (pitch, yaw, roll; 65536 a turn): Unreal looks
-/// along X with Z up and Y right, a Bevy camera along −Z with Y up and X right, Y and Z swapped.
+/// The Bevy camera rotation of an Unreal view rotation (pitch, yaw, roll; 65536 a turn): Unreal looks along X
+/// with Z up and Y right, a Bevy camera along -Z with Y up and X right, Y and Z swapped.
 pub fn view_rotation(rotation: Rotator) -> Quat {
     let matrix = rotator_matrix(rotation);
     let axis = |i: usize| {
@@ -18,7 +18,6 @@ pub fn view_rotation(rotation: Rotator) -> Quat {
 }
 
 
-/// `DefaultTexMipBias` as `Postal2.ini` ships it.
 const DEFAULT_MIP_BIAS: f32 = -0.5;
 
 pub(super) fn plain_output() -> (Msaa, Tonemapping, DebandDither, MipBias) {
@@ -44,26 +43,22 @@ fn set_camera(camera: &mut Mut<Camera>, is_active: bool, viewport: Option<&Viewp
     }
 }
 
-/// After the frame is presented: a slot's camera turns on and takes its field of view in the frame its models move to its
-/// layer (a kick's foot takes slot 0 and the weapon moves to slot 1), not a frame later.
+/// Runs after the frame is presented, so a slot's camera turns on and takes its field of view in the same frame
+/// its models move to its layer (a kick's foot takes slot 0 and the weapon slot 1), not a frame later.
 pub(super) struct ViewCameraPlugin;
 
 impl Plugin for ViewCameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, place_camera.in_set(SceneViewSystems::Place))
-            // After the HUD paint (egui's pass), so a layer shows in the frame it was painted.
             .add_systems(PostUpdate, show_canvas_layers.after(EguiPostUpdateSet::EndPass))
             .add_systems(PostUpdate, place_overlay_cameras.in_set(SceneViewSystems::Overlays).before(CameraUpdateSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
-/// The HUD draws the whole window, and the gamma ramp's image is not its target: it takes the last group only where the
-/// overlay camera would draw the same pixels to the same target.
 pub(super) fn hud_may_carry(overlay_target: &RenderTarget, viewport: Option<&Viewport>, hud_size: Option<UVec2>) -> bool {
     !matches!(overlay_target, RenderTarget::Image(_)) && viewport.is_some_and(|v| v.physical_position == UVec2::ZERO && Some(v.physical_size) == hud_size)
 }
 
-/// Carrying a group, the HUD draws on the frame itself as an overlay camera does, so its actors blend against the world.
 fn set_hud_output(camera: &mut Mut<Camera>, routed: &[usize]) {
     let carries = !routed.is_empty();
     if matches!(camera.clear_color, ClearColorConfig::None) == carries {
@@ -74,8 +69,6 @@ fn set_hud_output(camera: &mut Mut<Camera>, routed: &[usize]) {
     camera.output_mode = output_mode;
 }
 
-/// Each slot draws on its own camera after that slot's canvas layer; the last slot goes to the HUD's camera while it may.
-/// The carry hangs only on the slot count and the targets, so it holds from frame to frame.
 fn place_overlay_cameras(
     view: Res<MeshView>,
     hud: Res<HudView>,
@@ -139,14 +132,13 @@ fn place_camera(
     for (entity, mut camera, mut transform, scene_view, mut projection, culled, ssao) in &mut cameras {
         view.set_fov(&mut projection, view_fov);
         set_camera(&mut camera, viewport.is_some(), viewport.as_ref());
-        // GPU occlusion culling (Bevy 0.20) takes the whole depth texture for the view's: only for a view filling its
-        // target (the game's full window; its size is rounded from egui points), not one beside panels (the viewer).
+        // GPU occlusion culling takes the whole depth texture as the view's: only for a view filling its target
+        // (the game's full window), not one beside panels (the viewer).
         let fills = view.occlusion_culling
             && viewport.as_ref().is_none_or(|v| {
                 let target = camera.physical_target_size();
                 v.physical_position == UVec2::ZERO && target.is_some_and(|size| (size.as_ivec2() - v.physical_size.as_ivec2()).abs().max_element() <= 2)
             });
-        // It needs the depth prepass, which nothing else uses: both together.
         if fills && !culled {
             commands.entity(entity).insert((DepthPrepass, OcclusionCulling));
         } else if !fills && culled {
@@ -162,7 +154,6 @@ fn place_camera(
             *transform = placed;
         }
     }
-    // The sky zone's geometry at p shows at eye + turn^-1 (p - sky eye): no parallax, turned by the zone's rotation.
     if let (Some(eye), Some((sky_eye, turn))) = (eye, shown.sky_place) {
         let placed = Transform::from_matrix(Mat4::from_translation(eye) * Mat4::from_quat(turn.inverse()) * Mat4::from_translation(shown.origin - sky_eye));
         for mut transform in &mut sky_roots {

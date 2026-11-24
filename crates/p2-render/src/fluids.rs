@@ -1,5 +1,3 @@
-//! A fluid surface: the game simulates it and hands over its vertices; its mesh, material and texture scroll are made here.
-
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::camera::visibility::NoFrustumCulling;
@@ -14,7 +12,6 @@ use p2_particles::FluidVertex;
 use crate::scene::{MaterialImages, SectionView};
 use crate::view::{ActorLook, ActorMaterials, SectionMaterial, image_size};
 
-/// The surface as the game last stepped it in view. `images` and `indices` are read once, when it is added.
 #[derive(Component)]
 pub struct FluidDrawn {
     pub images: MaterialImages,
@@ -32,7 +29,6 @@ struct FluidDraw {
     uv_size: [f32; 2],
 }
 
-/// (`PostUpdate`)
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FluidSystems;
 
@@ -67,8 +63,8 @@ fn add_fluid_draw(
     material.insert(&mut draw);
 }
 
-/// The vertex colour is the light, 1 being neutral. No water skin reads the simulation's height alpha; retail's use of it is
-/// (unverified).
+/// The vertex colour is the light, 1 being neutral. No water skin reads the simulation's height alpha; retail's
+/// use of it is (unverified).
 fn fill_fluid(mesh: &mut Mesh, vertices: &[FluidVertex], indices: &[u32]) {
     let (positions, normals, colors, uvs, indices): (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>, Vec<[f32; 2]>, Vec<u32>) = if vertices.is_empty() || indices.is_empty() {
         (vec![[0.0; 3]], vec![[0.0, 1.0, 0.0]], vec![[0.0; 4]], vec![[0.0; 2]], vec![0, 0, 0])

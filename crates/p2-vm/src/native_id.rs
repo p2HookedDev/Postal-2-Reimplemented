@@ -1,5 +1,3 @@
-//! A native's group here is its route in [`crate::natives::call`]; `Operator` holds those [`crate::operators::operate`] answers.
-
 macro_rules! natives {
     ($($group:ident: [$($name:ident),* $(,)?]),* $(,)?) => {
         #[expect(non_camel_case_types, reason = "named as the natives' declarations (`Add_IntInt`, `actorReachable`)")]

@@ -1,5 +1,5 @@
-//! An object's properties as loaded: its class's defaults, then its saved tags over them. The two
-//! index different packages, so every value is found together with the package it indexes.
+//! An object's properties as loaded: its class's defaults, then its saved tags over them. The two index
+//! different packages, so every value is found together with the package it indexes.
 
 use std::sync::Arc;
 
@@ -16,7 +16,6 @@ pub struct Layer<'a> {
     pub properties: Properties,
 }
 
-/// Config values are not included.
 #[derive(Debug, Clone)]
 pub struct ObjectProperties<'a> {
     pub defaults: Arc<[Arc<Layer<'a>>]>,
@@ -26,8 +25,8 @@ pub struct ObjectProperties<'a> {
 
 impl<'a> ObjectProperties<'a> {
     /// Element `index` of property `name` (case-insensitive) from the last layer that sets it, with that layer's
-    /// package. A tagged struct (all but `Vector`, `Rotator`, `Color`) loads member by member over the value
-    /// below it: read its members with [`ObjectProperties::member`].
+    /// package. A tagged struct (all but `Vector`, `Rotator`, `Color`) loads member by member over the value below
+    /// it: read its members with [`ObjectProperties::member`].
     pub fn get(&self, name: &str, index: u32) -> Option<(&'a Package, &StoredValue)> {
         self.layers().rev().find_map(|layer| find(&layer.properties, name, index).map(|value| (layer.package, value)))
     }
@@ -39,8 +38,6 @@ impl<'a> ObjectProperties<'a> {
         })
     }
 
-    /// Bool property `name` (element 0). Here and below a value no layer sets reads as zero, like the engine's
-    /// zeroed memory.
     pub fn bool(&self, name: &str) -> bool {
         matches!(self.get(name, 0), Some((_, StoredValue::Bool(true))))
     }
@@ -73,7 +70,6 @@ impl<'a> ObjectProperties<'a> {
         }
     }
 
-    /// Object reference `name` unless `None`, when it indexes `package` (a class default would index the class's).
     pub fn object_in(&self, name: &str, package: &Package) -> Option<i32> {
         self.object(name).filter(|&(found, _)| std::ptr::eq(found, package)).map(|(_, reference)| reference)
     }
@@ -123,7 +119,6 @@ impl<'a, R: Resolve + ?Sized> Objects<'a, R> {
         Self::with_layout_cache(resolver, LayoutCache::default())
     }
 
-    /// See [`LayoutCache`] for when a cache may be reused.
     pub fn with_layout_cache(resolver: &'a R, cache: LayoutCache) -> Self {
         Self { resolver, layouts: Layouts::with_cache(resolver, cache), defaults: FxHashMap::default() }
     }
@@ -132,7 +127,6 @@ impl<'a, R: Resolve + ?Sized> Objects<'a, R> {
         self.layouts.cache
     }
 
-    /// Properties of object `export` of `src` (not of a class: classes save no tags of their own).
     pub fn read(&mut self, src: Source<'a>, export: usize) -> Result<ObjectProperties<'a>, Error> {
         let Some(entry) = src.package.exports.get(export) else {
             return Err(Error::WrongKind { export, expected: "export" });

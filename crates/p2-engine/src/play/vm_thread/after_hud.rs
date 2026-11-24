@@ -133,7 +133,6 @@ impl Simulation {
         for &actor in new {
             let vm = &self.vm;
             let Some(class) = vm.store.object(actor).class else { continue };
-            // Fluid feeders and trail starters are emitters that declare no particle emitters: logic actors with nothing to draw.
             if vm.store.is_a(actor, Kind::Emitter)
                 && !vm.store.is_deleted(actor)
                 && crate::actors::emitter_objects(vm, actor).is_empty()
@@ -286,8 +285,6 @@ fn level_time(vm: &Vm<Arc<Loader>>) -> f32 {
     }
 }
 
-/// How much wider than the tangent of half the field of view the cone tested for coronas is: it holds the whole frustum
-/// at any screen shape up to 21:9, and a corona whose centre just left the screen is still partly on it.
 const CORONA_CONE_WIDTH: f32 = 2.0;
 
 fn in_view_cone(offset: Vector, forward: Vector, reach: f32) -> bool {
@@ -300,7 +297,6 @@ fn track(list: &mut Vec<ObjectId>, new: &[ObjectId], joins: impl Fn(ObjectId) ->
     list.retain(|&actor| !gone(actor));
 }
 
-/// Explorer hands a web or `steam://` link to its registered program without blocking.
 fn open_url(url: &str) {
     let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
     if let Err(error) = std::process::Command::new(opener).arg(url).spawn() {

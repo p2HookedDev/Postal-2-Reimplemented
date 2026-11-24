@@ -67,7 +67,6 @@ struct LayerPipelines {
     entries: Option<[CachedComputePipelineId; 4]>,
 }
 
-/// The buffers for one level at one capacity; `current` names the water buffer that holds the newest depths.
 struct LayerBuffers {
     capacity: u32,
     level: u32,
@@ -80,7 +79,6 @@ struct LayerBuffers {
     sources: Buffer,
     current: usize,
     frames: u32,
-    /// A bind group for each water buffer as the one read, and the buffers and atlas they were made with.
     groups: Option<([BindGroup; 2], [BufferId; 3], TextureViewId)>,
 }
 
@@ -131,7 +129,6 @@ fn new_buffers(device: &RenderDevice, capacity: u32, level: u32) -> LayerBuffers
     }
 }
 
-/// Writes `bytes` to `buffer`, made anew and larger first when they do not fit.
 fn fill(device: &RenderDevice, queue: &RenderQueue, buffer: &mut Buffer, label: &'static str, bytes: &[u8]) {
     if bytes.len() as u64 > buffer.size() {
         *buffer = self::buffer(device, label, (bytes.len() as u64).next_power_of_two(), BufferUsages::STORAGE);

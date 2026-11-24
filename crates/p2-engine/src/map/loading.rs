@@ -9,7 +9,6 @@ use p2_render::canvas::ProgressBar;
 
 const BAR_MATERIAL: &str = "ProgressBarFinal";
 
-/// From the entry map: the polygon with the bar's material, as its `LevelLoadingView` sees it.
 pub fn read_progress_bar(game: &mut Game, entry: PackageId) -> Option<(ProgressBar, Image)> {
     let (view, rotation, polygon) = {
         let (pkg, data) = game.data(entry);

@@ -79,8 +79,8 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// Which eye height is (unverified).
-    /// Not modelled: adjacent zones, `bMuffledHearing`, `bAroundCornerHearing`.
+    /// Which eye height is used is unverified. Not modelled: adjacent zones, `bMuffledHearing`,
+    /// `bAroundCornerHearing`.
     fn can_hear(&self, listener: ObjectId, noise: Vector, loudness: f32, other: ObjectId) -> bool {
         let Some(instigator) = self.store.object_of(other, Prop::Instigator) else { return false };
         let Some(pawn) = self.store.object_of(listener, Prop::Pawn) else { return false };

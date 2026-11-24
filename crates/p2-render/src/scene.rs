@@ -28,12 +28,9 @@ pub struct ModelView {
     pub sections: Vec<SectionView>,
     pub instances: Vec<Transform>,
     pub zone: Option<ZoneCulled>,
-    /// Into the sun's shadow, when drawn by the world pass and solid.
     pub casts: bool,
 }
 
-/// Things placed while the game runs (particles, coronas): their draws join the sky camera, the view or both by the
-/// zones in their [`ZoneCulled`], like a moving actor's.
 #[derive(Component)]
 pub struct LayeredByZone;
 
@@ -67,7 +64,6 @@ pub struct Scene {
     pub start: Option<(Vec3, i32)>,
     pub collision: Option<StaticCollision>,
     pub fogs: Vec<Option<ZoneFog>>,
-    /// Each with its tag and whether it is blood.
     pub decals: Vec<(Handle<Image>, Transform, u32, bool)>,
     pub actors: Vec<MovingModel<FollowActor>>,
     pub attachments: Vec<MovingModel<FollowBone>>,
@@ -77,8 +73,8 @@ pub struct Scene {
     pub light_maps: Vec<Option<Handle<Image>>>,
 }
 
-/// From the `SkyZoneInfo`'s location, turned by its rotation and then the view's; only what lies in
-/// that zone (unverified).
+/// Placed from the `SkyZoneInfo`'s location, turned by its rotation and then the view's;
+/// shows only what lies in that zone (unverified).
 pub struct Sky {
     pub zone: u8,
     pub position: Vec3,
@@ -86,15 +82,12 @@ pub struct Sky {
     pub models: Vec<ModelView>,
 }
 
-/// Of several written in one frame the last counts.
 #[derive(Message)]
 pub enum SceneChange {
     Show(Box<Scene>),
     Clear,
 }
 
-/// A fog for each zone of the shown scene, in the zones' order. Written before the view's fog is blended, it shows in
-/// that frame.
 #[derive(Message)]
 pub struct ZoneFogs(pub Vec<Option<ZoneFog>>);
 
@@ -124,9 +117,7 @@ pub struct SectionView {
     pub alpha_map: Option<Handle<Image>>,
     pub terrain: Vec<TerrainPassLayer>,
     pub chunks: Option<Arc<[crate::world_pass::Chunk]>>,
-    /// The BSP node whose surfaces a translucent section holds, for the engine's back-to-front list.
     pub bsp_node: Option<usize>,
-    /// A blended terrain layer's index: the engine draws terrain with the world, before the translucent list.
     pub terrain_layer: Option<u32>,
 }
 
@@ -221,8 +212,6 @@ pub(crate) fn points_box(points: impl IntoIterator<Item = [f32; 3]>) -> Option<(
     points.into_iter().fold(None, |bounds, p| Some(merged_box(bounds.unwrap_or((p, p)), (p, p))))
 }
 
-/// The engine draws an actor in every zone its box touches: by the sky camera for the sky zone, by the view for any
-/// other (and when it touches no zone at all).
 pub(crate) fn sky_and_world(zones: &[u8], sky_zone: Option<u8>) -> (bool, bool) {
     let in_sky = sky_zone.is_some_and(|sky| zones.contains(&sky));
     (in_sky, zones.is_empty() || zones.iter().any(|&zone| Some(zone) != sky_zone))

@@ -1,6 +1,6 @@
-//! Modern graphics: the view widens on a screen wider than 16:9, a Matinee shot keeps 16:9 between side bars, the HUD can
-//! stay inside a centred 16:9 area and be drawn at whole pixels, and the tone pass can draw a wide view on a cylinder
-//! (Panini) so its edges do not stretch.
+//! Modern graphics: the view widens on a screen wider than 16:9, a Matinee shot keeps 16:9 between side bars, the
+//! HUD can stay inside a centred 16:9 area and be drawn at whole pixels, and the tone pass can draw a wide view
+//! on a cylinder (Panini) so its edges do not stretch.
 
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::prelude::{Res, ResMut};
@@ -51,14 +51,13 @@ fn follow_settings(settings: Option<Res<Settings>>, facts: Res<FrameFacts>, view
     }
 }
 
-/// The vertical field of view in radians for Unreal's horizontal one in degrees. Wide: past 16:9 the vertical one stays
-/// what 16:9 gives and the horizontal one grows.
+/// The vertical field of view in radians for Unreal's horizontal one in degrees. Wide: past 16:9 the vertical one
+/// stays what 16:9 gives and the horizontal one grows.
 pub(crate) fn vertical_fov(degrees: f32, aspect: f32, wide: bool) -> f32 {
     let aspect = if wide { aspect.min(WIDEST) } else { aspect };
     2.0 * ((degrees.to_radians() / 2.0).tan() / aspect).atan()
 }
 
-/// The centred 16:9 part of a wider viewport, else the viewport itself.
 pub(crate) fn centred_wide(position: UVec2, size: UVec2) -> (UVec2, UVec2) {
     let width = (size.y as f32 * WIDEST).round() as u32;
     if width >= size.x {
@@ -75,8 +74,6 @@ pub fn hud_area(rect: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_size(rect.min + egui::vec2(((rect.width() - width) / 2.0).round(), 0.0), egui::vec2(width, rect.height()))
 }
 
-/// What the tone pass reads for the Panini warp: its strength, the tangent of half the vertical field of view, and the
-/// zoom that keeps the warped frame filling the screen. Zero at level 0.
 pub(crate) fn panini(level: u8, vertical_fov: f32, aspect: f32) -> Vec3 {
     if level == 0 {
         return Vec3::ZERO;

@@ -119,7 +119,6 @@ impl Package {
         Some(self.name(name))
     }
 
-    /// `outers` run from the outermost group inwards.
     pub fn export_in<'a>(&self, index: usize, outers: impl DoubleEndedIterator<Item = &'a str>) -> bool {
         let Some(export) = self.exports.get(index) else { return false };
         let mut outer = export.package_index;
@@ -151,7 +150,6 @@ impl Package {
     }
 }
 
-/// `Group.Sub.Name` into its outers (outermost first) and the object name.
 pub(crate) fn split_path(path: &str) -> (impl DoubleEndedIterator<Item = &str> + Clone, &str) {
     let (outers, name) = path.rsplit_once('.').map_or((None, path), |(outers, name)| (Some(outers), name));
     (outers.into_iter().flat_map(|outers| outers.split('.')), name)

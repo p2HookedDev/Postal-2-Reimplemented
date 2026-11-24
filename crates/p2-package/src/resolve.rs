@@ -29,7 +29,6 @@ pub enum ResolveError {
     Frozen(String),
 }
 
-/// Export indices sorted by name, any case; every call takes the package it was built from.
 #[derive(Debug)]
 pub struct ExportsByName(Box<[usize]>);
 
@@ -80,14 +79,16 @@ pub struct LoadedPackage {
     exports_by_name: ExportsByName,
 }
 
-/// A clone shares the loaded packages and copies the import cache, so it keeps every [`PackageId`] of the original.
+/// A clone shares the loaded packages and copies the import cache, so it keeps every [`PackageId`] of the
+/// original.
 #[derive(Debug, Default, Clone)]
 pub struct Loader {
     files: FxHashMap<Caseless, PathBuf>,
     packages: Vec<Arc<LoadedPackage>>,
     ids: FxHashMap<Caseless, PackageId>,
     ids_by_address: FxHashMap<usize, PackageId>,
-    /// Successes only: a package's imports never change and ids only grow, while a failure may resolve after a later load.
+    /// Successes only: a package's imports never change and ids only grow, while a failure may resolve after a later
+    /// load.
     resolved_imports: Vec<Box<[OnceLock<Resolved>]>>,
     frozen: bool,
 }
@@ -226,8 +227,6 @@ impl Loader {
         Ok(self.find_loaded_export(path, None))
     }
 
-    /// A package may hold objects of different classes under one name (`ED_Weapons.ED_Chainsaw_NEW` is a
-    /// mesh and its `MeshAnimation`), so the class tells them apart.
     pub fn export_by_path_of_class(&mut self, path: &str, class: &str) -> Result<Option<(PackageId, usize)>, ResolveError> {
         self.load_path_package(path)?;
         Ok(self.find_loaded_export(path, Some(class)))
@@ -337,7 +336,6 @@ impl Loader {
         Some((resolved.package, resolved.export?))
     }
 
-    /// The name index of the package at the top of import `index`'s outer chain.
     fn top_package(&self, id: PackageId, index: usize) -> Result<usize, ResolveError> {
         let pkg = &self.package(id).package;
         let mut current = index;

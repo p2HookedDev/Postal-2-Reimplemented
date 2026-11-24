@@ -1,6 +1,6 @@
 //! Alpha-blended surfaces: Bevy's own fragment blends every clustered decal, projectors too, into the colour and
-//! multiplies it by the surface's alpha, which the blend applies again; [`BlendedMaterial`] projects after the lighting
-//! as the opaque surfaces do.
+//! multiplies it by the surface's alpha, which the blend applies again; [`BlendedMaterial`] projects after the
+//! lighting as the opaque surfaces do.
 
 use bevy::app::{App, Plugin};
 use bevy::asset::{Asset, AssetApp, Handle, uuid_handle};
@@ -42,7 +42,6 @@ impl MaterialExtension for OpaqueDecals {
     }
 }
 
-/// A sky section Bevy's standard material draws: its own look, the sky's vertex stage.
 pub type SkyStandardMaterial = ExtendedMaterial<StandardMaterial, SkyStandard>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
@@ -123,7 +122,6 @@ impl MaterialExtension for TerrainLayer {
         }
         crate::shaders::mark_pool_mirror(descriptor, key.mesh_key, key.bind_group_data);
         crate::shaders::mark_sky(descriptor, key.bind_group_data);
-        // A layer over the base lays colour only: the base under it wrote the same pool's record into the alpha.
         if key.bind_group_data.mirror
             && key.mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA
             && let Some(blend) = descriptor.fragment.as_mut().and_then(|fragment| fragment.targets.first_mut()).and_then(|target| target.as_mut()).and_then(|target| target.blend.as_mut())

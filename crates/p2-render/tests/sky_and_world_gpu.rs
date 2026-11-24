@@ -33,8 +33,6 @@ fn image_of(app: &App, camera: Entity) -> Option<Handle<Image>> {
     }
 }
 
-/// The red of the world's quad, the gap between the quads and the sky's quad, as the frame before the HUD shows them.
-/// The scene camera draws the sky quad too, through a sky material.
 fn world_gap_sky(sky_at: Vec3, sky_color: Color) -> [u8; 3] {
     let mut app = App::new();
     common::headless_renderer(&mut app);

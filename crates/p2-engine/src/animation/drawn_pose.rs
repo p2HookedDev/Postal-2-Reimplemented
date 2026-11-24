@@ -1,6 +1,3 @@
-//! What the pose layers share. A layer changes the drawn pose in `Poses::bones` only, on top of the animation's own
-//! pose, which `Poses::animated` keeps while a change is drawn: the game is told about bones from that one.
-
 use bevy::ecs::prelude::{Res, ResMut};
 use bevy::math::{Mat4, Quat, Vec3};
 use p2_vm::ObjectId;
@@ -12,7 +9,6 @@ use super::{AnimatedMesh, Poses};
 use p2_render::components::FollowActor;
 use crate::play::PlayWorld;
 
-/// A layer's people. A layer marks in `Poses::relayer` each actor whose change it altered or whose pose was made again.
 pub(super) struct Layer<T> {
     pub(super) people: FxHashMap<ObjectId, T>,
     generation: u64,
@@ -29,7 +25,6 @@ impl<T> Layer<T> {
         poses.relayer.extend(self.people.drain().map(|(actor, _)| actor));
     }
 
-    /// A new game reuses ids for other actors: the old people are forgotten without putting their pose back.
     pub(super) fn restarted(&mut self, generation: u64) -> bool {
         let restarted = std::mem::replace(&mut self.generation, generation) != generation;
         if restarted {
@@ -39,12 +34,10 @@ impl<T> Layer<T> {
     }
 }
 
-/// The animation's own pose: the kept one while a change is drawn, else the drawn one.
 pub(super) fn base_pose(poses: &Poses, actor: ObjectId) -> Option<&Vec<Mat4>> {
     poses.animated.get(&actor).or_else(|| poses.bones.get(&actor))
 }
 
-/// Feet before the flinch: the flinch turns a body that stands on its planted feet.
 pub(super) fn apply_layers(feet: Res<Feet>, flinches: Res<Flinches>, mut poses: ResMut<Poses>) {
     let Poses { bones, animated, changed, relayer, .. } = &mut *poses;
     for actor in relayer.drain() {
@@ -59,7 +52,6 @@ pub(super) fn apply_layers(feet: Res<Feet>, flinches: Res<Flinches>, mut poses: 
     }
 }
 
-/// The mesh's frame in the world for a person the script animates and no ragdoll holds.
 pub(super) fn mesh_place(world: &PlayWorld, item: &AnimatedMesh, actor: ObjectId) -> Option<Mat4> {
     let frame = world.actor(actor).filter(|frame| !frame.hidden && !frame.gone)?;
     if world.ragdolled(actor) || !matches!(world.pose(actor), Some(Some(_))) {
@@ -71,7 +63,6 @@ pub(super) fn mesh_place(world: &PlayWorld, item: &AnimatedMesh, actor: ObjectId
     follow.mesh_matrix(location, rotation)
 }
 
-/// Called before writing a changed pose over `pose`: while no copy is kept, `pose` is still the animation's.
 fn keep_for_game<'a>(animated: &'a mut FxHashMap<ObjectId, Vec<Mat4>>, actor: ObjectId, pose: &[Mat4]) -> &'a Vec<Mat4> {
     animated.entry(actor).or_insert_with(|| pose.to_vec())
 }

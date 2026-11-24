@@ -16,8 +16,8 @@ pub struct PartParams {
     pub velocity: p2_math::Vector,
 }
 
-/// How a joint limits the child's rotation relative to the parent, about the joint frame's axes: X the primary axis,
-/// Y the orthogonal one, Z their cross product.
+/// How a joint limits the child's rotation relative to the parent, about the joint frame's axes: X the primary
+/// axis, Y the orthogonal one, Z their cross product.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JointLimit {
     Hinge(Option<[f32; 2]>),
@@ -48,14 +48,9 @@ pub struct RagdollParams {
 
 /// Karma's limit. Piles tremble just under it.
 pub(crate) const SLEEP_SPEED: f32 = 7.07;
-/// How far a part may be from where it was marked and still count as lying there: Karma's sleep speed over the
-/// sleep time. By where the part is, not by its speed: a pile's parts tremble fast in place.
 const REST_REACH: f32 = SLEEP_SPEED * SLEEP_TIME;
-/// In radians. Wider than Karma's turn speed over the sleep time (0.032): a trembling part turns back and forth
-/// by about that much.
 const REST_TURN: f32 = 0.1;
 const REST_STEPS: u32 = (SLEEP_TIME / crate::STEP + 0.5) as u32;
-/// Unreal units between two corpses' boxes within which they count as one pile.
 const PILE_REACH: f32 = 2.0;
 /// In rad/s, as the original engine: a limb a joint limit still pulls back keeps the corpse awake.
 const SLEEP_ANGULAR_SPEED: f32 = 0.032;
@@ -65,9 +60,7 @@ const MASS_RATIO: [f32; 2] = [0.8, 1.2];
 /// Rapier corrects a stiff limit in one step with no speed cap, which throws the corpse.
 const LIMIT_HZ: f32 = 15.0;
 const LIMIT_DAMPING: f32 = 5.0;
-/// The share of a cone overshoot taken back per substep, so a limb returns over a few substeps instead of snapping.
 const CONE_HOLD: f32 = 0.3;
-/// In rad/s: slower than this, a limb past the cone is only stopped, not pulled back, or a pile never sleeps.
 const CONE_RESTING: f32 = 1.0;
 
 pub(crate) struct Resting {
@@ -76,8 +69,8 @@ pub(crate) struct Resting {
     steps: u32,
 }
 
-/// Rapier limits swing per axis, a box whose corners reach about 1.4 times past Karma's elliptical cone; this holds the
-/// swing inside the ellipse.
+/// Rapier limits swing per axis, a box whose corners reach about 1.4 times past Karma's elliptical cone; this
+/// holds the swing inside the ellipse.
 pub(crate) struct Cone {
     parent: RigidBodyHandle,
     child: RigidBodyHandle,
@@ -86,7 +79,6 @@ pub(crate) struct Cone {
     half_angles: [f32; 2],
 }
 
-/// How far the twist axis `d` (in the parent's joint frame) swings past the ellipse, and the axis that swings it further.
 fn swing_excess(d: Vector, [about_y, about_z]: [f32; 2]) -> Option<(f32, Vector)> {
     let side = (d.y * d.y + d.z * d.z).sqrt();
     if side < 1e-6 {
@@ -97,12 +89,13 @@ fn swing_excess(d: Vector, [about_y, about_z]: [f32; 2]) -> Option<(f32, Vector)
     (reach > 1.0).then(|| (angle - angle / reach, Vector::new(0.0, -d.z, d.y) / side))
 }
 
-/// A part that turns this many times more easily than one it is jointed to breaks its joints in the solver. Measured
-/// on the midget's neck, a sphere of 1.7 units between two shapeless clavicles: it held at 50 and broke at 100.
+/// A part that turns this many times more easily than one it is jointed to breaks its joints in the solver.
+/// Measured on the midget's neck, a sphere of 1.7 units between two shapeless clavicles: it held at 50 and broke
+/// at 100.
 const INERTIA_RATIO: f32 = 25.0;
 
-/// Each jointed tree keeps its total mass, so the body's flight stays retail's. A part's inertia is raised to what
-/// its joints can hold.
+/// Each jointed tree keeps its total mass, so the body's flight stays retail's. A part's inertia is raised to
+/// what its joints can hold.
 fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math::Vector)> {
     let n = parts.len();
     let mut parent = vec![None; n];
@@ -209,7 +202,6 @@ impl World {
         bodies
     }
 
-    /// A ragdoll whose parts all stayed by their marks for the sleep time goes dormant, whatever it touches.
     pub(crate) fn settle_ragdolls(&mut self) {
         let mut settled = Vec::new();
         for ragdoll in &mut self.ragdolls {
@@ -240,8 +232,6 @@ impl World {
         self.ragdolls.iter().any(|ragdoll| ragdoll.parts.contains(&handle))
     }
 
-    /// The dormant parts of `handle`'s ragdoll and of the dormant ragdolls piled with it: a corpse must fall when
-    /// what it lies on is moved, and a dormant body would hang in the air.
     pub(crate) fn dormant_pile(&self, handle: RigidBodyHandle) -> Vec<RigidBodyHandle> {
         let is_dormant = |ragdoll: &Resting| ragdoll.parts.iter().any(|part| self.dormant.contains(part));
         let Some(first) = self.ragdolls.iter().position(|ragdoll| ragdoll.parts.contains(&handle)).filter(|_| self.ragdolls.iter().any(is_dormant)) else {
@@ -361,7 +351,6 @@ impl World {
         }
     }
 
-    /// At rest long enough by Rapier's own test: a slow body that stays awake waits for the rest of its ragdoll.
     pub fn is_slow(&self, id: BodyId) -> bool {
         self.bodies.get(id.0).is_some_and(|body| body.activation().is_eligible_for_sleep())
     }
@@ -527,8 +516,6 @@ mod tests {
         assert!(slept.is_some_and(|f| f < 240), "slept at frame {slept:?}");
     }
 
-    /// The midget's neck and what hangs on it, with the sizes and masses of `Avg_Mini.ka`: the neck is a sphere of
-    /// 1.7 units between two shapeless clavicles and a head.
     fn midget_shoulders(neck_radius: f32) -> RagdollParams {
         let mass = 0.0647;
         let part = |shapes: Vec<Shape>, location: [f32; 3]| {

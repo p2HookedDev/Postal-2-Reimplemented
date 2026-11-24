@@ -13,16 +13,15 @@ pub const DETAIL_MIP_BIAS: f32 = -0.5;
 
 #[derive(ShaderType, Reflect, Debug, Clone, Copy, Default, PartialEq)]
 pub struct ShaderLayers {
-    /// x: the detail layer's UV scale (0: no detail), y: its mip bias, z: the modern flag (`modern::modern_flag`, 1 all on; read by
-    /// the lightmapped, mesh, actor and terrain layer shaders, set by `modern.rs`; 0 is retail), w: 1 while the setting turns detail off.
+    /// x detail UV scale (0 no detail), y its mip bias, z the modern flag (1 all on, 0 retail),
+    /// w 1 while the setting turns detail off.
     pub detail: Vec4,
-    /// The specular layer: x mode (0 none, 1 add, 2 × the base alpha, 3 × z, 4 × the emissive texture's alpha), y 1:
-    /// world space (else camera space), z the constant mask, w the coordinates (0 a cube, 1 a 2D texture at the
-    /// env-map coordinates, 2 a 2D texture at the base UV).
+    /// Specular layer: x mode (0 none, 1 add, 2 times base alpha, 3 times z, 4 times emissive alpha), y 1 for world
+    /// space (else camera space), z the constant mask, w coordinates (0 cube, 1 2D at env-map coordinates, 2 2D at
+    /// base UV).
     pub specular: Vec4,
     pub specular_u: Vec4,
     pub specular_v: Vec4,
-    /// x: 1 for a surface drawn with `OB_Darken`, whose light goes on the colour before it is taken from one.
     pub blend: Vec4,
 }
 

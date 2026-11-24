@@ -32,7 +32,6 @@ struct SwitchTarget {
     specular_size: [f32; 2],
 }
 
-/// `changes` are the switches the scripts set this frame, by object path, with the material each now shows.
 pub fn switch_materials(game: &mut Game, switches: &mut MaterialSwitches, images: &mut Assets<Image>, commands: &mut Commands, changes: Vec<(String, Option<String>)>) {
     if switches.images.is_empty() {
         return;

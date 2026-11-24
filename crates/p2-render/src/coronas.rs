@@ -54,7 +54,6 @@ pub struct CoronaPlace {
 #[derive(Component)]
 struct CoronaColor([f32; 3]);
 
-/// Emptied when the map changes, so the materials of a map that was left do not stay alive.
 #[derive(Resource, Default)]
 struct CoronaMaterials {
     level: u32,
@@ -128,8 +127,6 @@ fn forget_corona_materials(drawn: Option<Res<DrawnParticles>>, mut cache: ResMut
     }
 }
 
-/// The fade steps by 3 × the real seconds since the last frame. Lit ones face the view, or lie on the light's axes
-/// when `DrawScale3D` X ≠ Y.
 #[expect(clippy::too_many_arguments, reason = "a Bevy system's parameters")]
 fn draw_coronas(
     mut commands: Commands,

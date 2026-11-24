@@ -1,5 +1,5 @@
-//! `UnrealScript` definitions in `.u` packages (version 118, licensee 2). Object references (`i32`)
-//! and names (`usize`) are relative to the package the definition was read from.
+//! `UnrealScript` definitions in `.u` packages (version 118, licensee 2). Object references (`i32`) and
+//! names (`usize`) are relative to the package the definition was read from.
 
 #![forbid(unsafe_code)]
 
@@ -57,7 +57,6 @@ pub struct Struct {
     pub text_pos: i32,
     /// Bytecode size in memory (object references and names count 4 bytes, not their disk size).
     pub script_size: u32,
-    /// Bytecode as stored on disk (object references and names as compact indices).
     pub script: Vec<u8>,
 }
 
@@ -112,7 +111,6 @@ pub struct Property {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropertyKind {
-    /// `enum_` is 0 for a plain byte.
     Byte { enum_: i32 },
     Int,
     Bool,
@@ -189,8 +187,8 @@ pub fn class_name<'p>(pkg: &'p Package, export: &Export) -> &'p str {
     }
 }
 
-/// `Ok(None)` for any class but the `Core` definition classes, matched by name only (no other package defines classes
-/// with these names). Everything but class default properties must end exactly at the export's end.
+/// `Ok(None)` for any class but the `Core` definition classes, matched by name only (no other package defines
+/// classes with these names). Everything but class default properties must end exactly at the export's end.
 pub fn read_export(pkg: &Package, file: &[u8], index: usize) -> Result<Option<ScriptObject>, Error> {
     let Some(export) = pkg.exports.get(index) else {
         return Err(Error::WrongKind { export: index, expected: "export" });
@@ -216,8 +214,6 @@ pub fn read_export(pkg: &Package, file: &[u8], index: usize) -> Result<Option<Sc
     Ok(Some(object))
 }
 
-/// `Field::next` of definition export `index` and, if it is a property, the property: what a struct's children chain
-/// needs. Functions, states and classes stop after their `UField` header, so their bytecode is not decoded.
 pub(crate) fn read_child(pkg: &Package, file: &[u8], index: usize) -> Result<(i32, Option<Property>), Error> {
     let Some(export) = pkg.exports.get(index) else {
         return Err(Error::WrongKind { export: index, expected: "export" });

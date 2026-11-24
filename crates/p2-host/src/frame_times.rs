@@ -17,7 +17,6 @@ pub struct FrameTimes {
     pub vm_totals: std::collections::BTreeMap<&'static str, Duration>,
     pub vm_profile: VmProfile,
     pub vm_parts: FxHashMap<String, Duration>,
-    /// Game ticks presented: fewer than the frames drawn while a tick takes longer than a frame.
     pub vm_frames: u32,
     pub(super) current: FrameParts,
     pub(super) slowest: Option<FrameParts>,
@@ -85,8 +84,6 @@ pub fn end_frame(mut times: ResMut<FrameTimes>) {
     times.end_frame();
 }
 
-/// A changed asset is a queued write, which `submit` pays for.
-/// What rewrote a mesh, for the profile log: each rewrite is uploaded again.
 #[derive(Clone, Copy)]
 pub enum MeshWrite {
     Strip,

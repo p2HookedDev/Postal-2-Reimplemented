@@ -54,7 +54,6 @@ impl<L: LoaderRef> Vm<L> {
             Expr::Context { object, member, .. } | Expr::ClassContext { object, member, .. } => {
                 match self.eval(frame, object, context)? {
                     Value::Object(Some(object)) => self.eval(frame, member, Some(object))?,
-                    // "Accessed None": the engine logs it and yields a zero value.
                     _ => Value::Int(0),
                 }
             }
@@ -102,8 +101,8 @@ impl<L: LoaderRef> Vm<L> {
         id
     }
 
-    /// Found once per reference until the level is left (`leave_level` drops the map's objects). Only found objects are
-    /// kept: a reference whose object failed to load gives its stub next time.
+    /// Found once per reference until the level is left (`leave_level` drops the map's objects). Only found objects
+    /// are kept: a reference whose object failed to load gives its stub next time.
     pub(crate) fn object_const(&mut self, package: PackageId, reference: i32) -> Value {
         if let Some(&object) = self.script.lookups.object_consts.get(&(package, reference)) {
             return Value::Object(Some(object));
@@ -182,8 +181,8 @@ impl<L: LoaderRef> Vm<L> {
         }
         let target = self.cast_target(package, class);
         let class_name = self.store.name(target);
-        // `Viewport` is C++-only: the VM's one `Player`, the local one, stands for it (scripts find the local
-        // player by `ViewPort(Player) != None`, e.g. the ragdoll pool in `P2MoCapPawn.GetKarmaSkeleton`).
+        // `Viewport` is native-only: the VM's one local `Player` stands for it (scripts find the local player by
+        // `ViewPort(Player) != None`, e.g. the ragdoll pool in `P2MoCapPawn.GetKarmaSkeleton`).
         let viewport = class_name.eq_ignore_ascii_case("Viewport") && self.store.is_a(object, "Player");
         let keeps = self.store.is_a(object, target) || self.stub_is_a(object, class_name) || viewport;
         if let Some(key) = key {

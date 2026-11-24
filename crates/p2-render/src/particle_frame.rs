@@ -10,45 +10,37 @@ use p2_vm::FluidType;
 use crate::frame_facts::FrameFacts;
 use crate::scene::SectionView;
 
-/// How far the occlusion-culling `Aabb` reaches past the particle bounds (Unreal units). Flat sprites on a surface
-/// (puddles, splats) lie in it or a hair under it, and the culling shader compares the box's nearest depth with the
-/// surface's own: from steep angles the floor is in front of the box and the puddle vanishes.
+/// How far the occlusion-culling `Aabb` reaches past the particle bounds (Unreal units). Flat sprites on a
+/// surface (puddles, splats) lie in it or a hair under it, and the culling shader compares the box's nearest
+/// depth with the surface's own: from steep angles the floor is in front of the box and the puddle vanishes.
 pub const OCCLUSION_MARGIN: f32 = 8.0;
 
-/// What the particle simulation shows this frame, one slot per emitter actor; the slots and their vectors are refilled
-/// in place every frame.
 #[derive(Resource, Default)]
 pub struct DrawnParticles {
     pub actors: Vec<DrawnActor>,
-    /// The emitters spawned since the last frame drawn, once each.
     pub born: Vec<EmitterLook>,
-    /// The mesh emitters whose model was built since the last frame drawn, once each.
     pub born_meshes: Vec<MeshEmitterLook>,
-    /// The pushes the game gave since the last frame drawn, once each.
     pub blasts: Vec<Blast>,
-    /// Bevy coordinates relative to the world's origin, as the particles.
     pub eye: Vec3,
     /// Changed when a map is left: the drawing side drops what it keeps.
     pub level: u32,
 }
 
-/// What an explosion or a shot's impact does to loose pieces around it, in Unreal units and axes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Blast {
     pub at: Vector,
     pub radius: f32,
     /// The speed it gives a piece at its middle, in Unreal units a second; none at `radius`.
     pub push: f32,
-    /// The hit's way, of length 1, in Unreal axes; zero for a push out of its middle alone.
     pub way: Vector,
 }
 
 /// A shot's reach in Unreal units and its push in Unreal units a second.
 pub const SHOT_PUSH: (f32, f32) = (48.0, 450.0);
 
-/// A shot or a kick that hits a person throws what lies about and what it throws itself along its way: the push of an
-/// effect spawned where it hit takes that way, else the hit pushes as a shot. A hit stays readable for a game tick, so
-/// one already pushed is skipped.
+/// A shot or a kick that hits a person throws what lies about and what it throws itself along its way: the push
+/// of an effect spawned where it hit takes that way, else the hit pushes as a shot. A hit stays readable for a
+/// game tick, so one already pushed is skipped.
 pub(crate) fn push_from_person_hits(facts: Res<FrameFacts>, drawn: Option<ResMut<DrawnParticles>>, mut pushed: Local<Vec<[u32; 3]>>) {
     let Some(mut drawn) = drawn else { return };
     let hits: Vec<_> = facts.person_hits.iter().filter(|hit| hit.damage > 0.0).collect();
@@ -68,18 +60,13 @@ pub(crate) fn push_from_person_hits(facts: Res<FrameFacts>, drawn: Option<ResMut
     pushed.extend(hits.iter().map(|hit| <[f32; 3]>::from(hit.at).map(f32::to_bits)));
 }
 
-/// What a liquid actor of the scripts shows with its emitters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiquidRole {
-    /// A feeder pouring or spurting: its strip and droplets are the stream.
     Stream,
-    /// A feeder dripping from a ledge or a wound.
     Drip,
     Puddle,
     Trail,
-    /// A trail the scripts slide down a wall under a still aim.
     Flow,
-    /// Droplets bursting where a stream lands.
     Splash,
 }
 
@@ -87,23 +74,16 @@ pub enum LiquidRole {
 pub struct Liquid {
     pub kind: FluidType,
     pub role: LiquidRole,
-    /// The scripts' `bOnFire`, read every frame.
     pub burning: bool,
-    /// A stream's or drip's aim this frame; `None` for puddles and trails.
     pub pour: Option<Pour>,
 }
 
-/// How the scripts aim a feeder this frame, from its first emitter, world axes and Unreal units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pour {
-    /// Where its particles start: the feeder's place.
     pub from: Vector,
-    /// `StartVelocityRange`'s low and high ends, in Unreal units a second.
     pub velocity: [Vector; 2],
     pub acceleration: Vector,
-    /// Particles a second the emitter spawns while it flows.
     pub rate: f32,
-    /// False once the scripts stopped the flow (`ToggleFlow` off, `bStoppedFlow`).
     pub flowing: bool,
 }
 
@@ -115,9 +95,7 @@ pub struct DrawnActor {
     pub overlay: Option<usize>,
     pub puddle_seed: Option<u32>,
     pub liquid: Option<Liquid>,
-    /// Where the actor stands this frame; `None` before it is placed.
     pub place: Option<Vector>,
-    /// The box of the actor's mesh particles, which its sprites' bounds start from.
     pub mesh_reach: Option<(Vec3, Vec3)>,
     pub emitters: Vec<DrawnEmitter>,
 }
@@ -155,7 +133,6 @@ pub struct EmitterShape {
     pub sheets: usize,
 }
 
-/// What an emitter with a texture is drawn with, handed over once when it spawns.
 pub struct EmitterLook {
     pub parent: Entity,
     pub order: u32,
@@ -165,7 +142,6 @@ pub struct EmitterLook {
     pub fogless: bool,
 }
 
-/// What a mesh emitter is drawn with, handed over once when its model is built.
 pub struct MeshEmitterLook {
     pub parent: Entity,
     pub order: u32,
@@ -173,7 +149,6 @@ pub struct MeshEmitterLook {
     pub props: EmitterProperties,
 }
 
-/// A sprite lying on the ground as a disc: its centre in the world and the smaller of its half sides.
 fn puddle_disc(sprite: &SpriteParticle, origin: Vec3) -> Vec4 {
     (Vec3::from(to_bevy(sprite.location)) + origin).extend(sprite.up.size().min(sprite.right.size()))
 }
@@ -185,7 +160,6 @@ fn nearest_discs(mut discs: Vec<Vec4>, eye: Vec3, cap: usize) -> Vec<Vec4> {
 }
 
 impl DrawnParticles {
-    /// The once-each lists are dropped and `level` moves on; the slots are refilled by the next frame.
     pub fn leave_level(&mut self) {
         self.born.clear();
         self.born_meshes.clear();
@@ -193,7 +167,6 @@ impl DrawnParticles {
         self.level = self.level.wrapping_add(1);
     }
 
-    /// The drawn puddles' sprites as discs, the `cap` nearest to `eye`, for the reflection pass to mirror.
     pub fn puddle_discs(&self, origin: Vec3, eye: Vec3, cap: usize) -> Vec<Vec4> {
         let puddles = self.actors.iter().filter(|slot| slot.drawn && slot.overlay.is_none() && slot.puddle_seed.is_some());
         let sprites = puddles.flat_map(|slot| slot.emitters.iter().flat_map(|emitter| &emitter.sprites));

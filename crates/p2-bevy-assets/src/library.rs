@@ -217,7 +217,6 @@ impl Library {
         let game = match self.games.entry(system.clone()) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                // Scripts first: assets read with their class defaults.
                 entry.insert(Game { loader: Game::script_loader(&system, self.config_folder.clone())?, system: system.clone(), layouts: LayoutCache::default() })
             }
         };
@@ -259,7 +258,6 @@ impl Game {
         self.loader.adopt(&clone.loader);
     }
 
-    /// A copy for another thread that loads no more packages, so every id it hands out is this one's.
     pub fn frozen_clone(&self) -> Self {
         let mut game = self.clone();
         game.loader.freeze();

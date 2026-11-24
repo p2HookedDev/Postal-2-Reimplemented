@@ -22,8 +22,6 @@ impl VmAnimations {
     }
 }
 
-/// Heads: their scripts play an animation of another package, so no sequence of its own, posed only by its actor's VM
-/// channels.
 pub(super) fn still_mesh(pkg: &Package, handles: Vec<Handle<Mesh>>, mesh: &Arc<SkeletalMesh>) -> AnimatedMesh {
     let none = Arc::new(MeshAnimation { version: 0, bones: Vec::new(), sequences: Vec::new() });
     AnimatedMesh::new(handles, Arc::clone(mesh), none, 0, |i| pkg.name(mesh.bones[i].name).to_owned(), |_| String::new())

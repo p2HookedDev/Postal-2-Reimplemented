@@ -56,7 +56,6 @@ pub(super) fn build(asset: &KarmaAsset, mesh: &PosedMesh, frames: &[Frame], velo
                 })
                 .collect()
         });
-        // Colliding with nothing, such a body falls through the level and takes the drawn top half with it.
         let jointed = || {
             asset.joints.iter().any(|joint| {
                 let [a, b] = &joint.parts;
@@ -67,7 +66,6 @@ pub(super) fn build(asset: &KarmaAsset, mesh: &PosedMesh, frames: &[Frame], velo
             continue;
         }
         let frame = &frames[bone];
-        // The file's inertia is a placeholder.
         let file_inertia = [model.inertia[0], model.inertia[3], model.inertia[5]].map(|i| i * asset.mass_scale * to_unreal * to_unreal).into();
         let inertia = p2_physics::shapes_inertia(&shapes, model.mass * asset.mass_scale).unwrap_or(file_inertia);
         part_of_bone[bone] = Some(parts.len());

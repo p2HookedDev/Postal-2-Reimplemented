@@ -14,11 +14,9 @@ fn modern_bits(flag: f32) -> u32 {
     return u32(max(flag, 0.0) + 0.5);
 }
 
-// `diffuse` in display light, `specular` and `bounce` in linear light. `specular` is the lamps' highlight before any
-// reflectance, `specular_edge` its part that grows towards grazing: a surface takes the first by its reflectance and
-// the second by what is left of 1. `sky` is what a probe sees of the sky: x plus y, z, w along a direction; x below 0
-// without a probe to read. `grounded` is how much of the light from all around reaches the point past what moves near
-// it, 1 in the open.
+// `diffuse` in display light, `specular` and `bounce` in linear light; `specular_edge` is the highlight's part
+// that grows towards grazing. `sky` is what a probe sees of the sky, x below 0 without a probe; `grounded` is
+// how much light from all around reaches past nearby movers, 1 in the open.
 struct LampLight {
     diffuse: vec3<f32>,
     specular: vec3<f32>,

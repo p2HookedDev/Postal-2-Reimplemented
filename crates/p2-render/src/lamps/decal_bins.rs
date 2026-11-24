@@ -1,7 +1,6 @@
-//! The decals that may meet each screen tile of the world camera, cut after its depth prepass into rows of the lamp
-//! book, so a pixel walks its tile's list in place of Bevy's cluster list (`decal_bins.wesl`, `projector.wesl`
-//! `decal_list`). Bevy lists a decal in every cluster within twice its box's own sphere, and a liquid tile's box is 256
-//! units across.
+//! The decals that may touch each screen tile of the world camera, cut after its depth prepass into lamp book
+//! rows, so a pixel walks its tile's list instead of Bevy's cluster list. Bevy lists a decal in every cluster
+//! within twice its box's sphere, and a liquid tile's box is 256 units across.
 
 use bevy::app::App;
 use bevy::asset::{Handle, uuid_handle};
@@ -90,14 +89,12 @@ fn queue_bin_pipeline(cache: Res<PipelineCache>, mut pipeline: ResMut<BinPipelin
     }
 }
 
-/// Before any pass of the frame: a frame the bins are not cut in leaves every pixel on Bevy's cluster list.
 fn unmark_bins(atlas: Res<LampAtlas>, images: Res<RenderAssets<GpuImage>>, queue: Res<RenderQueue>) {
     let Some(book) = atlas.book.as_ref().and_then(|book| images.get(book)) else { return };
     let Some(row) = book.texture_descriptor.size.height.checked_sub(DECAL_BINS_FROM_END) else { return };
     write_rows(&queue, book, row, &[[0.0; 4]]);
 }
 
-/// The tile's side in pixels that keeps the grid within the book's rows, and the tiles across and down.
 fn tile_grid(width: u32, height: u32) -> (u32, u32, u32) {
     let mut side = TILE_PIXELS;
     while width.div_ceil(side) * height.div_ceil(side) > MOST_TILES {
@@ -123,7 +120,6 @@ fn bin_decals(
 ) {
     let (prepass, offset) = view.into_inner();
     let count = listed.len();
-    // The pass reads a single-sampled depth.
     let multisampled = prepass.depth.as_ref().is_some_and(|depth| depth.texture.texture.sample_count() > 1);
     if count == 0 || count > MOST_DECALS || multisampled {
         return;

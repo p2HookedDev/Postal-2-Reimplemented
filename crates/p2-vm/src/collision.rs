@@ -30,7 +30,6 @@ impl LocalShape {
     }
 }
 
-/// Fewer moved shapes than this are left to the placing itself: handing them to other threads costs more.
 const BOXES_AT_ONCE: usize = 4;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -90,9 +89,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(placement)
     }
 
-    /// The bounds of the shape `fill_shape` gives, without placing the triangles of an actor that has moved.
-    /// The collision boxes of actors about to be put at `places`, worked out on several threads and kept, so the
-    /// placing that follows (one actor after the other, with its script events) finds each one ready.
     pub(crate) fn prepare_bounds(&mut self, places: &[(ObjectId, Vector, Rotator)]) {
         use rayon::prelude::*;
         let work: Vec<(ObjectId, Placement, Arc<LocalShape>)> = places
@@ -137,7 +133,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(bounds)
     }
 
-    /// The collision triangles in the actor's own frame (pre-pivot and scale applied), as pawns collide with them.
     pub(crate) fn body_triangles(&mut self, actor: ObjectId) -> Option<(Triangles, Placement)> {
         let (primitive, brush, placement) = self.primitive_placement(actor)?;
         let local = self.local_shape(primitive, brush)?;
@@ -185,7 +180,6 @@ impl<L: LoaderRef> Vm<L> {
         self.world.primitives.bounds.remove(actor);
     }
 
-    /// A mover or a volume can reach far beyond its cylinder, and its pivot can be anywhere.
     pub(crate) fn collision_reach(&mut self, actor: ObjectId) -> f32 {
         let placement = self.fill_shape(actor);
         self.reach_of(actor, placement.and_then(|placement| self.placed_shape(actor, &placement)))
@@ -448,7 +442,6 @@ impl<L: LoaderRef> Vm<L> {
 const MATERIAL_SOURCES: [(&str, &str); 3] = [("Modifier", "Material"), ("Shader", "Diffuse"), ("Combiner", "Material1")];
 const MAX_MATERIAL_DEPTH: usize = 8;
 
-/// The box's x half size adds to the radius and its z half size to the height.
 fn cylinder_meets_box(at: Vector, radius: f32, height: f32, center: Vector, extent: Vector) -> bool {
     crate::actors::cylinders_meet(at, center, radius + extent[0], height + extent[2])
 }
@@ -510,8 +503,6 @@ pub(crate) fn fluid_line_check(bounds: [Vector; 2], height: f32, start: Vector, 
     Some(Hit { time: enter, location: start + d * enter, normal })
 }
 
-/// Half size, in the primitive's space, of the smallest box holding a world box of half size `extent`.
-/// `scale` must have no zero component.
 fn local_extent(extent: Vector, axes: &[Vector; 3], scale: Vector) -> Vector {
     [0, 1, 2].map(|k| (0..3).map(|c| (axes[k][c] * extent[c]).abs()).sum::<f32>() / scale[k].abs()).into()
 }

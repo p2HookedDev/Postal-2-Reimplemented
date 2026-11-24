@@ -1,6 +1,5 @@
-// The lamps' and the sun's shadows of each pixel of the world camera, cast after its depth prepass with the same code
-// the lit surfaces run (`lamp_shadow.wesl`, `sun_shadow.wesl`), which then read them in place of their own for the
-// lamps held here and the sun.
+// Lamp and sun shadows for each world camera pixel, cast after its depth prepass with the same code the lit
+// surfaces run, which then read these in place of their own for the lamps held here and the sun.
 
 import bevy_pbr::render::mesh_view_bindings::view;
 import package::p2_render::lamp_shadow::{
@@ -11,17 +10,15 @@ import package::p2_render::modern_base::LUMINANCE;
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::sun_shadow::{sun_held, sun_index, world_lookup};
 
-// Group 0 is Bevy's mesh view bindings at their own numbers, which the sun's code reads.
 @group(1) @binding(0) var depth: texture_depth_2d;
 @group(1) @binding(1) var normals: texture_2d<f32>;
 @group(1) @binding(6) var mask: texture_storage_2d<rgba32float, write>;
 
 // Matches `lamps/shadow_mask.rs`.
 const GROUP_SIDE: u32 = 8u;
-// The prepass holds the plain normal; the relief tilts a lit surface's off it by up to the angle whose tangent is this
-// (`relief.wesl`), so a lamp that far past the plain normal's side may still light the surface.
+// The prepass holds the plain normal, and relief tilts a lit surface's normal up to this tangent away,
+// so a lamp that far past the plain normal's side may still light the surface.
 const FACING_SLACK: f32 = 0.45;
-// Below every score: a faced lamp's is positive, a slack lamp's at least -1 / LAMP_SMALLEST.
 const UNRANKED: f32 = -1e30;
 
 var<workgroup> suns: array<array<u32, GROUP_SIDE>, GROUP_SIDE>;
@@ -29,8 +26,8 @@ var<workgroup> suns: array<array<u32, GROUP_SIDE>, GROUP_SIDE>;
 @compute @workgroup_size(GROUP_SIDE, GROUP_SIDE, 1)
 fn shade(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_id) local: vec3<u32>) {
     let size = textureDimensions(depth);
-    // The header, which `shadow_mask.rs` marks unwritten before the pass: 1, then two columns of the view's matrix, so
-    // another view keeps its own shadows.
+    // The header, which `shadow_mask.rs` marks unwritten before the pass: 1, then two columns of the view's matrix,
+    // so another view keeps its own shadows.
     if all(id.xy == vec2(0u)) {
         textureStore(mask, vec2(0u, size.y), vec4(1.0, 0.0, 0.0, 0.0));
         textureStore(mask, vec2(1u, size.y), view.clip_from_world[0]);
@@ -43,7 +40,6 @@ fn shade(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation
         textureStore(mask, id.xy, screen_texel(id.xy));
         sun = sun_bytes(id.xy);
     }
-    // A texel holds the suns of four rows: the group's first row of each four stores it.
     suns[local.y][local.x] = sun;
     workgroupBarrier();
     if inside && local.y % SCREEN_SUN_PIXELS == 0u {
@@ -68,9 +64,9 @@ fn screen_texel(pixel: vec2<u32>) -> vec4<f32> {
         column = tile_column(book, position);
         movers_near = column == 0u || book_texel(book, column).x != 0.0;
     }
-    // The lamps that light the pixel most past the static world take the slots; a lamp only the slack reaches ranks
-    // below every faced one. A lamp left out gives the lit surface no light, so a walled one never needs a slot. The
-    // bytes follow the list's order, as the lit surfaces count them.
+    // The lamps that light the pixel most past the static world take the slots; one only the slack reaches
+    // ranks below every faced one. A lamp left out gives no light, so a walled one never needs a slot.
+    // The bytes follow the list's order, as the lit surfaces count them.
     var best: array<f32, SCREEN_SLOTS>;
     var which: array<u32, SCREEN_SLOTS>;
     var shadows: array<vec2<f32>, SCREEN_SLOTS>;
@@ -129,7 +125,6 @@ fn put_byte(bytes: ptr<function, vec3<u32>>, at: u32, value: u32) {
     (*bytes)[at / 3u] |= value << (8u * (at % 3u));
 }
 
-// A byte for each of `sun_held`'s shares at the pixel's surface; 0 where none is, which no lit surface reads.
 fn sun_bytes(pixel: vec2<u32>) -> u32 {
     let z = textureLoad(depth, pixel, 0);
     if z <= 0.0 {

@@ -48,7 +48,6 @@ fn relief_from(
     return normalize(normal - tilt);
 }
 
-// Past these a slope shows nothing, so its texture taps are saved.
 fn relief_shows(position: vec3<f32>, duv_dx: vec2<f32>, duv_dy: vec2<f32>, size: vec2<f32>) -> bool {
     let texels = max(length(duv_dx * size), length(duv_dy * size));
     return texels < RELIEF_MINIFIED_TO && distance(view.world_position.xyz, position) < RELIEF_FAR;

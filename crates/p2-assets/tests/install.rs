@@ -209,7 +209,6 @@ fn every_kmesh_props() {
                     max[i] = max[i].max(p[i]);
                 }
             }
-            // Shapes are in Karma units: Unreal units / 50.
             let inside = |p: [f32; 3]| {
                 (0..3).all(|i| {
                     let slack = (max[i] - min[i]) * 0.25 + 2.0;
@@ -300,7 +299,6 @@ fn karma_parts_are_bone_frames() {
             worst_position = worst_position.max(error);
             worst_axis = worst_axis.min(agree);
         }
-        // The meshes' proportions differ a little from the skeleton the asset was made on (up to ~7 Unreal units).
         assert!(worst_position < 0.2, "{file}: joint positions do not fit the bones ({worst_position})");
         assert!(worst_axis > 0.95, "{file}: joint axes do not fit the bones ({worst_axis})");
     }
@@ -330,8 +328,6 @@ fn every_skeletal_mesh() {
             bones += mesh.bones.len();
             let bad_wedge = mesh.wedges.iter().any(|w| w.point as usize >= mesh.positions.len());
             let bad_index = mesh.indices.len() % 3 != 0 || mesh.indices.iter().any(|&i| usize::from(i) >= mesh.wedges.len());
-            // Material indices past `materials` exist (they rely on the actor's `Skins` or fall back to material 0), so they are
-            // only counted.
             let mut next_face = 0;
             let bad_section = mesh.sections.iter().any(|s| {
                 let ok = usize::from(s.first_face) == next_face;
@@ -505,8 +501,6 @@ fn bone_to_mesh(locals: &[([f32; 4], [f32; 3])], parents: &[usize], conjugate_ch
     out
 }
 
-/// Skinning a mid-walk pose of `animAvg_PL` onto `Avg_M_SS_Shorts_PB_D` keeps the mesh together only when non-root
-/// quaternions are conjugated.
 #[test]
 fn animation_pose_convention() {
     let Some(dir) = game_dir() else { return };
@@ -818,8 +812,6 @@ fn section_mismatch(model: &Model) -> Option<String> {
     None
 }
 
-/// Known exception: `PL-suburbs-2.fuk`, whose `Layers[3]` tag size is too small (the `SoundThing` problem); it needs
-/// declaration-driven property reading.
 #[test]
 fn every_terrain() {
     let Some(paths) = install_packages() else { return };
@@ -889,7 +881,6 @@ fn every_terrain_decorations() {
     let mut failures = Vec::new();
     let (mut terrains, mut layers, mut placed, mut reported) = (0, 0, 0, 0);
     for (loader, maps) in &mut games {
-        // Terrains first: the layouts borrow the loader, which texture loading needs mutably.
         let mut found = Vec::new();
         {
             let mut layouts = Layouts::new(&*loader);
@@ -990,8 +981,6 @@ fn every_mesh_actor() {
             if export.serial_size == 0 || pkg.object_name(export.class_index) == Some("SoundThing") {
                 continue;
             }
-            // Not actors, and no class to read them by: the classes `Core` and `Engine` define natively, with no script
-            // class in their packages; `MPDancers`, from a package that does not ship (`Strippers`); classes themselves.
             const NOT_READABLE: [&str; 13] = [
                 "Level", "Model", "Polys", "ConvexVolume", "StaticMeshInstance", "TerrainSector", "Package", "TextBuffer", "StaticMesh",
                 "Sound", "KMeshProps", "Function", "MPDancers",

@@ -26,8 +26,6 @@ pub fn rotator_matrix(rotation: Rotator) -> Mat4 {
     Mat4::from_cols(x, y, z, Vec4::W)
 }
 
-/// world = `rotation` · R(`rot_origin`) · (scale ⊙ (v − `origin`)) + location + pre-pivot,
-/// with scale = `DrawScale3D` · `DrawScale` · the mesh's `Scale`.
 pub fn unreal_mesh_matrix(
     location: Vector,
     rotation: Mat4,

@@ -1,15 +1,14 @@
-//! A lamp's size, the radius of the sphere its light comes from, for the modern lamp term. `MODERN_LAMP_SIZE` scales
-//! it; at 0 the shader keeps today's share of the lamp's radius.
+//! A lamp's size, the radius of the sphere its light comes from, for the modern lamp term.
+//! At `MODERN_LAMP_SIZE` 0 the shader uses a fixed share of the lamp's radius.
 
-/// Today's source size as a share of a lamp's radius. Matches `lamp_shadow.wesl`.
+/// Default source size as a share of a lamp's radius. Matches `lamp_shadow.wesl`.
 pub const LAMP_SOURCE_SHARE: f32 = 0.08;
-/// A corona's quad is a halo around the fixture: the fixture's bright part is this share of its side (unverified).
+/// A corona's quad is a halo around the fixture: the fixture's bright part is this share of its side
+/// (unverified).
 const CORONA_SHARE: f32 = 0.05;
 /// A source wider than this share of the radius would light its own surroundings as a wall.
 const LARGEST_SHARE: f32 = 0.25;
 
-/// `fixture` is the half size of the fixture mesh's largest side, `corona` the corona's base side in world units before
-/// its distance scaling, both where the map has them.
 pub fn lamp_size(radius: f32, corona: Option<f32>, fixture: Option<f32>) -> f32 {
     let size = match (fixture, corona) {
         (Some(fixture), _) if fixture > 0.0 => fixture,

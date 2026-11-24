@@ -6,7 +6,6 @@ use p2_assets::{BspNode, ConvexVolume, Model, poly_flags};
 use crate::MeshPlacement;
 use p2_math::Vector;
 
-/// A plane: points `p` with `normal · p >= d` are inside.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Plane {
     pub normal: Vector,
@@ -37,8 +36,8 @@ struct Portal {
     zones: [u8; 2],
 }
 
-/// A `PF_AntiPortal` surface: retail builds its occluder from the source brush poly; ours is the convex hull of the
-/// surface's BSP fragments, which lies inside that poly (so it never hides more than retail).
+/// A `PF_AntiPortal` surface: retail builds its occluder from the source brush poly; ours is the convex hull of
+/// the surface's BSP fragments, which lies inside that poly (so it never hides more than retail).
 struct Antiportal {
     polygon: Vec<Vector>,
     plane: Plane,
@@ -48,16 +47,12 @@ struct Antiportal {
     max: Vector,
 }
 
-/// An outward plane (the solid behind) with its world vertices.
 struct Face {
     plane: Plane,
     vertices: Vec<Vector>,
-    /// Per edge (vertex i to i + 1): the faces with vertices at both its ends.
     neighbours: Vec<Vec<usize>>,
 }
 
-/// An antiportal actor: its convex volume and the zones its box touches. Seen from outside it hides
-/// what lies wholly in its shadow: behind every face the eye is in front of, inside its silhouette.
 pub struct AntiportalActor {
     faces: Vec<Face>,
     centre: Vector,
@@ -100,7 +95,6 @@ impl AntiportalActor {
         Some(Self { faces, centre, zones: zones(min, max), min, max })
     }
 
-    /// `false`, appending nothing, when the eye faces no face.
     fn occluder(&self, eye: Vector, planes: &mut Vec<Plane>) -> bool {
         let front = |face: &Face| plane_dot(&face.plane, eye) > 0.0;
         if !self.faces.iter().any(front) {
@@ -133,7 +127,6 @@ pub struct ZonePortals {
     portals: Vec<Portal>,
     antiportals: Vec<Antiportal>,
     actors: Vec<AntiportalActor>,
-    /// By zone number, each list in ascending index order.
     members: Vec<ZoneMembers>,
 }
 
@@ -189,10 +182,9 @@ impl ZonePortals {
         Self { portals, antiportals, actors, members }
     }
 
-    /// Each portal of a reached zone that the eye faces from that zone's side is clipped by the zone's view volumes; what is
-    /// left opens the zone behind. Antiportals hide, in that zone, what lies wholly behind them, portals included (retail
-    /// adds them as its front-to-back walk meets them; here as each volume is expanded). Zone 0 (outside the world) sees
-    /// everything.
+    /// Each portal of a reached zone that the eye faces from that zone's side is clipped by the zone's view
+    /// volumes; what is left opens the zone behind. Antiportals hide what lies wholly behind them in that zone,
+    /// portals included. Zone 0 (outside the world) sees everything.
     pub fn visible(&self, eye: Vector, zone: u8, view: &[Plane], seen: &mut VisibleZones) {
         let VisibleZones { walked, capped, planes, volumes, occluders, antiportals_used, actors_used, antiportal_sides, portal_sides, whole, queue } =
             seen;
@@ -260,7 +252,6 @@ impl ZonePortals {
                 let (portal, side) = (&self.portals[index], portal_sides[index]);
                 let [back, front] = portal.zones;
                 let (near, far) = if side >= 0.0 { (front, back) } else { (back, front) };
-                // A portal once opened whole: any later volume through it lies inside that first one.
                 if near != zone || whole[index] {
                     continue;
                 }
@@ -298,15 +289,11 @@ impl ZonePortals {
     }
 }
 
-/// The result of [`ZonePortals::visible`], kept by the caller so its buffers are reused.
 #[derive(Default)]
 pub struct VisibleZones {
-    /// `false`: everything is seen.
     walked: bool,
     capped: bool,
-    /// The volumes and occluders are ranges of this.
     planes: Vec<Plane>,
-    /// By zone number.
     volumes: Vec<Vec<Range<usize>>>,
     occluders: Vec<Vec<Range<usize>>>,
     antiportals_used: Vec<bool>,
@@ -358,8 +345,8 @@ fn bounding_box<'a>(points: impl Iterator<Item = &'a Vector>) -> (Vector, Vector
     (min.into(), max.into())
 }
 
-/// One portal per surface and zone pair, both facings as one: the hull of its BSP fragments. Retail opens a portal
-/// surface once, through its source brush poly; the hull covers every fragment and lies inside that poly.
+/// One portal per surface and zone pair, both facings as one: the hull of its BSP fragments. Retail opens a
+/// portal surface once, through its source brush poly; the hull covers every fragment and lies inside that poly.
 fn portal_hulls(fragments: impl IntoIterator<Item = (usize, [u8; 2], [f32; 4], Vec<Vector>)>) -> Vec<Portal> {
     let mut merged: BTreeMap<(usize, [u8; 2], [u32; 4]), Vec<Vector>> = BTreeMap::new();
     for (surface, [back, front], plane, points) in fragments {
@@ -424,7 +411,6 @@ fn clip(polygon: &[Vector], planes: &[Plane]) -> Vec<Vector> {
     out
 }
 
-/// Appends the planes of the volume seen through `polygon` to `planes`; `false` (nothing appended) for a degenerate polygon.
 fn through(eye: Vector, polygon: &[Vector], portal: &Plane, side: f32, planes: &mut Vec<Plane>) -> bool {
     if polygon.len() < 3 {
         return false;

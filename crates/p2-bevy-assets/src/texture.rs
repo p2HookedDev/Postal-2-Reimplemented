@@ -128,8 +128,6 @@ pub fn alpha_on_black_image(texture: &Texture, palette: Option<&[[u8; 4]]>) -> O
     Some(rgba_image(width, height, texels))
 }
 
-/// Bakes masked self-illumination: base = `diffuse` × (1 − m), glow = `glow` × m, m = `mask` alpha.
-/// Lit base plus glow equals the driver's lerp(lit diffuse, glow, m).
 pub fn texture_glow(diffuse: (u32, u32, &[[u8; 4]]), glow: (u32, u32, &[[u8; 4]]), mask: (u32, u32, &[[u8; 4]])) -> (Image, Image) {
     let (width, height) = [diffuse, glow, mask].into_iter().map(|(w, h, _)| (w, h)).max_by_key(|&(w, h)| w * h).unwrap_or((1, 1));
     let at = |(w, h, texels): (u32, u32, &[[u8; 4]]), x: u32, y: u32| texels[((y * h / height) * w + x * w / width) as usize];
@@ -192,9 +190,9 @@ pub(crate) fn with_mips<const N: usize>(width: u32, height: u32, mut texels: Vec
     (data, levels)
 }
 
-/// Colour premultiplied by alpha (in gamma space), as egui blends (`One`, `OneMinusSrcAlpha`); straight alpha would add
-/// the colour of transparent texels. `additive`: the colour as is with zero alpha, which egui adds. Box-filtered mips and
-/// a trilinear sampler: a 512-pixel weapon icon drawn at ~40 pixels does not sparkle.
+/// Colour premultiplied by alpha (in gamma space), as egui blends (`One`, `OneMinusSrcAlpha`); straight alpha
+/// would add the colour of transparent texels. `additive`: the colour as is with zero alpha, which egui adds.
+/// Box-filtered mips and a trilinear sampler: a 512-pixel weapon icon drawn at ~40 pixels does not sparkle.
 pub fn texture_to_ui_image(texture: &Texture, palette: Option<&[[u8; 4]]>, additive: bool) -> Option<Image> {
     let (width, height, texels) = p2_assets::texture_rgba(texture, palette)?;
     let texels = texels

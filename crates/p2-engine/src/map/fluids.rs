@@ -151,8 +151,6 @@ pub(super) fn present_fluids(mut t: FluidParams) {
     t.times.add("fluids", started);
 }
 
-/// A surface steps only while in view within the last second (`drawn_lately`); only surfaces in view hand their
-/// vertices over.
 fn update_fluids(t: &mut FluidParams) {
     let Some(world) = t.play.world_mut() else { return };
     let plings = world.take_plings();

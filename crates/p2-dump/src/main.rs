@@ -1,17 +1,6 @@
-//! Dumps the header, name, import and export tables of a package.
-//!
-//! Usage: `p2-dump <package> [--props | --code]`. `--props` prints each export's tagged properties instead;
-//! `--code` prints the decoded bytecode of every function, state and class (native names from the `.u`
-//! packages next to it, or in `..\System`). `p2-dump <folder> --shaders` counts the `Shader` forms of every
-//! `.utx` / `.usx` / `.fuk` under the folder. `p2-dump <map> --reach` reads lights from standard input, one `x y z radius`
-//! a line in Unreal units, and prints each with the zones it could light in the map's largest BSP model, its own first
-//! (the radius is printed twice: the fifth column once held a reach). `p2-dump <map> --zones` lists each zone's polygons,
-//! sky backdrop polygons and portals, what level polygon lies straight behind each backdrop, and for every `x y z` eye
-//! on standard input the zones its rays meet and what they meet behind a backdrop. `p2-dump <map> --walk` runs the portal
-//! walk from eyes at the map's path nodes, and near the walls around them, and counts the rays that meet a polygon of a
-//! zone the walk did not reach. `p2-dump <animation package> --rig <.ka file> <mesh>` compares a ragdoll asset with the
-//! skeletal mesh it is used on: for each joint, how far the asset's two parts and the mesh's two bones disagree in
-//! turn and in place, bind pose against bind pose.
+//! Dumps a package's header, names, imports and exports; `--props` prints tagged properties, `--code` bytecode.
+//! `--shaders` counts Shader forms under a folder; `--reach`, `--zones` and `--walk` probe a map's zones.
+//! `--rig <.ka file> <mesh>` compares a ragdoll asset with the skeletal mesh it is used on.
 
 #![forbid(unsafe_code)]
 
@@ -39,7 +28,6 @@ fn level_model(pkg: &Package, data: &[u8]) -> anyhow::Result<Model> {
         .context("no BSP model in the package")
 }
 
-/// The polygons a ray meets from their drawn side, nearest first.
 fn ray_hits<'a>(polygons: &[&'a ModelPolygon], origin: Vector, direction: Vector) -> Vec<(f32, &'a ModelPolygon)> {
     let mut hits: Vec<_> = polygons
         .iter()
@@ -156,7 +144,6 @@ fn zone_survey(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Resu
     Ok(())
 }
 
-/// The angle in degrees between two frames' turns, their scale left out.
 fn turn_between(a: &Frame, b: &Frame) -> f32 {
     let unit = |frame: &Frame| frame.axes.map(|axis| Vector::from(axis).safe_normal());
     let (a, b) = (unit(a), unit(b));
@@ -215,7 +202,6 @@ fn rig_check(pkg: &Package, data: &[u8], asset_path: &Path, mesh_name: &str, out
 const WALK_EYES: usize = 80;
 const WALK_RAYS: i32 = 8;
 const EYE_HEIGHT: f32 = 40.0;
-/// How far from a wall the near-wall eyes stand: about a player's radius, and nearly touching.
 const WALL_GAPS: [f32; 2] = [30.0, 4.0];
 
 fn node_locations(pkg: &Package, data: &[u8]) -> Vec<Vector> {
@@ -234,7 +220,6 @@ fn node_locations(pkg: &Package, data: &[u8]) -> Vec<Vector> {
         .collect()
 }
 
-/// The four sides of a square view, 90 degrees wide, looking along `forward`.
 fn view_sides(eye: Vector, forward: Vector, right: Vector, up: Vector) -> Vec<Plane> {
     [right, -right, up, -up]
         .into_iter()
@@ -303,7 +288,6 @@ fn walk_check(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Resul
                         let node = &model.nodes[polygon.node];
                         let zones = if polygon.poly_flags & poly_flags::TWO_SIDED == 0 { [node.zones[1]; 2] } else { node.zones };
                         let at = eye + direction * distance;
-                        // Through empty space a line changes zone only at a portal, so the walk must reach what it meets.
                         let clear = p2_collision::line_check(&model, eye, eye + direction * (distance - 1.0)).is_none();
                         if clear && !zones.contains(&0) {
                             if !zones.iter().any(|&z| seen.reached(z)) {

@@ -3,7 +3,6 @@
 
 import package::p2_render::color::to_display;
 import package::p2_render::sun_shadow::{has_sun, sun_index, sun_map_visibility, sun_seen};
-// The levels are this material's bindings 5 and 6 (`P2_PARTICLE_LEVELS`), so the source carries no index.
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::modern::{ambient_occlusion, modern_surface, sky_view, surface_of};
 import package::p2_render::sky_view::{sky_before_near, sky_clip};
@@ -38,8 +37,8 @@ struct Params {
 @group(3) @binding(0) var particle_texture: texture_2d<f32>;
 @group(3) @binding(1) var particle_sampler: sampler;
 @group(3) @binding(2) var<uniform> params: Params;
-// One sprite (`particles.rs` `sprite_record`, Bevy coordinates, the mesh's own space). Per emitter a header record (only
-// `count` set) comes first, at the entity's `MeshTag`.
+// One sprite (`particles.rs` `sprite_record`, Bevy coordinates, the mesh's own space). Per emitter a header
+// record (only `count` set) comes first, at the entity's `MeshTag`.
 struct SpriteRecord {
     center: vec3<f32>,
     color: u32,
@@ -59,11 +58,8 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) uv_b: vec2<f32>,
     @location(5) color: vec4<f32>,
-    // The light at the emitter from its header record (display light, its zone's ambient and lamps); below 0 unlit.
     @location(6) light: vec3<f32>,
-    // A modern puddle: the place across its quad (-1 to 1 each way) and its edge seed; all 0 for any other sprite.
     @location(7) puddle: vec3<f32>,
-    // For a sprite lying on a surface: its emitter's lamps alone (display light) and the sprite's normal.
     @location(8) lamps: vec3<f32>,
     @location(9) normal: vec3<f32>,
 }
@@ -134,10 +130,10 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     return out;
 }
 
-// Matches `particle_draw/sprites.rs`.
 const SEED_BITS: u32 = 1023u;
 
-// Display brightness of the background the gamma-space sums are fitted for (the framebuffer blends in linear light).
+// Display brightness of the background the gamma-space sums are fitted for (the framebuffer blends in linear
+// light).
 const BACKGROUND: f32 = 0.25;
 const BACKGROUND_LINEAR: f32 = 0.05087609;
 
@@ -177,14 +173,14 @@ fn scene_fog_color() -> vec3<f32> {
     return vec3(0.0);
 }
 
-// A puff of smoke faces the sun with about half of itself.
 const PUFF_SUN: f32 = 0.5;
 // Matches `particle_material.rs` `LIT_LYING`.
 const LIT_LYING: u32 = 2u;
 const LIGHT_LIMIT: f32 = 2.0;
 
-// In display light, as the modern surfaces add their diffuse light: the emitter's light, which does not depend on the
-// view, and the sun where it reaches. The sky view and an emitter marked unlit draw it as retail does, unlit.
+// In display light, as the modern surfaces add their diffuse light: the emitter's light, which does not depend
+// on the view, and the sun where it reaches. The sky view and an emitter marked unlit draw it as retail does,
+// unlit.
 fn particle_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>) -> vec3<f32> {
     if emitter.x < 0.0 || sky_view() {
         return vec3(1.0);
@@ -199,8 +195,9 @@ fn particle_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>
     return min(light, vec3(LIGHT_LIMIT));
 }
 
-// A sprite lying on a surface takes the light the modern surfaces give a white texel there, as a decal on the same
-// surface does; the emitter's lamps stand in for the surface's own. Without a sun the surfaces keep their lightmaps.
+// A sprite lying on a surface takes the light the modern surfaces give a white texel there, as a decal on the
+// same surface does; the emitter's lamps stand in for the surface's own. Without a sun the surfaces keep their
+// lightmaps.
 fn lying_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>, lamps: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     if emitter.x < 0.0 || sky_view() || !has_sun() {
         return particle_light(position, frag_coord, emitter);
@@ -212,7 +209,6 @@ fn lying_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>, l
     return to_display(white);
 }
 
-// 1 where the sprite stands `params.soft` units or more before the geometry behind it, falling to 0 where it meets it.
 fn soft_fade(frag_coord: vec4<f32>) -> f32 {
 @if(DEPTH_PREPASS) {
     if params.soft <= 0.0 {
@@ -229,13 +225,12 @@ fn soft_fade(frag_coord: vec4<f32>) -> f32 {
 }
 }
 
-// Linear output F for a fixed blend `F + D * keep` (D the framebuffer, linear) that gives the engine's display-space
-// `source + d * keep` exactly over a background of display brightness BACKGROUND.
+// Linear output F for a fixed blend `F + D * keep` (D the framebuffer, linear) that gives the engine's display-
+// space `source + d * keep` exactly over a background of display brightness BACKGROUND.
 fn over_background(source: vec3<f32>, keep: f32) -> vec3<f32> {
     return max(srgb_to_linear(source + vec3(BACKGROUND * keep)) - vec3(BACKGROUND_LINEAR * keep), vec3(0.0));
 }
 
-// 1 inside a puddle's edge, whose radius wanders with a noise fixed by the seed, falling to 0 outside it.
 fn puddle_edge(puddle: vec3<f32>) -> f32 {
     if puddle.z <= 0.0 {
         return 1.0;
@@ -285,7 +280,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         fog_color = vec3(127.0 / 255.0);
     }
     color = mix(color, fog_color, fog_amount(in.world_position.xyz));
-    // Faded towards what each blend leaves the background as: no cover, no added light, neutral grey under modulation.
+    // Faded towards what each blend leaves the background as: no cover, no added light, neutral grey under
+    // modulation.
     let fade = soft_fade(in.position) * puddle_edge(in.puddle);
     if fade < 1.0 {
         if style == 2u {

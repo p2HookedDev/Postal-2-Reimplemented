@@ -1,6 +1,6 @@
-//! Soft darkening of the light from all around near what moves: each mover near the eye is a capsule, and a grid of
-//! columns around the eye names the capsules near each column. A fine grid serves the pixels near the eye and a coarse
-//! one those farther off; `lamp_shadow.wesl` reads each from a row of its own at the book's end.
+//! Soft darkening of light from all around near movers: each mover near the eye is a capsule, and a grid of
+//! columns around the eye names the capsules near each column. A fine grid serves near pixels, a coarse one
+//! far ones; `lamp_shadow.wesl` reads each from its own row at the book's end.
 
 use bevy::math::Vec3;
 
@@ -24,7 +24,6 @@ pub(super) struct Capsule {
 }
 
 impl Capsule {
-    /// Along the longest side of a mover's box, as thick as the mean of the other two.
     pub(super) fn of_box(min: Vec3, max: Vec3) -> Self {
         let (middle, half) = (0.5 * (min + max), 0.5 * (max - min));
         let long = half.max_position();
@@ -35,9 +34,6 @@ impl Capsule {
     }
 }
 
-/// Adds one grid's row to `rows`: the grid's low corner in x and z, a column's side and how many capsules; a texel a
-/// column, each naming up to four capsules from 1; then two texels a capsule. Capsules come nearest the eye first: a
-/// full column keeps those.
 pub(super) fn grounding_row(eye: Vec3, capsules: impl IntoIterator<Item = Capsule>, column_units: f32, rows: &mut Vec<[f32; 4]>) {
     let start = rows.len();
     rows.resize(start + BOOK_WIDTH, [0.0; 4]);

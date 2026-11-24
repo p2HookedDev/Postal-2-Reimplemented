@@ -1,5 +1,5 @@
-//! A retail material's class, given at load from its names and layers, and the roughness and reflectance the modern
-//! lit shader takes from it. `Settings::material_level` scales how far a surface leaves today's shading.
+//! A retail material's class, from its names and layers, and the roughness and reflectance the modern
+//! lit shader takes from it. `Settings::material_level` scales how far a surface departs from retail.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MaterialClass {
@@ -14,8 +14,6 @@ pub enum MaterialClass {
     Foliage = 7,
 }
 
-/// Words that mark each class, or with a plural `s`, tried in this order. Only words that name bare metal are listed:
-/// `car`, `iron` and `rust` also name painted things.
 const NAME_PARTS: [(MaterialClass, &[&str]); 7] = [
     (MaterialClass::Cloth, &["cloth", "carpet", "fabric", "curtain", "rug", "towel", "mattress", "sofa", "couch"]),
     (MaterialClass::Foliage, &["foliage", "leaf", "leaves", "trees", "grass", "plant", "bush", "hedge", "flower", "ivy"]),
@@ -30,13 +28,10 @@ impl MaterialClass {
     pub const ALL: [Self; 8] =
         [Self::Default, Self::Metal, Self::TileOrGlass, Self::Wood, Self::Cloth, Self::Skin, Self::ConcreteOrPlaster, Self::Foliage];
 
-    /// `names` are the material's package, its own name, then its groups from the innermost. The first of the own name,
-    /// the groups and last the package that holds a class's word decides; a guess that is not sure stays the default.
     pub fn of(names: &[&str]) -> Self {
         names.iter().skip(1).chain(names.first()).find_map(|name| named_class(name)).unwrap_or_default()
     }
 
-    /// The highlight's perceptual roughness. The default class keeps the shader's own.
     pub fn roughness(self) -> f32 {
         match self {
             Self::Default => 0.85,
@@ -50,7 +45,6 @@ impl MaterialClass {
         }
     }
 
-    /// Reflectance at normal incidence; 1 is a metal, whose reflectance is its texture's colour.
     pub fn reflectance(self) -> f32 {
         match self {
             Self::Metal => 1.0,
@@ -67,8 +61,6 @@ impl MaterialClass {
     }
 }
 
-/// The first class with a word among the name's whole words, which split at every non-letter and where a lower case
-/// letter meets an upper case one: `Trailer` is not a `rail`.
 fn named_class(name: &str) -> Option<MaterialClass> {
     let mut spaced = String::with_capacity(name.len() * 2);
     let mut after_lower = false;

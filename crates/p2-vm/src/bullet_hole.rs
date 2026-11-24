@@ -1,4 +1,5 @@
-//! Bullet holes on doors and Karma props: our addition. Retail ammo spawns its hit pack, and with it the hole, only on static hits.
+//! Bullet holes on doors and Karma props are our addition: retail ammo spawns its hit pack, and with it the hole,
+//! only on static hits.
 
 use p2_script::Expr;
 
@@ -6,7 +7,6 @@ use crate::interp::Function;
 use crate::{ClassId, Error, LoaderRef, Prop, Value, Vm};
 
 impl<L: LoaderRef> Vm<L> {
-    /// `args`: `ProcessTraceHit`'s weapon, hit actor, hit location and hit normal.
     pub(crate) fn bullet_hole(&mut self, function: &Function, [weapon, other, location, normal]: [Value; 4]) -> Result<(), Error> {
         let (Value::Object(Some(other)), Value::Vector(location), Value::Vector(normal)) = (other, location, normal) else { return Ok(()) };
         if !self.moving_receiver(other) {
@@ -23,7 +23,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// The splat class of the first `BulletHitPack` the function names.
     fn hole_splat(&mut self, function: &Function) -> Result<Option<ClassId>, Error> {
         if let Some(&splat) = self.script.lookups.hole_splats.get(&function.index) {
             return Ok(splat);

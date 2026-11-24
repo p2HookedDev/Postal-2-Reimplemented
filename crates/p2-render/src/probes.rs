@@ -1,5 +1,6 @@
-//! Light that reaches a point second hand, baked once per map into a grid on the compute pool: how much sky it sees
-//! each way, and what the sun and lamps bounce to it. `probes.wesl` reads it for what lights a room beyond the lamps.
+//! Light that reaches a point second hand, baked once per map into a grid on the compute pool: how much sky it
+//! sees each way, and what the sun and lamps bounce to it. `probes.wesl` reads it for what lights a room beyond
+//! the lamps.
 
 mod bake;
 
@@ -43,7 +44,6 @@ impl MaterialAtlas for ProbeAtlas {
     const SLOT: MaterialSlot = MaterialSlot::MetallicRoughness;
 
     fn wanted(&self) -> Option<Handle<Image>> {
-        // The shaders divide by the spacing: no atlas is bound without one.
         self.image.clone().filter(|_| self.spacing > 0.0)
     }
 }
@@ -55,7 +55,6 @@ pub(crate) struct ProbeJob {
     ready: Option<Option<ProbeBake>>,
 }
 
-/// Keyed by the grid's columns.
 pub(crate) type ProbePrebake = crate::lamps::Prebaked<i32, Option<ProbeBake>>;
 
 pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8) -> ProbePrebake {

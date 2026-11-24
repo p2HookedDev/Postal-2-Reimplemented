@@ -1,5 +1,3 @@
-// Photo mode's camera page. The lens rows are photo keys; tilt, orbit, height and speed move the camera itself, and
-// follow it while it flies, so Q and E move the tilt slider too.
 class ModernMenuPhotoCamera extends ModernMenuPhoto;
 
 const TiltMost = 45;

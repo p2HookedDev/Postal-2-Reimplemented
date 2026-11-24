@@ -52,11 +52,9 @@ impl Plugin for ParticleDrawPlugin {
     }
 }
 
-/// The drawing side's state of every emitter actor, keyed by the actor's parent entity.
 #[derive(Resource, Default)]
 pub struct ParticleDraws {
     pub(crate) actors: FxHashMap<Entity, ActorDraw>,
-    /// This frame's sprite records, uploaded to `PARTICLE_SPRITES`.
     pub records: Vec<[u32; RECORD_WORDS]>,
     materials: FxHashMap<SharedParticleKey, Handle<ParticleMaterial>>,
     pool_materials: FxHashMap<PoolMaterialKey, Handle<StandardMaterial>>,
@@ -145,7 +143,6 @@ pub fn draw_particles(
 }
 
 impl ParticleDraws {
-    /// The light the actor's lit sprites take this frame, in display light.
     pub(crate) fn light_of(&self, parent: Entity) -> Option<Vec3> {
         self.actors.get(&parent).map(|actor| actor.light.header()[0])
     }

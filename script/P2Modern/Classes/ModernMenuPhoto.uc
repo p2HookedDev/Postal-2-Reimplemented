@@ -1,6 +1,6 @@
-// Photo mode's two pages share this: the title, the page's own rows, a row to the other page, then the four rows both
-// keep. Its sliders write the photo keys alone: never the player's own rows, never the preset.
-// A page sits at the left edge with no backdrop, so the picture stays in view while a slider moves.
+// Photo mode's two pages share this: the title, the page's own rows, a row to the other page, then the four rows
+// both keep. Its sliders write the photo keys alone: never the player's own rows, never the preset. A page sits
+// at the left edge with no backdrop, so the picture stays in view while a slider moves.
 class ModernMenuPhoto extends ModernMenuPage;
 
 var ModernPhotoMode         Photo;
@@ -32,7 +32,6 @@ function AddPageRows()
 {
 }
 
-// Sliders here act while they move, not only when let go.
 function UWindowHSliderControl AddPhotoSlider(string Label, string Help, int Low, int Top)
 {
 	local UWindowHSliderControl Slider;
@@ -67,7 +66,6 @@ function LoadSliders()
 	bUpdate = true;
 }
 
-// The root window centres its page; this one is put back at the side every frame.
 function PlaceAtSide()
 {
 	WinLeft = Root.WinLeft;
@@ -85,7 +83,6 @@ function BeforePaint(Canvas C, float X, float Y)
 	Super.BeforePaint(C, X, Y);
 }
 
-// A field of view under 10 degrees is not a value the key takes, so the slider's low end jumps to 10.
 function Notify(UWindowDialogControl C, byte E)
 {
 	local int i;

@@ -1,14 +1,11 @@
-//! The zones a light could light. Walls are not looked at: rays against them never find every gap, and a zone left out
-//! is a room left dark.
+//! The zones a light could light. Walls are not looked at: rays against them never find every gap, and a zone
+//! left out is a room left dark.
 
 use p2_assets::{Model, poly_flags};
 use p2_math::Vector;
 
 use crate::{point_solid, point_zone};
 
-/// The zone the light stands in and every zone joined to one of them by a portal that comes within `radius` of the
-/// light. Empty where its zone cannot be told: inside the level's solid, or in zone 0, which holds what no portal
-/// closes off and so joins other zones without one.
 pub fn light_zones(model: &Model, start: Vector, radius: f32) -> Vec<u8> {
     if point_solid(model, start) {
         return Vec::new();

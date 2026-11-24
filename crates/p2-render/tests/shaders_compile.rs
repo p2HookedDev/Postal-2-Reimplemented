@@ -1,8 +1,3 @@
-//! The engine's WESL shaders composed as `bevy_shader` 0.20 composes them at runtime, then validated by naga for the
-//! game's feature sets. Bindless sets skip naga's binding-uniqueness check only: Bevy declares a bindless material's
-//! arrays from its `AsBindGroup` layout at runtime, which this composer does not. Skips when Bevy's sources are not in
-//! the registry.
-
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 

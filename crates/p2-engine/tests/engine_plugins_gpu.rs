@@ -20,7 +20,6 @@ fn run_frames(engine: PluginGroupBuilder) {
     app.add_plugins((EguiPlugin::default(), engine));
     app.finish();
     app.cleanup();
-    // Startup first: the interface camera of the engine claims the primary egui context there.
     app.update();
     let world = app.world_mut();
     let target = world.resource_mut::<Assets<Image>>().add(Image::new_target_texture(64, 64, TextureFormat::Rgba8UnormSrgb, None));

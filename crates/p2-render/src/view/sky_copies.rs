@@ -1,5 +1,5 @@
-//! A draw in the sky zone is drawn by a copy placed by `SkyRoot`, with the sky's material; the draw itself keeps only
-//! the level's layers, so one in both zones shows in both scenes, as retail draws it.
+//! A draw in the sky zone is drawn by a copy placed by `SkyRoot`, with the sky's material; the draw itself keeps
+//! only the level's layers, so one in both zones shows in both scenes, as retail draws it.
 
 use super::*;
 use bevy::asset::{AssetEvent, AssetId};
@@ -16,7 +16,6 @@ use crate::actor_light::ActorLitMaterial;
 use crate::particle_material::ParticleMaterial;
 use crate::translucent_order::TranslucentDraw;
 
-/// On a draw `layers_by_zone` finds in the sky zone.
 #[derive(Component)]
 pub(super) struct InSky;
 
@@ -51,7 +50,6 @@ pub(super) struct SkyDraws<'w, 's> {
     joint_copies: Query<'w, 's, &'static mut Transform, (With<SkyCopyOf>, Without<Mesh3d>)>,
 }
 
-/// Before transform propagation, from this frame's transforms: the copy never lags its draw.
 pub(super) fn sky_copies(mut commands: Commands, shown: Res<ShownScene>, mut sky: SkyDraws) {
     let Ok(root) = sky.root.single() else { return };
     let placement = root.compute_affine() * Affine3A::from_translation(-shown.origin);
@@ -73,7 +71,6 @@ pub(super) fn sky_copies(mut commands: Commands, shown: Res<ShownScene>, mut sky
                 }
             }
             None => {
-                // A skinned copy is skinned by copies of its joints, placed as the sky is.
                 let skin = skin.map(|skin| SkinnedMesh {
                     inverse_bindposes: skin.inverse_bindposes.clone(),
                     joints: skin.joints.iter().map(|&joint| commands.spawn((Transform::default(), SkyCopyOf(joint))).id()).collect(),
@@ -114,7 +111,6 @@ fn chain_of(draw: Entity, chain: &Query<(&Transform, Option<&ChildOf>), Without<
     affine
 }
 
-/// A material's sky twin: the same look, the sky's vertex stage and light.
 pub(super) trait SkyLook: Material + Clone {
     type Sky: Material;
 
@@ -153,7 +149,6 @@ impl SkyLook for ParticleMaterial {
     }
 }
 
-/// Each copy takes the sky twin of its draw's material, kept equal to it as the draw's material changes.
 pub(super) fn follow_sky_material<M: SkyLook>(
     mut commands: Commands,
     copies: Query<(Entity, &SkyCopyOf, Option<&MeshMaterial3d<M::Sky>>)>,

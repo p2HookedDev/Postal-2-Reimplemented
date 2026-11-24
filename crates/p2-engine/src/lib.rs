@@ -25,7 +25,6 @@ impl bevy::app::PluginGroup for P2EnginePlugins {
     }
 }
 
-/// The one place where the order between the engine's plugins is set. A plugin orders only its own sets.
 pub struct FrameOrderPlugin;
 
 impl bevy::app::Plugin for FrameOrderPlugin {
@@ -39,13 +38,10 @@ impl bevy::app::Plugin for FrameOrderPlugin {
             .configure_sets(Update, map::MapSystems::CoronaPlaces.in_set(play::PlaySystems::Placed).before(p2_render::coronas::CoronaSystems))
             .configure_sets(Update, p2_render::coronas::CoronaSystems.in_set(play::PlaySystems::Placed))
             .configure_sets(Update, p2_render::modern::ModernGraphicsSystems::Apply.after(MeshViewSystems::Camera))
-            // After the actors' models took their actors' places (`play::follow_actors`), so attachments land on this
-            // frame's bones.
             .configure_sets(Update, animation::AnimationSystems::Pose.after(MeshViewSystems::Camera))
             .configure_sets(Update, p2_render::RenderFollowSystems.after(MeshViewSystems::Apply))
             .configure_sets(PostUpdate, p2_render::view::SceneViewSystems::Overlays.after(play::PlaySystems::Present))
             .configure_sets(PostUpdate, p2_render::wounds::WoundsSystems.in_set(map::MapSystems::Present))
-            // Wounds age by the step the map's particles take.
             .configure_sets(PostUpdate, map::MapSystems::Particles.after(p2_render::wounds::WoundsSystems))
             .configure_sets(
                 PostUpdate,
@@ -57,7 +53,6 @@ impl bevy::app::Plugin for FrameOrderPlugin {
             use bevy::core_pipeline::core_3d::{main_opaque_pass_3d, main_transparent_pass_3d};
             use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
             use p2_render::MainPassExtraSystems;
-            // Bounce light gathers and scales the frame's colour, so the light added in front of surfaces comes after it.
             render_app.configure_sets(
                 Core3d,
                 (MainPassExtraSystems::Bounce, MainPassExtraSystems::FireVolume, MainPassExtraSystems::LampFog, MainPassExtraSystems::GpuParticles, MainPassExtraSystems::Liquids)

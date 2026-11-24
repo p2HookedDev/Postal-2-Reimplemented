@@ -69,7 +69,6 @@ impl<L: LoaderRef> Vm<L> {
         self.world.line_grid = ShapeGrid::new(&self.world.lines);
     }
 
-    /// As Karma, never static meshes.
     pub(crate) fn level_meshes(&self) -> Vec<LevelMesh> {
         const NF_NOT_CSG: u8 = 0x01;
         let mut meshes = Vec::new();

@@ -1,6 +1,6 @@
-//! Liquid in the air: feeders pour streams and wounds spurt, stepped on the CPU against the level, and the scripts'
-//! splash and droplet particles fly as drops. Drawn as two meshes, one for the streams and one for the drops, lit by
-//! the light the particles take.
+//! Liquid in the air: feeders pour streams and wounds spurt, stepped on the CPU against the level, and the
+//! scripts' splash and droplet particles fly as drops. Drawn as two meshes, one for the streams and one for the
+//! drops, lit by the light the particles take.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Asset, Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -54,34 +54,22 @@ const AIR_DROPS: Handle<ShaderBuffer> = uuid_handle!("e5a1c3d7-2b94-4f60-8d1e-7c
 const DROP_WORDS: usize = 16;
 /// `sun_levels.wesl` reads the material's bindings 5 and 6.
 const PARTICLE_LEVELS: &str = "P2_PARTICLE_LEVELS";
-/// A wound's drops for each particle its emitter spawns, and their speed between beats against the systole's.
 const SPURT_SHARE: f32 = 0.25;
 const SPURT_SLOW: f32 = 0.5;
-/// A wound's drops are drawn at this share of the size whose volume they pour.
 const SPURT_FINE: f32 = 0.3;
 const SPURT_RADIUS: [f32; 2] = [0.35 * SPURT_FINE, 0.8 * SPURT_FINE];
-/// Drops a second a blood stream throws where it breaks, and their size.
 const BREAK_DROPS: f32 = 40.0;
 const BREAK_RADIUS: [f32; 2] = [0.05, 0.15];
 const BREAK_SCATTER: [f32; 2] = [0.85, 1.15];
-/// A falling drop is drawn stretched over its motion in this many seconds, the same at any frame rate.
 const SHUTTER: f32 = 1.0 / 60.0;
-/// The scripts' splash and droplet sprites are drawn as drops of this share of their half width, within these radii.
 const SPRITE_RADIUS: f32 = 0.2;
 const SPRITE_RADII: [f32; 2] = [0.06, 0.25];
-/// Other liquids' sprite drops keep their size.
 const OTHER_SPRITE_RADII: [f32; 2] = [0.12, 1.2];
-/// A stream with no strip of its own is drawn along its aim for this long, in this many points.
 const AIMED_SECONDS: f32 = 0.6;
 const AIMED_POINTS: usize = 16;
-/// A vertex's stream axis and the stream's speed, location 5 of `AirIn`; zero on drops.
 const ATTRIBUTE_AXIS: MeshVertexAttribute = MeshVertexAttribute::new("LiquidAxis", 0x6c69_7175_6964_6178, VertexFormat::Float32x4);
-/// A stream that stops for longer than this starts a new retch when it flows again.
 const RETCH_GAP: f32 = 0.3;
-/// Unreal units a second fire climbs a stream from where it lands, the speed of the game's fire starter up a pour.
 const FIRE_RUN: f32 = 900.0;
-/// Chunks a second a paste throws at its mean surge, their half size and how far they spread off the pour, in Unreal
-/// units and Unreal units a second, how long they lie, how many shapes there are, and their colours in display light.
 const CHUNKS: f32 = 4.0;
 const CHUNK_HALF: [f32; 2] = [1.4, 2.4];
 const CHUNK_SPREAD: f32 = 40.0;
@@ -120,7 +108,6 @@ impl Plugin for AirLiquidsPlugin {
     }
 }
 
-/// Which of the two draws a material and its mesh are.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum AirPass {
     Ribbon,
@@ -207,23 +194,20 @@ impl Material for LiquidAirMaterial {
 /// What a vertex's `look` word says it draws; matches the `SHAPE_*` constants of `liquid_look.wesl`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
-    /// A paste's sheet facing the eye.
     Ribbon,
     Fall,
-    /// A jet's round tube.
     Tube,
 }
 
 impl Shape {
-    /// The radius, the `FluidType` byte, the shape and one word more: a stream's burning.
     pub fn look(self, radius: f32, kind: FluidType, extra: f32) -> [f32; 4] {
         [radius, f32::from(kind as u8), f32::from(self as u8), extra]
     }
 }
 
-/// Vertices as `liquid_look.wesl`'s `AirIn` takes them: the middle, a way (a sheet's direction, a tube vertex's offset
-/// from its axis or a drop's motion over the frame), the corner, the light with a seed word in its last lane, the look,
-/// and a stream's axis with its speed.
+/// Vertices as `liquid_look.wesl`'s `AirIn` takes them: the middle, a way (a sheet's direction, a tube vertex's
+/// offset from its axis or a drop's motion over the frame), the corner, the light with a seed word in its last
+/// lane, the look, and a stream's axis with its speed.
 #[derive(Default)]
 pub struct AirMesh {
     centers: Vec<[f32; 3]>,
@@ -275,15 +259,12 @@ fn drop_record(center: Vec3, way: Vec3, light: Vec3, look: [f32; 4], seed: f32) 
 
 struct Source {
     light: ActorLight,
-    /// This frame's light, display brightness; white while the particles are unlit.
     shown: Vec3,
     spurts_owed: f32,
     breaks_owed: f32,
     chunks_owed: f32,
-    /// The play clock when its retch began and when it last poured.
     retch: f32,
     poured: f32,
-    /// The play clock when it caught fire.
     lit: Option<f32>,
 }
 
@@ -298,7 +279,6 @@ pub(super) struct AirLiquids {
     pub(super) drops: Drops,
     sources: FxHashMap<u64, Source>,
     level: u32,
-    /// Seconds of play, the wounds' heartbeat clock.
     clock: f32,
 }
 
@@ -318,7 +298,6 @@ fn pour_of(actor: &DrawnActor) -> Option<(Liquid, Pour)> {
 fn follow_air_lights(settings: Option<Res<Settings>>, drawn: Option<Res<DrawnParticles>>, lights: ParticleLights, mut air: ResMut<AirLiquids>) {
     let Some(drawn) = drawn else { return };
     let glow = lights.wanted(settings.as_deref());
-    // Pours, splashes, and the emitters whose hits threw drops into the air.
     for actor in &drawn.actors {
         let id = actor.parent.to_bits();
         let splash = actor.liquid.is_some_and(|liquid| liquid.role == LiquidRole::Splash);
@@ -352,7 +331,6 @@ struct AirAssets<'w, 's> {
     drawn: Query<'w, 's, (&'static mut Visibility, &'static Mesh3d, &'static MeshMaterial3d<LiquidAirMaterial>, &'static mut Transform, &'static AirPass)>,
 }
 
-/// One frame of a feeder's pour: where it starts and its aim, in Bevy coordinates from the world's origin.
 struct Pouring<'a> {
     actor: &'a DrawnActor,
     liquid: Liquid,
@@ -397,7 +375,6 @@ fn fly_liquids(
         let Some((liquid, pour)) = pour_of(actor).filter(|(_, pour)| pour.flowing) else { continue };
         pour_feeder(air, &Pouring { actor, liquid, pour, origin, seconds, cap }, &hit, &mut ribbons, &mut chunks);
     }
-    // The rigid pieces take them only while they run; otherwise they would pile up unread.
     if let Some(mut births) = births.filter(|_| modern_level(inputs.settings.as_deref(), MODERN_GPU_PARTICLES) > 0) {
         births.0.append(&mut chunks);
     }
@@ -427,7 +404,6 @@ fn pour_feeder(air: &mut AirLiquids, pouring: &Pouring, hit: &impl Fn(Vec3, Vec3
     let from = Vec3::from(to_bevy(pour.from)) + origin;
     let velocity = pour.velocity.map(|end| Vec3::from(to_bevy(end)));
     let gravity = Vec3::from(to_bevy(pour.acceleration));
-    // Each wound beats on its own phase.
     let beat = heartbeat(air.clock + (id % 97) as f32 * 0.37);
     let strip = actor.emitters.iter().find(|emitter| !emitter.strip.is_empty());
     let points: Vec<Vec3> = match strip {
@@ -480,7 +456,6 @@ fn pour_feeder(air: &mut AirLiquids, pouring: &Pouring, hit: &impl Fn(Vec3, Vec3
     }
 }
 
-/// The path of a pour along its aim until it meets the level.
 fn aimed(from: Vec3, velocity: Vec3, gravity: Vec3, hit: &impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>) -> Vec<Vec3> {
     let mut points = vec![from];
     for step in 1..=AIMED_POINTS {
@@ -496,9 +471,8 @@ fn aimed(from: Vec3, velocity: Vec3, gravity: Vec3, hit: &impl Fn(Vec3, Vec3) ->
     points
 }
 
-/// The scripts' splash droplets and a pour's droplet sprites, drawn as drops where the scripts move them: a splash's
-/// first emitter (a later one is a ripple lying on the ground) and a pour's emitters after its stream, but for
-/// gasoline's, whose are the pour's own blobs.
+/// The scripts' splash and pour droplets, drawn as drops where the scripts move them: a splash's first emitter
+/// only (later ones are ripples on the ground), and a pour's emitters after its stream, except gasoline's blobs.
 fn script_drops(actor: &DrawnActor, origin: Vec3, seconds: f32, sources: &FxHashMap<u64, Source>, beads: &mut Vec<[u32; DROP_WORDS]>) {
     let Some(liquid) = actor.liquid else { return };
     let emitters = match liquid.role {
@@ -539,7 +513,6 @@ fn show_mesh(assets: &mut AirAssets, commands: &mut Commands, pass: AirPass, mes
     follow_textures(&mut assets.materials, &assets.textures, levels, &material.0);
 }
 
-/// Uploads the drops' records, header first, and draws them over a grid of quads that is only rebuilt when it grows.
 fn show_drops(assets: &mut AirAssets, commands: &mut Commands, records: &mut [[u32; DROP_WORDS]]) {
     let levels = assets.atlas.as_deref().and_then(|atlas| atlas.image.clone());
     let [header, drops @ ..] = records else { return };

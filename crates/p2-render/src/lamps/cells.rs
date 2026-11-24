@@ -1,6 +1,6 @@
-//! Which lamps light each cell of a grid over the map, so a pixel walks the lamps of its cell and no others. A lamp's
-//! reach is read off its shadow tile, redrawn here on the CPU texel for texel as the atlas pass draws it: a cell loses
-//! a lamp only where the atlas shades every point of it. Masked casters are left out, which only lists more.
+//! Which lamps light each cell of a grid over the map, so a pixel walks only its cell's lamps. A lamp's reach
+//! is read off its shadow tile, redrawn here on the CPU as the atlas pass draws it: a cell loses a lamp only
+//! where the atlas shades all of it. Masked casters are left out, which only makes lists longer.
 
 use bevy::math::Vec3;
 
@@ -9,9 +9,9 @@ use super::atlas::{FACE_AXES, GUARD_TEXELS, NEAR};
 const MOST_CELLS: u64 = 1 << 22;
 /// The shader takes a cell's place apart from 10 bits an axis.
 const MOST_CELLS_AN_AXIS: u32 = 1023;
-/// `lamp_shadow.wesl` moves the point it looks up by 1.5 texels along the normal, lets it be up to 3 texels nearer and its
-/// edge's reads 1.5 more, and reads at places up to 1 texel from it, each with the texel past it. It also lets the point
-/// be nearer by a share of its distance, for the steps of a 16 bit float.
+/// `lamp_shadow.wesl` moves its lookup point 1.5 texels along the normal, lets it be up to 3 texels nearer
+/// (edge reads 1.5 more) and reads up to 1 texel from it, each with the texel past it, plus a share of the
+/// distance for the steps of a 16-bit float.
 const LOOKUP_OFFSET_TEXELS: f32 = 1.5;
 const LOOKUP_MARGIN_TEXELS: f32 = 4.5;
 const LOOKUP_REACH_TEXELS: f32 = 1.0;
@@ -27,18 +27,13 @@ const CELL_SLACK: f32 = 0.5;
 pub(super) struct CellLamp<'a> {
     pub position: [f32; 3],
     pub radius: f32,
-    /// The side of one face of its shadow tile in texels. A lamp without a tile lights all it reaches.
     pub face: Option<u32>,
-    /// Corners of its casters in the vertices, three a triangle.
     pub casters: &'a [u32],
-    /// Its display light at its own place, weighed as the shader weighs it.
     pub strength: f32,
-    /// A spot's direction, and the scale and offset that turn the cosine of the angle off it into its share of light.
     pub spot: Option<([f32; 3], f32, f32)>,
 }
 
 impl<'a> CellLamp<'a> {
-    /// From the lamp's texels in the book, so a cell is judged by the numbers the shader reads.
     pub(super) fn of(record: &[[f32; 4]; RECORD_TEXELS], face: Option<u32>, casters: &'a [u32]) -> Self {
         let [[x, y, z, radius], [r, g, b, _], [along_x, along_y, scale, offset], ..] = *record;
         let strength = [r, g, b].iter().zip(LUMINANCE).map(|(channel, weight)| channel.max(0.0).sqrt() * weight).sum();
@@ -46,8 +41,6 @@ impl<'a> CellLamp<'a> {
         Self { position: [x, y, z], radius: radius.abs(), face, casters, strength, spot: (radius < 0.0).then_some((along, scale.abs(), offset)) }
     }
 
-    /// The most display light the lamp gives any point of a box, as the shader counts it before shadows. The box is seen
-    /// from the lamp and `nearest` is its distance.
     fn most_light(&self, low: [f32; 3], high: [f32; 3], nearest: f32) -> f32 {
         let x = (nearest / self.radius).min(1.0);
         let falloff = 1.0 - x * x * (3.0 - 2.0 * x);
@@ -71,12 +64,9 @@ pub(super) struct LampCells {
     pub origin: [f32; 3],
     pub cell: f32,
     pub dims: [u32; 3],
-    /// A cell's lamps are `lamps[starts[cell]..starts[cell + 1]]`.
     pub starts: Vec<u32>,
     pub lamps: Vec<u32>,
-    /// How many pairs of a lamp and a cell within its radius there are, lit or not.
     pub in_reach: u64,
-    /// For each lamp, how far the casters it sees through each face of its tile lie.
     pub reach: Vec<[f32; 6]>,
 }
 
@@ -108,8 +98,8 @@ fn grid(lamps: &[CellLamp], smallest_cell: f32) -> LampCells {
     }
 }
 
-/// A lamp's shadow tile: for each face the distance to the nearest caster over the radius, 1 where open, then the same
-/// at half the side over and over, each texel the farthest of its four.
+/// A lamp's shadow tile: for each face the distance to the nearest caster over the radius, 1 where open, then the
+/// same at half the side over and over, each texel the farthest of its four.
 struct Cube {
     side: usize,
     levels: Vec<Vec<f32>>,
@@ -143,7 +133,6 @@ impl Cube {
         Self { side, levels }
     }
 
-    /// Over the radius, for each face: nine in ten of its texels that hold a caster hold one no farther.
     fn reach(&self) -> [f32; 6] {
         let texels = self.side * self.side;
         let mut held = Vec::new();
@@ -155,7 +144,6 @@ impl Cube {
         })
     }
 
-    /// Whether any texel a lookup inside the box could read holds `depth` or more. The box is seen from the lamp.
     fn open_to(&self, low: [f32; 3], high: [f32; 3], depth: f32) -> bool {
         let half = 0.5 * self.side as f32;
         let span = half - GUARD_TEXELS;
@@ -195,7 +183,6 @@ impl Cube {
     }
 }
 
-/// `corners` in the face's own axes: x right, y up, z out of the lamp.
 fn draw_triangle(depths: &mut [f32], side: usize, corners: [[f32; 3]; 3], radius: f32) {
     let half = 0.5 * side as f32;
     let span = half - GUARD_TEXELS;
@@ -275,11 +262,9 @@ fn draw_triangle(depths: &mut [f32], side: usize, corners: [[f32; 3]; 3], radius
 enum Reach {
     Out,
     Dark,
-    /// The most light it may give in the box.
     Lit(f32),
 }
 
-/// Whether the lamp's light gets into a box of this side whose low corner, seen from the lamp, is `corner`.
 fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) -> Reach {
     let low = corner.map(|at| at - CELL_SLACK);
     let high = low.map(|at| at + side + 2.0 * CELL_SLACK);
@@ -301,8 +286,8 @@ fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) 
     if lights { Reach::Lit(light) } else { Reach::Dark }
 }
 
-/// The cells of `grid` a lamp lights with the most light it gives each, and how many lie within its radius. Cells are
-/// tried eight at a time as one box first: a box the lamp leaves dark holds no lit cell.
+/// The cells of `grid` a lamp lights with the most light it gives each, and how many lie within its radius. Cells
+/// are tried eight at a time as one box first: a box the lamp leaves dark holds no lit cell.
 fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(u32, f32)>, u64, [f32; 6]) {
     let cube = lamp.face.map(|face| Cube::drawn(face as usize, lamp, vertices));
     let blocks = |axis: usize| {
@@ -339,7 +324,6 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(
     (lit, in_reach, cube.as_ref().map_or([1.0; 6], Cube::reach).map(|share| share * lamp.radius))
 }
 
-/// Cells no smaller than `smallest_cell`, grown until the grid over every lamp's reach is small enough to hold.
 pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cell: f32) -> LampCells {
     if lamps.is_empty() {
         return LampCells::default();
@@ -378,21 +362,20 @@ pub(super) const RECORD_TEXELS: usize = 7;
 pub(super) const HEADER_TEXELS: usize = 2;
 /// The book's width in texels. `lamp_shadow.wesl` holds the same number.
 pub(super) const BOOK_WIDTH: usize = 2048;
-/// The rows the book ends with, counted back from its end: the movers' tile grid starts this far back, then their tiles'
-/// row, then the capsules' fine and coarse rows. `lamp_shadow.wesl` holds the same numbers.
+/// The rows the book ends with, counted back from its end: the movers' tile grid starts this far back, then their
+/// tiles' row, then the capsules' fine and coarse rows. `lamp_shadow.wesl` holds the same numbers.
 pub(super) const TILE_GRID_FROM_END: u32 = 20;
 pub(super) const TILES_FROM_END: u32 = 3;
 pub(super) const CAPSULES_FROM_END: u32 = 2;
 /// The decals' screen tile lists (`decal_bins.rs`) take these rows before the movers' ones.
 pub(super) const DECAL_BIN_ROWS: u32 = 257;
 pub(super) const DECAL_BINS_FROM_END: u32 = TILE_GRID_FROM_END + DECAL_BIN_ROWS;
-/// A texel's number goes through a float, exact up to 2^24; the rows at the end less, so the whole book is no taller
-/// than the 8192 texels every GPU takes.
+/// A texel's number goes through a float, exact up to 2^24; the rows at the end less, so the whole book is no
+/// taller than the 8192 texels every GPU takes.
 const MOST_BOOK_TEXELS: usize = (1 << 24) - DECAL_BINS_FROM_END as usize * BOOK_WIDTH;
 
-/// What `lamp_shadow.wesl` reads, four floats a texel: a header (the grid's corner and its cell; its sides and where the
-/// cells start), every lamp's record, a texel for each cell (where its list starts and how many lamps it holds) and
-/// the lists, four lamps a texel. Lists past the largest book are dropped, cells farthest along first.
+/// What `lamp_shadow.wesl` reads, four floats a texel: a header, every lamp's record, a texel a cell (list start
+/// and count) and the lists, four lamps a texel. Lists past the largest book are dropped, farthest cells first.
 pub(super) fn book_texels(cells: &LampCells, records: &[[[f32; 4]; RECORD_TEXELS]]) -> Vec<[f32; 4]> {
     let cells_start = HEADER_TEXELS + records.len() * RECORD_TEXELS;
     let cell_count = cells.starts.len().saturating_sub(1);

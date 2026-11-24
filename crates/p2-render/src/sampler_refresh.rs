@@ -1,5 +1,5 @@
-//! Texture settings act at once. Pixels have left the main world, so only the render world's samplers change; prepared
-//! materials and light map slabs keep the old sampler until prepared again.
+//! Texture settings apply at once. Pixels have left the main world, so only the render world's samplers change;
+//! prepared materials and light map slabs keep the old sampler until prepared again.
 
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Asset, AssetId, Assets};
@@ -51,8 +51,8 @@ fn refresh_samplers(world: &mut World, mut refresh: Local<Refresh>) {
     for (entity, lightmap) in refresh.lightmaps.drain(..) {
         if let Ok(mut entity) = world.get_entity_mut(entity) {
             entity.insert(lightmap);
-            // A light map coming back does not make the renderer build the mesh's pipeline again; a changed mesh does.
-            // Without it the mesh is drawn with the pipeline built while it had no light map, which the GPU refuses.
+            // A light map coming back does not rebuild the mesh's pipeline, but a changed mesh does. Without this the mesh
+            // draws with the pipeline built while it had no light map, which the GPU refuses.
             if let Some(mut mesh) = entity.get_mut::<Mesh3d>() {
                 mesh.set_changed();
             }

@@ -87,8 +87,6 @@ impl ShapeGrid {
         found.sort_unstable();
     }
 
-    /// The queries run with `&self`, also from parallel passes, so the scratch is per thread; a nested query gets a fresh
-    /// one.
     fn with_near<R>(&self, start: Vector, end: Vector, pad: f32, f: impl FnOnce(&[usize]) -> R) -> R {
         let mut scratch = NEAR_SCRATCH.take();
         self.near_segment(start, end, pad, &mut scratch);

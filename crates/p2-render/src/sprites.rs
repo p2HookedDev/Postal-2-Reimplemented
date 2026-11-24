@@ -32,7 +32,6 @@ pub struct SpriteSystems;
 
 pub struct SpritePlugin;
 
-/// Emptied when the map changes, so the materials of a map that was left do not stay alive.
 #[derive(Resource, Default)]
 struct SpriteMaterials {
     level: u32,
@@ -71,8 +70,8 @@ fn forget_sprite_materials(drawn: Option<Res<DrawnParticles>>, mut cache: ResMut
     }
 }
 
-/// Corners are `Location ± X ± Y` with texture coordinates 0 / 1 at their ends. Which camera axis is
-/// up is taken from sprites showing upright in the editor (unverified in the binary).
+/// Corners are `Location +/- X +/- Y`, texture coordinates 0 and 1 at the ends. Which camera axis is up
+/// is taken from sprites showing upright in the editor (unverified).
 pub(crate) fn sprite_quad() -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     let uvs = vec![[0.0f32, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
@@ -85,8 +84,8 @@ pub(crate) fn sprite_quad() -> Mesh {
     mesh
 }
 
-/// Half width `USize · DrawScale · DrawScale3D.X / 2`, half height the same with `.Y`. Both sides take
-/// the texture's `USize`, so a non-square texture draws square, as in retail.
+/// Half width `USize * DrawScale * DrawScale3D.X / 2`, half height the same with `.Y`. Both use the texture's
+/// `USize`, so a non-square texture draws square, as in retail.
 fn face_sprites(views: Query<&SceneView>, mut sprites: Query<(&SpriteLook, &FollowActor, &mut Transform)>) {
     let Some(view) = views.iter().next() else { return };
     for (look, follow, mut transform) in &mut sprites {

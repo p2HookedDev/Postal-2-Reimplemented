@@ -38,7 +38,6 @@ fn box_triangle(start: Vector, delta: Vector, extent: Vector, tri: [[f32; 3]; 3]
         let low = projected.iter().copied().fold(f32::INFINITY, f32::min) - reach;
         let high = projected.iter().copied().fold(f32::NEG_INFINITY, f32::max) + reach;
         let speed = axis.dot(delta);
-        // Motion under 1e-9 along the axis's unit direction is no motion: `speed` is that motion times the axis's length.
         if speed * speed < 1e-18 * length_squared {
             if low > 0.0 || high < 0.0 {
                 return None;
@@ -78,12 +77,10 @@ fn swept_bounds(start: Vector, end: Vector, extent: Vector) -> (Vector, Vector) 
     ([0, 1, 2].map(|i| start[i].min(end[i]) - extent[i]).into(), [0, 1, 2].map(|i| start[i].max(end[i]) + extent[i]).into())
 }
 
-/// Whether the triangle's own box reaches into the box from `min` to `max`.
 pub fn triangle_reaches(min: Vector, max: Vector, tri: &[[f32; 3]; 3]) -> bool {
     (0..3).all(|i| tri.iter().any(|p| p[i] >= min[i]) && tri.iter().any(|p| p[i] <= max[i]))
 }
 
-/// Of hits at the same time, the first mesh's and in it the lowest triangle's wins.
 pub fn mesh_box_check<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>, start: Vector, end: Vector, extent: Vector) -> Option<Hit> {
     let (min, max) = swept_bounds(start, end, extent);
     let delta = end - start;

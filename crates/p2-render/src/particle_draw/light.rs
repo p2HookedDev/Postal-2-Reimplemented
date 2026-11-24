@@ -16,11 +16,8 @@ use crate::view::ShownScene;
 
 const LAMP_RECHECK_UNITS: f32 = 16.0;
 const LAMP_RECHECK_FRAMES: u8 = 30;
-/// A lamp's fitting often holds it inside its own collision, so the wall test stops this short of it.
 const LAMP_CLEARANCE: f32 = 16.0;
 
-/// An actor's light for lit sprites under modern graphics: the `emitter_light` at the emitter and its lamps' share
-/// (`lamps_shown`), where and how many frames ago they were summed, and this frame's share of the script lights.
 pub(crate) struct ActorLight {
     lamp_light: Vec3,
     lamps_alone: Vec3,
@@ -38,7 +35,6 @@ impl Default for ActorLight {
 }
 
 impl ActorLight {
-    /// The two lights of the emitters' header records: the emitter's, and its lamps' share alone.
     pub(crate) fn header(&self) -> [Vec3; 2] {
         [self.lamp_light + self.fire_light, self.lamps_alone + self.fire_light]
     }
@@ -58,14 +54,13 @@ pub struct ParticleLights<'w, 's> {
 }
 
 impl ParticleLights<'_, '_> {
-    /// Whether this frame lights the emitters, and whether the script lights count too.
     pub(crate) fn wanted(&self, settings: Option<&Settings>) -> Option<LitBy> {
         let level = |name: &str| settings.map_or(0, |settings| settings.modern_level(name));
         (self.facts.in_play && level(MODERN_PARTICLE_LIGHT) > 0).then(|| if level(MODERN_FIRE_LIGHT) > 0 { LitBy::ScriptLightsToo } else { LitBy::Lamps })
     }
 
-    /// Takes the actor's slot of this frame: an actor drawn last frame gets one sum at its place, again when it moves or
-    /// on a slow rota. A lamp a wall hides adds nothing. The script lights are read every frame.
+    /// Takes the actor's slot of this frame: an actor drawn last frame gets one sum at its place, again when it moves
+    /// or on a slow rota. A lamp a wall hides adds nothing. The script lights are read every frame.
     pub(crate) fn follow(&self, light: &mut ActorLight, slot: &DrawnActor, glow: Option<LitBy>) {
         let drawn_before = std::mem::replace(&mut light.drawn_before, slot.drawn);
         let Some(glow) = glow.filter(|_| drawn_before) else { return };

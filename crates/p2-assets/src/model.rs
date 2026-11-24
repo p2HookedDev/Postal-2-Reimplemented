@@ -49,7 +49,6 @@ pub struct BspNode {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BspSurface {
-    /// Object reference to the material (0 = none).
     pub material: i32,
     pub poly_flags: u32,
     pub base: usize,
@@ -95,7 +94,6 @@ pub struct BspSection {
     pub material: i32,
     pub num_nodes: i32,
     pub poly_flags: u32,
-    /// Index into [`Model::light_map_textures`] (-1 = none).
     pub light_map_texture: i32,
 }
 
@@ -157,7 +155,6 @@ pub mod poly_flags {
     pub const MASKED: u32 = 0x0000_0002;
     pub const TRANSLUCENT: u32 = 0x0000_0004;
     pub const TWO_SIDED: u32 = 0x0000_0100;
-    /// Not lit (sky and cloud surfaces): drawn without a light map and without dynamic light passes.
     pub const UNLIT: u32 = 0x0040_0000;
 }
 
@@ -256,7 +253,6 @@ pub fn read_polys(pkg: &Package, file: &[u8], export: &Export) -> Result<Vec<Pol
 }
 
 impl LightMap {
-    /// Lumel coordinates of (x, y, z, w) · `world_to_light_map` (columns 0 and 1): w is 1 for a point, 0 for a direction.
     pub fn lumel(&self, [x, y, z]: [f32; 3], w: f32) -> [f32; 2] {
         let m = &self.world_to_light_map;
         [x * m[0] + y * m[4] + z * m[8] + w * m[12], x * m[1] + y * m[5] + z * m[9] + w * m[13]]
@@ -288,7 +284,6 @@ impl LightMapTexture {
 }
 
 impl Model {
-    /// Mip 0 of each light map atlas as RGBA.
     pub fn light_map_atlases(&self) -> Vec<Option<(u32, u32, Vec<[u8; 4]>)>> {
         self.light_map_textures
             .iter()

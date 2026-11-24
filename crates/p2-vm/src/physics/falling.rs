@@ -7,8 +7,6 @@ use super::{
     MoveHit, VolumeProps, horizontal_size, substep, two_wall_adjust,
 };
 
-/// The velocity at the middle of a fall step: `lift` (buoyancy over mass) takes its share off the acceleration, gravity
-/// included, and `fluid_friction` slows what the actor already had.
 pub(crate) fn fall_velocity(old: Vector, acceleration: Vector, tick: f32, lift: f32, fluid_friction: f32) -> Vector {
     (acceleration * ((1.0 - lift) * 0.5 * tick)) + (old * (1.0 - fluid_friction * tick))
 }

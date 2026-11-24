@@ -24,8 +24,6 @@ impl<L: LoaderRef> Vm<L> {
             && !self.is_based_on(other, actor)
     }
 
-    /// Begins and ends touches for `actor` where it stands; both blocking, they bump instead. Both actors
-    /// get the event, `actor` first. An unchanged touched set writes nothing and builds no lists.
     pub fn update_touching(&mut self, actor: ObjectId) -> Result<(), Error> {
         let mut now = self.hash.spare_actors.pop().unwrap_or_default();
         self.touched_now(actor, &mut now);
@@ -71,7 +69,6 @@ impl<L: LoaderRef> Vm<L> {
     fn retouch(&mut self, actor: ObjectId, now: &[ObjectId]) -> Result<(), Error> {
         let mut before = self.hash.spare_actors.pop().unwrap_or_default();
         before.extend(self.store.objects_of(actor, Prop::Touching).flatten());
-        // Retail's order: `EndTouch` the ones left, then `BeginTouch` the new ones.
         for other in missing_from(&before, now) {
             self.end_touch(actor, other)?;
         }
@@ -185,7 +182,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// After the new flags are set: only collision turned on from off touches.
     pub(crate) fn set_collision_after(&mut self, actor: ObjectId, was: bool, now: bool) -> Result<(), Error> {
         if !was && now {
             self.touch_overlapped(actor)?;

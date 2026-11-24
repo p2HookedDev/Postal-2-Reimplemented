@@ -1,6 +1,6 @@
 // Photo mode: the game pauses and the view moves to a free camera near the player. The player, his controller's
-// rotation and his saved settings are never changed; leaving puts the view back as it was.
-// While the photo menu is shown the mouse works the menu and the movement keys still fly; H hides it for the mouse.
+// rotation and his saved settings are never changed; leaving puts the view back as it was. While the photo menu
+// is shown the mouse works the menu and the movement keys still fly; H hides it for the mouse.
 class ModernPhotoMode extends Interaction;
 
 const KeyPath = "ini:Engine.Engine.RenderDevice";
@@ -25,10 +25,8 @@ const GridAlpha = 110;
 // Canvas styles by number, as retail's classes outside Actor write them: normal and alpha blended.
 const StyleNormal = 1;
 const StyleAlpha = 5;
-// The picture is asked for a few frames after the menu and hint went, so the frame it captures no longer has them.
 const ShotDelayFrames = 2;
 const HintHideTime = 0.3;
-// The root window's fancy medium font, the size of the retail menus' help line.
 const HintFontIndex = 5;
 
 var byte                PhotoKey;
@@ -248,8 +246,8 @@ function Close()
 		PC.SetPause(false);
 }
 
-// The photo rows start from the picture the player plays with and the rest from neutral; the photo keys are saved,
-// so this runs on every open.
+// The photo rows start from the picture the player plays with and the rest from neutral; the photo keys are
+// saved, so this runs on every open.
 function ResetPicture()
 {
 	local int i;
@@ -273,7 +271,6 @@ function ResetPicture()
 	Bars = 0;
 }
 
-// The root window would pause or resume the game on its own when a menu shows or hides; photo mode owns the pause.
 function ShowPhotoMenu()
 {
 	local ShellRootWindow Root;
@@ -328,7 +325,6 @@ function TakePhoto()
 	ShotFrames = 0;
 }
 
-// Back to the player's eyes, looking level the way he faces.
 function ResetCamera()
 {
 	local PlayerController PC;
@@ -343,7 +339,6 @@ function ResetCamera()
 	Camera.SetRotation(R);
 }
 
-// One trace along the view; nothing hit focuses as far as the lens goes.
 function FocusOnCenter()
 {
 	local vector HitLocation, HitNormal, Start;
@@ -364,7 +359,6 @@ function FocusOnCenter()
 		WriteKey("ModernPhotoBlur", string(BlurOnFocus));
 }
 
-// Degrees around the player from the way he faces, 0 in front of him.
 function int OrbitDegrees()
 {
 	local vector Offset;
@@ -382,7 +376,6 @@ function int OrbitDegrees()
 	return Nearest(float(Yaw) * 360.0 / 65536.0);
 }
 
-// Keeps the camera's distance and height from the player and turns it to look at him.
 function SetOrbit(int Degrees)
 {
 	local Pawn P;
@@ -432,7 +425,6 @@ function ClearHeld()
 	bFast = false;
 }
 
-// Movement follows the player's own bindings; tilt and speed keys are fixed. True when the key flies the camera.
 function bool Hold(EInputKey Key, bool bDown)
 {
 	local string Binding;
@@ -506,7 +498,6 @@ function Turn(EInputKey Key, float Delta)
 	Camera.SetRotation(R);
 }
 
-// Runs while paused. Time dilation is divided out so the camera moves on real time.
 function Tick(float DeltaTime)
 {
 	local PlayerController PC;
@@ -560,7 +551,6 @@ function Tick(float DeltaTime)
 	Camera.SetRotation(R);
 }
 
-// Black bars across the top and bottom when the screen is taller than the chosen shape; 0 without them.
 function float BarHeight(Canvas Canvas)
 {
 	if (Bars <= 0 || Canvas.ClipY <= 0 || Canvas.ClipX / Canvas.ClipY >= BarRatios[Bars])
@@ -578,7 +568,6 @@ function DrawBars(Canvas Canvas, float Height)
 	Canvas.DrawRect(Texture'UWindow.WhiteTexture', Canvas.ClipX, Height);
 }
 
-// Rule of thirds inside the frame the bars leave.
 function DrawGrid(Canvas Canvas, float Top)
 {
 	local float Height;

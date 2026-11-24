@@ -33,14 +33,11 @@ impl Plugin for MoverSightPlugin {
     }
 }
 
-/// The movers' meshes an active 3D camera drew this frame.
 #[derive(Resource, Default)]
 pub struct MoversSeen {
-    /// Sorted, as the engine binary-searches it.
     pub drawn: Vec<Entity>,
 }
 
-/// Whether the device culls on the GPU; Bevy knows it only in the render world, from its first render frame.
 #[derive(Resource, Default, PartialEq)]
 struct GpuCulls(bool);
 
@@ -74,7 +71,6 @@ struct Eye {
 struct Cascade {
     frustum: Frustum,
     layers: RenderLayers,
-    /// The view the cascade belongs to, where its visibility ranges are measured from.
     eye: Option<Vec3A>,
 }
 
@@ -95,7 +91,6 @@ enum Sight {
     Neither,
 }
 
-/// Bevy's own camera and cascade tests, with their flags.
 fn sight(mover: &MoverBounds, eyes: &[Eye], cascades: &[Cascade]) -> Sight {
     if !mover.inherited.get() {
         return Sight::Neither;

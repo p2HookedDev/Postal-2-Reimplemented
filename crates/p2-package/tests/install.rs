@@ -44,8 +44,6 @@ fn bad_reference(pkg: &Package) -> Option<String> {
         .map(|(what, index)| format!("{what} {index} out of range"))
 }
 
-/// Known exception: `SoundThing` actors in maps store a struct tag whose size is 2 bytes short, so size-based framing
-/// fails. Needs declaration-driven parsing.
 fn bad_object(pkg: &Package, data: &[u8]) -> Option<String> {
     pkg.exports
         .iter()

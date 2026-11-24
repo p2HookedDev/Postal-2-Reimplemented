@@ -30,7 +30,8 @@ impl Plugin for PreprocessReusePlugin {
     }
 }
 
-// Every buffer id, bound size, offset and dispatch count Bevy's system reads; its bind groups and counts are a function of these alone.
+// Every buffer id, bound size, offset and dispatch count Bevy's system reads; its bind groups and counts
+// depend on these alone.
 #[expect(clippy::too_many_arguments, reason = "the condition reads every input of the system it guards")]
 fn preprocess_inputs_changed(
     views: Query<(Entity, &ExtractedView)>,

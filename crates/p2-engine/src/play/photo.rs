@@ -1,6 +1,3 @@
-//! Photo mode's game side: what the script's photo mode settings mean to the VM, and the screenshot request handed to
-//! the drawing side.
-
 use bevy::ecs::prelude::{MessageWriter, ResMut};
 use p2_vm::{LoaderRef, ObjectId, Prop, Vm, ini_truthy};
 
@@ -19,7 +16,6 @@ pub(crate) fn clear_photo_active<L: LoaderRef>(vm: &mut Vm<L>) {
     }
 }
 
-/// The player's pawn while photo mode is open with its hide row set.
 pub(crate) fn photo_hidden_pawn<L: LoaderRef>(vm: &mut Vm<L>) -> Option<ObjectId> {
     if !photo_active(vm) || !vm.get_command(MODERN_PHOTO_HIDE_PLAYER).is_ok_and(|value| ini_truthy(&value)) {
         return None;

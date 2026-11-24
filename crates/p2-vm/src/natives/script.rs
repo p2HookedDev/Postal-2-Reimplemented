@@ -163,7 +163,6 @@ pub(super) fn state_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: O
     let value = match native {
         Native::GotoState => {
             if let Some(this) = this {
-                // An omitted state is the current one (`GotoState(, '')`): the code goes to the label in that state.
                 let state = if matches!(args.first(), Some(Value::Map)) { vm.state_name(this) } else { name_arg(args, 0) };
                 vm.goto_state(this, state, name_arg(args, 1))?;
             }

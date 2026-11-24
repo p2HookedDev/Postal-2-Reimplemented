@@ -4,15 +4,11 @@ use p2_assets::pose::Frame;
 
 use super::*;
 
-/// The drawn state of the game. The view, every actor's place, the channel times and the ragdoll bones a frame shows
-/// all come from here, at the one shown time of its clock: nothing drawn keeps a glide or a clock of its own.
 pub(crate) struct Shown {
     pub(crate) clock: TickClock,
     glide: Glide,
     pub(crate) places: Places,
     view_from: Option<[(Vector, Rotator); 2]>,
-    /// Per posed actor and channel: the animation (its address) and the sequence at the tick before the newest, the
-    /// time shown when the newest tick came and that tick's time.
     pose_from: FxHashMap<ObjectId, Vec<ChannelFrom>>,
     ragdoll_from: FxHashMap<ObjectId, [Vec<Frame>; 2]>,
 }
@@ -31,12 +27,10 @@ impl Default for Shown {
 }
 
 impl Shown {
-    /// A frame `real_delta` seconds after the one before: the shown time moves on.
     pub(in crate::play) fn frame(&mut self, real_delta: f32) {
         self.glide = self.clock.frame(real_delta);
     }
 
-    /// The tick `new` came after `old`: what each thing shows now is where its way to `old` starts.
     pub(super) fn tick(&mut self, old: &VmFrame, new: &VmFrame, actors: &FxHashMap<ObjectId, ActorFrame>, landed: &mut FxHashSet<ObjectId>) {
         let glide = self.glide;
         self.places.tick(glide, actors, landed);
@@ -68,7 +62,6 @@ impl Shown {
         self.glide = self.clock.glide();
     }
 
-    /// The view on its way to `to`, the newest tick's.
     pub(in crate::play) fn view(&self, to: (Vector, Rotator)) -> (Vector, Rotator) {
         self.view_from.map_or(to, |[from, mid]| self.glide.pick(from, mid, to, glided))
     }
@@ -77,8 +70,6 @@ impl Shown {
         self.places.shown(actor, now, self.glide)
     }
 
-    /// The time to show channel `index` of the actor's pose at: on its way from the last tick's while both play the
-    /// same sequence forward, across a loop's wrap too.
     pub fn channel_time(&self, actor: ObjectId, index: usize, channel: &ChannelPose) -> f32 {
         glided_time(self.pose_from.get(&actor).and_then(|from| from.get(index)), ChannelTime::of(channel), self.glide)
     }

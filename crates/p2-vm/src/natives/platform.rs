@@ -2,7 +2,6 @@ use crate::native_id::Native;
 use crate::{Error, HostCommand, LoaderRef, ObjectId, Prop, Value, Vm};
 use super::{bool_arg, int_arg, milliseconds_since_2000, str_arg};
 
-/// Indexed by `ESocialNetwork`.
 const SOCIAL_URLS: [&str; 3] = ["https://www.facebook.com/rwsstudiosllc", "https://twitter.com/RWSstudios", "http://www.runningwithscissors.com/"];
 
 pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectId>, args: &[Value]) -> Result<Option<Value>, Error> {
@@ -13,7 +12,6 @@ pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this
         }
         Native::IsDemoBuild | Native::PlatformIsSteamDeck | Native::PlatformIsMacOS | Native::PlatformIsUnix | Native::IsSteamBuild => Value::Bool(false),
         Native::SteamOwnsDLC | Native::SteamOwnsGame => Value::Bool(u32::try_from(int_arg(args, 0)).is_ok_and(|app| vm.options.steam_apps.contains(&app))),
-        // Retail opens the store page in the Steam overlay; ours asks Steam to open it.
         Native::SteamViewStorePage => {
             vm.host.commands.push(HostCommand::OpenUrl(format!("steam://store/{}", int_arg(args, 0))));
             return Ok(None);

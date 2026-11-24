@@ -14,8 +14,9 @@ use super::{PendingAssets, SceneAssets};
 use crate::level_collision::mean_albedo;
 use crate::scene::{MaterialImages, ModelView};
 
-/// Shared by the threads that build a scene: each entry is made once, by the first thread that asks; another thread
-/// asking meanwhile waits for it. Entries only point down (material, source, detail or specular), so no two waits cross.
+/// Shared by the threads that build a scene: each entry is made once, by the first thread that asks; another
+/// thread asking meanwhile waits for it. Entries only point down (material, source, detail or specular), so no
+/// two waits cross.
 #[derive(Default)]
 pub struct MaterialCache {
     cache: Mutex<HashMap<(PackageId, i32), Arc<OnceLock<Option<MaterialImages>>>>>,
@@ -74,8 +75,8 @@ pub fn projector_image(game: &mut Game, add: impl FnOnce(Image) -> Handle<Image>
 
 pub struct SwitchImage {
     pub image: AssetId<Image>,
-    /// The switch itself ends at this image, so its surfaces take all of a new material (`restyle_switched`). A material
-    /// around the switch merged its own state into the walk's: those surfaces only get the new image.
+    /// The switch ends at this image, so its surfaces take all of a new material. A material around the switch
+    /// merged its own state into the walk, so those surfaces only get the new image.
     pub whole: bool,
     pub shown: RenderState,
 }

@@ -18,8 +18,6 @@ impl<K> Default for Coronas<K> {
 }
 
 impl<K: Copy + PartialEq> Coronas<K> {
-    /// Every corona dims by `delta` and is dropped below 0; a candidate `clear` says the eye sees
-    /// brightens by 2 · `delta` up to 1, or takes the first free slot. Seen it lights over 1/3 s.
     pub fn step(&mut self, delta: f32, candidates: impl IntoIterator<Item = K>, mut clear: impl FnMut(K) -> bool) {
         for slot in &mut self.slots {
             if let Some((_, bright)) = slot {

@@ -33,8 +33,6 @@ pub enum SaveError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveGame {
     pub map: String,
-    /// The level URL's options (`Game=...`): the engine saves its level with its URL, so a loaded game travels on
-    /// as the same game.
     pub options: Vec<String>,
     names: Vec<String>,
     externals: Vec<(String, String)>,

@@ -1,10 +1,6 @@
-//! A storage buffer of records the draws read at their `MeshTag`, one slot each.
-
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::render::storage::ShaderBuffer;
 
-/// Slots given back are taken first, then ones never used. It only doubles: a new byte size makes Bevy build a new GPU
-/// buffer.
 pub(crate) struct SlotBuffer<T> {
     handle: Handle<ShaderBuffer>,
     records: Vec<T>,
@@ -42,7 +38,6 @@ impl<T: bytemuck::NoUninit + Default + PartialEq> SlotBuffer<T> {
         }
     }
 
-    /// Made in the assets the first time, so a material bound to it never meets Bevy's one-byte stand-in.
     pub(crate) fn upload(&mut self, buffers: &mut Assets<ShaderBuffer>) {
         if !std::mem::take(&mut self.dirty) {
             return;

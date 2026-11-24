@@ -5,8 +5,8 @@ use bevy::transform::components::Transform;
 use p2_assets::SkeletalMesh;
 use crate::coords::{AXIS_SWAP, to_bevy, unreal_to_bevy};
 
-/// Mesh-space matrices (Unreal space), parents before children. As in the engine, the root's quaternion is used as
-/// stored and every other bone's conjugated.
+/// Mesh-space matrices (Unreal space), parents before children. As in the engine, the root's quaternion is used
+/// as stored and every other bone's conjugated.
 pub fn bone_matrices(parents: &[usize], local: &[([f32; 4], [f32; 3])]) -> Vec<Mat4> {
     scaled_bone_matrices(parents, local, |_| 1.0)
 }
@@ -29,7 +29,6 @@ pub fn scaled_bone_matrices_into(parents: &[usize], local: &[([f32; 4], [f32; 3]
     }
 }
 
-/// The inverse bind poses and the bind transforms, in bone order.
 pub fn skin_bind(mesh: &SkeletalMesh) -> (Vec<Mat4>, Vec<Transform>) {
     let binds = skin_bind_matrices(mesh);
     (binds.iter().map(|bind| AXIS_SWAP * bind.inverse() * AXIS_SWAP).collect(), binds.into_iter().map(unreal_to_bevy).collect())
@@ -56,8 +55,6 @@ pub fn skin_points(mesh: &SkeletalMesh, inverse_bind: &[Mat4], pose: &[Mat4]) ->
         })
         .collect()
 }
-/// Index order is kept, like static meshes.
-/// The meshes stay in the main world too, so animation can move them.
 pub fn skeletal_mesh_to_meshes(mesh: &SkeletalMesh, gpu_skin: bool) -> Vec<(Mesh, u16)> {
     let position = |point: u32| mesh.positions.get(point as usize).copied().unwrap_or_default();
     let mut point_normals = vec![Vec3::ZERO; mesh.positions.len()];

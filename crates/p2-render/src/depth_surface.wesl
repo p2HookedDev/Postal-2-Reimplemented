@@ -1,6 +1,3 @@
-// The surfaces the depth prepass holds, for compute passes that land things on them. Matrices come in apart rather
-// than the whole view, so a call does not copy the view uniform.
-
 fn world_at(depth: texture_depth_2d, world_from_clip: mat4x4<f32>, pixel: vec2<i32>, size: vec2<f32>) -> vec3<f32> {
     let uv = (vec2<f32>(pixel) + 0.5) / size;
     let clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, textureLoad(depth, pixel, 0), 1.0);
@@ -12,7 +9,6 @@ fn eye_distance(view_from_world: mat4x4<f32>, p: vec3<f32>) -> f32 {
     return -(view_from_world * vec4(p, 1.0)).z;
 }
 
-// Facing the eye; the eye's way where the neighbours give no slope.
 fn normal_at(depth: texture_depth_2d, world_from_clip: mat4x4<f32>, eye: vec3<f32>, pixel: vec2<i32>, size: vec2<f32>, surface: vec3<f32>) -> vec3<f32> {
     let across = world_at(depth, world_from_clip, pixel + vec2(1, 0), size) - world_at(depth, world_from_clip, pixel - vec2(1, 0), size);
     let down = world_at(depth, world_from_clip, pixel + vec2(0, 1), size) - world_at(depth, world_from_clip, pixel - vec2(0, 1), size);
@@ -22,7 +18,6 @@ fn normal_at(depth: texture_depth_2d, world_from_clip: mat4x4<f32>, eye: vec3<f3
     return select(n, -n, dot(n, to_eye) < 0.0);
 }
 
-// `p` pulled along its line from the eye onto the surface's depth, then `lift` off it.
 fn on_surface(view_from_world: mat4x4<f32>, eye: vec3<f32>, p: vec3<f32>, surface: vec3<f32>, n: vec3<f32>, lift: f32) -> vec3<f32> {
     return eye + (p - eye) * (eye_distance(view_from_world, surface) / eye_distance(view_from_world, p)) + n * lift;
 }

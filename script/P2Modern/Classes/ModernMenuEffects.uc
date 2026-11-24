@@ -1,4 +1,5 @@
-// Picture effects and colour. These are taste, not quality: no preset writes them, and changing one keeps the preset.
+// Picture effects and colour. These are taste, not quality: no preset writes them, and changing one keeps the
+// preset.
 class ModernMenuEffects extends ModernMenuPage;
 
 function CreateMenuContents()

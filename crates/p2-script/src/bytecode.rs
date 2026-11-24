@@ -1,5 +1,5 @@
-//! Script bytecode decoded into expression trees. The script size counts bytes in memory (references
-//! and names take 4 each; compact on disk), and jump and case offsets are in-memory offsets.
+//! Script bytecode decoded into expression trees. The script size counts bytes in memory (references and names
+//! take 4 each; compact on disk), and jump and case offsets are in-memory offsets.
 
 use std::marker::PhantomData;
 
@@ -13,9 +13,9 @@ const END_FUNCTION_PARMS: u8 = 0x16;
 const DEBUG_INFO: u8 = 0x42;
 /// Debug info version that the engine treats as part of the preceding call.
 const DEBUG_INFO_VERSION: i32 = 100;
-/// Deepest expression nesting decoded. A nesting token takes one byte, so a damaged script could otherwise recurse once
-/// per byte and overflow the stack. Well above source code, which adds a level per term of a `$` or `||` chain (tens of
-/// levels; the deepest retail expression is unverified), and within the game's 64 MB stacks even in a debug build.
+/// Deepest expression nesting decoded: a nesting token is one byte, so a damaged script could recurse once per
+/// byte and overflow the stack. Well above real scripts (tens of levels for long `$` or `||` chains) and within
+/// the game's 64 MB stacks even in a debug build.
 const MAX_EXPR_DEPTH: usize = 512;
 
 /// `EX_PrimitiveCast` kinds from 0x39, in retail's table order (0x46 is unused).
@@ -59,7 +59,6 @@ pub fn cast_name(kind: u8) -> Option<&'static str> {
     CASTS.get(usize::from(kind.checked_sub(0x39)?)).copied().filter(|name| !name.is_empty())
 }
 
-/// One top-level expression and its in-memory offset (what jumps and cases refer to).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Statement {
     pub offset: u32,
@@ -75,7 +74,6 @@ pub enum Callee {
     Native(u16),
 }
 
-/// A bytecode expression. Object references and names index the script's package tables.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     LocalVariable(i32),
@@ -95,7 +93,6 @@ pub enum Expr {
     Let { target: Box<Self>, value: Box<Self> },
     DynArrayElement { index: Box<Self>, array: Box<Self> },
     New { outer: Box<Self>, name: Box<Self>, flags: Box<Self>, class: Box<Self> },
-    /// `skip`: bytes to skip when the object is `None`; `size`: result size.
     ClassContext { object: Box<Self>, skip: u16, size: u8, member: Box<Self> },
     MetaCast { class: i32, value: Box<Self> },
     LetBool { target: Box<Self>, value: Box<Self> },
@@ -104,7 +101,6 @@ pub enum Expr {
     Skip { size: u16, value: Box<Self> },
     Context { object: Box<Self>, skip: u16, size: u8, member: Box<Self> },
     ArrayElement { index: Box<Self>, array: Box<Self> },
-    /// Parameters without the closing `EX_EndFunctionParms`; debug info attached to the call is dropped.
     Call { callee: Callee, args: Vec<Self> },
     IntConst(i32),
     FloatConst(f32),
@@ -137,9 +133,9 @@ pub enum Expr {
     DebugInfo { version: i32, line: i32, position: i32, opcode: String },
     DelegateProperty(usize),
     LetDelegate { target: Box<Self>, value: Box<Self> },
-    /// A reference an interpreter resolves once: `expr` as decoded (a local, instance or default
-    /// variable, struct member, name constant, call other than a delegate call, or dynamic / meta cast), `link` its
-    /// slot in the function's link table. Only [`decode_script_linked`] produces it.
+    /// A reference an interpreter resolves once: `expr` as decoded (a variable, struct member, name constant,
+    /// non-delegate call, or dynamic or meta cast), `link` its slot in the function's link table.
+    /// Only [`decode_script_linked`] produces it.
     Linked { link: u32, expr: Box<Self> },
 }
 
@@ -174,7 +170,6 @@ fn decode<B: Build>(pkg: &Package, r: &mut Reader, size: u32, links: Option<u32>
     Ok(decoder.links.unwrap_or(0))
 }
 
-/// What decoding makes of an expression: the tree, or nothing for a walk that only measures the script.
 trait Build {
     type Node;
     fn node(make: impl FnOnce() -> Expr) -> Self::Node;
@@ -205,7 +200,6 @@ impl Build for Walk {
 
     fn node(_: impl FnOnce() -> Expr) {}
 
-    /// Never called: a walk makes no expressions.
     fn expr((): ()) -> Expr {
         Expr::Nothing
     }
@@ -253,13 +247,11 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
         Ok(self.r.f32()?)
     }
 
-    /// Object reference: compact index on disk, pointer in memory.
     fn object(&mut self) -> Result<i32, Error> {
         self.code += 4;
         Ok(self.r.compact()?)
     }
 
-    /// Name: compact index on disk, 4 bytes in memory. Returns the name-table index.
     fn name(&mut self) -> Result<usize, Error> {
         self.code += 4;
         Ok(self.pkg.read_name(self.r)?)
@@ -275,7 +267,6 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
         Ok(self.r.bytes(end - start)?)
     }
 
-    /// Latin-1 text up to a 0 byte, without it.
     fn c_string(&mut self) -> Result<&'a [u8], Error> {
         let start = self.r.pos();
         while self.byte()? != 0 {}
@@ -305,7 +296,6 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
         Ok(if is_delegate { B::node(call) } else { self.link(call) })
     }
 
-    /// The expression's first token, and what was made of it.
     fn expr(&mut self) -> Result<(u8, B::Node), Error> {
         if self.depth >= MAX_EXPR_DEPTH {
             return Err(Error::TooDeep { limit: MAX_EXPR_DEPTH, offset: self.r.pos() });
@@ -341,7 +331,7 @@ mod tests {
     }
 
     const SCRIPT: &[u8] = &[
-        0x0f, 0x00, 0x40, 0x01, 0x1d, 1, 0, 0, 0, // Let: object reference as 2-byte compact index
+        0x0f, 0x00, 0x40, 0x01, 0x1d, 1, 0, 0, 0,
         0x04, 0x0b,
         0x70, 0x25, 0x16,
         0x0c, 0x00, 0, 0, 0, 0,

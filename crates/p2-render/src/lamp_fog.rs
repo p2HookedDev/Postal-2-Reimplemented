@@ -1,6 +1,6 @@
-//! Modern graphics: lamp-lit fog. Between the opaque and the see-through passes a half-size pass marches each view ray
-//! to its depth through the nearest lamps' light, and a full-size pass blurs that where depths agree and adds it to the
-//! frame. Lamps only, without shadows: the fog never darkens or greys, and the sun's rays stay the tone pass's.
+//! Lamp-lit fog: between the opaque and see-through passes, a half-size pass marches each view ray through
+//! the nearest lamps' light, and a full-size pass blurs it where depths agree and adds it to the frame.
+//! Lamps only, without shadows, so the fog never darkens or greys; the sun's rays stay in the tone pass.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -47,11 +47,9 @@ use crate::view::ShownScene;
 const LAMP_FOG_SHADER: Handle<Shader> = uuid_handle!("5d8c2f71-0e4b-4a96-b3d7-91f6c4a2e83d");
 const FOG_LAMPS: usize = 4;
 const STEPS: f32 = 16.0;
-/// How far along the view a lamp's fog is looked for, and how far a ray into the sky is marched.
 const VIEW_REACH: f32 = 4096.0;
 /// Without a shadow a lamp's fog would show through walls, so it reaches only this share of the lamp's range.
 const FOG_REACH: f32 = 0.6;
-/// At level 3 a ray through the middle of a lamp of range 750 gathers about a sixth of the lamp's colour.
 const DENSITY_PER_LEVEL: f32 = 6e-5;
 const MARCH_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 const ADD: BlendState = BlendState {
@@ -93,7 +91,7 @@ pub struct FogLamp {
     along: Vec4,
 }
 
-/// On a scene camera while lamp fog shows. As `lamp_fog.wesl` reads it.
+/// On a scene camera while lamp fog shows; laid out as `lamp_fog.wesl` reads it.
 #[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq, ExtractComponent)]
 #[extract_app(RenderApp)]
 #[extract_component_sync_target((Self, LampFogPipelineIds, PassUniformOffset<Self>, LampFogTexture))]
@@ -102,7 +100,6 @@ pub struct LampFog {
     lamps: [FogLamp; FOG_LAMPS],
     /// x the density a unit, y the lamps, z the steps, w the reach into the sky.
     look: Vec4,
-    /// The view's part of the target in pixels: corner in xy, size in zw.
     viewport: Vec4,
 }
 
@@ -114,7 +111,6 @@ struct FogSource {
     spot: Option<(Vec3, f32)>,
 }
 
-/// A lamp scored by its light at the eye and at the points of the view's line nearest to it and to its cone's middle.
 fn view_score(source: &FogSource, eye: Vec3, forward: Vec3) -> f32 {
     let reach = source.range * FOG_REACH;
     let on_view = |point: Vec3| eye + forward * (point - eye).dot(forward).clamp(0.0, VIEW_REACH);
@@ -123,15 +119,14 @@ fn view_score(source: &FogSource, eye: Vec3, forward: Vec3) -> f32 {
     light * source.color.element_sum()
 }
 
-/// The lamps whose fog the view shows, strongest first.
 fn pick_lamps(sources: &[FogSource], eye: Vec3, forward: Vec3) -> Vec<FogSource> {
     let mut scored: Vec<(f32, FogSource)> = sources.iter().map(|source| (view_score(source, eye, forward), *source)).filter(|(score, _)| *score > 0.0).collect();
     scored.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
     scored.into_iter().take(FOG_LAMPS).map(|(_, source)| source).collect()
 }
 
-/// The fog's density a unit: none without a lamp in reach, nor where the eye's zone is open to the sky and its sun
-/// outshines the strongest lamp (daylight would grey).
+/// The fog's density a unit: none without a lamp in reach, nor where the eye's zone is open to the sky and its
+/// sun outshines the strongest lamp (daylight would grey).
 fn fog_density(level: u8, open_to_sky: bool, sun: f32, strongest_lamp: Option<f32>) -> f32 {
     match strongest_lamp {
         Some(lamp) if level > 0 && !(open_to_sky && sun >= lamp) => f32::from(level) * DENSITY_PER_LEVEL,
@@ -139,7 +134,6 @@ fn fog_density(level: u8, open_to_sky: bool, sun: f32, strongest_lamp: Option<f3
     }
 }
 
-/// Which zones see the sky through a backdrop.
 fn sky_zones(model: &Model) -> Vec<bool> {
     let mut open = vec![false; model.zones.len()];
     for (index, node) in model.nodes.iter().enumerate() {
@@ -225,7 +219,6 @@ pub struct LampFogPipelineIds {
     composite: CachedRenderPipelineId,
 }
 
-/// The half-size march.
 #[derive(Component)]
 pub struct LampFogTexture(CachedTexture);
 

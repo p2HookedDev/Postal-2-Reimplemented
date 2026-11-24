@@ -35,7 +35,6 @@ pub struct MeshActor<'a> {
     pub location: Vector,
     pub rotation: Rotator,
     pub scale: Vector,
-    /// Subtracted from mesh vertices before scaling and rotation.
     pub pre_pivot: Vector,
     pub instance: i32,
     pub unlit: bool,

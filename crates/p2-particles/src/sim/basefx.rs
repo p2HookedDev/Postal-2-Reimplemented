@@ -59,9 +59,6 @@ pub(super) fn independent_origin(props: &EmitterProperties, owner: &super::Owner
 }
 
 impl Emitter {
-    /// Its particles stay; its slot count changes only with [`Self::reinitialize`] (as `MaxParticles` only matters to
-    /// `Initialize`), and `Disabled` stays as the simulation has it (scripts' toggles come through
-    /// `ParticleEmitter::set_disabled`).
     pub fn set_properties(&mut self, index: usize, props: EmitterProperties) {
         let Some(e) = self.emitters.get_mut(index) else { return };
         let disabled = e.props.disabled;

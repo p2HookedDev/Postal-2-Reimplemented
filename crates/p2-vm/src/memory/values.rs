@@ -68,8 +68,8 @@ impl MemLayouts {
         self.write(field.shape, field.dim, mem, field.word as usize, field.heap as usize, value);
     }
 
-    /// Converted to the shape's type: numbers to numbers, anything else of another kind to the zero value (as the engine's
-    /// memory holds what a typed copy leaves there).
+    /// Converted to the shape's type: numbers to numbers, anything else of another kind to the zero value (as the
+    /// engine's memory holds what a typed copy leaves there).
     pub(crate) fn write(&self, shape: Shape, dim: u32, mem: &mut Mem, word: usize, heap: usize, value: Value) {
         if dim > 1 {
             let (w, h) = self.size(shape);

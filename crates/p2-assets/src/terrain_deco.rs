@@ -31,8 +31,6 @@ pub struct TexelMap<'a, T> {
     pub texels: &'a [T],
 }
 
-/// Texture data a layer's maps point to. A map the layer names but that is `None` here (unsupported format,
-/// not loaded) samples as zero, as in the engine.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DecoMaps<'a> {
     pub density: Option<TexelMap<'a, u8>>,
@@ -174,7 +172,6 @@ impl Placing<'_> {
         let (v00, v10, v01, v11) = (v(gx, gy)?, v(gx + 1, gy)?, v(gx, gy + 1)?, v(gx + 1, gy + 1)?);
         let a = rng.next();
         let b = rng.next();
-        // A point in one of the two triangles split along v00-v11 (whatever the quad's EdgeTurn).
         let (base, e1, e2, k1, k2) =
             if a > b { (v10, v00 - v10, v11 - v10, 1.0 - a, b) } else { (v01, v00 - v01, v11 - v01, a, 1.0 - b) };
         let location: [f32; 3] = std::array::from_fn(|i| (base[i] + e1[i] * k1) + e2[i] * k2);

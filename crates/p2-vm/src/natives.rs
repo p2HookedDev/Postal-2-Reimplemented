@@ -64,8 +64,8 @@ pub(crate) fn iterator_outs(native: Option<Native>) -> &'static [usize] {
     }
 }
 
-/// An actor the loop body spawns, added at the list's end, is reached.
-/// For `ChildActors` and `BasedActors` this is (unverified).
+/// An actor the loop body spawns, added at the list's end, is reached (unverified for `ChildActors` and
+/// `BasedActors`).
 pub(crate) fn walks_actor_list(native: Option<Native>) -> Option<Native> {
     native.filter(|native| {
         matches!(native, Native::AllActors | Native::DynamicActors | Native::ChildActors | Native::BasedActors | Native::RadiusActors | Native::VisibleActors)
@@ -262,9 +262,9 @@ pub(crate) fn update_time<L: LoaderRef>(vm: &mut Vm<L>, level: ObjectId) {
     }
 }
 
-/// As the engine counts: the day of the month and every month up to and including the current one (30 days for April,
-/// June, September, November; February 29 when the years since 2000 divide by 4, else 28; others 31), and 366 or 365
-/// days for each year since 2000 alike.
+/// As the engine counts: the day of the month plus every month up to and including the current one (30 days for
+/// April, June, September, November; February 29 when the years since 2000 divide by 4, else 28; others 31),
+/// and 366 or 365 days for each year since 2000 alike.
 fn milliseconds_since_2000<L: LoaderRef>(vm: &mut Vm<L>, level: Option<ObjectId>) -> [f32; 3] {
     let [year, month, _, day, hour, minute, second, millisecond] = system_time();
     if let Some(level) = level {

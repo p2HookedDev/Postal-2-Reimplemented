@@ -15,8 +15,8 @@ import bevy_pbr::{render::{mesh_view_bindings::depth_prepass_texture, utils::int
 // In shadow map texels: the depth margin and the move along the normal.
 const SHADOW_BIAS: f32 = 1.0;
 const SHADOW_NORMAL_OFFSET: f32 = 1.5;
-// The radius of a shadow's soft edge in world units, the same in every level and cascade. A level whose texels are
-// wider than this takes the least radius its texels allow. Only the shadow mask pass takes the wider choices.
+// The radius of a shadow's soft edge in world units, the same in every level and cascade. A level whose texels
+// are wider takes the least radius its texels allow. Only the shadow mask pass takes the wider choices.
 @if(SHADOW_SOFTER)
 const SOFT_EDGE_UNITS: f32 = 8.0;
 @if(SHADOW_SOFT && !SHADOW_SOFTER)
@@ -26,7 +26,6 @@ const SOFT_EDGE_UNITS: f32 = 1.5;
 const SOFT_EDGE_LEAST_TEXELS: f32 = 0.75;
 const SOFT_EDGE_MOST_TEXELS: f32 = 8.0;
 const SOFT_EDGE_TAPS: i32 = 12;
-// Tap n unturned: sqrt((n + 0.5) / 12) out along the angle n times the golden angle, 2.3999632.
 const SOFT_EDGE_DISK: array<vec2<f32>, 12> = array<vec2<f32>, 12>(
     vec2(0.204124145, 0.000000000),
     vec2(-0.260699246, 0.238821907),
@@ -41,46 +40,37 @@ const SOFT_EDGE_DISK: array<vec2<f32>, 12> = array<vec2<f32>, 12>(
     vec2(0.396471272, -0.847236998),
     vec2(0.292982695, 0.934074127),
 );
-// A receiver plane steeper than this many texels of depth per texel is noise.
 const SHADOW_SLOPE_CAP_TEXELS: f32 = 16.0;
-// In a level's half widths from the eye, not from its centre, which jumps at each redraw: a level is used out to where
-// it surely holds the point, and blends into the next coarser one from `LEVEL_FADE_FROM`, as their shadows stand a
+// In a level's half widths from the eye, not its centre, which jumps at each redraw. A level is used out to
+// where it surely holds the point and blends into the next coarser one from here, as their shadows stand a
 // texel's bias apart.
 const LEVEL_FADE_FROM: f32 = 0.45;
 const LEVEL_USABLE: f32 = 0.75;
-// In world units: the most a shadow lookup moves along the normal, which a coarse level's wide texels would make a
-// visible shift of the whole shadow.
+// In world units: the most a shadow lookup moves along the normal; a coarse level's wide texels would otherwise
+// visibly shift the whole shadow.
 const SHADOW_NORMAL_OFFSET_MOST: f32 = 8.0;
-// In the outermost level's half widths from the eye: its shadows fade out over this range, inside what the level
-// holds wherever its stepped centre stands.
 const LAST_LEVEL_FADE_FROM: f32 = 0.55;
 const LAST_LEVEL_FADE_TO: f32 = 0.74;
-// The share of the movers' last cascade past which their shadows fade out.
 const MOVER_FADE_FROM: f32 = 0.8;
 const SUN_FACING_FADE: f32 = 0.05;
 const SKY_FACING_FADE: f32 = 0.1;
 const CONTACT_NEAR: f32 = 1024.0;
 const CONTACT_FAR: f32 = 2048.0;
-// Contact steps fall from the near count to the far one over these distances, where a march's result is hardly seen.
 const CONTACT_STEPS_FULL_TO: f32 = 256.0;
 const CONTACT_STEPS_FEW_FROM: f32 = 1024.0;
 const CONTACT_FEWEST_STEPS: f32 = 4.0;
-// In the sky level's texels: how far its four taps spread, which softens a roof's edge.
 const SKY_KERNEL_TEXELS: f32 = 2.0;
 // The sky left under a roof, standing for the bounce no light here carries (a guess, not seen in game).
 const ROOFED_SKY: f32 = 0.1;
 
-// The sun's cascade overlap, which also tells it from the fills when it draws no shadow map. Matches `modern.rs`.
+// The sun's cascade overlap, which also tells it from the fills when it draws no shadow map. Matches
+// `modern.rs`.
 const SUN_OVERLAP: f32 = 0.1;
 
-// A world-lit overlay, the first-person weapon, is magnified many times: its soft edges reach at least this far, in
-// more taps, turned by a pattern fixed to the mesh.
 const HELD_EDGE_LEAST_TEXELS: f32 = 2.75;
 const HELD_EDGE_TAPS: i32 = 20;
 const GOLDEN_ANGLE: f32 = 2.3999632;
 
-// How a surface reads the shadows. `offset` scales its moves off the surface: 1 on the world, 0 on a world-lit
-// overlay, which casts into no map; that one takes `sky`, the open sky picked once for it, and turns its taps by `seed`.
 struct ShadowLookup {
     offset: f32,
     sky: f32,
@@ -122,8 +112,8 @@ fn sun_index() -> u32 {
     return lights.n_directional_lights;
 }
 
-// The sun is spawned whenever the switch is on. Views it does not reach, the sky's and the first-person weapon's, keep
-// retail's light.
+// The sun is spawned whenever the switch is on. Views it does not reach, the sky's and the first-person
+// weapon's, keep retail's light.
 fn has_sun() -> bool {
     return sun_found(sun_index());
 }
@@ -132,7 +122,6 @@ fn sun_found(sun: u32) -> bool {
     return sun < lights.n_directional_lights;
 }
 
-// The cached levels exist only while the sun casts, and only views it reaches read them.
 fn levels_read(sun: u32) -> bool {
     return sun_found(sun) && casts_shadow(sun);
 }
@@ -141,7 +130,6 @@ fn view_z_of(position: vec4<f32>) -> f32 {
     return dot(vec4(view.view_from_world[0].z, view.view_from_world[1].z, view.view_from_world[2].z, view.view_from_world[3].z), position);
 }
 
-// The lowest sun shadow setting takes one hardware tap everywhere.
 fn sharp_filter() -> bool {
 @if(SHADOW_FILTER_METHOD_HARDWARE_2X2) {
     return false;
@@ -151,7 +139,6 @@ fn sharp_filter() -> bool {
 }
 }
 
-// Where a shadow is read: one of the sun's cascades in Bevy's array, or a cached level's tile in our atlas.
 struct ShadowSource {
     clip_from_world: mat4x4<f32>,
     texel_world: f32,
@@ -181,8 +168,8 @@ fn shadow_tap(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>, offset: vec
     return sample_shadow_map_hardware(uv + offset, at, i32(lights.directional_lights[shade.sun].depth_texture_base_index + shade.cascade));
 }
 
-// Contact hardening: the shadow's edge widens by this many world units for each unit between caster and receiver (the
-// sun's disc, made wider than the real one's 0.009 so the change shows), from a search of this many depth reads.
+// Contact hardening: the shadow's edge widens by this many world units per unit between caster and receiver
+// (wider than the real sun's 0.009 so the change shows).
 const SUN_SPREAD: f32 = 0.02;
 const BLOCKER_TAPS: i32 = 8;
 
@@ -198,8 +185,8 @@ fn raw_depth(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>) -> f32 {
     return textureLoad(directional_shadow_textures, texel, i32(lights.directional_lights[shade.sun].depth_texture_base_index + shade.cascade), 0);
 }
 
-// World units from the receiver to the casters found within `reach` of it, on average; 0 without one. A stored depth
-// above the receiver's (held against its slope) is nearer the sun.
+// World units from the receiver to the casters found within `reach`, on average; 0 without one.
+// A stored depth above the receiver's, held against its slope, is nearer the sun.
 @if(SHADOW_CONTACT_HARDENING)
 fn caster_gap(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>, depth: f32, slope: vec2<f32>, depth_per_unit: f32, reach: f32) -> f32 {
     var sum = 0.0;
@@ -219,7 +206,6 @@ fn caster_gap(atlas: LevelAtlas, shade: ShadowSource, uv: vec2<f32>, depth: f32,
     return sum / found / max(depth_per_unit, 1e-6);
 }
 
-// Sharp on purpose: a rim that settles most pixels, then a 3 x 3 texel filter in four bilinear taps.
 fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, normal: vec3<f32>, sharp: bool, lookup: ShadowLookup) -> f32 {
     let to_sun = shade.to_sun;
     let facing = dot(normal, to_sun);
@@ -250,7 +236,6 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
     var radius = clamp(SOFT_EDGE_UNITS / texel_world, least, SOFT_EDGE_MOST_TEXELS) * texel;
     var rim = radius + texel;
 @if(SHADOW_CONTACT_HARDENING) {
-    // The widest edge the gap could ask for settles the pixel first: wholly lit or wholly in shadow needs no search.
     if !held {
         rim = (SOFT_EDGE_MOST_TEXELS + 1.0) * texel;
     }
@@ -280,7 +265,6 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
         }
         return lit / f32(HELD_EDGE_TAPS);
     }
-    // A disk of taps turned by a pattern fixed to the screen, so the edge is grain that stands still, not bands.
     let clip = view.clip_from_world * vec4(position, 1.0);
     let pixel = (clip.xy / clip.w * 0.5 + 0.5) * view.viewport.zw;
     let turn = disk_turn(pixel);
@@ -292,8 +276,6 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
     return lit / f32(SOFT_EDGE_TAPS);
 }
 
-// The finest level holding the point, fading into the next one near its edge. Past the last level there is no shadow.
-// Each level is tested with two rows of its matrix; only the chosen pair is read whole.
 fn static_sun_map(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: ShadowLookup) -> f32 {
     if !levels_read(sun) {
         return 1.0;
@@ -367,9 +349,7 @@ fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: Shado
     if index >= (*light).num_cascades {
         return 1.0;
     }
-    // The sun's own cascades read no level.
     let atlas = LevelAtlas();
-    // In the farthest cascade a shadow is small on screen: one filtered tap.
     let last = (*light).num_cascades - 1u;
     var shadow = cascade_shadow(atlas, cascade_source(sun, index), position.xyz, normal, index < last && sharp_filter(), lookup);
     let next = index + 1u;
@@ -386,8 +366,8 @@ fn mover_sun_map(sun: u32, position: vec4<f32>, normal: vec3<f32>, lookup: Shado
     return shadow;
 }
 
-// How much of a short ray towards the sun is clear in the depth buffer. The jitter stays the same each frame: Bevy's
-// own changes per frame and shimmers without temporal smoothing.
+// How much of a short ray towards the sun is clear in the depth buffer. The jitter is fixed per pixel:
+// Bevy's changes per frame and shimmers without temporal smoothing.
 fn contact_clear(world_position: vec3<f32>, frag_coord: vec2<f32>, to_sun: vec3<f32>) -> f32 {
 @if(CONTACT_SHADOWS && DEPTH_PREPASS) {
     if contact_shadows_settings.linear_steps == 0u {
@@ -409,7 +389,6 @@ fn contact_clear(world_position: vec3<f32>, frag_coord: vec2<f32>, to_sun: vec3<
     return 1.0;
 }
 
-// The share of the sky straight above a point. The point moves off its surface first, so a wall's taps stay out of its own building.
 fn sky_open(source: LevelSource, sun: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
     if !levels_read(sun) {
         return 1.0;
@@ -433,7 +412,6 @@ fn sky_open(source: LevelSource, sun: u32, position: vec3<f32>, normal: vec3<f32
     return 1.0;
 }
 
-// x the sun's direct share, contact shadow in. y the sun map alone. z the sky left by what stands above the point.
 fn sun_seen(source: LevelSource, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
     return sun_seen_from(source, sun_index(), position, normal, frag_coord, world_lookup());
 }
@@ -442,7 +420,6 @@ fn sun_seen_from(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec
     return sun_faced(sun, normal, sun_held(source, sun, position, normal, frag_coord, lookup));
 }
 
-// `sun_seen_from` before its fades by how squarely the point faces the sun: what the screen pass holds for a pixel.
 fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>, lookup: ShadowLookup) -> vec3<f32> {
     var sky = lookup.sky;
     if !held_lookup(lookup) {
@@ -466,7 +443,6 @@ fn sun_held(source: LevelSource, sun: u32, position: vec4<f32>, normal: vec3<f32
     return vec3(direct, map, open);
 }
 
-// `held` faded by how squarely the point faces the sun; facing away, or with no sun, only its sky is left.
 fn sun_faced(sun: u32, normal: vec3<f32>, held: vec3<f32>) -> vec3<f32> {
     if sun >= lights.n_directional_lights {
         return vec3(0.0, 1.0, held.z);
@@ -478,13 +454,11 @@ fn sun_faced(sun: u32, normal: vec3<f32>, held: vec3<f32>) -> vec3<f32> {
     return vec3(held.x * saturate(facing / SUN_FACING_FADE), mix(1.0, held.y, saturate(facing / SKY_FACING_FADE)), held.z);
 }
 
-// From the sun's cascaded map alone; 1 without a shadowed sun in this view.
 fn sun_map_visibility(source: LevelSource, sun: u32, world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
     if sun >= lights.n_directional_lights || !casts_shadow(sun) {
         return 1.0;
     }
     let view_z = view_z_of(world_position);
-    // The sun's cascades hold movers only; the static world is in the cached levels.
     return min(static_sun_map(source, sun, world_position, normal, world_lookup()), shadows::fetch_directional_shadow(sun, world_position, normal, view_z, frag_coord));
 }
 

@@ -1,6 +1,5 @@
 use crate::ObjectId;
 
-/// Per-object engine state indexed by object id, which the store hands out in order and never reuses.
 #[derive(Debug)]
 pub(crate) struct ObjectTable<T> {
     slots: Vec<Option<T>>,
@@ -44,7 +43,6 @@ impl<T> ObjectTable<T> {
         self.slots.get_mut(id.0 as usize)?.take()
     }
 
-    /// Walks every slot: not for a per-frame path.
     pub(crate) fn count(&self) -> usize {
         self.slots.iter().filter(|slot| slot.is_some()).count()
     }

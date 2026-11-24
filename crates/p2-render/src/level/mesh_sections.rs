@@ -54,8 +54,8 @@ pub fn skeletal_sections<S: SceneAssets>(
 
 const MAX_JOINTS: usize = 256;
 
-/// The drawn meshes of a skeletal model, one a section. A mesh skinned on the CPU gets the retail mesh's points written
-/// into them, so only a GPU skinned one is smoothed.
+/// The drawn meshes of a skeletal model, one per section. CPU-skinned meshes get the original mesh's points
+/// written into them, so only GPU-skinned ones are smoothed.
 pub fn skeletal_draw_meshes(mesh: &SkeletalMesh, gpu_skin: bool, smoothing: u8) -> Vec<(Mesh, u16)> {
     let smoothed = (gpu_skin && smoothing > 0).then(|| smoothed_skeletal_mesh(mesh)).flatten();
     skeletal_mesh_to_meshes(smoothed.as_ref().unwrap_or(mesh), gpu_skin)

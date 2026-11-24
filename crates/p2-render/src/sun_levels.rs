@@ -1,5 +1,5 @@
-//! The cached sun levels as records and tiles of one image of our own: tiles of the shadow map's size, a few columns
-//! wide, and a row of records under them that `sun_levels.wesl` reads.
+//! The cached sun levels as tiles of one image of our own, a few shadow-map-sized columns wide,
+//! with a row of records under them that `sun_levels.wesl` reads.
 
 use bevy::app::{App, Plugin};
 use bevy::asset::{AssetId, Assets, Handle, uuid_handle};
@@ -31,17 +31,15 @@ use crate::sun_cache::SunCacheStale;
 
 pub(crate) const LEVEL_CASTER_SHADER: Handle<Shader> = uuid_handle!("e4a1c7d2-58b3-4f69-8c0e-2d71b9f4a635");
 
-/// Texels before the first record: the level count.
 pub const HEADER_TEXELS: usize = 1;
-/// The matrix in 0 to 15 by rows, texel size 16, kind 17, direction to the light 18 to 20, tile corner 21 and 22,
-/// tile side 23. Matches `sun_levels.wesl`.
+/// Matrix in texels 0 to 15 by rows, texel size 16, kind 17, direction to the light 18 to 20, tile corner 21 and
+/// 22, tile side 23. Matches `sun_levels.wesl`.
 pub const RECORD_TEXELS: usize = 24;
 const LEAST_COLUMNS: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SunLevelKind {
     Cached,
-    /// Looks straight down and tells a room from open sky.
     Sky,
 }
 
@@ -51,17 +49,14 @@ pub struct SunLevelRecord {
     pub clip_from_world: Mat4,
     pub texel_size: f32,
     pub direction_to_light: Vec3,
-    /// The level's view as Bevy would build its cascade view; not in the record row.
     pub world_from_view: Mat4,
     pub clip_from_view: Mat4,
 }
 
-/// Ordered from the finest level, so a level keeps its tile while the set of levels stays the same.
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct SunLevelFrame {
     pub records: Vec<SunLevelRecord>,
-    /// The one level drawn this frame, if any.
     pub drawing: Option<usize>,
     pub map_size: u32,
 }
@@ -74,7 +69,6 @@ pub struct AtlasLayout {
 }
 
 impl AtlasLayout {
-    /// The fewest columns that keep the image within the device's limit; `None` when no count does.
     pub fn choose(tiles: u32, tile_size: u32, max_dimension: u32) -> Option<Self> {
         let record_width = (HEADER_TEXELS + tiles as usize * RECORD_TEXELS) as u32;
         (LEAST_COLUMNS..=tiles.max(LEAST_COLUMNS))
@@ -89,7 +83,6 @@ impl AtlasLayout {
         self.tiles.div_ceil(self.columns)
     }
 
-    /// One record row under the tiles.
     pub fn size(&self) -> [u32; 2] {
         [self.columns * self.tile_size, self.rows() * self.tile_size + 1]
     }
@@ -102,7 +95,6 @@ impl AtlasLayout {
         [tile % self.columns * self.tile_size, tile / self.columns * self.tile_size]
     }
 
-    /// The record row's texels, one float each.
     pub fn record_texels(&self, records: &[SunLevelRecord]) -> Vec<f32> {
         let mut texels = Vec::with_capacity(HEADER_TEXELS + records.len() * RECORD_TEXELS);
         texels.push(records.len() as f32);
@@ -121,8 +113,8 @@ impl AtlasLayout {
     }
 }
 
-/// Float depth needs a filterable 32-bit format to sit in the materials' bindless array; without one each float's bits
-/// go into the four bytes of a texel, which the same bytes on the CPU side already are.
+/// Float depth needs a filterable 32-bit format to sit in the materials' bindless array; without one each float's
+/// bits go into the four bytes of a texel.
 pub fn atlas_format(features: WgpuFeatures) -> TextureFormat {
     if features.contains(WgpuFeatures::FLOAT32_FILTERABLE) { TextureFormat::R32Float } else { TextureFormat::Rgba8Unorm }
 }
@@ -146,7 +138,6 @@ impl MaterialAtlas for SunLevelAtlas {
     }
 }
 
-/// A new image holds no level, so the whole cache redraws.
 pub(crate) fn follow_level_atlas(frame: Res<SunLevelFrame>, device: Option<Res<RenderDevice>>, stale: Res<SunCacheStale>, mut atlas: ResMut<SunLevelAtlas>, mut images: ResMut<Assets<Image>>) {
     let Some(device) = device else { return };
     let wanted = AtlasLayout::choose(frame.records.len() as u32, frame.map_size, device.limits().max_texture_dimension_2d)
@@ -164,11 +155,9 @@ pub(crate) fn follow_level_atlas(frame: Res<SunLevelFrame>, device: Option<Res<R
 pub(crate) struct PropCaster {
     pub(crate) mesh: AssetId<Mesh>,
     pub(crate) world_from_local: Mat4,
-    /// A masked prop's texture and alpha cutoff.
     pub(crate) cut: Option<(AssetId<Image>, f32)>,
 }
 
-/// The settled props a level draws, as Bevy's shadow queue would see them; filled only on a frame a level draws.
 #[derive(Resource, Default)]
 pub(crate) struct SunLevelProps(pub(crate) Vec<PropCaster>);
 

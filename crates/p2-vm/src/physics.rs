@@ -57,8 +57,6 @@ pub(crate) struct MoveHit {
     pub actor: Option<ObjectId>,
 }
 
-/// A floor [`Vm::find_floor`] found: the cylinder bottom's distance above it (negative when the bottom sank into
-/// terrain or a mesh, which only line traces see) and its normal.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Floor {
     pub distance: f32,

@@ -90,8 +90,8 @@ properties!(
     MyType, bOnFire, QuantityPerHit,
 );
 
-/// Every property the host reads to draw an actor: its frame, its look and a restyle. A write that changes one moves
-/// the object's `drawn` stamp, and in debug builds the host's reads fail on any other property.
+/// Every property the host reads to draw an actor: its frame, its look and a restyle. A write that changes one
+/// moves the object's `drawn` stamp, and in debug builds the host's reads fail on any other property.
 pub(crate) const DRAWN: &[Prop] = &[
     Prop::Location, Prop::Rotation, Prop::DrawScale, Prop::DrawScale3D, Prop::PrePivot, Prop::Velocity, Prop::Owner,
     Prop::Controller, Prop::bIsPlayer, Prop::TimeDilation, Prop::bDeleteMe, Prop::bHidden, Prop::bOwnerNoSee,
@@ -146,15 +146,12 @@ impl Resolved {
         self.kinds
     }
 
-    /// Whether a write at `span` may change a property on [`DRAWN`]. Where the answer is unclear (a span past the
-    /// class's memory, an empty one) it is yes: an extra read of the actor, never a missed one.
     pub(crate) fn drawn(&self, span: Span) -> bool {
         let flagged = |flags: &[bool], at: u32, len: u32| len > 0 && flags.get(at as usize).is_none_or(|&flag| flag);
         (span.words == 0 && span.heaps == 0) || flagged(&self.drawn_words, span.word, span.words) || flagged(&self.drawn_heaps, span.heap, span.heaps)
     }
 }
 
-/// One flag per word and per heap slot of a class's memory, set over every element and member of a [`DRAWN`] property.
 fn drawn_flags(slots: &[u32], fields: &[Field]) -> (Box<[bool]>, Box<[bool]>) {
     let spans = || fields.iter().map(Span::of);
     let mut words = vec![false; spans().map(|s| s.word + s.words).max().unwrap_or(0) as usize];
@@ -227,8 +224,8 @@ impl PropertyName for Prop {
     }
 }
 
-/// Valid for the class it was resolved in and its subclasses only: in another class the slot is some other property, or
-/// none.
+/// Valid for the class it was resolved in and its subclasses only: in another class the slot is some other
+/// property, or none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot(pub(crate) usize);
 

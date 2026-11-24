@@ -1,6 +1,6 @@
-// Modern graphics shading, read only while the switch is on: real-time light from the map's suns and sky over the
-// texture, with no baked light. Linear light is display light squared. Diffuse lights add in display light as retail's
-// do, which keeps the map's colours; only highlights add in linear light. The result is linear light, past 1 where bright.
+// Modern shading, read only while the switch is on: real-time light from the map's suns and sky, no baked light.
+// Linear light is display light squared. Diffuse lights add in display light as the original's do, keeping the
+// map's colours; only highlights add in linear light. The result is linear light, past 1 where bright.
 
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::modern_base::{DIELECTRIC_F0, LUMINANCE, LampLight, MODERN_ON, NO_GLOSS, fresnel_five, ggx, modern_bits, to_eye};
@@ -14,9 +14,9 @@ import bevy_pbr::render::mesh_view_bindings::screen_space_ambient_occlusion_text
 
 const AO_STRENGTH: f32 = 0.8;
 
-// In display light, as the sky's share left to fills in a sun shadow.
 const SKY_SHADOWED: f32 = 0.8;
-// The sky's reflection in a sun shadow: what cast the shadow also stands in the way of a reflection towards the sun's side.
+// The sky's reflection in a sun shadow: what cast the shadow also stands in the way of a reflection towards the
+// sun's side.
 const REFLECTION_SHADOWED: f32 = 0.2;
 
 const DEFAULT_ROUGHNESS: f32 = 0.85;
@@ -27,8 +27,9 @@ const GROUND_ALBEDO: vec3<f32> = vec3(0.17, 0.14, 0.11);
 const DIFFUSE_LIMIT: f32 = 2.0;
 
 const ACTOR_GLOSS: f32 = 0.1;
-// Skinned actors' sun shadow fades in over N · L from 0 to this (the interpolated normal's): near the terminator a
-// low-poly mesh's flat faces shadow themselves where its smooth normal still faces the sun, which showed its triangles.
+// Skinned actors' sun shadow fades in over N · L from 0 to this (the interpolated normal's): near the terminator
+// a low-poly mesh's flat faces shadow themselves where its smooth normal still faces the sun, which showed its
+// triangles.
 const ACTOR_TERMINATOR_COS: f32 = 0.35;
 const ACTOR_SHININESS: f32 = 20.0;
 
@@ -41,8 +42,8 @@ fn allows_gloss(flag: f32) -> bool {
     return (bits & MODERN_ON) != 0u && (bits & NO_GLOSS) == 0u;
 }
 
-// x roughness, y metal, z 1 on a special-lit surface and else its reflectance as a dielectric. `packed` is the roughness,
-// 0 for the default surface, 2 further from 0 when special-lit, negative on a metal.
+// x roughness, y metal, z 1 on a special-lit surface and else its reflectance as a dielectric. `packed` is the
+// roughness, 0 for the default surface, 2 further from 0 when special-lit, negative on a metal.
 fn surface_of(packed: f32) -> vec3<f32> {
     let size = abs(packed);
     let special = size >= 2.0;
@@ -54,9 +55,9 @@ fn surface_of(packed: f32) -> vec3<f32> {
 const MATERIALS_SHIFT: u32 = 3u;
 const MATERIALS_TOP: f32 = 10.0;
 
-// `blend` is the layers' blend: z the material class's roughness (0 without a class), w its reflectance (1 on a metal).
-// The level moves the surface from the default towards its class. A classed surface's reflectance is negated: a class
-// guessed from names changes only how the surface shines, as its texture already holds its paint and shading.
+// `blend` z is the material class's roughness (0 without a class), w its reflectance (1 on a metal). The level
+// moves the surface from the default towards its class. A classed surface's reflectance is negated: a class
+// guessed from names changes only how it shines, as its texture already holds its paint and shading.
 fn classed_surface(flag: f32, blend: vec4<f32>) -> vec3<f32> {
     let level = (modern_bits(flag) >> MATERIALS_SHIFT) & 15u;
     if level == 0u || blend.z <= 0.0 {
@@ -74,8 +75,6 @@ fn ao_with_bounce(ao: f32, albedo: vec3<f32>) -> vec3<f32> {
     return max(vec3(ao), ((ao * a + b) * ao + c) * ao);
 }
 
-// What lights a surface besides its lamps and probes: the sun in linear light, the zone's ambient in display light, the
-// fills' mean colour in linear light and their sum on the surface's normal in display light.
 struct Around {
     sun_color: vec3<f32>,
     to_sun: vec3<f32>,
@@ -90,7 +89,6 @@ fn view_around(normal: vec3<f32>, lamps: LampLight, surface: vec3<f32>) -> Aroun
     var around = Around(vec3(0.0), vec3(0.0, 1.0, 0.0), lights.ambient_color.rgb, vec3(0.0), vec3(0.0), vec3(0.0));
     let sun = sun_index();
     if sun < lights.n_directional_lights {
-        // The map's sun is never special-lit, so such a surface only takes its own fills.
         around.sun_color = select(lights.directional_lights[sun].color.rgb, vec3(0.0), special);
         around.to_sun = lights.directional_lights[sun].direction_to_light;
     }
@@ -101,8 +99,8 @@ fn view_around(normal: vec3<f32>, lamps: LampLight, surface: vec3<f32>) -> Aroun
             around.sky += fill;
             fill_count += 1.0;
             let way = lights.directional_lights[i].direction_to_light;
-            // A special sun is unshadowed. Otherwise a fill reaches only as far as the probe sees sky its way; open sky reads
-            // 0.5 + 0.5 up by the probes' weights.
+            // A special sun is unshadowed. Otherwise a fill reaches only as far as the probe sees sky its way; open sky
+            // reads 0.5 + 0.5 up by the probes' weights.
             var sees = 1.0;
             if lamps.sky.x >= 0.0 && !special {
                 sees = saturate((lamps.sky.x + dot(lamps.sky.yzw, way)) / max(0.5 + 0.5 * way.y, 0.1));
@@ -117,19 +115,18 @@ fn view_around(normal: vec3<f32>, lamps: LampLight, surface: vec3<f32>) -> Aroun
     return around;
 }
 
-// A map lit by one sun has no fill to stand for its sky, so its shade took no sky light at all. The zone's ambient
-// stands in: whole on a surface facing up, half on a wall, none facing down. A map without a sun has no sky to add.
+// A map lit by one sun has no fill to stand for its sky, so its shade took no sky light at all. The zone's
+// ambient stands in: whole on a surface facing up, half on a wall, none facing down. A map without a sun has no
+// sky to add.
 fn sky_from_ambient(around: ptr<function, Around>, normal: vec3<f32>) {
     let ambient = (*around).ambient;
     (*around).sky = ambient * ambient;
     (*around).fills = ambient * (0.5 + 0.5 * normal.y);
 }
 
-// What a surface shows without its highlight and reflection, and those apart: a see-through surface blends them apart.
 struct Lit {
     matte: vec3<f32>,
     shine: vec3<f32>,
-    // The part of `shine` that mirrors the surroundings, not a light's highlight.
     reflection: vec3<f32>,
 }
 
@@ -174,14 +171,14 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
     let matte_rough = select(rough, DEFAULT_ROUGHNESS, classed);
     let share = vec3(1.0) - (matte_f0 + (max(vec3(1.0 - matte_rough), matte_f0) - matte_f0) * fresnel_five(nv));
     let direct_light = ambient + sqrt(sun_color) * (facing * direct) + lamps.diffuse;
-    // A bounce adds in linear light, so it fills what is dark and leaves retail's colours where the map's lights already reach.
+    // A bounce adds in linear light, so it fills what is dark and leaves retail's colours where the map's lights
+    // already reach.
     let shown = min(sqrt(direct_light * direct_light + lamps.bounce * occlusion), vec3(DIFFUSE_LIMIT));
     var lit = Lit(shown * shown * albedo * share * select(1.0 - metal, 1.0, classed), vec3(0.0), vec3(0.0));
     if gloss {
         let spec = sun_color * direct * ggx(normal, to_sun, eye, facing, saturate(a + SUN_DISC), f0);
         let e0 = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
         let ab = vec2(-1.04, 1.04) * (min(e0.x * e0.x, exp2(-9.28 * nv)) * e0.x + e0.y) + e0.zw;
-        // A rough surface returns less of the sky than the fit says, which would otherwise film every colour.
         let rough_reflection = mix(1.0 - 0.6 * smoothstep(0.5, 1.0, rough), 1.0, metal);
         env *= rough_reflection * (f0 * ab.x + ab.y) * saturate(pow(nv + occlusion, exp2(-16.0 * rough * rough - 1.0)) - 1.0 + occlusion);
         lit.shine = (spec + env + lamps.specular * f0 + lamps.specular_edge * (vec3(1.0) - f0)) * cavity;
@@ -201,8 +198,8 @@ fn lit_surface(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen: v
     return to_linear(sqrt(max(lit.matte + lit.shine, vec3(0.0))));
 }
 
-// What blending shows of a see-through surface: its highlight and reflection stay whole at any opacity, which takes more
-// alpha than the texture's.
+// What blending shows of a see-through surface: its highlight and reflection stay whole at any opacity, which
+// takes more alpha than the texture's.
 fn modern_glass(color: vec4<f32>, position: vec3<f32>, normal: vec3<f32>, seen: vec3<f32>, ao: f32, gloss: bool, lamps: LampLight, surface: vec3<f32>) -> vec4<f32> {
     let display = to_display(color.rgb);
     let lit = surface_light(display * display, position, normal, seen, ao, gloss, lamps, surface, view_around(normal, lamps, surface));
@@ -212,7 +209,8 @@ fn modern_glass(color: vec4<f32>, position: vec3<f32>, normal: vec3<f32>, seen: 
     return vec4((matte * color.a + highlight) / max(alpha, 1e-4), alpha);
 }
 
-// The frame's alpha tells the sky from the world for the sun's rays: a solid surface of the sky stores 0, the world 1.
+// The frame's alpha tells the sky from the world for the sun's rays: a solid surface of the sky stores 0, the
+// world 1.
 fn sky_view() -> bool {
 @if(SKY_VIEW)
     return true;
@@ -253,8 +251,6 @@ fn ambient_occlusion(frag_coord: vec2<f32>) -> f32 {
     return 1.0;
 }
 }
-
-// Actors and retail dynamic lights keep these until they take the shared light.
 
 fn actor_highlight(diffuse: vec3<f32>, normal: vec3<f32>, to_light: vec3<f32>, eye: vec3<f32>) -> vec3<f32> {
     let halfway = normalize(to_light + eye);

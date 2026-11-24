@@ -1,9 +1,9 @@
 import package::p2_render::tone_curve::pbr_neutral;
 import package::p2_render::screen_pass::gradient_noise;
 
-// `sun`: its place on the screen in uv, the rays' strength (0 without rays) and the frame's width over its height.
-// `tint`: the rays' colour. `grade`: exposure, saturation, contrast, vignette. `lens`: colour fringe in uv at the corner.
-// `balance`: the white balance's gains on red, green and blue.
+// `sun`: screen uv, ray strength (0 without rays) and aspect ratio. `tint`: ray colour. `grade`: exposure,
+// saturation, contrast, vignette. `lens`: colour fringe in uv at the corner. `balance`: white balance gains on
+// rgb.
 struct Post {
     sun: vec4<f32>,
     tint: vec4<f32>,
@@ -18,10 +18,8 @@ struct Post {
 
 const LUMINANCE: vec3<f32> = vec3(0.2126, 0.7152, 0.0722);
 const RAY_STEPS: i32 = 24;
-// The share of the way to the sun a ray is followed.
 const RAY_LENGTH: f32 = 0.9;
 const RAY_DECAY: f32 = 0.96;
-// In frame heights from the sun: how far the sky around it feeds rays, and how far from it a pixel still shows them.
 const RAY_SOURCE: f32 = 0.45;
 const RAY_REACH: f32 = 1.3;
 const RAY_BRIGHTEST: f32 = 2.0;
@@ -41,8 +39,8 @@ fn across(offset: vec2<f32>) -> f32 {
     return length(offset * vec2(post.sun.w, 1.0));
 }
 
-// Light shafts: the sky near the sun, smeared away from it. The sky stores alpha 0 and the world's surfaces 1, so
-// whatever stands before the sun cuts its shaft.
+// Light shafts: the sky near the sun, smeared away from it. The sky stores alpha 0 and world surfaces 1,
+// so whatever stands before the sun cuts its shaft.
 fn sun_rays(uv: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let strength = post.sun.z;
     if strength <= 0.0 {
@@ -69,8 +67,6 @@ fn sun_rays(uv: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
     return sum * post.tint.rgb * (strength * reach * reach / f32(RAY_STEPS));
 }
 
-// Where in the flat frame a cylindrical (Panini) view finds what it shows at `uv`. `half`: the tangent of half the
-// vertical field of view; `zoom` keeps the warped frame filling the screen.
 fn panini(uv: vec2<f32>, strength: f32, half: f32, zoom: f32, aspect: f32) -> vec2<f32> {
     let extent = vec2(half * aspect, half);
     let at = (uv * 2.0 - 1.0) * extent * zoom;
@@ -100,7 +96,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     color = pbr_neutral(color);
     let grey = dot(color, LUMINANCE);
     color = max(mix(vec3(grey), color, post.grade.y), vec3(0.0));
-    // Contrast turns about middle grey in display light, where the eye judges it.
     let shown = max((sqrt(color) - 0.5) * post.grade.z + 0.5, vec3(0.0));
     color = shown * shown;
     let corner = saturate((across(from_middle) - VIGNETTE_FROM) / (across(vec2(0.5)) - VIGNETTE_FROM));

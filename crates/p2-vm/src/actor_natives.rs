@@ -30,21 +30,16 @@ fn control_slot<T>(list: &mut Vec<T>, matches: impl Fn(&T) -> bool, new: impl Fn
     list.get_mut(at)
 }
 
-/// `SetBoneRotation` and `SetBoneLocation` share one entry per bone; alpha 0 has no effect. State
-/// only: no shipped script calls either native.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoneControl {
     pub bone: NameId,
     pub rotation: Rotator,
-    /// `SetBoneRotation`'s `Space` (0: the engine's default, bone-local; others unverified).
     pub space: i32,
     pub rotation_alpha: f32,
     pub location: Vector,
     pub location_alpha: f32,
 }
 
-/// `SetBoneDirection` entry. State only: `AWPerson` calls it with alpha 0, and the one call with alpha
-/// 1, `P2MoCapPawn.RotateTowards`, says its native caller is switched off.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoneDirection {
     pub bone: NameId,
@@ -74,36 +69,29 @@ pub struct FluidPling {
     pub radius: f32,
 }
 
-/// A `CheckForFluidHit` the scripts ran on a feeder: where its stream met static geometry, in world space.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FluidHit {
     pub feeder: ObjectId,
     pub kind: FluidType,
     pub at: Vector,
     pub normal: Vector,
-    /// The tick's seconds the script handed the call.
     pub seconds: f32,
-    /// The feeder's `QuantityPerHit`.
     pub quantity: f32,
 }
 
 const MOST_KEPT_FLUID_HITS: usize = 256;
 
-/// `args`: the call's `StartLoc`, `EndLoc`, `HitVel`, `GroundHit`, `HitNormal` and `DeltaTime`.
 fn fluid_hit(feeder: ObjectId, kind: FluidType, quantity: f32, args: &[Value; 6]) -> FluidHit {
     FluidHit { feeder, kind, at: vec3(args.get(3)), normal: vec3(args.get(4)), seconds: float_arg(args, 5), quantity }
 }
 
-/// A `TakeDamage` on a pawn, living or dead, as the script was handed it; `at` and `momentum` in world space.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PersonHit {
     pub person: ObjectId,
     pub at: Vector,
     pub momentum: Vector,
     pub damage: f32,
-    /// `Health` above 0 when the hit was seen.
     pub alive: bool,
-    /// Retail's own headshot verdict for this shot, such as a close pistol shot to the back of the head.
     pub headshot: bool,
 }
 
@@ -117,9 +105,7 @@ pub struct ActorFx {
     movies: FxHashMap<ObjectId, MovieState>,
     movie_textures: FxHashMap<ObjectId, ObjectId>,
     pub plings: Vec<FluidPling>,
-    /// Drained by the host each tick.
     pub person_hits: Vec<PersonHit>,
-    /// Drained by the host each tick.
     pub fluid_hits: Vec<FluidHit>,
     com_offsets: FxHashMap<ObjectId, Vector>,
     inertia: FxHashMap<ObjectId, [Vector; 2]>,
@@ -234,8 +220,8 @@ impl<L: LoaderRef> Vm<L> {
         self.actor_fx.following.remove(&projector);
     }
 
-    /// `Movie` and `TextureMovie`'s `Movie` live in the transient package. Script cannot assign `Movie`:
-    /// it is `const`. `PlayMovieScaled` replaces `TextureMovie`.
+    /// `Movie` and `TextureMovie`'s `Movie` live in the transient package. Script cannot assign `Movie`: it is
+    /// `const`. `PlayMovieScaled` replaces `TextureMovie`.
     pub(crate) fn construct_hud_movies(&mut self, hud: ObjectId) -> Result<(), Error> {
         let movie_class = self.find_class("Engine", "Movie")?;
         let texture_class = self.find_class("Engine", "MovieTexture")?;
@@ -265,8 +251,8 @@ impl<L: LoaderRef> Vm<L> {
         let Some(this) = this else { return Ok(None) };
         let unknown = || Error::UnknownNative(format!("{native:?}"));
         let value = match native {
-            // Not modelled: a controller's pawn joining with it, and retail doing nothing while the projector
-            // has no projection yet.
+            // Not modelled: a controller's pawn joining with it, and retail doing nothing while the projector has no
+            // projection yet.
             Native::AttachActor if self.store.is_a(this, Kind::Projector) => {
                 if let Some(actor) = object_arg(args, 0)
                     && !self.actor_fx.projected.contains(&(this, actor))
@@ -285,7 +271,6 @@ impl<L: LoaderRef> Vm<L> {
                 self.host.commands.push(HostCommand::Particle(ParticleCommand::Kill(this)));
                 return Ok(None);
             }
-            // Spawns wrap over the oldest; the VM counts, the host simulates.
             Native::SpawnParticle if self.store.is_a(this, self.script.lookups.class_names.particle_emitter) => {
                 let max = self.store.int_of(this, Prop::MaxParticles).clamp(0, MAX_SPAWN);
                 let amount = args.first().map_or(0, int).clamp(0, max);
@@ -313,7 +298,6 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 return Ok(None);
             }
-            // X, Y in canvas pixels.
             Native::ScreenToWorld => {
                 let Vector { x, y, .. } = vec3(args.first());
                 let (_, rotation) = self.camera();
@@ -321,8 +305,6 @@ impl<L: LoaderRef> Vm<L> {
                 let (width, height) = self.media.canvas.object.map_or((0, 0), |c| (self.store.int_of(c, Prop::SizeX), self.store.int_of(c, Prop::SizeY)));
                 Value::Vector(screen_to_near_plane([x, y], [width as f32, height as f32], if fov > 0.0 { fov } else { 90.0 }, rotation))
             }
-            // `PlayFlashbangSound(Sound, OverrideDuration)`: the host stops the other sounds, silences the loops
-            // and plays no new ones for the duration.
             Native::PlayFlashbangSound => {
                 if let Some(sound) = object_arg(args, 0) {
                     let volume = self.sound_volume().clamp(0.0, 1.0);
@@ -334,7 +316,6 @@ impl<L: LoaderRef> Vm<L> {
                 return Ok(None);
             }
             Native::GetCacheEntry | Native::MoveCacheEntry => Value::Bool(false),
-            // No shipped script calls the last two and nothing draws a `ScriptedTexture`'s text: no effect.
             Native::AddSpawnProperty | Native::GraphData | Native::DrawColoredText | Native::ReplaceTexture => return Ok(None),
             _ => return Err(unknown()),
         };
@@ -376,8 +357,6 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn lod_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Result<Option<Value>, Error> {
         let value = match native {
-            // No shipped script calls these three natives and the host draws no LOD, so the list only answers
-            // `DeleteLodStaticMesh`.
             Native::SetLodStaticMesh => {
                 let (distance, mesh) = (float_arg(args, 0), object_arg(args, 1));
                 let list = self.actor_fx.lods.entry(this).or_default();
@@ -405,8 +384,6 @@ impl<L: LoaderRef> Vm<L> {
 
     pub(crate) fn karma_state_native(&mut self, native: Native, this: ObjectId, args: &mut [Value]) -> Result<Option<Value>, Error> {
         match native {
-            // No shipped script calls these or their getters and the bodies in `karma.rs` read neither property,
-            // so the values only answer the getters.
             Native::KSetCOMOffset => {
                 self.actor_fx.com_offsets.insert(this, vec3(args.first()));
             }
@@ -427,13 +404,12 @@ impl<L: LoaderRef> Vm<L> {
                     }
                 }
             }
-            // The joint's force and torque come from the host's solver (not read yet): zero.
             Native::KGetConstraintForce | Native::KGetConstraintTorque => {
                 if let Some(out) = args.get_mut(0) {
                     *out = Value::Vector(Vector::ZERO);
                 }
             }
-            // `KHinge` calls this; the VM models no Karma joints, so there is nothing to update (retail not read).
+            // `KHinge` calls this; the VM models no Karma joints, so there is nothing to update (unverified).
             Native::KUpdateConstraintParams => {}
             _ => return Err(Error::UnknownNative(format!("{native:?}"))),
         }
@@ -469,7 +445,7 @@ impl<L: LoaderRef> Vm<L> {
                 self.actor_fx.movies.entry(this).or_default().playing = false;
                 return Ok(None);
             }
-            // The movie ends after its last frame (no more looping; unverified).
+            // The movie stops after its last frame instead of looping (unverified).
             Native::StopAtEnd => {
                 self.actor_fx.movies.entry(this).or_default().looping = false;
                 return Ok(None);
@@ -484,7 +460,7 @@ impl<L: LoaderRef> Vm<L> {
             Native::GetWidth => Value::Int(self.actor_fx.movies.get(&this).map_or(0, |m| m.width)),
             Native::GetHeight => Value::Int(self.actor_fx.movies.get(&this).map_or(0, |m| m.height)),
             // Retail also opens the texture's `MovieFilename` here; whether that starts it is unverified,
-            // script's `Play` follows at once.
+            // as script's `Play` follows at once.
             Native::InitializeMovie => {
                 let movie = match self.store.get(this, "Movie") {
                     Some(Value::Object(Some(movie))) => movie,
@@ -541,8 +517,8 @@ fn on_receiver(location: Vector, center: Vector, extent: Vector) -> bool {
 /// Unreal units. Retail uses 5 for every scene: the view, the sky and each `DrawActor`.
 pub const NEAR_CLIPPING_PLANE: f32 = 5.0;
 
-/// `fov` is horizontal, in degrees. Not a unit vector, as retail: it is as long as the near plane is
-/// far (at least 5), and `MapScreen.DrawMarkerOnMap` doubles it to put its markers past the plane.
+/// `fov` is horizontal, in degrees. Not a unit vector, as in retail: it is as long as the near plane is far
+/// (at least 5), and `MapScreen.DrawMarkerOnMap` doubles it to put its markers past the plane.
 fn screen_to_near_plane(pixel: [f32; 2], size: [f32; 2], fov: f32, rotation: Rotator) -> Vector {
     let [forward, right, up] = rotation.axes();
     let half = (fov.to_radians() / 2.0).tan();

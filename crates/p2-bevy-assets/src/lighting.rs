@@ -1,8 +1,8 @@
 use bevy::mesh::{Mesh, VertexAttributeValues};
 
-/// `Modulate2X` in linear space: the engine draws all baked lighting (BSP light maps, terrain and static mesh vertex
-/// colours) as texture × 2 × lighting in display (gamma) space, so 128 is full brightness. As a factor on a linear
-/// (sRGB-decoded) texture: (2 · lighting)^2.2 (unclamped; the output clamps).
+/// `Modulate2X` in linear space: the engine draws all baked lighting (BSP light maps, terrain and static mesh
+/// vertex colours) as texture × 2 × lighting in display (gamma) space, so 128 is full brightness. As a factor on
+/// a linear (sRGB-decoded) texture: (2 · lighting)^2.2 (unclamped; the output clamps).
 pub const MODULATE_2X: f32 = 4.594_794;
 
 pub fn modulate_2x(byte: u8) -> f32 {

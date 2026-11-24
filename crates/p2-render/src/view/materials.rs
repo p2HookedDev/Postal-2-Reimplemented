@@ -44,8 +44,6 @@ struct ActorMaterialKey {
     vertex_lit: bool,
 }
 
-/// Sections of one look share a material: of the actors spawned while a map plays until the map is left, of the scene's
-/// own actors and attachments until the scene changes.
 #[derive(Resource, Default)]
 pub struct ActorMaterialCache {
     spawned: FxHashMap<ActorMaterialKey, SectionMaterial>,
@@ -77,7 +75,6 @@ impl ActorMaterials<'_> {
         }
     }
 
-    /// At a map change: the actors spawned while the map played are gone.
     pub fn forget_spawned(&mut self) {
         self.cache.spawned.clear();
     }

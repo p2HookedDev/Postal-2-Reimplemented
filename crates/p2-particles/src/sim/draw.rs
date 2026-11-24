@@ -4,7 +4,6 @@ use crate::props::{CoordinateSystem, DirectionUsage, DrawStyle, EmitterPropertie
 use crate::props::RotationSource;
 
 impl ParticleEmitter {
-    /// A `Relative` emitter's particles live in its owner's space.
     pub(super) fn to_world(&self, owner: Owner) -> impl Fn(Vector) -> Vector + Copy {
         let relative = self.props.coordinate_system == CoordinateSystem::Relative;
         let axes = owner.rotation.axes();

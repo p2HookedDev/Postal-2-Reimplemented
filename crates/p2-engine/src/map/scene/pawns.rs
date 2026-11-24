@@ -68,7 +68,6 @@ pub(super) fn pawn_models(
                 pre_pivot: a.pre_pivot,
                 skeletal: Some((mesh.scale, mesh.origin, mesh.rot_origin)),
             };
-            // Lit by the lights where it walks (one colour per pawn: the meshes are shared).
             let lit = ActorLit::skeletal(a.object, &mesh, a.scale, &a.lighting);
             parts.followers.push(MovingModel { sections: own_sections, transform: unreal_to_bevy(body), follow, lit });
             for attachment in attachments.get(&a.object).into_iter().flatten() {

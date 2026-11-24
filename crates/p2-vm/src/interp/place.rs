@@ -46,7 +46,6 @@ impl<L: LoaderRef> Vm<L> {
         self.store.memory.read(place.shape, place.dim, mem, word, heap)
     }
 
-    /// Inside a dynamic array the whole top-level array counts: its heap slot is the one the class flags.
     fn span(&self, place: &Place) -> Span {
         match place.hops[..place.depth as usize].first() {
             Some(hop) => Span::place(0, hop.heap, (0, 1), 1),

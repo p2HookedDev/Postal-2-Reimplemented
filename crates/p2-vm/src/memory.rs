@@ -24,10 +24,8 @@ pub enum Shape {
     Int,
     Bool,
     Float,
-    /// 0 = None, else the object's id + 1.
     Object,
     Name,
-    /// Two words: the object (as [`Shape::Object`]) and the function name.
     Delegate,
     Str,
     Array(LayoutId),
@@ -73,8 +71,6 @@ pub(crate) struct MemLayout {
     pub fields: Vec<Field>,
     pub words: u32,
     pub heaps: u32,
-    /// Word offsets and shapes of the first three members when they are one-word scalars (else `Shape::Map`): a
-    /// vector's X, Y, Z, a rotator's pitch, yaw, roll, read without going through `fields`.
     pub head: [(u32, Shape); 3],
     pub kind: StructKind,
     zero_heap: Vec<Heap>,
@@ -115,8 +111,6 @@ impl MemLayouts {
         self.of_class(layout, None)
     }
 
-    /// The last properties of `layout` are the superclass's (`base`, of `base_count` properties):
-    /// they keep its offsets and the class's own come after them.
     pub(crate) fn of_class(&mut self, layout: &Arc<StructLayout>, base: Option<(LayoutId, usize)>) -> LayoutId {
         let key = Arc::as_ptr(layout) as usize;
         if let Some(&id) = self.by_source.get(&key) {
@@ -275,7 +269,6 @@ impl MemLayouts {
         });
     }
 
-    /// A save file's lengths are not trusted.
     pub(crate) fn arrays_fit(&self, id: LayoutId, mem: &Mem) -> bool {
         self.fits_at(Shape::Struct(id), mem, 0, 0)
     }

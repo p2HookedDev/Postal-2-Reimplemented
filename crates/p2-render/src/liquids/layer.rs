@@ -1,7 +1,6 @@
-//! Liquid on the level's surfaces as a height field on the GPU, in tiles of 128 x 128 texels of 2 Unreal units: floor
-//! tiles on the world's grid, plane tiles on the planes of walls, slopes and ceilings. The main world decides which
-//! tiles live and in which atlas slot, traces each tile's surface once on a worker, and hands the render world
-//! (`layer_gpu.rs`) the frame's sources and steps. Unreal units and axes, heights in Bevy's.
+//! Liquid on level surfaces as a GPU height field, in tiles of 128 x 128 texels of 2 Unreal units: floor tiles
+//! on the world grid, plane tiles on walls, slopes and ceilings. The main world places tiles in atlas slots and
+//! traces each surface once on a worker; `layer_gpu.rs` steps them. Unreal units and axes, heights in Bevy's.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
@@ -34,29 +33,22 @@ pub const SLOTS_SIDE: u32 = 8;
 pub const MOST_SLOTS: u32 = SLOTS_SIDE * SLOTS_SIDE;
 /// The depth a wet floor keeps: only liquid above it flows. A liquid on a floor stands about this deep.
 pub const FILM: f32 = 0.3;
-/// Puke is a paste: it stands this deep before it flows.
 pub const PASTE_FILM: f32 = 0.8;
-/// Seconds of one step of the liquid, on the level's clock.
 pub const STEP: f32 = 1.0 / 60.0;
-/// A floor height at or past this is a wall, or not traced yet.
 pub const WALL: f32 = 1e30;
-/// A feed joins the tile at its column whose floor there lies within this of its height; a tile joins the one beside
-/// it whose first liquid lies within the larger reach. Floors farther apart keep to tiles of their own.
+/// A feed joins the tile at its column whose floor there lies within this of its height; a tile joins the one
+/// beside it whose first liquid lies within the larger reach. Floors farther apart keep to tiles of their own.
 const FEED_REACH: f32 = 24.0;
 const BESIDE_REACH: f32 = 128.0;
-/// Tiles one column holds, one a floor.
 const MOST_LAYERS: i32 = 4;
-/// A tile's floor rays start this far over its first liquid and reach this far down: a kerb is a floor, a deep drop
-/// a wall.
+/// A tile's floor rays start this far over its first liquid and reach this far down: a kerb is a floor, a deep
+/// drop a wall.
 const STEP_UP: f32 = 24.0;
 const REACH: f32 = 128.0;
-/// Unreal units around a source whose tiles are made too, so its liquid has room to run.
 const ROOM: f32 = 48.0;
 /// `SHAPE_REACH` in `liquid_layer.wesl`: a held source's blot lies within this many radii of its middle.
 const SHAPE_REACH: f32 = 1.45;
-/// Seconds a film the scripts stop holding takes to dry at the game's normal fluid detail.
 pub const FILM_LIFE: f32 = 4.0;
-/// A tile nothing feeds is kept this many film lives: its film has dried by then.
 const IDLE_LIVES: f32 = 3.0;
 const MOST_FLUID_DETAIL: i32 = 11;
 const NEAR_FOREVER: f32 = 3600.0;
@@ -65,30 +57,27 @@ pub const SCORCH_LIFE: f32 = 40.0;
 /// `ADDS` and `BURNING` in `liquid_layer.wesl`, the bits of `LayerSource::adds`.
 pub const ADDS: u32 = 1;
 pub const BURNING: u32 = 2;
-/// A projector decal whose frame buffer blending is 7, which no game projector uses: the world's surfaces read it as
-/// liquid. Its slot rides in bits 8 to 15.
+/// A projector decal whose frame buffer blending is 7, which no game projector uses: the world's surfaces read it
+/// as liquid. Its slot rides in bits 8 to 15.
 const LIQUID_DECAL_TAG: u32 = 0x8000_0000 | 0x10_0000 | 0xf_0000 | 7;
-/// How far the decal's box reaches above and below the tile's floors.
 const BOX_MARGIN: f32 = 12.0;
-/// A plane tile's normal snaps to `YAWS` steps of the horizontal angle and to steps of `PITCH_STEP` up or down from
-/// level, from `CEILING` (straight down) to `TOP_PITCH`; its offset along the normal snaps to `PLANE_SNAP`.
+/// A plane tile's normal snaps to `YAWS` steps of the horizontal angle and to steps of `PITCH_STEP` up or down
+/// from level, from `CEILING` (straight down) to `TOP_PITCH`; its offset along the normal snaps to `PLANE_SNAP`.
 const YAWS: i32 = 64;
 const CEILING: i32 = -9;
 const TOP_PITCH: i32 = 3;
 const PITCH_STEP: f32 = TAU / 36.0;
 const PLANE_SNAP: f32 = 2.0;
-/// `POOL_WALL_REACH_UU` in `projector.wesl`: how far off a plane tile's plane its face may stand. A face a little off
-/// the plane's snapped direction leans away from the plane across the tile.
+/// `POOL_WALL_REACH_UU` in `projector.wesl`: how far off a plane tile's plane its face may stand. A face a little
+/// off the plane's snapped direction leans away from the plane across the tile.
 pub const WALL_FIT: f32 = 6.0;
 /// `POOL_FACE_MATCH` in `projector.wesl`: the least cosine between a face's normal and its plane tile's.
 pub const FACE_MATCH: f32 = 0.9;
 /// `POOL_WALL_TILE` in `projector.wesl`: the tag bit of a plane tile's decal.
 pub const WALL_TILE_TAG: u32 = 0x80_0000;
-/// A feed off the floor joins a tile whose plane lies within this of it.
 const PLANE_JOIN: f32 = 4.0;
 
 pub trait Floor {
-    /// The height of the floor straight under `from` within `reach`; `None` where there is none or `from` is inside.
     fn floor_below(&self, from: Vector, reach: f32) -> Option<f32>;
 }
 
@@ -99,7 +88,6 @@ impl Floor for StaticCollision {
     }
 }
 
-/// The level's surfaces as a plane tile meets them: the first hit between two points, its place and normal.
 pub trait Surfaces {
     fn hit(&self, from: Vector, to: Vector) -> Option<(Vector, Vector)>;
 }
@@ -110,7 +98,6 @@ impl Surfaces for StaticCollision {
     }
 }
 
-/// `Slot` in `liquid_layer.wesl`.
 #[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
 pub struct LayerSlot {
     pub around: [i32; 9],
@@ -126,7 +113,6 @@ impl Default for LayerSlot {
     }
 }
 
-/// `Source` in `liquid_layer.wesl`.
 #[derive(ShaderType, Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayerSource {
     pub x: f32,
@@ -134,36 +120,28 @@ pub struct LayerSource {
     pub radius: f32,
     pub amount: f32,
     pub kind: f32,
-    /// `ADDS` when it adds volume, `BURNING` when the scripts' fire burns on it.
     pub adds: u32,
     /// Picks a held source's blot; from its place in the world, so every tile it spans draws the same one.
     pub seed: u32,
 }
 
-/// What a feed does to the floor under it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Feed {
-    /// Keeps the floor wet to this depth, as a script's puddle or trail does while it lives.
     Hold(f32),
-    /// Adds this volume, as a landing drop does.
     Add(f32),
 }
 
-/// Liquid fed onto the floor this frame: a disc at `at` of `radius` Unreal units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Feeding {
     pub at: Vector,
     pub radius: f32,
     pub kind: FluidType,
     pub feed: Feed,
-    /// The scripts' fire burns on it: the fuel under it catches.
     pub burning: bool,
-    /// The face's normal when it lands off the floor, on a wall, slope or ceiling: it feeds that plane's tiles.
     pub face: Option<Vector>,
 }
 
 impl Feeding {
-    /// How far its liquid reaches from `at`: a held blot's lobes stand past its radius.
     fn reach(&self) -> f32 {
         match self.feed {
             Feed::Hold(_) => self.radius * SHAPE_REACH,
@@ -172,13 +150,10 @@ impl Feeding {
     }
 }
 
-/// The frame's work for the render world. `floors` and `cleared` are handed over once.
 #[derive(Resource, Clone, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct LayerFrame {
-    /// Slots the buffers hold.
     pub capacity: u32,
-    /// Changes with the level: the render world starts afresh.
     pub level: u32,
     pub steps: u32,
     pub slots: Vec<LayerSlot>,
@@ -187,7 +162,6 @@ pub struct LayerFrame {
     pub cleared: Vec<u32>,
     pub floors: Vec<(u32, Arc<Vec<f32>>)>,
     pub atlas: Option<AssetId<Image>>,
-    /// Seconds a film the scripts stop holding takes to dry, after the game's fluid detail.
     pub film_life: f32,
 }
 
@@ -197,7 +171,6 @@ impl Default for LayerFrame {
     }
 }
 
-/// A tile: its column of the world's grid, and which of the floors in that column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileKey {
     pub x: i32,
@@ -211,14 +184,13 @@ impl TileKey {
     }
 }
 
-/// The grid column holding `at`.
 fn column(at: Vector) -> [i32; 2] {
     [(at.x / TILE).floor() as i32, (at.y / TILE).floor() as i32]
 }
 
-/// A tile on a plane: its normal in `YAWS` steps of the horizontal angle and `PITCH_STEP` steps up or down, its offset
-/// along that normal in `PLANE_SNAP` steps, and a cell of the plane's grid, u level along the plane and v across it
-/// (up on a wall).
+/// A tile on a plane: its normal in `YAWS` steps of the horizontal angle and `PITCH_STEP` steps up or down, its
+/// offset along that normal in `PLANE_SNAP` steps, and a cell of the plane's grid, u level along the plane and v
+/// across it (up on a wall).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PlaneKey {
     pub yaw: i32,
@@ -229,14 +201,12 @@ pub struct PlaneKey {
 }
 
 impl PlaneKey {
-    /// The tile holding `at` on the plane through it facing `normal`.
     fn at(at: Vector, normal: Vector) -> Self {
         let yaw = (normal.y.atan2(normal.x) / (TAU / YAWS as f32)).round() as i32;
         let pitch = (normal.z.clamp(-1.0, 1.0).asin() / PITCH_STEP).round() as i32;
         Self::on(yaw, pitch, at)
     }
 
-    /// The tile holding `at` on the plane of direction `yaw` and `pitch` through it. A ceiling has one direction.
     fn on(yaw: i32, pitch: i32, at: Vector) -> Self {
         let pitch = pitch.clamp(CEILING, TOP_PITCH);
         let yaw = if pitch == CEILING { 0 } else { yaw.rem_euclid(YAWS) };
@@ -263,7 +233,6 @@ impl PlaneKey {
         self.offset as f32 * PLANE_SNAP
     }
 
-    /// `at` in the plane's own axes, as x and y.
     fn flat(self, at: Vector) -> Vector {
         Vector::new(at.dot(self.along()), at.dot(self.across()), 0.0)
     }
@@ -273,8 +242,9 @@ impl PlaneKey {
     }
 }
 
-/// A plane tile's offset in Bevy's (along its normal, plus `shift`) for each texel whose face matches its plane, row by
-/// row; `WALL` where none does. Every texel of the face takes the plane's one offset, so liquid on it finds no slope.
+/// A plane tile's offset in Bevy's (along its normal, plus `shift`) for each texel whose face matches its plane,
+/// row by row; `WALL` where none does. Every texel of the face takes the plane's one offset, so liquid on it
+/// finds no slope.
 pub fn trace_plane(surfaces: &impl Surfaces, key: PlaneKey, shift: f32) -> Vec<f32> {
     let (normal, along, across, corner) = (key.normal(), key.along(), key.across(), key.corner());
     (0..SIDE)
@@ -289,24 +259,18 @@ pub fn trace_plane(surfaces: &impl Surfaces, key: PlaneKey, shift: f32) -> Vec<f
 
 struct Tile {
     slot: u32,
-    /// The kind it was last fed.
     kind: FluidType,
     first_z: f32,
     last_fed: f32,
-    /// When a burning feed last touched it.
     burnt: f32,
     tracing: Option<Task<Vec<f32>>>,
-    /// The traced floor, Bevy heights, row by row.
     floors: Option<Arc<Vec<f32>>>,
-    /// The lowest and highest traced floor, Bevy heights.
     span: Option<[f32; 2]>,
     decal: Option<Entity>,
     placed: Transform,
-    /// Its decal carries the puke splat's decal as a child.
     puke: bool,
 }
 
-/// Every tile's floor heights in Bevy's (Unreal z plus `lift`), row by row; `WALL` where liquid cannot stand.
 pub fn trace_floor(floor: &impl Floor, key: TileKey, first_z: f32, lift: f32) -> Vec<f32> {
     let corner = key.corner();
     (0..SIDE)
@@ -325,7 +289,6 @@ fn floor_span(floors: &[f32]) -> Option<[f32; 2]> {
     })
 }
 
-/// What a new tile's floor is traced against, the world's origin in Bevy and the level's clock.
 #[derive(Clone, Copy)]
 pub struct Level<'a> {
     pub collision: Option<&'a Arc<StaticCollision>>,
@@ -333,8 +296,8 @@ pub struct Level<'a> {
     pub now: f32,
 }
 
-/// How long a fluid of `seconds` at the normal detail lives at the game's fluid `detail`, as the game scales its trails:
-/// shorter below normal, a whole multiple above, near forever at the top.
+/// How long a fluid of `seconds` at the normal detail lives at the game's fluid `detail`, as the game scales its
+/// trails: shorter below normal, a whole multiple above, near forever at the top.
 pub fn fluid_life(detail: i32, seconds: f32) -> f32 {
     match detail.clamp(1, MOST_FLUID_DETAIL) {
         NORMAL_FLUID_DETAIL => seconds,
@@ -356,7 +319,6 @@ pub struct LiquidLayer {
     no_room: bool,
 }
 
-/// A tile puke has reached takes the puke splat's decal, which the floors colour its puke from.
 pub fn mark_puke_tiles(mut layer: ResMut<LiquidLayer>, textures: Res<LiquidTextures>, mut commands: Commands) {
     let Some(splat) = &textures.puke_splat else { return };
     let LiquidLayer { tiles, planes, .. } = &mut *layer;
@@ -371,12 +333,10 @@ pub fn mark_puke_tiles(mut layer: ResMut<LiquidLayer>, textures: Res<LiquidTextu
     }
 }
 
-/// The depth a kind stands at before it flows.
 pub fn film_of(kind: FluidType) -> f32 {
     if matches!(kind, FluidType::Puke | FluidType::BloodyPuke) { PASTE_FILM } else { FILM }
 }
 
-/// The slots the buffers hold at a level of the Liquids slider.
 pub fn capacity(level: u8) -> u32 {
     (4 + 6 * u32::from(level)).min(MOST_SLOTS)
 }
@@ -395,7 +355,6 @@ fn decal_transform(key: TileKey, [lo, hi]: [f32; 2], origin: Vec3) -> Transform 
         .with_scale(Vec3::new(TILE, TILE, hi - lo + 2.0 * BOX_MARGIN))
 }
 
-/// Projects along the plane's normal, u along the decal's x and v against its y, as a floor tile's decal lies.
 fn plane_decal_transform(key: PlaneKey, origin: Vec3) -> Transform {
     let bevy = |v: Vector| Vec3::new(v.x, v.z, v.y);
     let middle = key.corner() + (key.along() + key.across()) * (TILE * 0.5);
@@ -415,7 +374,6 @@ fn layer_source(feeding: &Feeding, local: Vector) -> LayerSource {
     LayerSource { x: local.x, y: local.y, radius: feeding.radius / TEXEL, amount, kind: f32::from(feeding.kind as u8), adds, seed }
 }
 
-/// Takes a tile's finished trace, and hands it to the render world.
 fn take_trace(tile: &mut Tile, frame: &mut LayerFrame) {
     if tile.tracing.as_ref().is_some_and(Task::is_finished)
         && let Some(floors) = tile.tracing.take().map(block_on)
@@ -427,7 +385,6 @@ fn take_trace(tile: &mut Tile, frame: &mut LayerFrame) {
     }
 }
 
-/// The tile fed longest ago, if more than a second ago, and when.
 fn idlest<K: Copy>(tiles: &FxHashMap<K, Tile>, now: f32) -> Option<(K, f32)> {
     tiles.iter().filter(|(_, tile)| now - tile.last_fed > 1.0).min_by(|a, b| a.1.last_fed.total_cmp(&b.1.last_fed)).map(|(&key, tile)| (key, tile.last_fed))
 }
@@ -439,13 +396,11 @@ fn add_slot(frame: &mut LayerFrame, tile: &Tile, around: [i32; 9], sources: Vec<
     frame.active.push(tile.slot);
 }
 
-/// The grid columns a disc of `radius` around `at` touches.
 fn touched(at: Vector, radius: f32) -> impl Iterator<Item = [i32; 2]> {
     let ([x0, y0], [x1, y1]) = (column(at - Vector::new(radius, radius, 0.0)), column(at + Vector::new(radius, radius, 0.0)));
     (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| [x, y]))
 }
 
-/// The traced floor's Unreal height under `at` in the tile at `key`, if traced there and not a wall.
 fn floor_under(key: TileKey, floors: &[f32], at: Vector, lift: f32) -> Option<f32> {
     let local = (at - key.corner()) * (1.0 / TEXEL);
     let (i, j) = (local.x.floor(), local.y.floor());
@@ -455,8 +410,6 @@ fn floor_under(key: TileKey, floors: &[f32], at: Vector, lift: f32) -> Option<f3
 }
 
 impl LiquidLayer {
-    /// The tile at `column` whose floor lies nearest `z` within `reach`: under `at` where it is traced, else at its first
-    /// liquid's height.
     fn layer_near(&self, [x, y]: [i32; 2], at: Vector, lift: f32, reach: f32) -> Option<TileKey> {
         (0..MOST_LAYERS)
             .map(|layer| TileKey { x, y, layer })
@@ -470,7 +423,6 @@ impl LiquidLayer {
             .map(|(key, _)| key)
     }
 
-    /// Drops every tile; the render world starts afresh at `capacity` slots.
     pub fn reset(&mut self, commands: &mut Commands, capacity: u32) {
         for tile in self.tiles.drain().map(|(_, tile)| tile).chain(self.planes.drain().map(|(_, tile)| tile)) {
             if let Some(decal) = tile.decal {
@@ -481,8 +433,6 @@ impl LiquidLayer {
         (self.capacity, self.level, self.spare) = (capacity, self.level.wrapping_add(1), 0.0);
     }
 
-    /// A tile at `column` for liquid at `at`, made with its floor traced from there if no tile holds that floor and there
-    /// is room; a tile idle longest gives way when the slots run out.
     fn tile(&mut self, [x, y]: [i32; 2], at: Vector, level: Level, cleared: &mut Vec<u32>, commands: &mut Commands) {
         if self.layer_near([x, y], at, level.origin.y, FEED_REACH).is_some() {
             return;
@@ -496,7 +446,6 @@ impl LiquidLayer {
         cleared.push(slot);
     }
 
-    /// A free slot; the tile idle longest, floor or plane, gives way when the slots run out.
     fn free_slot(&mut self, now: f32, commands: &mut Commands) -> Option<u32> {
         // Feeds only make tiles fresher, so once none can give way none can until the frame ends.
         if self.free.is_empty() && !self.no_room {
@@ -544,7 +493,6 @@ impl LiquidLayer {
             .map_or(snapped, |(key, _)| key)
     }
 
-    /// A plane tile at `key`, made with its face traced if there is none and there is room.
     fn plane_tile(&mut self, key: PlaneKey, level: Level, cleared: &mut Vec<u32>, commands: &mut Commands) {
         if self.planes.contains_key(&key) {
             return;
@@ -556,7 +504,6 @@ impl LiquidLayer {
         cleared.push(slot);
     }
 
-    /// A feed off the floor: tiles of the plane it lands on around it, and its source in those under it.
     fn feed_plane(&mut self, feeding: &Feeding, level: Level, by_slot: &mut [Vec<LayerSource>], cleared: &mut Vec<u32>, commands: &mut Commands) {
         let Some(normal) = feeding.face else { return };
         let plane = self.plane_near(feeding.at, normal);
@@ -573,7 +520,6 @@ impl LiquidLayer {
         }
     }
 
-    /// One frame: tiles for the feeds, their sources, finished floor traces, idle tiles dropped, `steps` steps.
     pub fn frame(&mut self, feeds: &[Feeding], level: Level, steps: u32, images: &mut Assets<Image>, commands: &mut Commands, frame: &mut LayerFrame) {
         let (now, lift) = (level.now, level.origin.y);
         let atlas = self.atlas.get_or_insert_with(|| new_liquid_atlas(images)).clone();
@@ -661,7 +607,6 @@ impl LiquidLayer {
         (frame.capacity, frame.level, frame.steps, frame.atlas) = (self.capacity, self.level, steps, Some(atlas.id()));
     }
 
-    /// Whole steps of `step` seconds owed after `seconds` more of the level's clock, at most `most`.
     pub fn steps(&mut self, seconds: f32, step: f32, most: u32) -> u32 {
         self.spare = (self.spare + seconds).min(step * most as f32);
         let steps = (self.spare / step).floor();
@@ -760,7 +705,6 @@ mod tests {
         }
     }
 
-    /// A flat face through the plane of `normal` at `offset`, met from its front.
     struct Slab(Vector, f32);
 
     impl Surfaces for Slab {

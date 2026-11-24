@@ -65,12 +65,10 @@ pub(crate) fn place(light: &MeshLight, gpu: &BevyLight, origin: Vec3) -> Transfo
     }
 }
 
-/// The script lights the game reported; read through [`DynamicLightList`], which adds the modern look's own.
 #[derive(bevy::ecs::prelude::Resource, Default)]
 pub struct FrameLights(Vec<MeshLight>);
 
 impl FrameLights {
-    /// Touched only when they changed, so the render systems' change detection stays meaningful.
     pub fn publish(mut frame: ResMut<Self>, lights: &[MeshLight]) {
         if frame.0 != lights {
             frame.0.clear();
@@ -79,7 +77,6 @@ impl FrameLights {
     }
 }
 
-/// The frame's dynamic lights: the script lights, then the fire and flash lights of the modern look.
 #[derive(SystemParam)]
 pub struct DynamicLightList<'w> {
     script: Res<'w, FrameLights>,
@@ -110,8 +107,8 @@ pub(crate) fn dynamic_lights(
 ) {
     let level_brightness = shown.lighting.as_ref().map_or(1.0, |environment| environment.level_brightness);
     let lights = frame.iter().enumerate().filter(|(_, light)| light.dynamic).filter_map(|(index, light)| Some((index, gpu_light(light, level_brightness)?)));
-    // Per kind: the query yields the entities archetype by archetype, not in the frame's order, so one cursor over all
-    // lights would pair a point light with a spot entity whenever the kinds interleave.
+    // Per kind: the query yields the entities archetype by archetype, not in the frame's order, so one cursor over
+    // all lights would pair a point light with a spot entity whenever the kinds interleave.
     let LightsByKind { points, spots } = &mut *by_kind;
     for (index, gpu) in lights {
         let list = if matches!(gpu, BevyLight::Point(_)) { &mut *points } else { &mut *spots };

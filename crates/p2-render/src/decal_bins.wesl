@@ -1,11 +1,9 @@
-// The decals that may meet each screen tile of the world camera, after its depth prepass: a tile's list holds the
-// index in Bevy's decal buffer of every decal whose box meets the slab of the tile between its nearest and farthest
-// depth, our liquid's decals first, then the rest, each in ascending order. `projector.wesl` walks a pixel's list in
-// place of Bevy's cluster list, whose sphere around a decal is twice the box's own.
+// The decals that may meet each screen tile, after the depth prepass: per tile, the index in Bevy's decal
+// buffer of every decal whose box meets the tile's depth slab, our liquid's first, each in ascending order.
+// `projector.wesl` walks this list in place of Bevy's cluster list, whose sphere is twice the box's size.
 
 import bevy_render::view::View;
 
-// Bevy's `RenderClusteredDecal`, as its buffer holds it.
 struct Decal {
     local_from_world: mat4x4<f32>,
     image_indices: vec4<i32>,
@@ -18,9 +16,7 @@ struct Decal {
 }
 
 struct Bins {
-    // Tiles across and down, a tile's side in pixels, the decals in Bevy's buffer.
     grid: vec4<u32>,
-    // x: the book texel where the tiles' lists start.
     lists: vec4<u32>,
 }
 
@@ -41,8 +37,8 @@ const LISTED_SPAN: u32 = 64u;
 // Matches `projector.wesl`: a decal of our liquid has these tag bits.
 const PROJECTOR: u32 = 0x80000000u;
 const FB_LIQUID: u32 = 7u;
-// Past the box's faces a decal still counts as meeting a tile, in its own units: rounding between the prepass's depth
-// and the main pass's position never drops one.
+// Past the box's faces a decal still counts as meeting a tile, in its own units: rounding between the prepass's
+// depth and the main pass's position never drops one.
 const BOX_SLACK: f32 = 0.001;
 
 var<workgroup> nearest: atomic<u32>;
@@ -58,8 +54,6 @@ fn book_at(texel: u32) -> vec2<u32> {
     return vec2(texel % BOOK_WIDTH, texel / BOOK_WIDTH);
 }
 
-// Whether the box of `decal` meets the hull of the slab's corners: the corners' bounds in the box's own space against
-// the unit box. Never false where they meet.
 fn meets(decal: u32) -> bool {
     let m = decals[decal].local_from_world;
     var low = vec3(1e30);
@@ -147,8 +141,6 @@ fn bin(@builtin(workgroup_id) tile: vec3<u32>, @builtin(local_invocation_id) lan
         liquids_listed = liquids;
     }
     workgroupBarrier();
-    // The header before the lists, which `decal_bins.rs` marks unwritten before the pass: the grid, the tile's side, the
-    // decals, 1; then two columns of the binned view's matrix, so another view keeps Bevy's cluster list.
     if all(tile.xy == vec2(0u)) && index == LIST_TEXELS {
         let head = bins.lists.x - HEAD_TEXELS;
         textureStore(book, book_at(head), vec4(f32(bins.grid.x), f32(side), f32(bins.grid.w), 1.0));

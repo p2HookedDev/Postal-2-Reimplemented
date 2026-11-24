@@ -1,5 +1,5 @@
-//! Modern graphics: bloom with Bevy's look in two passes, where Bevy's takes a render pass per mip and step. One compute
-//! pass runs the whole downsample and upsample chain, one render pass adds the result to the frame.
+//! Modern graphics: bloom with Bevy's look in two passes, where Bevy's takes a render pass per mip and step. One
+//! compute pass runs the whole downsample and upsample chain, one render pass adds the result to the frame.
 
 use bevy::app::{App, Plugin};
 use bevy::asset::{Handle, uuid_handle};
@@ -40,7 +40,8 @@ const MAX_MIP_DIMENSION: u32 = 512;
 const MIP_COUNT: u32 = MAX_MIP_DIMENSION.ilog2() - 1;
 const MIPS: usize = MIP_COUNT as usize;
 const WORKGROUP: u32 = 8;
-// The texture's layers: the downsampled mips, and the upsample's sums, as a compute step cannot blend into the mip it reads.
+// The texture's layers: the downsampled mips, and the upsample's sums, as a compute step cannot blend into the
+// mip it reads.
 const DOWN: u32 = 0;
 const UP: u32 = 1;
 
@@ -71,7 +72,6 @@ impl Plugin for ModernBloomPlugin {
     }
 }
 
-/// Bevy's `Bloom` settings in its additive mode at uniform scale.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 #[require(Hdr)]
 pub struct ModernBloom {
@@ -84,7 +84,6 @@ pub struct ModernBloom {
 }
 
 impl ModernBloom {
-    /// How much of mip `mip`'s blur is added to the level above it; mip 0's goes onto the frame.
     fn blend(&self, mip: f32) -> f32 {
         let along = mip / (MIP_COUNT - 1) as f32;
         let boost = (1.0 - ops::powf(1.0 - along, 1.0 / (1.0 - self.low_frequency_boost_curvature))) * self.low_frequency_boost;
@@ -112,7 +111,6 @@ impl ExtractComponent<RenderApp> for ModernBloom {
     }
 }
 
-/// One per mip of each view, the mip's blend; the downsamples read the first.
 #[derive(ShaderType, Debug, Clone, Copy, PartialEq)]
 pub struct BloomStep {
     threshold: Vec4,
@@ -193,13 +191,11 @@ pub struct BloomView {
     composite: CachedRenderPipelineId,
 }
 
-/// Made again only when the texture or the uniform buffer changes.
 #[derive(Component)]
 pub struct BloomChain {
     key: (TextureId, BufferId),
     first_output: TextureView,
     down: Vec<BindGroup>,
-    /// From the smallest mip up.
     up: Vec<BindGroup>,
     composite: BindGroup,
 }

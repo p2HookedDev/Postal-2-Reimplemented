@@ -1,6 +1,3 @@
-//! Asset viewer. Optional arguments `[package [asset]]` preselect a package (path suffix, e.g. `AW7Tex.utx`) and an
-//! asset.
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;

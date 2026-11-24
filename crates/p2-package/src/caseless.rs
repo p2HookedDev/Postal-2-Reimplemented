@@ -2,7 +2,6 @@ use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
-/// Map key whose hash and equality ignore ASCII case; maps keyed by it are looked up with `&name as &dyn Text`.
 #[derive(Debug, Clone)]
 pub(crate) struct Caseless(pub(crate) Box<str>);
 

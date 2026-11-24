@@ -1,7 +1,6 @@
-//! The lamps' and the sun's shadows of each pixel of the world camera, cast after its depth prepass and the sun's
-//! cascades (`lamp_mask.wesl`) into an image the lit materials hold in their normal map slot, so a surface runs the
-//! shadow code only for the lamps the image does not hold (`lamp_shadow.wesl` `screen_shadows`) and none for the sun
-//! (`screen_sun`). Run inside the lit surfaces' shader, the shadows held up the rest of its work in a fight.
+//! Lamp and sun shadows for each world camera pixel, cast after the depth prepass and sun cascades into an
+//! image the lit materials hold in their normal map slot, so a surface runs shadow code only for lamps it lacks.
+//! Run inside the lit surfaces' shader, the shadows held up the rest of its work in a fight.
 
 use bevy::app::{App, PostUpdate};
 use bevy::asset::{Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -40,19 +39,19 @@ use crate::world_pass::WorldCamera;
 
 const MASK_SHADER: Handle<Shader> = uuid_handle!("f3a4516c-ba33-4e97-9d69-3ce25bfa5f3f");
 const GROUP_SIDE: u32 = 8;
-// The sun's rows start this many rows past the pixels' (the header between), a row for this many pixel rows, one in
-// each channel. Matches `lamp_shadow.wesl`.
+// The sun's rows start this many rows past the pixels' (the header between), a row for this many pixel rows, one
+// in each channel. Matches `lamp_shadow.wesl`.
 const SUN_ROWS_FROM: u32 = 1;
 const SUN_PIXELS: u32 = 4;
 
-/// A texel a pixel of the world camera's target, a header row after them and the sun's rows (`mask_height`), made anew
-/// when the target changes size; none without a normal prepass, or with MSAA, where every surface casts its own.
+/// A texel a pixel of the world camera's target, a header row after them and the sun's rows (`mask_height`), made
+/// anew when the target changes size; none without a normal prepass, or with MSAA, where every surface casts its
+/// own.
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub(super) struct ShadowMask {
     image: Option<Handle<Image>>,
     size: UVec2,
-    /// The shadow filter level: 0 sharp, 1 soft, 2 softer, 3 contact hardening.
     softness: u8,
 }
 
@@ -72,7 +71,6 @@ struct MaskPipeline {
     pipelines: HashMap<MaskKey, CachedComputePipelineId>,
 }
 
-/// What the lit pipelines' sun code is specialized on, as Bevy's mesh pipeline names it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct MaskKey {
     filter: &'static str,
@@ -109,7 +107,6 @@ struct MaskGroups {
 
 pub(super) fn build(app: &mut App) {
     app.init_resource::<ShadowMask>();
-    // After the camera's size is set this frame, so a resized frame's mask is as big as its prepass.
     app.add_systems(PostUpdate, (size_mask.after(CameraUpdateSystems).in_set(AtlasSizeSystems), follow_softness));
     follow_atlas::<ShadowMask>(app);
     app.add_plugins(ExtractResourcePlugin::<ShadowMask>::default());
@@ -169,8 +166,8 @@ fn init_mask_pipeline(mut commands: Commands) {
             ),
         ),
     );
-    // Bevy's mesh view bindings at their own numbers, which the sun's code imports; the contact shadows' settings only
-    // for a view that has them, as the lit pipelines take them.
+    // Bevy's mesh view bindings at their own numbers, which the sun's code imports; the contact shadows' settings
+    // only for a view that has them, as the lit pipelines take them.
     let sun = BindGroupLayoutDescriptor::new(
         "lamp shadow mask sun",
         &BindGroupLayoutEntries::with_indices(
@@ -208,9 +205,8 @@ fn queue_mask_pipeline(
     views: Query<(Option<&ShadowFilteringMethod>, Has<ContactShadows>), With<WorldCamera>>,
 ) {
     let MaskPipeline { sun, sun_contact, layout, pipelines } = &mut *pipeline;
-    // Every filter the settings pick (`modern.rs`), with and without contact shadows, is made before it is needed: a
-    // frame without the pass lights the world's surfaces with the sun unshadowed and the sky open. A new softness
-    // builds while the last one casts (`cast_shadows`).
+    // Every filter the settings pick, with and without contact shadows, is built ahead: a frame without the pass
+    // lights the world with the sun unshadowed and the sky open. A new softness builds while the last one casts.
     let softness = mask.softness;
     let settings = [ShadowFilteringMethod::Hardware2x2, ShadowFilteringMethod::Gaussian].into_iter().flat_map(|filter| [false, true].map(move |contact| MaskKey::for_view(Some(&filter), contact, softness)));
     if views.is_empty() {
@@ -241,7 +237,6 @@ fn unmark_mask(mask: Res<ShadowMask>, images: Res<RenderAssets<GpuImage>>, queue
     write_rows(&queue, image, mask.size.y, &[[0.0; 4]]);
 }
 
-/// The pipeline for `key`, or while it builds one of another softness with the same filter.
 fn ready_pipeline<'a>(pipeline: &MaskPipeline, cache: &'a PipelineCache, key: MaskKey) -> Option<&'a ComputePipeline> {
     let ready = |key: &MaskKey| pipeline.pipelines.get(key).and_then(|id| cache.get_compute_pipeline(*id));
     ready(&key).or_else(|| (0..=3).map(|softness| MaskKey { softness, ..key }).find_map(|key| ready(&key)))
@@ -282,7 +277,6 @@ fn cast_shadows(
     if multisampled || target.texture_descriptor.size.width != size.width || target.texture_descriptor.size.height != mask_height(size.height) {
         return;
     }
-    // Without lamps or their bake the pass still casts the sun; its lamp half then finds no atlas and holds none.
     let book = atlas.book.as_ref().and_then(|book| images.get(book)).unwrap_or(&fallback.d2);
     let shadows = atlas.wanted().and_then(|image| images.get(&image)).unwrap_or(&fallback.d2);
     let levels = sun_levels.image.as_ref().and_then(|image| images.get(image)).unwrap_or(&fallback.d2);
