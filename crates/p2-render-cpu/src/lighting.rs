@@ -43,6 +43,8 @@ pub struct MeshLight {
     pub cone: u8,
     pub dynamic: bool,
     pub special_lit: bool,
+    /// The side of the corona drawn at the light in world units, 0 without one.
+    pub corona: f32,
 }
 
 impl Default for MeshLight {
@@ -62,6 +64,7 @@ impl Default for MeshLight {
             cone: 128,
             dynamic: false,
             special_lit: false,
+            corona: 0.0,
         }
     }
 }

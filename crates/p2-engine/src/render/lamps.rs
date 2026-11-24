@@ -93,16 +93,18 @@ fn on_threads<T: Send>(count: usize, threads: usize, work: impl Fn(usize) -> T +
 
 /// A lamp's texels in the book, as `lamp_shadow.wesl` reads them: place and radius (negative for a spot); linear colour
 /// and atlas tile; a spot's direction x and y, its cone's scale signed as the direction's z, and the cone's offset.
-/// The last three are written by the passes: two of detail squares, one of where its movers' tiles lie.
+/// The next three are written by the passes: two of detail squares, one of where its movers' tiles lie. The last holds
+/// the lamp's size.
 fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32) -> [[f32; 4]; RECORD_TEXELS] {
     let (at, spot) = scene_place(light, origin);
     let [r, g, b] = linear_light(light.color(level_brightness));
     let look = [r, g, b, (tile & (LAMP_MARK - 1)) as f32];
+    let size = [crate::render::lamp_size::lamp_size(light.world_radius(), Some(light.corona), None), 0.0, 0.0, 0.0];
     let Some(along) = spot else {
-        return [[at.x, at.y, at.z, light.world_radius()], look, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]];
+        return [[at.x, at.y, at.z, light.world_radius()], look, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4], size];
     };
     let scale = 1.0 / (1.0 - light.cone_sine()).max(1e-4);
-    [[at.x, at.y, at.z, -light.world_radius()], look, [along.x, along.y, scale.copysign(along.z), -light.cone_sine() * scale], [0.0; 4], [0.0; 4], [0.0; 4]]
+    [[at.x, at.y, at.z, -light.world_radius()], look, [along.x, along.y, scale.copysign(along.z), -light.cone_sine() * scale], [0.0; 4], [0.0; 4], [0.0; 4], size]
 }
 
 /// A lamp's place in the scene and, for a spot, the way it shines.
@@ -159,14 +161,36 @@ pub(crate) fn map_lamps(environment: &LightEnvironment) -> Vec<MeshLight> {
 pub struct Lamp;
 
 #[derive(Component)]
-struct Placed {
+pub(crate) struct Placed {
     number: u32,
     strength: f32,
-    range: f32,
+    /// Linear light.
+    pub(crate) color: Vec3,
+    pub(crate) range: f32,
     /// A spot's direction and the cosine of its cone's half angle.
-    spot: Option<(Vec3, f32)>,
+    pub(crate) spot: Option<(Vec3, f32)>,
     /// How far the static world it lights lies from it through each face of its tile.
     reach: [f32; 6],
+}
+
+/// As the shader lights a point: 0 outside the lamp's range or a spot's cone.
+pub(crate) fn lamp_falloff(lamp_at: Vec3, range: f32, spot: Option<(Vec3, f32)>, point: Vec3) -> f32 {
+    let to_point = point - lamp_at;
+    let squared = to_point.length_squared();
+    if squared >= range * range {
+        return 0.0;
+    }
+    let x = squared.sqrt() / range;
+    let cone = spot.map_or(1.0, |(along, cos)| {
+        let share = ((along.dot(to_point.normalize_or_zero()) - cos) / (1.0 - cos).max(1e-4)).clamp(0.0, 1.0);
+        share * share
+    });
+    (1.0 - x * x * (3.0 - 2.0 * x)) * cone
+}
+
+/// The linear light of the placed lamps at a point, with no shadow test.
+pub(crate) fn lamp_sum(lamps: &[(Vec3, &Placed)], point: Vec3) -> Vec3 {
+    lamps.iter().map(|(at, placed)| placed.color * lamp_falloff(*at, placed.range, placed.spot, point)).sum()
 }
 
 #[derive(Resource, Default)]
@@ -312,7 +336,7 @@ fn spawn_lamp(commands: &mut Commands, index: usize, light: &MeshLight, reach: [
     let at = place(light, &gpu, origin);
     let [r, g, b] = linear_light(light.color(environment.level_brightness));
     let spot = scene_place(light, origin).1.map(|along| (along, light.cone_sine()));
-    let placed = Placed { number: index as u32, strength: r + g + b, range: light.world_radius(), spot, reach };
+    let placed = Placed { number: index as u32, strength: r + g + b, color: Vec3::new(r, g, b), range: light.world_radius(), spot, reach };
     let seen = (Lamp, placed, at, Visibility::default(), RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER, RESTING_PROP_LAYER]), zone, SeenWithin(light.world_radius() * LAMP_SEEN_RADII));
     commands.spawn(seen);
 }
@@ -584,6 +608,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_lamp_sum_adds_the_lamps_in_range_by_their_falloff() {
+        let placed = |color: Vec3, spot| Placed { number: 0, strength: color.element_sum(), color, range: 100.0, spot, reach: [0.0; 6] };
+        let (red, blue, down) = (placed(Vec3::X, None), placed(Vec3::Z, None), placed(Vec3::Y, Some((Vec3::NEG_Y, 0.5))));
+        let lamps = [(Vec3::ZERO, &red), (Vec3::new(500.0, 0.0, 0.0), &blue), (Vec3::new(0.0, 100.0, 0.0), &down)];
+        assert_eq!(lamp_sum(&lamps, Vec3::ZERO), Vec3::X);
+        let half = lamp_sum(&lamps, Vec3::new(50.0, 0.0, 0.0));
+        assert!((half - Vec3::new(0.5, 0.0, 0.0)).length() < 1e-6, "{half}");
+        let under = lamp_sum(&lamps, Vec3::new(0.0, 50.0, 0.0));
+        assert!((under - Vec3::new(0.5, 0.5, 0.0)).length() < 1e-6, "{under}");
+        assert_eq!(lamp_sum(&lamps, Vec3::new(0.0, 0.0, 300.0)), Vec3::ZERO);
+    }
+
+    #[test]
     fn the_lamp_level_sets_the_atlas_side() {
         let table: Vec<u32> = (0..=4).map(lamp_quality).map(|quality| quality.atlas_side).collect();
         assert_eq!(table, [0, 4096, 4096, 8192, 16384]);
@@ -600,6 +637,9 @@ mod tests {
         let [r, g, b] = linear_light(light.color(1.0));
         assert_eq!(record[1], [r, g, b, tile as f32]);
         assert_eq!(record[1][3] as u32, tile);
+        assert_eq!(record[6], [light.world_radius() * crate::render::lamp_size::LAMP_SOURCE_SHARE, 0.0, 0.0, 0.0]);
+        let crowned = lamp_record(&MeshLight { corona: 160.0, ..light }, 1.0, Vec3::ZERO, tile);
+        assert_eq!(crowned[6][0], crate::render::lamp_size::lamp_size(light.world_radius(), Some(160.0), None));
     }
 
     #[test]

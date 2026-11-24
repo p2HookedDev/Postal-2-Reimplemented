@@ -575,7 +575,7 @@ pub(super) fn update_projections(t: &mut ProjectionTargets) {
                     projector.material_blending
                 );
                 let decal = ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() };
-                let entity = t.commands.spawn((MapScoped, decal, transform)).id();
+                let entity = t.commands.spawn((MapScoped, decal, transform, decal_aging::DecalAge::new(tag, projector.life, &projector.texture))).id();
                 if let Some(old) = projectors.dynamic_decals.insert(actor, entity) {
                     t.commands.entity(old).despawn();
                 }

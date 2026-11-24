@@ -44,7 +44,7 @@ fn every_material_kind_follows_the_setting() {
             world.resource::<Assets<LightmappedMaterial>>().get(&bsp).unwrap().extension.layers.detail.z > 0.5,
             world.resource::<Assets<MeshLitMaterial>>().get(&mesh).unwrap().extension.layers.detail.z > 0.5,
             world.resource::<Assets<ActorLitMaterial>>().get(&actor).unwrap().extension.layers.detail.z > 0.5,
-            world.resource::<Assets<TerrainMaterial>>().get(&ground).unwrap().extension.params.count.y == 1,
+            world.resource::<Assets<TerrainMaterial>>().get(&ground).unwrap().extension.params.count.y & u32::from(MODERN_ON) != 0,
             world.resource::<Assets<TerrainLayerMaterial>>().get(&layer).unwrap().extension.layers.detail.z > 0.5,
         ]
     };
@@ -63,9 +63,11 @@ fn every_material_gets_the_flag_once() {
     world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
     world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
     let bits = modern_flag(world.resource::<Settings>());
+    let level = world.resource::<Settings>().modern_level(MODERN_MATERIALS);
     assert!(bits & MODERN_ON != 0);
     let materials = world.resource::<Assets<LightmappedMaterial>>();
-    assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| material.flag() == bits)));
+    assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| material.flag() & 7 == u16::from(bits))));
+    assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| crate::render::material_class::levels_of(material.flag()).0 == level)));
 }
 
 #[test]

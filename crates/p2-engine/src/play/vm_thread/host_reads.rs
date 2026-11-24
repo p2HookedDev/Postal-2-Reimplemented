@@ -171,6 +171,7 @@ fn actor_frame(vm: &Vm<Arc<Loader>>, actor: ObjectId, view: Option<&p2_vm::Playe
         emitters_disabled: emitters_disabled(vm, actor),
         look: actor_look(vm, actor),
         glow: vm.store.byte_of(actor, Prop::AmbientGlow),
+        cull_distance: vm.store.float_of(actor, Prop::CullDistance),
     }
 }
 

@@ -28,6 +28,11 @@ sliders and boxes. It is our code, not retail's; it uses only the stock Shell me
 - `ModernMenuEffects` extends `ModernMenuPage`: sliders 0 to 10 for `ModernGodRays`, `ModernVignette`,
   `ModernChromaticAberration` (0 off) and `ModernSaturation`, `ModernContrast`, `ModernExposure`
   (5 neutral). No preset writes them, and changing one keeps the preset.
+- `ModernMenuSurfaces`, `ModernMenuParticles`, `ModernMenuScreen`, `ModernMenuMotion` extend `ModernMenuPage`: the
+  rows of the sixteen upgrades, a switch for a top of 1, a
+  combo for `ModernReflections`, `ModernSharpHud`, `ModernFireVolumes`, sliders 0 to 10 otherwise. Like the picture
+  effects, no preset writes them and changing one keeps the preset. A box reads `True` as at least 1, so
+  `ModernTemporalAA` (default 0) works as a box.
 
 `ModernBake` keeps its key but has no row. Values and presets: `crates/p2-host/src/display.rs`.
 

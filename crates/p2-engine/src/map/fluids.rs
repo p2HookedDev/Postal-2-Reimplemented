@@ -54,21 +54,44 @@ pub(super) fn empty_quads(mesh: &mut Mesh) {
 pub(super) fn fill_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3) {
     let mut quads = Quads::default();
     if points.len() > 2 {
-        let at = |i: usize| Vec3::from_array(points[i].location.into());
-        let sides: Vec<Vec3> = (0..points.len())
-            .map(|i| {
-                let previous = if i == 0 { 2.0 * at(0) - at(1) } else { at(i - 1) };
-                let facing = normal.unwrap_or_else(|| (eye - previous).normalize_or_zero());
-                (at(i) - previous).cross(facing).normalize_or_zero() * points[i].size
-            })
-            .collect();
-        for i in 0..points.len() - 2 {
-            let color = display(points[i].color);
-            let corners = [at(i) - sides[i], at(i) + sides[i], at(i + 1) + sides[i + 1], at(i + 1) - sides[i + 1]];
-            quads.push(corners, [0.0, 1.0, 1.0, 0.0], [color; 4]);
-        }
+        strip_quads(&mut quads, &points[..points.len() - 1], normal, eye, |_| [1.0, 0.0]);
     }
     quads.write(mesh);
+}
+
+/// The modern stream: the drawn points smoothed into a ribbon, the texture scrolling downstream. A ribbon facing the eye
+/// (a stream in the air) also sags; one with a fixed normal (a trail on the ground) neither sags nor scrolls.
+pub(super) fn fill_flowing_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3, seconds: f32) {
+    use super::liquid_flow::{Hang, PIECES, phase, ribbon};
+    let mut quads = Quads::default();
+    if points.len() > 2 {
+        let smooth = ribbon(&points[..points.len() - 1], if normal.is_none() { Hang::Sags } else { Hang::Straight });
+        let shift = if normal.is_none() { phase(seconds) } else { 0.0 };
+        let pieces = PIECES as f32;
+        strip_quads(&mut quads, &smooth, normal, eye, |i| {
+            let k = (i % PIECES) as f32;
+            [1.0 - k / pieces + shift, 1.0 - (k + 1.0) / pieces + shift]
+        });
+    }
+    quads.write(mesh);
+}
+
+/// One quad per pair of neighbouring points, `v` giving each quad's texture V at its first and second point.
+fn strip_quads(quads: &mut Quads, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3, v: impl Fn(usize) -> [f32; 2]) {
+    let at = |i: usize| Vec3::from_array(points[i].location.into());
+    let sides: Vec<Vec3> = (0..points.len())
+        .map(|i| {
+            let previous = if i == 0 { 2.0 * at(0) - at(1) } else { at(i - 1) };
+            let facing = normal.unwrap_or_else(|| (eye - previous).normalize_or_zero());
+            (at(i) - previous).cross(facing).normalize_or_zero() * points[i].size
+        })
+        .collect();
+    for i in 0..points.len() - 1 {
+        let color = display(points[i].color);
+        let [v0, v1] = v(i);
+        let corners = [at(i) - sides[i], at(i) + sides[i], at(i + 1) + sides[i + 1], at(i + 1) - sides[i + 1]];
+        quads.push(corners, [0.0, v0, 1.0, v1], [color; 4]);
+    }
 }
 
 /// Side of a point: direction from the previous point × the line from the eye to that previous point,

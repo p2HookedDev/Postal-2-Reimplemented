@@ -269,6 +269,8 @@ pub struct RenderState {
     pub specular_uv: Vec<UvModifier>,
     pub combiner: Option<i32>,
     pub switch: Option<i32>,
+    /// The renderer's material class, from the material's names and layers; 0 is the default class.
+    pub class: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

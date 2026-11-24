@@ -53,7 +53,9 @@ pub use crate::level_collision::{LevelCollision, StaticCollision};
 
 mod canvas_actors;
 mod coronas;
+mod decal_aging;
 mod fluids;
+mod liquid_flow;
 mod hud;
 mod load;
 mod movie;
@@ -69,7 +71,7 @@ use movie::Movies;
 pub use particles::{ParticleReport, Particles};
 pub use particles::pad_bounds;
 pub use sprites::{SpriteQuad, face_sprites};
-pub use coronas::{CoronaActor, corona_actor, draw_coronas, is_corona};
+pub use coronas::{CORONA_SIZE, CoronaActor, corona_actor, draw_coronas, is_corona};
 pub use spawned::{SpawnedActors, material_images};
 use spawned::SpawnTargets;
 use canvas_actors::HudTargets;
@@ -91,7 +93,8 @@ pub enum MapSystems {
 impl bevy::app::Plugin for MapPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
-        app.init_resource::<Fluids>()
+        app.add_plugins((decal_aging::DecalAgingPlugin, crate::render::wounds::WoundsPlugin))
+            .init_resource::<Fluids>()
             .init_resource::<MaterialSwitches>()
             .init_resource::<Projectors>()
             .init_resource::<Particles>()
@@ -456,6 +459,7 @@ impl Session {
         hud.hud_textures.clear();
         hud.hud_fonts.clear();
         hud.hud_images.clear();
+        hud.nearest = Default::default();
         hud.hud_assets = HudAssets::default();
         hud.movies.stop(&mut t.commands);
         hud.canvas_actors.clear();
@@ -475,6 +479,9 @@ impl Session {
     }
 
     pub fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut SceneTargets) {
+        // Menus keep the whole window: the cursor is read against it.
+        let playing = t.play.world().is_some_and(|world| world.pointer() == crate::play::Pointer::Captured);
+        let rect = if t.view.modern.safe_area && playing { crate::render::modern_view::hud_area(rect) } else { rect };
         let started = std::time::Instant::now();
         t.hud.start_frame(started);
         t.play.set_canvas_size([rect.width(), rect.height()]);

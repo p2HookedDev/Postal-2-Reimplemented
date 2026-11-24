@@ -11,8 +11,10 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 9] = [
+const ENTRIES: [(&str, &[&str]); 17] = [
     ("actor_light", &[]),
+    ("actor_light", &["VISIBILITY_RANGE_DITHER"]),
+    ("mesh_light", &["VISIBILITY_RANGE_DITHER"]),
     ("lightmapped", &[]),
     ("lightmapped", &["LIGHTMAP"]),
     ("mesh_light", &[]),
@@ -21,6 +23,12 @@ const ENTRIES: [(&str, &[&str]); 9] = [
     ("blended", &[]),
     ("particle", &[]),
     ("tone", &[]),
+    ("reflections", &[]),
+    ("lamp_fog", &[]),
+    ("bounce", &[]),
+    ("fire_volume", &[]),
+    ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS"]),
+    ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS", "ACTOR_SHADING"]),
 ];
 
 const CONSTANTS: &str = "const MATERIAL_BIND_GROUP = 3;

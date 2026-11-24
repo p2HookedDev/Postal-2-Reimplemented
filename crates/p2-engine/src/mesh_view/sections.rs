@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::material_class::{MaterialClass, with_class};
 
 #[derive(Clone)]
 pub struct MaterialImages {
@@ -58,13 +59,14 @@ impl SectionView {
     pub fn textured(mesh: Handle<Mesh>, found: Option<MaterialImages>) -> Self {
         let state = found.as_ref().map(|found| found.state.clone()).unwrap_or_default();
         let alpha_mode = alpha_mode(&state);
-        let layers = Layers::new(
+        let mut layers = Layers::new(
             found.as_ref().and_then(|found| found.detail.clone()),
             state.detail.map_or(0.0, |detail| detail.scale),
             found.as_ref().and_then(|found| found.specular.clone()),
             state.specular_uv.clone(),
             state.opacity.is_some() && (state.glow.is_some() || state.specular.is_some()),
         );
+        layers.params = with_class(layers.params, MaterialClass::from_index(f32::from(state.class)));
         Self {
             mesh,
             glow: found.as_ref().and_then(|found| found.glow.clone()),

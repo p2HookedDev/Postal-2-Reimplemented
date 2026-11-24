@@ -19,7 +19,7 @@ use super::faces::{DETAIL_UNIT, FINEST_TEXEL, FaceBook};
 use super::grounding::{Capsule, GRID_COLUMNS, grounding_row};
 use super::movers::{Drawn, MOST_MOVER_TILES, MoverCaster, MoverTile, MoverTiles, TILE_MARGIN, WIDEST_TILE};
 use super::tile_grid::tile_grid_rows;
-use super::{DetailSquares, Lamp, LampAtlas, MOVER_FADE_SECONDS, Placed, lamp_quality, scene_eye};
+use super::{DetailSquares, Lamp, LampAtlas, MOVER_FADE_SECONDS, Placed, lamp_falloff, lamp_quality, scene_eye};
 use crate::components::{ActorModel, BaseModel, FollowActor, FollowBone, MOVER_LAYER, RESTING_PROP_LAYER, SceneView};
 use crate::display::{MODERN_LAMP_SHADOWS, Settings};
 use crate::level_collision::{LevelCollision, StaticCollision};
@@ -137,20 +137,8 @@ pub(super) struct PickState {
     numbers: FxHashMap<Entity, u32>,
 }
 
-/// As the shader lights a point: 0 outside the lamp's range or a spot's cone.
 fn lamp_score(lamp: &Lit, middle: Vec3) -> f32 {
-    let to_mover = middle - lamp.at;
-    let squared = to_mover.length_squared();
-    if squared >= lamp.range * lamp.range {
-        return 0.0;
-    }
-    let distance = squared.sqrt();
-    let x = distance / lamp.range;
-    let cone = lamp.spot.map_or(1.0, |(along, cos)| {
-        let share = ((along.dot(to_mover.normalize_or_zero()) - cos) / (1.0 - cos).max(1e-4)).clamp(0.0, 1.0);
-        share * share
-    });
-    lamp.strength * (1.0 - x * x * (3.0 - 2.0 * x)) * cone
+    lamp.strength * lamp_falloff(lamp.at, lamp.range, lamp.spot, middle)
 }
 
 /// The tile's axis, the tangent of its half angle and the lamp's distance to the mover's middle.

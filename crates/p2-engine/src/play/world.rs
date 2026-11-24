@@ -34,6 +34,8 @@ pub struct ActorFrame {
     /// When it changes, the host rebuilds the model ([`Spawned::restyled`]).
     pub look: u64,
     pub glow: u8,
+    /// In Unreal units; 0 culls nothing.
+    pub cull_distance: f32,
 }
 
 /// Channels above 0 blend over channel 0. Bone names are lower case and shared, so frames allocate
@@ -98,6 +100,7 @@ impl ActorFrame {
             emitters_disabled: Vec::new(),
             look: 0,
             glow: 0,
+            cull_distance: 0.0,
         }
     }
 }
@@ -441,6 +444,24 @@ impl PlayWorld {
 
     pub fn fov(&self) -> Option<f32> {
         self.frame.fov
+    }
+
+    /// A Matinee shot drives the camera.
+    pub fn cutscene(&self) -> bool {
+        self.frame.view.as_ref().is_some_and(|view| view.interpolating)
+    }
+
+    /// Drawn by a camera at the last hand-off to the game.
+    pub fn drawn(&self, actor: ObjectId) -> bool {
+        self.visible.contains(&actor)
+    }
+
+    pub fn ragdolled(&self, actor: ObjectId) -> bool {
+        self.frame.ragdolls.contains_key(&actor)
+    }
+
+    pub fn view_location(&self) -> Option<Vector> {
+        self.frame.view.as_ref().map(|view| view.location)
     }
 
     pub fn origin(&self) -> Vec3 {

@@ -41,13 +41,29 @@ fn allows_gloss(flag: f32) -> bool {
     return (bits & MODERN_ON) != 0u && (bits & NO_GLOSS) == 0u;
 }
 
-// x roughness, y metal, z 1 on a special-lit surface. `packed` is the roughness, 0 for the default surface, 2 further from
-// 0 when special-lit, negative on a metal.
+// x roughness, y metal, z 1 on a special-lit surface and else its reflectance as a dielectric. `packed` is the roughness,
+// 0 for the default surface, 2 further from 0 when special-lit, negative on a metal.
 fn surface_of(packed: f32) -> vec3<f32> {
     let size = abs(packed);
     let special = size >= 2.0;
     let rough = select(size, size - 2.0, special);
-    return vec3(select(rough, DEFAULT_ROUGHNESS, rough == 0.0), select(0.0, 1.0, packed < 0.0), select(0.0, 1.0, special));
+    return vec3(select(rough, DEFAULT_ROUGHNESS, rough == 0.0), select(0.0, 1.0, packed < 0.0), select(DIELECTRIC_F0, 1.0, special));
+}
+
+// The materials level sits above the flag's effect bits. Matches `material_class.rs`.
+const MATERIALS_SHIFT: u32 = 3u;
+const MATERIALS_TOP: f32 = 10.0;
+
+// `blend` is the layers' blend: z the material class's roughness (0 without a class), w its reflectance (1 on a metal).
+// The level moves the surface from the default towards its class.
+fn classed_surface(flag: f32, blend: vec4<f32>) -> vec3<f32> {
+    let level = (modern_bits(flag) >> MATERIALS_SHIFT) & 15u;
+    if level == 0u || blend.z <= 0.0 {
+        return surface_of(0.0);
+    }
+    let scale = min(f32(level) / MATERIALS_TOP, 1.0);
+    let metal = blend.w >= 1.0;
+    return vec3(mix(DEFAULT_ROUGHNESS, blend.z, scale), select(0.0, scale, metal), mix(DIELECTRIC_F0, select(blend.w, DIELECTRIC_F0, metal), scale));
 }
 
 fn ao_with_bounce(ao: f32, albedo: vec3<f32>) -> vec3<f32> {
@@ -119,8 +135,9 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
     let to_sun = around.to_sun;
     let rough = surface.x;
     let metal = surface.y;
+    let dielectric = select(surface.z, DIELECTRIC_F0, special);
     let a = rough * rough;
-    let f0 = mix(vec3(DIELECTRIC_F0), albedo, metal);
+    let f0 = mix(vec3(dielectric), albedo, metal);
     let eye = to_eye(position);
     let reflected = reflect(-eye, normal);
     // Probes carry what the zone's flat ambient and the sky left under a roof stand in for without them.
@@ -160,8 +177,9 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
         // A rough surface returns less of the sky than the fit says, which would otherwise film every colour.
         let rough_reflection = mix(1.0 - 0.6 * smoothstep(0.5, 1.0, rough), 1.0, metal);
         env *= rough_reflection * (f0 * ab.x + ab.y) * saturate(pow(nv + occlusion, exp2(-16.0 * rough * rough - 1.0)) - 1.0 + occlusion);
-        // `lamps.specular` is a dielectric's, and terrain's layers share it, so a metal's colour comes on here.
-        lit.shine = (spec + env + lamps.specular * mix(vec3(1.0), albedo / DIELECTRIC_F0, metal)) * cavity;
+        // `lamps.specular` is the default dielectric's, and terrain's layers share it, so a class's reflectance and a
+        // metal's colour come on here. Written so the default reflectance gives exactly 1.
+        lit.shine = (spec + env + lamps.specular * mix(vec3(1.0 + (dielectric - DIELECTRIC_F0) / DIELECTRIC_F0), albedo / DIELECTRIC_F0, metal)) * cavity;
     }
     return lit;
 }

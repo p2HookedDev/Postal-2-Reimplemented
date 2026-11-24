@@ -11,7 +11,7 @@ use p2_math::{Rotator, Vector};
 use p2_render_cpu::corona::{Coronas, corona_color, fade_delta, non_square, non_square_scale, size_factor, within_light_radius};
 use p2_vm::{LoaderRef, Prop, Value};
 
-const CORONA_SIZE: f32 = 1024.0;
+pub const CORONA_SIZE: f32 = 1024.0;
 
 pub struct CoronaActor {
     pub object: ObjectId,

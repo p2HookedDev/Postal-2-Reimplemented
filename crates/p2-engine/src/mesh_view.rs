@@ -135,6 +135,7 @@ pub struct MeshView {
     pub occlusion_culling: bool,
     pub(crate) canvas_layers: Vec<Entity>,
     pub(crate) canvas_below: [bool; OVERLAY_LAYERS.len()],
+    pub(crate) modern: crate::render::modern_view::ModernView,
 }
 
 impl Default for MeshView {
@@ -146,6 +147,7 @@ impl Default for MeshView {
             occlusion_culling: false,
             canvas_layers: Vec::new(),
             canvas_below: [false; OVERLAY_LAYERS.len()],
+            modern: Default::default(),
         }
     }
 }
@@ -250,8 +252,8 @@ impl MeshView {
     }
 
     fn set_fov(&self, projection: &mut Mut<Projection>, degrees: f32) {
-        let aspect = self.viewport.map_or(1.0, |(_, size)| size.x as f32 / size.y.max(1) as f32);
-        let fov = 2.0 * ((degrees.to_radians() / 2.0).tan() / aspect).atan();
+        let aspect = self.bevy_viewport().map_or(1.0, |viewport| viewport.physical_size.x as f32 / viewport.physical_size.y.max(1) as f32);
+        let fov = crate::render::modern_view::vertical_fov(degrees, aspect, self.modern.wide);
         if matches!(&**projection, Projection::Perspective(perspective) if perspective.fov != fov)
             && let Projection::Perspective(perspective) = &mut **projection
         {
@@ -260,7 +262,10 @@ impl MeshView {
     }
 
     fn bevy_viewport(&self) -> Option<Viewport> {
-        self.viewport.map(|(physical_position, physical_size)| Viewport { physical_position, physical_size, ..Default::default() })
+        self.viewport.map(|(position, size)| {
+            let (physical_position, physical_size) = if self.modern.bars { crate::render::modern_view::centred_wide(position, size) } else { (position, size) };
+            Viewport { physical_position, physical_size, ..Default::default() }
+        })
     }
 
 }

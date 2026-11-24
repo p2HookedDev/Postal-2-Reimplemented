@@ -368,7 +368,7 @@ pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cel
 }
 
 /// Texels of a lamp's record in the book. `lamp_shadow.wesl` holds the same number.
-pub(super) const RECORD_TEXELS: usize = 6;
+pub(super) const RECORD_TEXELS: usize = 7;
 pub(super) const HEADER_TEXELS: usize = 2;
 /// The book's width in texels. `lamp_shadow.wesl` holds the same number.
 pub(super) const BOOK_WIDTH: usize = 2048;
@@ -487,12 +487,12 @@ mod tests {
 
     fn spot_record(along: Vec3, sine: f32, color: f32) -> [[f32; 4]; RECORD_TEXELS] {
         let scale = 1.0 / (1.0 - sine);
-        [[30.0, -20.0, 10.0, -1000.0], [color; 4], [along.x, along.y, scale.copysign(along.z), -sine * scale], [0.0; 4], [0.0; 4], [0.0; 4]]
+        [[30.0, -20.0, 10.0, -1000.0], [color; 4], [along.x, along.y, scale.copysign(along.z), -sine * scale], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]]
     }
 
     #[test]
     fn a_cell_loses_only_a_lamp_the_shader_would_skip_at_every_point_of_it() {
-        let point_lamp = [[30.0, -20.0, 10.0, 1000.0], [0.05; 4], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]];
+        let point_lamp = [[30.0, -20.0, 10.0, 1000.0], [0.05; 4], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]];
         let down = spot_record(Vec3::new(0.2, -0.9, -0.38).normalize(), 0.5, 0.6);
         let narrow = spot_record(Vec3::new(-0.7, 0.1, 0.7).normalize(), 0.875, 1.0);
         for (record, most_listed) in [(point_lamp, 1.0), (down, 0.45), (narrow, 0.2)] {

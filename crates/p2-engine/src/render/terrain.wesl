@@ -183,7 +183,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     if modern {
         seen = sun_seen_from(sun, vertex_output.world_position, normal, pbr_input.frag_coord.xy);
         occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
-        lamps = lamp_light(vertex_output, position, normal, pbr_input.frag_coord.xy, ranges, gloss, surface_of(0.0));
+        lamps = lamp_light(vertex_output, position, normal, pbr_input.frag_coord.xy, ranges, gloss, surface_of(0.0), f32(terrain.count.y));
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
     }
     var color = vec3(0.0);

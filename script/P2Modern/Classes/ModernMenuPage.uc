@@ -14,8 +14,8 @@ var int                     RowHigh[8];
 var int                     RowTop[8];
 var int                     RowCount;
 
-var localized string        Labels[8];
-var localized string        Helps[8];
+var localized string        Labels[10];
+var localized string        Helps[10];
 var localized string        LevelNames[5];
 var localized string        TitleText;
 var localized string        BackHelp;
@@ -46,8 +46,10 @@ function int ReadLevel(string Key, int High)
 	local string Value;
 
 	Value = ReadKey(Key);
-	if (Value == "" || Value ~= "True")
+	if (Value == "")
 		return High;
+	if (Value ~= "True")
+		return Max(High, 1);
 	if (Value ~= "False")
 		return 0;
 	return int(Value);

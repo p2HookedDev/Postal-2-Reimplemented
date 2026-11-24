@@ -7,6 +7,10 @@ var UWindowComboControl     PresetCombo;
 var ShellMenuChoice         LightingChoice;
 var ShellMenuChoice         ImageChoice;
 var ShellMenuChoice         EffectsChoice;
+var ShellMenuChoice         SurfacesChoice;
+var ShellMenuChoice         ParticlesChoice;
+var ShellMenuChoice         ScreenChoice;
+var ShellMenuChoice         MotionChoice;
 var localized string        CustomName;
 
 var string                  PresetKeys[9];
@@ -27,6 +31,10 @@ function CreateMenuContents()
 	LightingChoice = AddChoice(Labels[2], Helps[2], ItemFont, ItemAlign);
 	ImageChoice = AddChoice(Labels[3], Helps[3], ItemFont, ItemAlign);
 	EffectsChoice = AddChoice(Labels[4], Helps[4], ItemFont, ItemAlign);
+	SurfacesChoice = AddChoice(Labels[5], Helps[5], ItemFont, ItemAlign);
+	ParticlesChoice = AddChoice(Labels[6], Helps[6], ItemFont, ItemAlign);
+	ScreenChoice = AddChoice(Labels[7], Helps[7], ItemFont, ItemAlign);
+	MotionChoice = AddChoice(Labels[8], Helps[8], ItemFont, ItemAlign);
 	AddBack();
 	LoadRows();
 }
@@ -62,6 +70,14 @@ function Notify(UWindowDialogControl C, byte E)
 		GoToMenu(class'ModernMenuImage');
 	else if (E == DE_Click && C == EffectsChoice)
 		GoToMenu(class'ModernMenuEffects');
+	else if (E == DE_Click && C == SurfacesChoice)
+		GoToMenu(class'ModernMenuSurfaces');
+	else if (E == DE_Click && C == ParticlesChoice)
+		GoToMenu(class'ModernMenuParticles');
+	else if (E == DE_Click && C == ScreenChoice)
+		GoToMenu(class'ModernMenuScreen');
+	else if (E == DE_Click && C == MotionChoice)
+		GoToMenu(class'ModernMenuMotion');
 	else if (E == DE_Change && bUpdate && C == MasterBox)
 	{
 		WriteKey("ModernGraphics", string(MasterBox.bChecked));
@@ -80,12 +96,20 @@ defaultproperties
 	Labels(2)="Shadows and lighting"
 	Labels(3)="Image and effects"
 	Labels(4)="Picture effects"
+	Labels(5)="Reflections and light"
+	Labels(6)="Fire, blood and particles"
+	Labels(7)="Screen and HUD"
+	Labels(8)="Bodies and cutscenes"
 
 	Helps(0)="Turns all the new graphics on or off. Off gives the original look."
 	Helps(1)="Sets every quality row at once. Changing a row yourself makes it Custom."
 	Helps(2)="Sun and lamp shadows, contact shadows, ambient occlusion, indirect light and rounded terrain."
 	Helps(3)="Edge smoothing, bloom, sharpening, surface relief and generated specular."
 	Helps(4)="Sun rays, vignette, colour fringe, colour strength, contrast and exposure."
+	Helps(5)="Reflections, surface materials, lamp size, bounce light and lamp lit fog."
+	Helps(6)="Lit and soft particles, drying blood, wounds, flowing liquids and fire."
+	Helps(7)="Sharp HUD, wide screens, edge correction, fade in and temporal smoothing."
+	Helps(8)="Feet on stairs and slopes, flinching when hit, and cutscene camera effects."
 
 	PresetKeys(0)="ModernSunShadows"
 	PresetKeys(1)="ModernShadowDistance"

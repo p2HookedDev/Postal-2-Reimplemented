@@ -1,4 +1,5 @@
 use super::*;
+use super::drawn_pose::told_bone;
 use bevy::camera::visibility::RenderLayers;
 use crate::components::{CanvasDrawn, UNSEEN_LAYER};
 
@@ -81,7 +82,9 @@ pub(super) fn follow_bones(
             .unwrap_or(follow.body);
         let frame = follow.frame(body, bone);
         if let Some(world) = world {
-            world.shown.places.put_on_bone(follow.actor, follow.base, BoneFrame::of(frame));
+            let told = told_bone(&poses.animated, follow.base, follow.bone, bone);
+            let told = if told == bone { frame } else { follow.frame(body, told) };
+            world.shown.places.put_on_bone(follow.actor, follow.base, BoneFrame::of(told));
         }
         transform.set_if_neq(follow.transform_at(frame));
     }
@@ -137,10 +140,12 @@ pub(super) fn place_attached(
             *base = Some((*follow, canvas_drawn));
         }
     }
-    let (slots, names, aliases, bones) = (&mut poses.slots, &poses.names, &poses.aliases, &poses.bones);
+    let (slots, names, aliases, bones, animated) = (&mut poses.slots, &poses.names, &poses.aliases, &poses.bones, &poses.animated);
+    // The game is told the frame from the animation's own pose; the model is drawn on the corrected one.
     let mut frame_of = |attachment: &crate::actors::BoneAttachment| {
         let (index, tag) = bone_slot(slots, names, aliases, attachment)?;
-        let bone = *bones.get(&attachment.base)?.get(index)? * tag;
+        let drawn = *bones.get(&attachment.base)?.get(index)?;
+        let told = told_bone(animated, attachment.base, index, drawn);
         let body = match bases.get(&attachment.base).copied().flatten() {
             // What the scripts draw themselves stands at the newest tick's place; the rest where it is shown.
             Some((base, canvas_drawn)) => {
@@ -149,21 +154,23 @@ pub(super) fn place_attached(
             }
             None => *bone_bodies.get(&attachment.base)?,
         };
-        Some(attachment_frame(body, bone, attachment.relative_location, attachment.relative_rotation))
+        let frame = |bone: Mat4| attachment_frame(body, bone * tag, attachment.relative_location, attachment.relative_rotation);
+        let drawn_frame = frame(drawn);
+        Some((if told == drawn { drawn_frame } else { frame(told) }, drawn_frame))
     };
     for &(actor, _) in emitters.iter() {
         if let Some(attachment) = world.actor(actor).and_then(|actor| actor.attachment.as_ref())
-            && let Some(frame) = frame_of(attachment)
+            && let Some((told, _)) = frame_of(attachment)
         {
-            placed.push((actor, attachment.base, BoneFrame::of(frame)));
+            placed.push((actor, attachment.base, BoneFrame::of(told)));
         }
     }
     for &entity in due_models.iter() {
         let Ok((_, follow, mut transform, _)) = models.get_mut(entity) else { continue };
         let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) else { continue };
-        let Some(frame) = frame_of(attachment) else { continue };
-        placed.push((follow.actor, attachment.base, BoneFrame::of(frame)));
-        transform.set_if_neq(attached_transform(&follow, frame));
+        let Some((told, drawn)) = frame_of(attachment) else { continue };
+        placed.push((follow.actor, attachment.base, BoneFrame::of(told)));
+        transform.set_if_neq(attached_transform(&follow, drawn));
     }
     for (actor, base, frame) in placed.drain(..) {
         world.shown.places.put_on_bone(actor, base, frame);

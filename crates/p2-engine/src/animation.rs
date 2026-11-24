@@ -29,6 +29,9 @@ pub(crate) use attachments::{BoneFrame, attached_transform};
 pub use attachments::attachment_frame;
 
 mod attachments;
+mod drawn_pose;
+mod foot_placement;
+mod hit_reaction;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AnimationSystems {
@@ -42,6 +45,8 @@ impl Plugin for AnimationPlugin {
         crate::add_once(app, crate::FrameOrderPlugin);
         app.init_resource::<Animated>()
             .init_resource::<Poses>()
+            .add_plugins(foot_placement::FootPlacementPlugin)
+            .add_plugins(hit_reaction::HitReactionPlugin)
             .add_systems(Update, (animate, pose_joints, follow_bones, place_attached).chain().in_set(AnimationSystems::Pose))
             .add_systems(
                 PostUpdate,
@@ -62,6 +67,9 @@ struct Poses {
     joints: FxHashMap<ObjectId, Vec<(usize, Entity)>>,
     slots: FxHashMap<ObjectId, Vec<(p2_vm::NameId, usize, Mat4)>>,
     moved: FxHashSet<ObjectId>,
+    /// The animation's own pose of an actor whose drawn pose in `bones` was corrected since it was last posed: what
+    /// the game is told about bones. Dropped whenever the actor is posed again.
+    animated: FxHashMap<ObjectId, Vec<Mat4>>,
 }
 
 impl Poses {
@@ -76,6 +84,7 @@ impl Poses {
         self.aliases.remove(&actor);
         self.joints.remove(&actor);
         self.slots.remove(&actor);
+        self.animated.remove(&actor);
     }
 }
 
@@ -376,6 +385,7 @@ fn animate(
         let live: FxHashSet<ObjectId> = animated.0.iter().filter_map(|item| item.actor).collect();
         poses.bones.retain(|actor, _| live.contains(actor));
         poses.joints.retain(|actor, _| live.contains(actor));
+        poses.animated.retain(|actor, _| live.contains(actor));
         for item in &animated.0 {
             if let Some(actor) = item.actor {
                 poses.note(actor, item);
@@ -410,6 +420,7 @@ fn animate(
     for (item, pose) in animated.0.iter().zip(posed) {
         if let (Some(actor), Some(pose)) = (item.actor, pose) {
             poses.bones.insert(actor, pose);
+            poses.animated.remove(&actor);
             poses.changed.insert(actor);
             poses.note(actor, item);
         }

@@ -70,15 +70,32 @@ fn sun_rays(uv: vec2<f32>, pixel: vec2<f32>) -> vec3<f32> {
     return sum * post.tint.rgb * (strength * reach * reach / f32(RAY_STEPS));
 }
 
+// Where in the flat frame a cylindrical (Panini) view finds what it shows at `uv`. `half`: the tangent of half the
+// vertical field of view; `zoom` keeps the warped frame filling the screen.
+fn panini(uv: vec2<f32>, strength: f32, half: f32, zoom: f32, aspect: f32) -> vec2<f32> {
+    let extent = vec2(half * aspect, half);
+    let at = (uv * 2.0 - 1.0) * extent * zoom;
+    let away = 1.0 + strength;
+    let hyp_sq = at.x * at.x + away * away;
+    let slant = at.x * strength;
+    let to_cylinder = (-slant * at.x + away * sqrt(hyp_sq - slant * slant)) / hyp_sq;
+    let on_cylinder = at * ((to_cylinder + strength) / away);
+    return on_cylinder / (to_cylinder * extent) * 0.5 + 0.5;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let from_middle = in.uv - vec2(0.5);
-    var color = textureSample(scene, scene_sampler, in.uv).rgb;
+    var at = in.uv;
+    if post.lens.y > 0.0 {
+        at = panini(in.uv, post.lens.y, post.lens.z, post.lens.w, post.sun.w);
+    }
+    var color = textureSample(scene, scene_sampler, at).rgb;
     let fringe = post.lens.x;
     if fringe > 0.0 {
         let shift = from_middle * (2.0 * fringe * length(from_middle));
-        color.r = textureSampleLevel(scene, scene_sampler, in.uv + shift, 0.0).r;
-        color.b = textureSampleLevel(scene, scene_sampler, in.uv - shift, 0.0).b;
+        color.r = textureSampleLevel(scene, scene_sampler, at + shift, 0.0).r;
+        color.b = textureSampleLevel(scene, scene_sampler, at - shift, 0.0).b;
     }
     color = color * post.grade.x + sun_rays(in.uv, in.position.xy);
     color = pbr_neutral(color);

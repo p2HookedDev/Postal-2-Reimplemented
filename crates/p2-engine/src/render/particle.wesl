@@ -1,11 +1,16 @@
 // Particle sprites: D3D colour stages in display (gamma) space, then the output the pipeline's fixed
 // blend turns into the engine's result. Sprite grids expand each quad from this frame's records.
 
+import package::p2_engine::color::to_display;
+import package::p2_engine::sun_shadow::{sun_index, sun_map_visibility};
 import bevy_pbr::render::{
     mesh_functions::{get_world_from_local, get_tag},
-    view_transformations::position_world_to_clip,
-    mesh_view_bindings::view,
+    view_transformations::{depth_ndc_to_view_z, position_world_to_clip},
+    mesh_view_bindings::{view, lights},
 };
+
+@if(DEPTH_PREPASS)
+import bevy_pbr::render::mesh_view_bindings::depth_prepass_texture;
 
 @if(DISTANCE_FOG)
 import bevy_pbr::render::{
@@ -19,6 +24,10 @@ struct Params {
     alpha_test: u32,
     blend_frames: u32,
     fogged: u32,
+    // Modern graphics: the depth in world units over which a sprite fades into the geometry behind it (0 off), and
+    // whether it takes the light where it is.
+    soft: f32,
+    lit: u32,
 }
 
 @group(3) @binding(0) var particle_texture: texture_2d<f32>;
@@ -46,6 +55,10 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) uv_b: vec2<f32>,
     @location(5) color: vec4<f32>,
+    // The lamps' linear light at the emitter, from its header record; 0 without one.
+    @location(6) lamps: vec3<f32>,
+    // A modern puddle: the place across its quad (-1 to 1 each way) and its edge seed; all 0 for any other sprite.
+    @location(7) puddle: vec3<f32>,
 }
 
 @if(!PARTICLE_INSTANCES)
@@ -95,6 +108,10 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.uv = vec2(select(sprite.uv.x, sprite.uv.z, along_right), select(sprite.uv.y, sprite.uv.w, along_up));
     out.uv_b = vec2(select(sprite.next_uv.x, sprite.next_uv.z, along_right), select(sprite.next_uv.y, sprite.next_uv.w, along_up));
     out.color = unpack4x8unorm(sprite.color);
+    out.lamps = sprites[first].center;
+    if sprite.unused != 0u {
+        out.puddle = vec3(select(-1.0, 1.0, along_right), select(-1.0, 1.0, along_up), f32(sprite.unused));
+    }
     return out;
 }
 
@@ -138,10 +155,56 @@ fn scene_fog_color() -> vec3<f32> {
     return vec3(0.0);
 }
 
+// A puff of smoke faces the sun with about half of itself.
+const PUFF_SUN: f32 = 0.5;
+const LIGHT_LIMIT: f32 = 2.0;
+
+// In display light, as the modern surfaces add their diffuse light: the zone's ambient, the lamps near the emitter
+// (unshadowed) and the sun where it reaches.
+fn particle_light(position: vec3<f32>, frag_coord: vec4<f32>, lamps: vec3<f32>) -> vec3<f32> {
+    var light = lights.ambient_color.rgb + to_display(lamps) * PUFF_SUN;
+    let sun = sun_index();
+    if sun < lights.n_directional_lights {
+        let to_sun = lights.directional_lights[sun].direction_to_light;
+        let seen = sun_map_visibility(sun, vec4(position, 1.0), to_sun, frag_coord.xy);
+        light += to_display(lights.directional_lights[sun].color.rgb) * (seen * PUFF_SUN);
+    }
+    return min(light, vec3(LIGHT_LIMIT));
+}
+
+// 1 where the sprite stands `params.soft` units or more before the geometry behind it, falling to 0 where it meets it.
+fn soft_fade(frag_coord: vec4<f32>) -> f32 {
+@if(DEPTH_PREPASS) {
+    if params.soft <= 0.0 {
+        return 1.0;
+    }
+    let scene = textureLoad(depth_prepass_texture, vec2<i32>(frag_coord.xy), 0);
+    if scene <= 0.0 || frag_coord.z <= 0.0 {
+        return 1.0;
+    }
+    return saturate((depth_ndc_to_view_z(frag_coord.z) - depth_ndc_to_view_z(scene)) / params.soft);
+}
+@else {
+    return 1.0;
+}
+}
+
 // Linear output F for a fixed blend `F + D * keep` (D the framebuffer, linear) that gives the engine's display-space
 // `source + d * keep` exactly over a background of display brightness BACKGROUND.
 fn over_background(source: vec3<f32>, keep: f32) -> vec3<f32> {
     return max(srgb_to_linear(source + vec3(BACKGROUND * keep)) - vec3(BACKGROUND_LINEAR * keep), vec3(0.0));
+}
+
+// 1 inside a puddle's edge, whose radius wanders with a noise fixed by the seed, falling to 0 outside it.
+fn puddle_edge(puddle: vec3<f32>) -> f32 {
+    if puddle.z <= 0.0 {
+        return 1.0;
+    }
+    let angle = atan2(puddle.y, puddle.x);
+    let seed = puddle.z * 1.618;
+    let wander = 0.5 * sin(3.0 * angle + seed) + 0.3 * sin(5.0 * angle + seed * 2.3) + 0.2 * sin(8.0 * angle + seed * 3.7);
+    let edge = 0.88 + 0.08 * wander;
+    return 1.0 - smoothstep(edge - 0.18, edge, length(puddle.xy));
 }
 
 @fragment
@@ -163,6 +226,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if params.alpha_test != 0u && alpha <= params.alpha_ref {
         discard;
     }
+    if params.lit != 0u {
+        color *= particle_light(in.world_position.xyz, in.position, in.lamps);
+    }
     // D3D fog mixes the colour towards a per-style fog colour: the scene's for regular and alpha blend,
     // grey 127 for modulated (neutral under 2x), black for the others (they add or darken nothing).
     var fog_color = vec3(0.0);
@@ -172,6 +238,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         fog_color = vec3(127.0 / 255.0);
     }
     color = mix(color, fog_color, fog_amount(in.world_position.xyz));
+    // Faded towards what each blend leaves the background as: no cover, no added light, neutral grey under modulation.
+    let fade = soft_fade(in.position) * puddle_edge(in.puddle);
+    if fade < 1.0 {
+        if style == 2u {
+            color = mix(vec3(127.0 / 255.0), color, fade);
+        } else if style != 1u {
+            color *= fade;
+        }
+        alpha *= fade;
+    }
     switch style {
         case 0u: {
             return vec4(srgb_to_linear(color), 1.0);

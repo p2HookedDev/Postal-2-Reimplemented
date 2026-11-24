@@ -245,8 +245,9 @@ fn sprite_records_expand_to_the_cpu_quads() {
             assert_eq!(color, colors[corner], "corner {corner}");
         }
     }
-    assert_eq!(header_record(5)[7], 5);
-    assert!(header_record(5).iter().enumerate().all(|(i, &w)| i == 7 || w == 0));
+    assert_eq!(header_record(5, Vec3::ZERO)[7], 5);
+    assert!(header_record(5, Vec3::ZERO).iter().enumerate().all(|(i, &w)| i == 7 || w == 0));
+    assert_eq!(header_record(5, Vec3::new(0.5, 1.0, 2.0))[0..3], [0.5f32, 1.0, 2.0].map(f32::to_bits));
 }
 
 #[test]
@@ -406,6 +407,10 @@ fn the_particle_step_never_draws_or_steps_a_flash_on_a_weapon_where_the_game_kee
         peak: 0,
         frames: ParticleFrames::default(),
         turn: Turn::default(),
+        lamp_light: Vec3::ZERO,
+        lamp_at: Vec3::ZERO,
+        lamp_age: u8::MAX,
+        liquid: Default::default(),
     };
     app.insert_resource(Particles { actors: vec![emitter], ..Particles::default() });
     app.add_systems(Update, present_particles);

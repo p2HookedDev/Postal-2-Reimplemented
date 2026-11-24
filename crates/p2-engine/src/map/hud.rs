@@ -1,6 +1,9 @@
 use super::*;
 use p2_vm::ERenderStyle;
 
+pub(super) mod distance;
+pub(super) mod sharp;
+
 pub(super) struct HudFont {
     font: Font,
     pages: Vec<Option<(egui::TextureId, egui::Vec2)>>,
@@ -27,6 +30,7 @@ pub struct Hud {
     pub(super) progress_bar: Option<Option<(ProgressBar, egui::TextureId)>>,
     painted_at: Option<std::time::Instant>,
     first_reads_left: std::time::Duration,
+    pub(super) nearest: sharp::NearestImages,
 }
 
 impl Hud {
@@ -181,19 +185,30 @@ pub(super) fn paint_canvas(ctx: &egui::Context, rect: egui::Rect, items: &[Canva
 pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasItem], session: &mut Session, contexts: &mut EguiContexts, targets: &mut SceneTargets) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, "hud".into())).with_clip_rect(rect);
     let color = |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+    let (sharp_hud, sharp_text, per_point) = (targets.view.modern.sharp_hud, targets.view.modern.sharp_text, ctx.pixels_per_point());
     for item in items {
         match item {
             CanvasItem::Text { text, position, scale, color: c, font } => {
                 let path = font.as_deref().unwrap_or_default();
-                let hud_font = match targets.hud.hud_fonts.get(path) {
+                let hud = &mut *targets.hud;
+                let hud_font = match hud.hud_fonts.get(path) {
                     Some(found) => found.as_ref(),
                     None => {
                         let images = &mut targets.assets.images;
-                        let Some(found) = targets.hud.first_read(|hud| font.as_deref().and_then(|path| session.hud_font(path, hud, contexts, images))) else { continue };
-                        targets.hud.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
+                        let Some(found) = hud.first_read(|hud| font.as_deref().and_then(|path| session.hud_font(path, hud, contexts, images))) else { continue };
+                        hud.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
                     }
                 };
-                let origin = rect.min + egui::vec2(position[0], position[1]);
+                let (mut origin, mut scale) = (rect.min + egui::vec2(position[0], position[1]), *scale);
+                if sharp_hud {
+                    origin = sharp::on_pixel(origin, per_point);
+                    if !sharp_text {
+                        scale = scale.map(|scale| sharp::whole_pixels(scale, 1.0, per_point));
+                    }
+                }
+                let nearest = sharp_hud && scale[0].min(scale[1]) * per_point >= 1.0;
+                let magnified = scale[0].max(scale[1]) * per_point;
+                let smooth = sharp_text && magnified > 1.0;
                 match hud_font {
                     Some(hud_font) => {
                         let mut x = 0.0;
@@ -204,7 +219,14 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
                                     egui::pos2(glyph.start_u as f32 / texels.x, glyph.start_v as f32 / texels.y),
                                     egui::vec2(glyph.u_size as f32 / texels.x, glyph.v_size as f32 / texels.y),
                                 );
-                                painter.image(*id, egui::Rect::from_min_size(origin + egui::vec2(x, 0.0), size), uv, color(*c));
+                                let id = if smooth {
+                                    hud.nearest.text_page(*id, magnified, &hud.hud_images, contexts, &mut targets.assets.images)
+                                } else if nearest {
+                                    hud.nearest.texture(*id, &hud.hud_images, contexts, &mut targets.assets.images)
+                                } else {
+                                    *id
+                                };
+                                painter.image(id, egui::Rect::from_min_size(origin + egui::vec2(x, 0.0), size), uv, color(*c));
                             }
                             x += (glyph.u_size + hud_font.font.kerning) as f32 * scale[0];
                         }
@@ -217,8 +239,17 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
             }
             CanvasItem::Actor { .. } => {}
             CanvasItem::Tile { material, position, size, uv, color: c, style } => {
-                let Some((id, texels)) = session.cached_hud_texture(material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
-                let area = egui::Rect::from_min_size(rect.min + egui::vec2(position[0], position[1]), egui::vec2(size[0], size[1]));
+                let Some((mut id, texels)) = session.cached_hud_texture(material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
+                let (mut min, mut size) = (rect.min + egui::vec2(position[0], position[1]), *size);
+                if sharp_hud {
+                    min = sharp::on_pixel(min, per_point);
+                    size = [sharp::whole_pixels(size[0], uv[2].abs(), per_point), sharp::whole_pixels(size[1], uv[3].abs(), per_point)];
+                    if size[0] * per_point >= uv[2].abs() && size[1] * per_point >= uv[3].abs() {
+                        let hud = &mut *targets.hud;
+                        id = hud.nearest.texture(id, &hud.hud_images, contexts, &mut targets.assets.images);
+                    }
+                }
+                let area = egui::Rect::from_min_size(min, egui::vec2(size[0], size[1]));
                 let (u, v) = (inside_borders(uv[0], uv[2], texels.x, size[0]), inside_borders(uv[1], uv[3], texels.y, size[1]));
                 let uv = egui::Rect::from_min_size(egui::pos2(u[0] / texels.x, v[0] / texels.y), egui::vec2(u[1] / texels.x, v[1] / texels.y));
                 let tint = if ERenderStyle::from_byte(*style) == Some(ERenderStyle::Translucent) { egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], 0) } else { color(*c) };

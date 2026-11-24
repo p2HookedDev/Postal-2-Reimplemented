@@ -11,7 +11,7 @@ import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TA
 import package::p2_engine::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, lit_color, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
-import package::p2_engine::modern::{allows_gloss, ambient_occlusion, is_modern, is_see_through, modern_glass, modern_surface, surface_of, with_light};
+import package::p2_engine::modern::{allows_gloss, ambient_occlusion, classed_surface, is_modern, is_see_through, modern_glass, modern_surface, with_light};
 import package::p2_engine::relief::base_relief;
 import package::p2_engine::sun_shadow::{sun_found, sun_index, sun_seen_from};
 import package::p2_engine::lamp_shadow::{is_lamp, lamp_light};
@@ -77,8 +77,8 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
         let darken = layers.blend.x != 0.0;
         let gloss = allows_gloss(layers.detail.z) && !darken;
-        let material_surface = surface_of(0.0);
-        let lamps = lamp_light(vertex_output, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface);
+        let material_surface = classed_surface(layers.detail.z, layers.blend);
+        let lamps = lamp_light(vertex_output, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface, layers.detail.z);
         let occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
         if darken {
             // A darken surface takes the light alone, as it took the light map.

@@ -104,6 +104,7 @@ fn follow_effects(
     window: Single<&Window, With<PrimaryWindow>>,
     views: Query<(&Camera, &GlobalTransform), With<SceneView>>,
     suns: Query<(&DirectionalLight, &GlobalTransform), With<SunShadow>>,
+    projections: Query<(&Camera, &bevy::camera::Projection), With<SceneView>>,
     mut materials: ResMut<Assets<ToneMaterial>>,
 ) {
     if !settings.modern_graphics() {
@@ -121,7 +122,14 @@ fn follow_effects(
             1.0 + around_neutral(MODERN_CONTRAST) * CONTRAST_PER_LEVEL,
             level(MODERN_VIGNETTE) * VIGNETTE_PER_LEVEL,
         ),
-        lens: Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, 0.0, 0.0, 0.0),
+        lens: {
+            let fov = projections.iter().find_map(|(camera, projection)| match projection {
+                bevy::camera::Projection::Perspective(perspective) if camera.is_active => Some(perspective.fov),
+                _ => None,
+            });
+            let panini = fov.map_or(Vec3::ZERO, |fov| crate::render::modern_view::panini(settings.modern_level(crate::display::MODERN_PANINI), fov, aspect));
+            Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, panini.x, panini.y, panini.z)
+        },
     };
     let rays = level(MODERN_GOD_RAYS) * RAYS_PER_LEVEL;
     let view = views.iter().find(|(camera, _)| camera.is_active);

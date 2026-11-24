@@ -254,6 +254,14 @@ pub fn mesh_light(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<MeshLight>
         cone: vm.store.byte_of(actor, Prop::LightCone),
         dynamic: vm.store.flag_of(actor, Prop::bDynamicLight),
         special_lit: vm.store.flag_of(actor, Prop::bSpecialLit),
+        corona: if crate::map::is_corona(vm, actor) {
+            crate::map::CORONA_SIZE * match vm.store.get(actor, Prop::DrawScale) {
+                Some(Value::Float(scale)) => scale,
+                _ => 1.0,
+            }
+        } else {
+            0.0
+        },
     })
 }
 
@@ -310,6 +318,7 @@ pub struct EmitterActor {
     pub objects: Vec<ObjectId>,
     pub meshes: Vec<Option<String>>,
     pub name: String,
+    pub puddle: bool,
 }
 
 pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<EmitterActor> {
@@ -338,7 +347,7 @@ pub fn emitter_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Emitter
     let settings = vm.read_ordered(actor, "EmitterSettings", |get| {
         EmitterSettings::from_lookup(|name: &str| get(name).as_ref().map(property_value))
     });
-    Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone() })
+    Some(EmitterActor { settings, emitters, objects, meshes, name: vm.store.object(actor).path.clone(), puddle: vm.store.is_a(actor, Kind::FluidPuddle) })
 }
 
 pub fn emitter_properties(vm: &Vm<impl LoaderRef>, emitter: ObjectId) -> EmitterProperties {
@@ -416,6 +425,8 @@ pub struct ProjectorActor {
     pub targets: ProjectTargets,
     pub tagged: bool,
     pub follows: Option<ObjectId>,
+    /// `LifeSpan` when the frame was sent: 0 = no life span.
+    pub life: f32,
 }
 
 pub const PROJECT_BSP: u8 = 1;
@@ -444,6 +455,7 @@ pub fn projector_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Proje
         },
         max_trace: int(Prop::MaxTraceDistance, 1000) as f32,
         fov: int(Prop::FOV, 0),
+        life: vm.store.float_of(actor, Prop::LifeSpan),
         blending: match vm.store.get(actor, Prop::FrameBufferBlendingOp) {
             Some(Value::Byte(op)) => ProjectorBlending::from_byte(op),
             _ => ProjectorBlending::Modulate,

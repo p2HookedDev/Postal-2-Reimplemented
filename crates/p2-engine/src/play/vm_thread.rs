@@ -38,6 +38,7 @@ pub struct VmFrame {
     pub(super) emitter_changes: Vec<(ObjectId, EmitterProperties)>,
     pub(super) dynamic_lights: Vec<p2_render_cpu::MeshLight>,
     pub(super) plings: Vec<p2_vm::FluidPling>,
+    pub(super) person_hits: Vec<p2_vm::PersonHit>,
     pub(super) fluid_touchers: Vec<(ObjectId, Vec<p2_particles::FluidToucher>)>,
     pub(super) corona_blocked: Vec<ObjectId>,
     pub(super) material_switches: Vec<(String, Option<String>)>,
@@ -45,6 +46,7 @@ pub struct VmFrame {
     pub(super) overlay: Option<Overlay>,
     pub(super) movies: Vec<(String, ObjectId, p2_vm::MovieState)>,
     pub(super) paused: bool,
+    pub(super) time_dilation: f32,
     pub(super) quit: bool,
     pub(super) window: Option<p2_vm::WindowRequest>,
     pub(super) settings: Option<crate::display::Settings>,
@@ -143,6 +145,7 @@ impl VmFrame {
         self.dynamic_lights.clear();
         self.material_switches.clear();
         self.plings.clear();
+        self.person_hits.clear();
         self.fluid_touchers.clear();
         self.corona_blocked.clear();
         self.movies.clear();

@@ -22,7 +22,7 @@ properties!(
     bAllowZThrow, bMeleeDamage, bMeleeWeapon,
     bAlwaysTick, CollisionRadius, CollisionHeight, Touching, Owner, Base, bCollideWhenPlacing, bSkipEncroachmentCheck,
     Location, Rotation, Velocity, Acceleration, OldAcceleration, Physics, Brush, Mesh, StaticMesh, DrawType, DrawScale,
-    DrawScale3D, PrePivot, LastRenderTime,
+    DrawScale3D, PrePivot, LastRenderTime, CullDistance,
     TimerRate, TimerCounter, bTimerLoop, LifeSpan,
     Controller, Player, bStasis,
     bClassBlocker, bExactClassesOnly, bAllowOnlySpecifiedClasses, BlockedClasses, Priority, HeadVolume,
@@ -98,6 +98,7 @@ pub(crate) const DRAWN: &[Prop] = &[
     Prop::Disabled, Prop::Mesh, Prop::StaticMesh, Prop::Skins, Prop::DrawType, Prop::bUnlit, Prop::AmbientGlow,
     Prop::MaxLights, Prop::StaticMeshInstance, Prop::bCollideActors, Prop::bBlockActors, Prop::ForcedVisibilityZoneTag,
     Prop::bStatic, Prop::bAcceptsProjectors, Prop::Texture, Prop::Style, Prop::Tag, Prop::bCorona,
+    Prop::CullDistance,
 ];
 
 macro_rules! kinds {

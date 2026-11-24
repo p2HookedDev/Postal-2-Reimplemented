@@ -4,6 +4,8 @@ use crate::karma::IMPULSE_SCALE;
 use crate::{Error, LoaderRef, NameId, ObjectId, Value, Vm, Prop};
 use super::{AIR_THROW, Corpse, HIT_TICKS, MELEE_THROW, SHOT_THROW, SeenHit};
 
+const MOST_KEPT_HITS: usize = 256;
+
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn ragdoll_native(&mut self, native: Native, this: ObjectId, args: &[Value]) -> Option<Result<Option<Value>, Error>> {
         let live = self.karma.ragdolls.live.contains_key(&this);
@@ -75,6 +77,11 @@ impl<L: LoaderRef> Vm<L> {
             _ => None,
         };
         let (at, momentum) = (crate::natives::vec3(args.get(2)), crate::natives::vec3(args.get(3)));
+        // A host that never drains the list (a test, the viewer) must not let it grow.
+        if self.store.is_a(victim, crate::Kind::Pawn) && self.actor_fx.person_hits.len() < MOST_KEPT_HITS {
+            let alive = self.store.int_of(victim, Prop::Health) > 0;
+            self.actor_fx.person_hits.push(crate::PersonHit { person: victim, at, momentum, damage, alive });
+        }
         let length = momentum.size();
         let throw = match args.get(4) {
             Some(&Value::Object(Some(class))) if length > 0.0 => self.throw_of(class, instigator),

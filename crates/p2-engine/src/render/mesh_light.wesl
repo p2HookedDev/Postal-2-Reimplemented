@@ -7,8 +7,10 @@ import bevy_pbr::{
 };
 import package::p2_engine::projector::{apply_decals, cluster_ranges, mesh_target, project};
 import package::p2_engine::dynamic_light::dynamic_light;
+@if(VISIBILITY_RANGE_DITHER)
+import bevy_pbr::render::pbr_functions::visibility_range_dither;
 import package::p2_engine::modern::{
-    allows_gloss, ambient_occlusion, is_modern, is_see_through, modern_glass, modern_surface, surface_of, with_light,
+    allows_gloss, ambient_occlusion, classed_surface, is_modern, is_see_through, modern_glass, modern_surface, with_light,
 };
 import package::p2_engine::relief::base_relief;
 import package::p2_engine::sun_shadow::{has_sun, sun_seen};
@@ -25,6 +27,8 @@ import package::p2_engine::layer_bindings::indices;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+@if(VISIBILITY_RANGE_DITHER)
+    visibility_range_dither(in.position, in.visibility_range_dither);
     var plain = in;
 @if(VERTEX_COLORS)
     plain.color = vec4(1.0);
@@ -47,8 +51,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let bumped = base_relief(in, pbr_input, normal, layers.detail.z);
         let darken = layers.blend.x != 0.0;
         let gloss = allows_gloss(layers.detail.z) && !darken;
-        let material_surface = surface_of(0.0);
-        let lamps = lamp_light(in, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface);
+        let material_surface = classed_surface(layers.detail.z, layers.blend);
+        let lamps = lamp_light(in, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface, layers.detail.z);
         let occlusion = ambient_occlusion(pbr_input.frag_coord.xy);
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);
         if darken {

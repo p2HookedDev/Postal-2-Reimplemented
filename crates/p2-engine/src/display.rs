@@ -108,6 +108,28 @@ pub const QUERIES: &[&str] = &[
     MODERN_SATURATION,
     MODERN_CONTRAST,
     MODERN_EXPOSURE,
+    MODERN_REFLECTIONS,
+    MODERN_REFLECTION_STRENGTH,
+    MODERN_PARTICLE_LIGHT,
+    MODERN_SOFT_PARTICLES,
+    MODERN_DECAL_AGING,
+    MODERN_WOUNDS,
+    MODERN_MATERIALS,
+    MODERN_SHARP_HUD,
+    MODERN_WIDE_VIEW,
+    MODERN_HUD_SAFE_AREA,
+    MODERN_PANINI,
+    MODERN_FADE_IN,
+    MODERN_FOOT_PLACEMENT,
+    MODERN_HIT_REACTIONS,
+    MODERN_LAMP_SIZE,
+    MODERN_CUTSCENE_DOF,
+    MODERN_CUTSCENE_MOTION_BLUR,
+    MODERN_TEMPORAL_AA,
+    MODERN_BOUNCE_LIGHT,
+    MODERN_LIQUID_FLOW,
+    MODERN_FIRE_VOLUMES,
+    MODERN_VOLUMETRIC_FOG,
     MSAA,
 ];
 
@@ -154,12 +176,34 @@ pub const MODERN_CHROMATIC_ABERRATION: &str = "ini:Engine.Engine.RenderDevice Mo
 pub const MODERN_SATURATION: &str = "ini:Engine.Engine.RenderDevice ModernSaturation";
 pub const MODERN_CONTRAST: &str = "ini:Engine.Engine.RenderDevice ModernContrast";
 pub const MODERN_EXPOSURE: &str = "ini:Engine.Engine.RenderDevice ModernExposure";
+pub const MODERN_REFLECTIONS: &str = "ini:Engine.Engine.RenderDevice ModernReflections";
+pub const MODERN_REFLECTION_STRENGTH: &str = "ini:Engine.Engine.RenderDevice ModernReflectionStrength";
+pub const MODERN_PARTICLE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernParticleLight";
+pub const MODERN_SOFT_PARTICLES: &str = "ini:Engine.Engine.RenderDevice ModernSoftParticles";
+pub const MODERN_DECAL_AGING: &str = "ini:Engine.Engine.RenderDevice ModernDecalAging";
+pub const MODERN_WOUNDS: &str = "ini:Engine.Engine.RenderDevice ModernWounds";
+pub const MODERN_MATERIALS: &str = "ini:Engine.Engine.RenderDevice ModernMaterials";
+pub const MODERN_SHARP_HUD: &str = "ini:Engine.Engine.RenderDevice ModernSharpHud";
+pub const MODERN_WIDE_VIEW: &str = "ini:Engine.Engine.RenderDevice ModernWideView";
+pub const MODERN_HUD_SAFE_AREA: &str = "ini:Engine.Engine.RenderDevice ModernHudSafeArea";
+pub const MODERN_PANINI: &str = "ini:Engine.Engine.RenderDevice ModernPanini";
+pub const MODERN_FADE_IN: &str = "ini:Engine.Engine.RenderDevice ModernFadeIn";
+pub const MODERN_FOOT_PLACEMENT: &str = "ini:Engine.Engine.RenderDevice ModernFootPlacement";
+pub const MODERN_HIT_REACTIONS: &str = "ini:Engine.Engine.RenderDevice ModernHitReactions";
+pub const MODERN_LAMP_SIZE: &str = "ini:Engine.Engine.RenderDevice ModernLampSize";
+pub const MODERN_CUTSCENE_DOF: &str = "ini:Engine.Engine.RenderDevice ModernCutsceneDof";
+pub const MODERN_CUTSCENE_MOTION_BLUR: &str = "ini:Engine.Engine.RenderDevice ModernCutsceneMotionBlur";
+pub const MODERN_TEMPORAL_AA: &str = "ini:Engine.Engine.RenderDevice ModernTemporalAA";
+pub const MODERN_BOUNCE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernBounceLight";
+pub const MODERN_LIQUID_FLOW: &str = "ini:Engine.Engine.RenderDevice ModernLiquidFlow";
+pub const MODERN_FIRE_VOLUMES: &str = "ini:Engine.Engine.RenderDevice ModernFireVolumes";
+pub const MODERN_VOLUMETRIC_FOG: &str = "ini:Engine.Engine.RenderDevice ModernVolumetricFog";
 
 /// The slider value that leaves saturation, contrast and exposure as they are.
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 15] = [
+const LEVELS: [(&str, u8, u8); 37] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
@@ -175,6 +219,28 @@ const LEVELS: [(&str, u8, u8); 15] = [
     (MODERN_SATURATION, NEUTRAL_LEVEL, 10),
     (MODERN_CONTRAST, NEUTRAL_LEVEL, 10),
     (MODERN_EXPOSURE, NEUTRAL_LEVEL, 10),
+    (MODERN_REFLECTIONS, 2, 3),
+    (MODERN_REFLECTION_STRENGTH, 5, 10),
+    (MODERN_PARTICLE_LIGHT, 1, 1),
+    (MODERN_SOFT_PARTICLES, 5, 10),
+    (MODERN_DECAL_AGING, 1, 1),
+    (MODERN_WOUNDS, 1, 1),
+    (MODERN_MATERIALS, 5, 10),
+    (MODERN_SHARP_HUD, 1, 2),
+    (MODERN_WIDE_VIEW, 1, 1),
+    (MODERN_HUD_SAFE_AREA, 1, 1),
+    (MODERN_PANINI, 0, 10),
+    (MODERN_FADE_IN, 5, 10),
+    (MODERN_FOOT_PLACEMENT, 1, 1),
+    (MODERN_HIT_REACTIONS, 5, 10),
+    (MODERN_LAMP_SIZE, 5, 10),
+    (MODERN_CUTSCENE_DOF, 4, 10),
+    (MODERN_CUTSCENE_MOTION_BLUR, 3, 10),
+    (MODERN_TEMPORAL_AA, 0, 1),
+    (MODERN_BOUNCE_LIGHT, 3, 10),
+    (MODERN_LIQUID_FLOW, 1, 1),
+    (MODERN_FIRE_VOLUMES, 1, 2),
+    (MODERN_VOLUMETRIC_FOG, 3, 10),
 ];
 
 const ANTI_ALIASING_MSAA_2X: u8 = 3;
@@ -257,7 +323,7 @@ impl Settings {
         match text.parse::<u8>() {
             _ if text.is_empty() => high,
             Ok(level) => level.min(top),
-            Err(_) if ini_truthy(text) => high,
+            Err(_) if ini_truthy(text) => high.max(1),
             Err(_) => 0,
         }
     }
@@ -380,8 +446,12 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 5, 1, 5, 1, 1, 5, 1, 1, 1, 0, 5, 1, 5, 5, 4, 3, 0, 3, 1, 1, 3]);
+        let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 10, 1, 1, 10, 2, 1, 1, 10, 10, 1, 10, 10, 10, 10, 1, 10, 1, 2, 10]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
+        assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 1);
+        assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);
         assert_eq!(with("True", MODERN_BLOOM, "7").modern_level(MODERN_BLOOM), 7);
         assert_eq!(with("True", MODERN_BLOOM, "0").modern_level(MODERN_BLOOM), 0);
         assert_eq!(with("True", MODERN_BLOOM, "40").modern_level(MODERN_BLOOM), 10);

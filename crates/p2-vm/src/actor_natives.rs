@@ -74,6 +74,17 @@ pub struct FluidPling {
     pub radius: f32,
 }
 
+/// A `TakeDamage` on a pawn, living or dead, as the script was handed it; `at` and `momentum` in world space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersonHit {
+    pub person: ObjectId,
+    pub at: Vector,
+    pub momentum: Vector,
+    pub damage: f32,
+    /// `Health` above 0 when the hit was seen.
+    pub alive: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct ActorFx {
     controls: FxHashMap<ObjectId, Vec<BoneControl>>,
@@ -84,6 +95,8 @@ pub struct ActorFx {
     movies: FxHashMap<ObjectId, MovieState>,
     movie_textures: FxHashMap<ObjectId, ObjectId>,
     pub plings: Vec<FluidPling>,
+    /// Drained by the host each tick.
+    pub person_hits: Vec<PersonHit>,
     com_offsets: FxHashMap<ObjectId, Vector>,
     inertia: FxHashMap<ObjectId, [Vector; 2]>,
     lods: FxHashMap<ObjectId, Vec<(f32, Option<ObjectId>)>>,

@@ -37,6 +37,16 @@ impl PlayWorld {
         self.frame.step
     }
 
+    /// [`Self::step`] in game seconds, as `LifeSpan` and timers count them: `TimeDilation` slows them.
+    pub fn game_step(&self) -> f32 {
+        self.frame.step * self.frame.time_dilation
+    }
+
+    /// The hits on people in the tick now shown, each on one host frame only.
+    pub fn person_hits(&self) -> &[p2_vm::PersonHit] {
+        if self.fresh { &self.frame.person_hits } else { &[] }
+    }
+
     pub fn take_plings(&mut self) -> Vec<p2_vm::FluidPling> {
         std::mem::take(&mut self.frame.plings)
     }

@@ -1,4 +1,7 @@
 use super::*;
+use crate::render::material_class::MaterialClass;
+
+const MOST_GROUPS: usize = 8;
 
 impl Game {
     pub fn material_texture(&mut self, id: PackageId, material: i32) -> Option<SectionTexture> {
@@ -88,7 +91,25 @@ impl Game {
         let specular = walk.specular.and_then(|(id, specular)| self.specular_source(id, specular, plain && glow.is_none()));
         let (specular, specular_uv) = specular.map_or((None, Vec::new()), |(specular, uv)| (Some(specular), uv));
         state.specular_uv = specular_uv;
-        Some((TextureSource { texture: walk.texture, opacity, wet: walk.wet, combine, glow, detail, specular, switch: walk.switch }, state))
+        let source = TextureSource { texture: walk.texture, opacity, wet: walk.wet, combine, glow, detail, specular, switch: walk.switch };
+        state.class = self.material_class(id, material, source) as u8;
+        Some((source, state))
+    }
+
+    /// From the material's package, its groups and its own name, then its specular layer.
+    fn material_class(&mut self, id: PackageId, material: i32, source: TextureSource) -> MaterialClass {
+        let specular = specular_params(source);
+        let Some((package, export)) = self.export_of(id, material) else { return MaterialClass::of(&[], specular) };
+        let pkg = self.data(package).0;
+        let mut names = vec![self.package_name(package)];
+        let mut at = Some(export);
+        while names.len() <= MOST_GROUPS
+            && let Some(found) = at.and_then(|index| pkg.exports.get(index))
+        {
+            names.push(pkg.name(found.object_name));
+            at = usize::try_from(found.package_index).ok().and_then(|outer| outer.checked_sub(1));
+        }
+        MaterialClass::of(&names, specular)
     }
 
     fn specular_source(&mut self, id: PackageId, p2_assets::SpecularLayer { material: specular, mask, mask_is_diffuse: diffuse_mask }: p2_assets::SpecularLayer, bake: bool) -> Option<(SpecularSource, Vec<UvModifier>)> {

@@ -34,9 +34,10 @@ use p2_render_cpu::{HardwareLight, LE_SUNLIGHT, MeshLight};
 
 use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow, UNSEEN_LAYER};
 use crate::display::{
-    MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_LAMP_SHADOWS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS, MODERN_SHARPEN,
-    MODERN_SPECULAR, Settings,
+    MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_LAMP_SHADOWS, MODERN_LAMP_SIZE, MODERN_MATERIALS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
+    MODERN_SHARPEN, MODERN_SPECULAR, MODERN_TEMPORAL_AA, Settings,
 };
+use crate::render::material_class::level_bits;
 use crate::level_collision::LevelCollision;
 use crate::mesh_view::{NoSunCast, SKY_LAYER};
 use crate::render::tone::ToneCamera;
@@ -102,18 +103,18 @@ pub fn modern_flag(settings: &Settings) -> u8 {
 
 trait ModernFlagged: Asset {
     const KIND: &'static str;
-    fn flag(&self) -> u8;
-    fn set_flag(&mut self, flag: u8);
+    fn flag(&self) -> u16;
+    fn set_flag(&mut self, flag: u16);
 }
 
 macro_rules! layers_flag {
     ($material:ty, $kind:literal) => {
         impl ModernFlagged for $material {
             const KIND: &'static str = $kind;
-            fn flag(&self) -> u8 {
-                self.extension.layers.detail.z.round() as u8
+            fn flag(&self) -> u16 {
+                self.extension.layers.detail.z.round() as u16
             }
-            fn set_flag(&mut self, flag: u8) {
+            fn set_flag(&mut self, flag: u16) {
                 self.extension.layers.detail.z = f32::from(flag);
             }
         }
@@ -126,10 +127,10 @@ layers_flag!(TerrainLayerMaterial, "terrain layer");
 
 impl ModernFlagged for TerrainMaterial {
     const KIND: &'static str = "terrain";
-    fn flag(&self) -> u8 {
-        u8::try_from(self.extension.params.count.y).unwrap_or(u8::MAX)
+    fn flag(&self) -> u16 {
+        u16::try_from(self.extension.params.count.y).unwrap_or(u16::MAX)
     }
-    fn set_flag(&mut self, flag: u8) {
+    fn set_flag(&mut self, flag: u16) {
         self.extension.params.count.y = u32::from(flag);
     }
 }
@@ -146,7 +147,7 @@ fn follow_flag<M: ModernFlagged>(
     let added: Vec<AssetId<M>> = events.as_deref().map_or_else(Vec::new, |events| {
         cursor.read(events).filter_map(|event| match *event { AssetEvent::Added { id } => Some(id), _ => None }).collect()
     });
-    let bits = modern_flag(&settings);
+    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.modern_level(MODERN_MATERIALS), settings.modern_level(MODERN_LAMP_SIZE));
     let stale: Vec<_> = if settings.is_changed() || materials.len() != *known {
         *known = materials.len();
         materials.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect()
@@ -216,7 +217,8 @@ pub fn apply(
         } else {
             post.remove::<ContrastAdaptiveSharpening>();
         }
-        match settings.modern_level(MODERN_ANTI_ALIASING) {
+        let temporal = settings.modern_level(MODERN_TEMPORAL_AA) > 0;
+        match if temporal { 0 } else { settings.modern_level(MODERN_ANTI_ALIASING) } {
             1 => post.remove::<Smaa>().insert(Fxaa::default()),
             2 => post.remove::<Fxaa>().insert(Smaa { preset: SmaaPreset::High }),
             _ => post.remove::<(Fxaa, Smaa)>(),
@@ -227,12 +229,22 @@ pub fn apply(
         } else {
             camera.remove::<ContactShadows>();
         }
+        let screen_reflections = settings.modern_level(crate::display::MODERN_REFLECTIONS) > 0 || settings.modern_level(crate::display::MODERN_BOUNCE_LIGHT) > 0;
+        if screen_reflections {
+            camera.insert((DepthPrepass, NormalPrepass));
+        }
         if ao > 0 {
             camera.insert(ssao(ao));
+        } else if screen_reflections {
+            camera.remove::<ScreenSpaceAmbientOcclusion>();
         } else {
             camera.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
         }
-        if contact == 0 && ao == 0 && !culled {
+        let fire_volumes = settings.modern_level(crate::display::MODERN_FIRE_VOLUMES) > 0;
+        if fire_volumes {
+            camera.insert(DepthPrepass);
+        }
+        if contact == 0 && ao == 0 && !culled && !screen_reflections && !fire_volumes {
             camera.remove::<DepthPrepass>();
         }
         // Above level 1 the world shaders use their own filter; Gaussian is for the actors.

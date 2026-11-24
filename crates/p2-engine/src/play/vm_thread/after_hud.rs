@@ -66,6 +66,7 @@ impl Simulation {
         let vm = &self.vm;
         frame.movies.extend(vm.movie_textures().filter_map(|(texture, movie)| Some((vm.store.object(texture).path.clone(), movie, vm.movie(movie)?.clone()))));
         frame.paused = vm.paused();
+        frame.time_dilation = vm.time_dilation();
         frame.quit = self.quit;
         self.read_audio(frame);
         self.read_settings(frame);
@@ -209,6 +210,7 @@ impl Simulation {
             })
             .collect();
         frame.plings.append(&mut self.vm.actor_fx.plings);
+        frame.person_hits.append(&mut self.vm.actor_fx.person_hits);
         frame.projector_actors = self.vm.projector_actors();
         let vm = &self.vm;
         for command in commands {

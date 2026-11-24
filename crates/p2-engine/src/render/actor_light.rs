@@ -235,6 +235,7 @@ impl MaterialExtension for HardwareLighting {
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         crate::render::shaders::cast_both_sides(descriptor, key.mesh_key);
+        crate::render::reflections::write_class_in_prepass(descriptor, crate::render::reflections::LayersHeld::InActorShading);
         Ok(())
     }
 

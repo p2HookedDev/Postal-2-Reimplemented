@@ -10,7 +10,7 @@ import package::p2_engine::projector::{apply_decals, cluster_ranges, project, TA
 import package::p2_engine::layer_bindings::{ShaderLayers, apply_layers, post_lighting};
 import package::p2_engine::color::{to_display, to_linear};
 import package::p2_engine::dynamic_light::dynamic_light;
-import package::p2_engine::modern::{allows_gloss, ambient_occlusion, is_modern, modern_surface, surface_of, with_light};
+import package::p2_engine::modern::{allows_gloss, ambient_occlusion, classed_surface, is_modern, modern_surface, with_light};
 import package::p2_engine::relief::base_relief;
 import package::p2_engine::sun_shadow::{has_sun, sun_seen};
 import package::p2_engine::lamp_shadow::lamp_light;
@@ -72,8 +72,9 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         let seen = sun_seen(pbr_input.world_position, normal, pbr_input.frag_coord.xy);
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
         let gloss = allows_gloss(layers.detail.z);
-        let lamps = lamp_light(vertex_output, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, surface_of(0.0));
-        surface = modern_surface(pbr_input.material.base_color.rgb, position, bumped, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface_of(0.0));
+        let material_surface = classed_surface(layers.detail.z, layers.blend);
+        let lamps = lamp_light(vertex_output, position, bumped, pbr_input.frag_coord.xy, ranges, gloss, material_surface, layers.detail.z);
+        surface = modern_surface(pbr_input.material.base_color.rgb, position, bumped, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, material_surface);
         surface = with_light(surface, pbr_input.material.base_color.rgb, dynamic_light(pbr_input.world_position, normal, ranges));
     }
     var out: FragmentOutput;

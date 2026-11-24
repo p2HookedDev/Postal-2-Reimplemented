@@ -7,11 +7,13 @@ import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
 };
 import package::p2_engine::dynamic_light::dynamic_light;
+@if(VISIBILITY_RANGE_DITHER)
+import bevy_pbr::render::pbr_functions::visibility_range_dither;
 import package::p2_engine::projector::{actor_target, cluster_ranges, project};
 import package::p2_engine::color::to_linear;
 import package::p2_engine::modern::{
     Around, actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, lit_surface, modern_surface, sky_from_ambient,
-    surface_of, with_light,
+    classed_surface, surface_of, with_light,
 };
 import package::p2_engine::modern_base::to_eye;
 import package::p2_engine::sun_shadow::{ROOFED_SKY, SKY_FACING_FADE, SUN_FACING_FADE, sun_found, sun_index, sun_seen_from, sun_visibility};
@@ -120,6 +122,8 @@ fn light_at(light: HardwareLight, position: vec3<f32>, normal: vec3<f32>) -> vec
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+@if(VISIBILITY_RANGE_DITHER)
+    visibility_range_dither(in.position, in.visibility_range_dither);
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     // The specular mask (`apply_layers`), before `alpha_discard` sets the alpha to 1 on opaque and masked materials.
     let base_alpha = pbr_input.material.base_color.a;
@@ -154,8 +158,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         var surface = vec3(0.0);
         if sun_on {
             let seen = sun_seen_from(sun_id, in.world_position, normal, pbr_input.frag_coord.xy);
-            let material_surface = surface_of(0.0);
-            let lamps = lamp_light(in, position, normal, pbr_input.frag_coord.xy, ranges, gloss, material_surface);
+            let material_surface = classed_surface(flag, (*shading).layers.blend);
+            let lamps = lamp_light(in, position, normal, pbr_input.frag_coord.xy, ranges, gloss, material_surface, flag);
             surface = modern_surface(color, position, normal, seen, occlusion, gloss, lamps, material_surface);
         } else {
             surface = overlay_surface(color, position, normal, occlusion, gloss, *lighting);

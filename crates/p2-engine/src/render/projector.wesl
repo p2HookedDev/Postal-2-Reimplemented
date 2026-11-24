@@ -47,6 +47,14 @@ const STATIC_MESH: u32 = 4u;
 const MOVER: u32 = 8u;
 // In a projector's tag: it follows a mover or Karma prop and draws on those only; in a surface: it is one.
 const ON_MOVER: u32 = 0x80u;
+// Modern decal aging (map/decal_aging.rs, render/wounds.rs): blood drying in bits 3..7, fading out in bits 10..15;
+// 0 = as retail. A wound (bit 15) on actors also takes the bodies that refuse the game's projectors.
+const DRY_SHIFT: u32 = 3u;
+const DRY_MASK: u32 = 0xfu;
+const FADE_SHIFT: u32 = 10u;
+const FADE_MASK: u32 = 0x1fu;
+const WOUND: u32 = 0x8000u;
+const DRY_TINT: vec3<f32> = vec3(0.6, 0.42, 0.36);
 
 fn section_target(instance_index: u32, kind: u32) -> u32 {
     let tag = get_tag(instance_index);
@@ -127,7 +135,8 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
     var frame = vec3(0.0);
     var drawn = false;
     while clustered_decal_iterator_next(&iterator) {
-        if (iterator.tag & PROJECTOR) == 0u || iterator.base_color_texture_index < 0 || (iterator.tag & surface & TARGETS) == 0u {
+        let wound = (iterator.tag & WOUND) != 0u && surface == 0u;
+        if (iterator.tag & PROJECTOR) == 0u || iterator.base_color_texture_index < 0 || ((iterator.tag & surface & TARGETS) == 0u && !wound) {
             continue;
         }
         // `ProjectTag` filters actors only: BSP and terrain take the projector regardless.
@@ -155,7 +164,7 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
             drawn = true;
         }
         let projected = to_display(texel.rgb);
-        let material = (iterator.tag >> 8u) & 0xffu;
+        let material = (iterator.tag >> 8u) & 0x3u;
         var src = projected;
         if material == PB_MODULATE {
             src = projected * base;
@@ -164,7 +173,8 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
         } else if material == PB_ADD {
             src = min(projected + base, vec3(1.0));
         }
-        switch iterator.tag & 0x7fu {
+        let under = frame;
+        switch iterator.tag & 0x7u {
             case FB_OVERWRITE: { frame = src; }
             case FB_MODULATE: { frame = 2.0 * src * frame; }
             case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }
@@ -173,6 +183,15 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
             case FB_DARKEN: { frame = frame * (1.0 - src); }
             case FB_BRIGHTEN: { frame = src + frame * (1.0 - src); }
             default: {}
+        }
+        // Drying darkens what the splat changed, whatever its blend; fading takes the frame back to what lay under it.
+        let dry = (iterator.tag >> DRY_SHIFT) & DRY_MASK;
+        if dry != 0u {
+            frame = mix(frame, frame * DRY_TINT, f32(dry) / 15.0 * saturate(distance(frame, under) * 2.0));
+        }
+        let fade = (iterator.tag >> FADE_SHIFT) & FADE_MASK;
+        if fade != 0u {
+            frame = mix(frame, under, f32(fade) / 31.0);
         }
         frame = min(frame, vec3(1.0));
     }

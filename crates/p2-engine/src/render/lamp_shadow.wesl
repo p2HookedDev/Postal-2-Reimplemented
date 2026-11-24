@@ -1,4 +1,4 @@
-import package::p2_engine::modern_base::{DIELECTRIC_F0, LUMINANCE, LampLight, ggx, to_eye};
+import package::p2_engine::modern_base::{DIELECTRIC_F0, LUMINANCE, LampLight, ggx, modern_bits, to_eye};
 import package::p2_engine::sun_shadow::{SHADOW_BIAS, SHADOW_NORMAL_OFFSET, SOFT_EDGE_UNITS, SUN_FACING_FADE};
 import package::p2_engine::probes::read_probes;
 import bevy_pbr::render::{
@@ -30,14 +30,18 @@ const LAMP_ENERGY: f32 = 1.4485;
 const LAMP_FADE_FROM: f32 = 21.0;
 const LAMP_FADE_TO: f32 = 30.0;
 const LAMP_SMALLEST: f32 = 0.01;
-// A lamp's source is this share of its radius.
+// A lamp's source is this share of its radius, until the lamp size level moves it towards the lamp's own size.
 const LAMP_SOURCE_SHARE: f32 = 0.08;
+// The lamp size level sits above the modern flag's effect bits. Matches `material_class.rs`.
+const LAMP_SIZE_SHIFT: u32 = 7u;
+const LAMP_SIZE_TOP: f32 = 10.0;
+const BOOK_SIZE_TEXEL: u32 = 6u;
 // The book of lamps rides in the material's anisotropy texture, four floats a texel: a header (the grid's corner and
-// cell side; its sides and where the cells start), six texels a lamp, a texel a cell (where its list starts and how
+// cell side; its sides and where the cells start), seven texels a lamp, a texel a cell (where its list starts and how
 // many lamps it holds) and the lists of lamps whose light gets into the cell, four a texel. Matches `lamps/cells.rs`.
 const BOOK_WIDTH: u32 = 2048u;
 const BOOK_HEADER: u32 = 2u;
-const BOOK_RECORD: u32 = 6u;
+const BOOK_RECORD: u32 = 7u;
 // A detail face's corner is counted in these texels. Matches `lamps/faces.rs`.
 const DETAIL_UNIT: f32 = 64.0;
 // A texel holds a distance in a 16 bit float: its steps are this share of the distance at most.
@@ -312,12 +316,13 @@ fn mover_shadow(in: VertexOutput, held: vec4<f32>, named: vec4<f32>, named_more:
 }
 
 // Light from the placed lamps and the probes, before the surface's colour: terrain's layers share one sum.
-fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, frag_coord: vec2<f32>, ranges: clustering::ClusterableObjectIndexRanges, gloss: bool, surface: vec3<f32>) -> LampLight {
+fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, frag_coord: vec2<f32>, ranges: clustering::ClusterableObjectIndexRanges, gloss: bool, surface: vec3<f32>, flag: f32) -> LampLight {
     var sum = no_lamps();
     // Special-lit surfaces take only special lights, and no lamp is one.
     if surface.z > 0.5 {
         return sum;
     }
+    let sized = min(f32((modern_bits(flag) >> LAMP_SIZE_SHIFT) & 15u) / LAMP_SIZE_TOP, 1.0);
     let side = atlas_side(in);
     let unit = side / ATLAS_UNITS;
     let rough = surface.x;
@@ -408,7 +413,11 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, frag_coo
         if shadow <= 0.0 {
             continue;
         }
-        let a = saturate(rough * rough + lamp_radius * LAMP_SOURCE_SHARE / (2.0 * distance_to));
+        var source = lamp_radius * LAMP_SOURCE_SHARE;
+        if sized > 0.0 {
+            source = mix(source, book_texel(in, record + BOOK_SIZE_TEXEL).x, sized);
+        }
+        let a = saturate(rough * rough + source / (2.0 * distance_to));
         add_lamp(&sum, shown, color, x2, cone, shadow, facing, to_lamp, normal, eye, gloss && share >= LAMP_GLOSS_FROM, a);
     }
     // A mover's shadow takes its lamp's share of the linear light and no more: summed in display light, one lamp of

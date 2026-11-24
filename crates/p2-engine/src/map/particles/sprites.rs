@@ -138,19 +138,28 @@ pub(super) fn sprite_record(sprite: &SpriteParticle, grid_at: Vec3) -> [u32; REC
     record
 }
 
-pub(super) fn header_record(count: usize) -> [u32; RECORD_WORDS] {
+/// The emitter's sprite count, and in the place of a sprite's centre the lamps' linear light at the emitter.
+pub(super) fn header_record(count: usize, lamps: Vec3) -> [u32; RECORD_WORDS] {
     let mut record = [0; RECORD_WORDS];
+    record[0..3].copy_from_slice(&lamps.to_array().map(f32::to_bits));
     record[7] = u32::try_from(count).unwrap_or(u32::MAX);
     record
 }
 
 pub(super) fn write_sprite_records(writes: &mut MeshWrites, p: &mut ParticleActor, particles: &[(Vec<StripPoint>, Vec<SpriteParticle>)], drawn: Option<(Vec3, Vec3)>) {
     let grid_at = drawn.map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
+    let lamps = p.lamp_light;
+    let puddle_seed = p.liquid.seed().filter(|_| writes.liquid_flow);
     for (draw, (_, sprites)) in p.draws.iter_mut().zip(particles) {
         let (Some(EmitterMesh { entity, shown: true, .. }), Some(grid)) = (&draw.mesh, &mut draw.grid) else { continue };
         let first = u32::try_from(writes.records.len()).unwrap_or(u32::MAX);
-        writes.records.push(header_record(sprites.len()));
+        writes.records.push(header_record(sprites.len(), lamps));
+        let sprites_at = writes.records.len();
         writes.records.extend(sprites.iter().map(|sprite| sprite_record(sprite, grid_at)));
+        if let Some(seed) = puddle_seed {
+            // The record's spare word: a modern puddle's edge seed, 0 for every other sprite.
+            writes.records[sprites_at..].iter_mut().for_each(|record| record[11] = seed);
+        }
         if grid.first != Some(first) {
             grid.first = Some(first);
             writes.commands.entity(*entity).insert(MeshTag::new(first));
