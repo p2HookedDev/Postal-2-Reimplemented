@@ -1,7 +1,7 @@
 // The look of liquid in the air, shared by the ribbon and the drops: each kind's optics, its surface, and the light it
 // takes, which is the lamps, zone ambient and sun the particles take, never the frame behind it.
 
-import package::p2_render::color::{to_display, to_linear};
+import package::p2_render::color::{BLOOD_BODY, BLOOD_SIGMA, to_display, to_linear};
 import package::p2_render::sun_shadow::{sun_index, sun_map_visibility};
 // The levels are the material's bindings 5 and 6 (`P2_PARTICLE_LEVELS`), so the source carries no index.
 import package::p2_render::sun_levels::LevelSource;
@@ -95,7 +95,7 @@ var<private> OPTICS: array<Optics, KINDS> = array<Optics, KINDS>(
     // Urine
     Optics(vec3(0.03, 0.08, 0.5), 0.0, vec3(0.037, 0.035, 0.0), 0.0, 0.08, 0.0, 0.35, 0.25),
     // Blood
-    Optics(vec3(1.6, 9.0, 10.0), 0.0, vec3(0.12, 0.001, 0.0006), 0.0, 0.1, 0.0, 0.45, 0.6),
+    Optics(BLOOD_SIGMA, 0.0, BLOOD_BODY, 0.0, 0.1, 0.0, 0.45, 0.6),
     // Puke
     Optics(vec3(3.5, 3.8, 5.0), 0.0, vec3(0.3, 0.2, 0.05), 0.9, 0.45, 0.0, 1.0, 0.8),
     // BloodyPuke
@@ -136,6 +136,10 @@ const DRY_SPECULAR: f32 = 0.15;
 const BILE: vec3<f32> = vec3(0.8, 1.15, 0.6);
 const CHUNK: vec3<f32> = vec3(1.3, 1.2, 1.4);
 const FLECK: vec3<f32> = vec3(0.35, 0.22, 0.2);
+// A blood drop's radius in Unreal units below which it is a matte speck, with no glint, rim or least opacity, and above
+// which it shines in full.
+const MATTE_BELOW: f32 = 0.3;
+const SHINY_ABOVE: f32 = 1.0;
 // Unreal units over which liquid fades into the geometry behind it.
 const SOFT_UNITS: f32 = 2.0;
 
@@ -234,7 +238,11 @@ fn ggx(n_dot_h: f32, a2: f32) -> f32 {
 // emitter (display brightness) and the sun where it reaches, absorbed over the depth, its glints, and the sun behind it.
 fn air_shade(world: vec3<f32>, n: vec3<f32>, thickness: f32, look: vec4<f32>, emitter: vec3<f32>, frag_coord: vec4<f32>, cover: f32, burning: f32, surface: Surface) -> vec4<f32> {
     let optics = optics_of(look.y);
-    let v = normalize(view.world_position.xyz - world);
+    // Blood is turbid: deep, it keeps its colour, and as any water its glints are white.
+    let turbid = select(0.0, 1.0, u32(look.y + 0.5) == BLOOD);
+    let falling = select(0.0, 1.0, abs(look.z - SHAPE_FALL) < 0.5);
+    let shine = 1.0 - turbid * falling *(1.0 - smoothstep(MATTE_BELOW, SHINY_ABOVE, look.x));
+    let v =normalize(view.world_position.xyz - world);
     var light = emitter;
     var sun_light = vec3(0.0);
     var to_sun = vec3(0.0, 1.0, 0.0);
@@ -251,22 +259,22 @@ fn air_shade(world: vec3<f32>, n: vec3<f32>, thickness: f32, look: vec4<f32>, em
     let n_dot_v = max(dot(n, v), 1e-3);
     // Schlick's Fresnel for water's index of 1.33, whose reflectance head on is `F0`.
     let fresnel = F0 + (1.0 - F0) * pow(1.0 - n_dot_v, 5.0);
-    let alpha = cover * max(max(1.0 - dot(transmit, vec3(1.0 / 3.0)), fresnel), optics.least);
+    let alpha = cover * max(max(1.0 - dot(transmit, vec3(1.0 / 3.0)), fresnel * shine), optics.least * shine);
     // A paste scatters from its surface and keeps its colour however deep it is.
-    let deep = mix(mix(vec3(DEEP), vec3(1.0), transmit), vec3(1.0), saturate(optics.chunks * 1.25));
+    let deep = mix(mix(vec3(DEEP), vec3(1.0), transmit), vec3(1.0), max(saturate(optics.chunks * 1.25), turbid));
     let body = to_linear(to_display(optics.body * surface.tint * deep) * light);
 
     let a2 = pow(max(optics.roughness * mix(1.0, WET_SHARPEN, surface.wet * optics.chunks), 0.03), 4.0);
     let lit_side = select(0.0, 1.0, dot(n, to_sun) > 0.0);
     let brightest = max(max(optics.body.r, optics.body.g), max(optics.body.b, 1e-4));
     let own = optics.body / brightest;
-    let hue = mix(vec3(1.0), own, GLINT_HUE);
+    let hue = mix(vec3(1.0), own, GLINT_HUE * (1.0 - turbid));
     let film = 0.5 + 0.5 * cos(TAU * (depth * FILM_SCALE + (1.0 - n_dot_v) * 0.6 + vec3(0.0, 0.33, 0.67)));
     let sun_glint = ggx(max(dot(n, normalize(to_sun + v)), 0.0), a2) * lit_side;
     let key_glint = ggx(max(dot(n, normalize(KEY + v)), 0.0), a2) * KEY_GLINT;
-    var specular = (sun_light * sun_glint + to_linear(light) * key_glint) * (fresnel / (4.0 * n_dot_v)) * hue + to_linear(light) * (fresnel * RIM);
+    var specular = (sun_light * sun_glint + to_linear(light) * key_glint) * (fresnel / (4.0 * n_dot_v)) * hue + to_linear(light) * (fresnel * RIM * (1.0 - 0.7 * turbid));
     let dry = mix(1.0, mix(DRY_SPECULAR, 1.0, surface.wet), optics.chunks);
-    specular = min(specular * mix(vec3(1.0), 2.0 * film, optics.sheen) * dry, vec3(SPECULAR_LIMIT));
+    specular = min(specular * mix(vec3(1.0), 2.0 * film, optics.sheen) * dry * shine, vec3(SPECULAR_LIMIT));
     let behind = pow(saturate(dot(-v, to_sun)), BACK_POWER);
     let back = min(sun_light * transmit * own * (behind * BACK_LIGHT), vec3(LIGHT_LIMIT));
 

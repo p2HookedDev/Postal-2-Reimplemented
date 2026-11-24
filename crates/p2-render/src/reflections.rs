@@ -3,6 +3,7 @@
 //! prepass alpha names a reflecting class, which our lit materials' prepass writes. A ray that leaves the screen or
 //! meets nothing shows nothing: no stand-in light takes its place. Level 1 marches half as far as level 2. A puddle
 //! is a sprite, which writes no prepass: the pass is told where the nearest puddles lie and mirrors the floor there.
+//! A lit pool writes its gloss into the frame's alpha past 1, negated on blood; the pass mirrors it and puts alpha back to 1.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -315,5 +316,11 @@ mod tests {
         let mut depth_only = RenderPipelineDescriptor::default();
         write_class_in_prepass(&mut depth_only, LayersHeld::Alone);
         assert!(depth_only.fragment.is_none());
+    }
+
+    #[test]
+    fn the_pass_tints_blood_as_the_lit_shaders_do() {
+        let sheen = |source: &'static str| source.lines().map(str::trim).find(|line| line.starts_with("const BLOOD_SHEEN:")).expect("a blood sheen");
+        assert_eq!(sheen(include_str!("reflections.wesl")), sheen(include_str!("projector.wesl")));
     }
 }

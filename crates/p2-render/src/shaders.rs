@@ -125,10 +125,11 @@ pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
     parsed.unwrap_or_else(|| panic!("const {name} = {value} is not a number"))
 }
 
-/// Whether a section material draws the sky zone.
+/// Whether a section material draws the sky zone, and whether it hands its pools to the screen reflections.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkyKey {
     pub sky: bool,
+    pub mirror: bool,
 }
 
 pub(crate) fn mark_sky(descriptor: &mut RenderPipelineDescriptor, key: SkyKey) {
@@ -163,10 +164,55 @@ pub(crate) fn mark_see_through(descriptor: &mut RenderPipelineDescriptor, key: M
     }
 }
 
+/// The pool record rides in the frame's alpha, which any blend (or alpha to coverage) would misread, and the sky's alpha
+/// of 0 is the sun-ray mask; so only opaque and masked pipelines of the world write it, and only in views without MSAA,
+/// the only ones the reflection pass runs in to put the alpha back.
+pub(crate) fn mark_pool_mirror(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
+    if key.mirror
+        && !key.sky
+        && mesh_key.msaa_samples() == 1
+        && mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_OPAQUE
+        && let Some(fragment) = descriptor.fragment.as_mut()
+    {
+        fragment.shader_defs.push("POOL_MIRROR".into());
+    }
+}
+
 /// Bevy's shadow pass takes the material's cull mode, and a level's faces look into its empty space: from the sun's side
 /// a sealed room's roof is a back face. Only directional shadow views have this key.
 pub(crate) fn cast_both_sides(descriptor: &mut RenderPipelineDescriptor, key: MeshPipelineKey) {
     if key.contains(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO) {
         descriptor.primitive.cull_mode = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::render::render_resource::FragmentState;
+
+    #[test]
+    fn only_an_unblended_world_pipeline_with_the_flag_writes_the_pool_record() {
+        let marked = |mesh_key: MeshPipelineKey, key: SkyKey| {
+            let mut descriptor = RenderPipelineDescriptor { fragment: Some(FragmentState::default()), ..Default::default() };
+            mark_pool_mirror(&mut descriptor, mesh_key, key);
+            descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("POOL_MIRROR"))
+        };
+        let world = SkyKey { sky: false, mirror: true };
+        assert!(marked(MeshPipelineKey::BLEND_OPAQUE, world));
+        assert!(marked(MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::MAY_DISCARD, world));
+        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: false, mirror: false }));
+        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: true, mirror: true }));
+        for blend in [
+            MeshPipelineKey::BLEND_ALPHA,
+            MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA,
+            MeshPipelineKey::BLEND_MULTIPLY,
+            MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE,
+        ] {
+            assert!(!marked(blend, world));
+        }
+        let mut depth_only = RenderPipelineDescriptor::default();
+        mark_pool_mirror(&mut depth_only, MeshPipelineKey::BLEND_OPAQUE, world);
+        assert!(depth_only.fragment.is_none());
     }
 }

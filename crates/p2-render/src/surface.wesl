@@ -7,7 +7,7 @@ import bevy_pbr::render::{
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::layer_bindings::lit_color;
 import package::p2_render::layer_types::ShaderLayers;
-import package::p2_render::modern::{allows_gloss, ambient_occlusion, classed_surface, modern_glass, surface_light, view_around, with_light};
+import package::p2_render::modern::{Lit, allows_gloss, ambient_occlusion, classed_surface, modern_glass, surface_light, view_around, with_light};
 import package::p2_render::modern_base::LampLight;
 import package::p2_render::sun_shadow::{sun_seen_from, sun_visibility};
 import package::p2_render::sun_levels::LevelSource;
@@ -67,7 +67,7 @@ fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f3
     }
     let gloss = (allows_gloss(flag) || standing.wet > 0.0) && !darken;
     let surface = pooled_surface(classed_surface(flag, blend), standing);
-    let lamps = lamp_light(in, position, wet_normal(bumped, standing), gloss, surface, flag);
+    let lamps = lamp_light(in, position, wet_normal(bumped, standing), bumped, gloss, surface, flag);
     return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface, standing);
 }
 
@@ -94,8 +94,21 @@ fn pooled_surface_lit(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, 
     let display = to_display(color);
     let around = view_around(normal, incoming.lamps, incoming.surface);
     let lit = surface_light(display * display, position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, around);
-    let shine = select(lit.shine, min(lit.shine * incoming.pool.sheen, vec3(POOL_SHINE_LIMIT)), incoming.pool.wet > 0.0);
+    let shine = select(lit.shine, pool_shine(lit, incoming.pool), incoming.pool.wet > 0.0);
     return to_linear(sqrt(max(lit.matte + shine, vec3(0.0)))) + incoming.pool.glow;
+}
+
+fn pool_shine(lit: Lit, pool: Pool) -> vec3<f32> {
+    return min((lit.shine + lit.reflection * (pool.tint - vec3(1.0)) * pool.wet) * pool.sheen, vec3(POOL_SHINE_LIMIT));
+}
+
+// A fullbright surface keeps its colour; only the pool on it shines, faded by its cover so the rim stays as it was,
+// and a fire on it glows.
+fn pooled_unlit(color: vec3<f32>, normal: vec3<f32>, incoming: ModernLight) -> vec3<f32> {
+    let display = to_display(color);
+    let around = view_around(normal, incoming.lamps, incoming.surface);
+    let lit = surface_light(display * display, incoming.position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, around);
+    return to_linear(sqrt(display * display + pool_shine(lit, incoming.pool) * incoming.pool.wet)) + incoming.pool.glow;
 }
 
 // The texture under twice the light in display space, clamped to 1 as the frame buffer clamps it.

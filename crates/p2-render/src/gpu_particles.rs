@@ -67,7 +67,8 @@ const SUN_REACH: f32 = 30_000.0;
 /// What a droplet is, in its `shape.y`, as `gpu_particles.wesl` has them; 0 is a chunk.
 pub(crate) const STREAK: f32 = 1.0;
 pub(crate) const MIST: f32 = 2.0;
-/// In a droplet's `rest.w`, as `gpu_particles.wesl` has it: a blood hit's droplet, which no later push moves.
+/// In a droplet's `rest.w`, as `gpu_particles.wesl` has it: a blood hit's droplet, which dies where it lands and which
+/// no later push moves.
 pub(crate) const UNPUSHED: f32 = 1.0;
 /// Seconds the pool is still stepped and drawn after its last droplet should have died.
 const LIFE_MARGIN: f64 = 1.0;
@@ -213,7 +214,7 @@ fn throw_droplets(
     let lit = facts.in_play && modern_level(settings.as_deref(), MODERN_PARTICLE_LIGHT) > 0;
     let light_at = |parent: Entity, location: Vector| room.at(parent, location).filter(|_| lit).unwrap_or(Vec3::ONE);
     let newborn = match drawn.as_deref() {
-        Some(drawn) if any_view => spawner.throw(drawn, level, facts.in_play.then_some(facts.origin), facts.game_step, light_at, &mut births.0),
+        Some(drawn) if any_view => spawner.throw(drawn, level, facts.in_play.then_some(facts.origin), facts.game_step, &facts.person_hits, light_at, &mut births.0),
         _ => Vec::new(),
     };
     sprays.write_batch(spawner.sprays.drain(..));

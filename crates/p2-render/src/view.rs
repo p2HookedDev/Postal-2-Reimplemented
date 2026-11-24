@@ -272,7 +272,14 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         RenderLayers::from_layers(&[0, SKY_LAYER]),
         crate::world_pass::WorldCamera,
         // Assigning lights costs by the clusters they cover, on the main thread; a longer list per pixel costs far less.
-        ClusterConfig::FixedZ { total: 1536, z_slices: 16, z_config: ClusterZConfig::default(), dynamic_resizing: true },
+        // Bevy's first slice of 5 is meant for metres: in Unreal units it spends slices close to the eye and leaves the
+        // fight's range in deep slices, whose decal lists every pixel there walks.
+        ClusterConfig::FixedZ {
+            total: 1536,
+            z_slices: 16,
+            z_config: ClusterZConfig { first_slice_depth: 100.0, ..Default::default() },
+            dynamic_resizing: true,
+        },
         DistanceFog { color: Color::NONE, ..Default::default() },
         AmbientLight { affects_lightmapped_meshes: false, ..Default::default() },
     ));
@@ -363,8 +370,11 @@ fn apply_change(
     }
     let world_supported = world.supported();
     commands.entity(root).with_children(|parent| {
-        for (image, transform, tag) in decals {
-            parent.spawn((ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() }, transform));
+        for (image, transform, tag, blood) in decals {
+            let mut decal = parent.spawn((ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() }, transform));
+            if blood {
+                decal.insert(crate::wounds::BloodDecal);
+            }
         }
         for (model, in_sky) in models.into_iter().map(|model| (model, false)).chain(sky_models.into_iter().map(|model| (model, true))) {
             let sections: Vec<_> = model

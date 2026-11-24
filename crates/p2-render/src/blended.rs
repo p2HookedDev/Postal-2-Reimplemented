@@ -6,10 +6,10 @@ use bevy::app::{App, Plugin};
 use bevy::asset::{Asset, AssetApp, Handle, uuid_handle};
 use bevy::image::Image;
 use bevy::mesh::MeshVertexBufferLayoutRef;
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MaterialPlugin, StandardMaterial};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MaterialPlugin, MeshPipelineKey, StandardMaterial};
 use bevy::reflect::Reflect;
 use bevy::render::RenderApp;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{AsBindGroup, BlendComponent, BlendFactor, BlendOperation, RenderPipelineDescriptor, SpecializedMeshPipelineError};
 use bevy::shader::{Shader, ShaderRef};
 
 use crate::shader_layers::{Layers, ShaderLayers};
@@ -99,7 +99,7 @@ impl From<&TerrainLayer> for ShaderLayers {
 
 impl From<&TerrainLayer> for SkyKey {
     fn from(extension: &TerrainLayer) -> Self {
-        Self { sky: extension.sky }
+        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32) }
     }
 }
 
@@ -119,7 +119,15 @@ impl MaterialExtension for TerrainLayer {
         if let Some(fragment) = descriptor.fragment.as_mut() {
             fragment.shader_defs.push("TERRAIN_LAYER".into());
         }
+        crate::shaders::mark_pool_mirror(descriptor, key.mesh_key, key.bind_group_data);
         crate::shaders::mark_sky(descriptor, key.bind_group_data);
+        // A layer over the base lays colour only: the base under it wrote the same pool's record into the alpha.
+        if key.bind_group_data.mirror
+            && key.mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA
+            && let Some(blend) = descriptor.fragment.as_mut().and_then(|fragment| fragment.targets.first_mut()).and_then(|target| target.as_mut()).and_then(|target| target.blend.as_mut())
+        {
+            blend.alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add };
+        }
         Ok(())
     }
 }

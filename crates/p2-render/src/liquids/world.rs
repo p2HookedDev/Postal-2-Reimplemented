@@ -13,13 +13,13 @@ use bevy::math::Vec3;
 use bevy::render::RenderApp;
 use bevy::render::extract_resource::ExtractResourcePlugin;
 use p2_bevy_assets::to_bevy;
-use p2_host::display::{MODERN_LIQUIDS, Settings};
+use p2_host::display::{MODERN_LIQUIDS, NORMAL_FLUID_DETAIL, Settings};
 use p2_math::Vector;
 use p2_particles::SpriteParticle;
 use p2_vm::FluidHit;
 
 use super::LiquidLanding;
-use super::layer::{Feed, Feeding, LayerFrame, Level, LiquidLayer, STEP, TEXEL, capacity, film_of};
+use super::layer::{FILM_LIFE, Feed, Feeding, LayerFrame, Level, LiquidLayer, STEP, TEXEL, capacity, film_of, fluid_life};
 use crate::frame_facts::FrameFacts;
 use crate::level_collision::LevelCollision;
 use crate::particle_draw::draw_particles;
@@ -133,6 +133,7 @@ pub(crate) fn step_liquids(
         feeds.push(Feeding { at, radius: landing_radius(landing), kind: landing.kind, feed: Feed::Add(landing.volume), burning: false, face: face_of(normal) });
     }
     let steps = layer.steps(facts.step(), STEP, MOST_STEPS);
+    frame.film_life = fluid_life(settings.as_deref().map_or(NORMAL_FLUID_DETAIL, Settings::fluid_detail), FILM_LIFE);
     let level = Level { collision: collision.as_deref().and_then(|collision| collision.0.as_ref()), origin: facts.origin, now: facts.level_time };
     layer.frame(&feeds, level, steps, &mut images, &mut commands, &mut frame);
 }

@@ -49,16 +49,20 @@ const PARTICLE_LEVELS: &str = "P2_PARTICLE_LEVELS";
 /// A wound's drops for each particle its emitter spawns, and their speed between beats against the systole's.
 const SPURT_SHARE: f32 = 0.25;
 const SPURT_SLOW: f32 = 0.5;
-const SPURT_RADIUS: [f32; 2] = [0.35, 0.8];
+/// A wound's drops are drawn at this share of the size whose volume they pour.
+const SPURT_FINE: f32 = 0.3;
+const SPURT_RADIUS: [f32; 2] = [0.35 * SPURT_FINE, 0.8 * SPURT_FINE];
 /// Drops a second a blood stream throws where it breaks, and their size.
 const BREAK_DROPS: f32 = 40.0;
-const BREAK_RADIUS: [f32; 2] = [0.15, 0.5];
+const BREAK_RADIUS: [f32; 2] = [0.05, 0.15];
 const BREAK_SCATTER: [f32; 2] = [0.85, 1.15];
 /// A falling drop is drawn stretched over its motion in this many seconds, the same at any frame rate.
 const SHUTTER: f32 = 1.0 / 60.0;
 /// The scripts' splash and droplet sprites are drawn as drops of this share of their half width, within these radii.
 const SPRITE_RADIUS: f32 = 0.2;
-const SPRITE_RADII: [f32; 2] = [0.12, 1.2];
+const SPRITE_RADII: [f32; 2] = [0.06, 0.25];
+/// Other liquids' sprite drops keep their size.
+const OTHER_SPRITE_RADII: [f32; 2] = [0.12, 1.2];
 /// A stream with no strip of its own is drawn along its aim for this long, in this many points.
 const AIMED_SECONDS: f32 = 0.6;
 const AIMED_POINTS: usize = 16;
@@ -66,6 +70,8 @@ const AIMED_POINTS: usize = 16;
 const ATTRIBUTE_AXIS: MeshVertexAttribute = MeshVertexAttribute::new("LiquidAxis", 0x6c69_7175_6964_6178, VertexFormat::Float32x4);
 /// A stream that stops for longer than this starts a new retch when it flows again.
 const RETCH_GAP: f32 = 0.3;
+/// Unreal units a second fire climbs a stream from where it lands, the speed of the game's fire starter up a pour.
+const FIRE_RUN: f32 = 900.0;
 /// Chunks a second a paste throws at its mean surge, their half size and how far they spread off the pour, in Unreal
 /// units and Unreal units a second, how long they lie, how many shapes there are, and their colours in display light.
 const CHUNKS: f32 = 4.0;
@@ -205,7 +211,7 @@ pub struct AirMesh {
     pub(super) ways: Vec<[f32; 3]>,
     corners: Vec<[f32; 2]>,
     lights: Vec<[f32; 4]>,
-    looks: Vec<[f32; 4]>,
+    pub(super) looks: Vec<[f32; 4]>,
     axes: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
 }
@@ -256,11 +262,13 @@ struct Source {
     /// The play clock when its retch began and when it last poured.
     retch: f32,
     poured: f32,
+    /// The play clock when it caught fire.
+    lit: Option<f32>,
 }
 
 impl Default for Source {
     fn default() -> Self {
-        Self { light: ActorLight::default(), shown: Vec3::ONE, spurts_owed: 0.0, breaks_owed: 0.0, chunks_owed: 0.0, retch: 0.0, poured: 0.0 }
+        Self { light: ActorLight::default(), shown: Vec3::ONE, spurts_owed: 0.0, breaks_owed: 0.0, chunks_owed: 0.0, retch: 0.0, poured: 0.0, lit: None }
     }
 }
 
@@ -411,7 +419,9 @@ fn pour_feeder(air: &mut AirLiquids, pouring: &Pouring, hit: &impl Fn(Vec3, Vec3
     let retch = air.clock - source.retch;
     let rings = stream_arc(&cut_at_hit(from, &points, hit), reach(liquid.kind, beat));
     let speed = (velocity[0] + velocity[1]).length() * 0.5;
-    let stream = StreamDraw { kind: liquid.kind, burning: f32::from(u8::from(liquid.burning)), light: source.shown, retch, speed, fall: (-gravity.y).max(0.0) };
+    source.lit = liquid.burning.then(|| source.lit.unwrap_or(air.clock));
+    let burn_reach = source.lit.map(|lit| (air.clock - lit) * FIRE_RUN);
+    let stream = StreamDraw { kind: liquid.kind, burn_reach, light: source.shown, retch, speed, fall: (-gravity.y).max(0.0) };
     ring_vertices(&rings, &stream, ribbons);
     if paste(liquid.kind) {
         let surge = (gush(liquid.kind, retch) - TRICKLE) / (1.0 - TRICKLE);
@@ -436,7 +446,11 @@ fn pour_feeder(air: &mut AirLiquids, pouring: &Pouring, hit: &impl Fn(Vec3, Vec3
     }
     let wound = Feed { source: id, kind: liquid.kind, from, velocity, radius: SPURT_RADIUS, pours: true };
     let count = due(&mut source.spurts_owed, pour.rate * SPURT_SHARE * beat, seconds);
+    let first = air.drops.list.len();
     air.drops.throw_from(&wound, SPURT_SLOW + (1.0 - SPURT_SLOW) * beat, count, seconds, cap);
+    for drop in &mut air.drops.list[first..] {
+        drop.volume /= SPURT_FINE.powi(3);
+    }
     if let Some(end) = rings.last() {
         let broken = Feed { from: end.at, velocity: BREAK_SCATTER.map(|scale| end.way * speed * scale), radius: BREAK_RADIUS, pours: false, ..wound };
         let count = due(&mut source.breaks_owed, BREAK_DROPS, seconds);
@@ -474,7 +488,8 @@ fn script_drops(actor: &DrawnActor, origin: Vec3, seconds: f32, sources: &FxHash
     for sprite in emitters.iter().flat_map(|emitter| &emitter.sprites) {
         let at = Vec3::from(to_bevy(sprite.location));
         let moved = if seconds > 0.0 { (at - Vec3::from(to_bevy(sprite.previous))) * (SHUTTER / seconds) } else { Vec3::ZERO };
-        let radius = (sprite.size[0] * SPRITE_RADIUS).clamp(SPRITE_RADII[0], SPRITE_RADII[1]);
+        let [least, most] = if liquid.kind == FluidType::Blood { SPRITE_RADII } else { OTHER_SPRITE_RADII };
+        let radius = (sprite.size[0] * SPRITE_RADIUS).clamp(least, most);
         let seed = (sprite.serial as f32 * 0.618_034).fract();
         beads.quad(at + origin, moved, light, Shape::Fall.look(radius, liquid.kind, 0.0), seed);
     }
@@ -522,6 +537,13 @@ mod tests {
             assert_eq!(shader_const(LOOK, name), f64::from(shape as u8), "{name}");
         }
         assert_eq!(Shape::Tube.look(0.5, FluidType::Blood, 0.25), [0.5, 3.0, 2.0, 0.25]);
+    }
+
+    #[test]
+    fn fine_blood_drops_are_matte() {
+        let matte = shader_const(LOOK, "MATTE_BELOW") as f32;
+        assert!(SPURT_RADIUS[1].max(BREAK_RADIUS[1]).max(SPRITE_RADII[1]) <= matte);
+        assert!(matte < shader_const(LOOK, "SHINY_ABOVE") as f32);
     }
 
     #[test]

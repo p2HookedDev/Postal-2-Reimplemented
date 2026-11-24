@@ -138,11 +138,18 @@ impl<L: LoaderRef> Vm<L> {
             let hit: [Value; 6] = std::array::from_fn(|k| hit_arg(&*self, &args, k, function.params[k]));
             self.fluid_hit_seen(feeder, &hit);
         }
+        // Before the call: the values path hands back only the out parameters.
+        let body_at = (function.hook == Some(ScriptHook::BodyLocation)).then(|| hit_arg(&*self, &args, 2, function.params[2]));
         self.script.script_depth += 1;
         let started = self.function_enter();
         let mut result = run(self, function, this, class, args);
         self.function_exit(function, started);
         self.script.script_depth -= 1;
+        if let (Some(at), Some(victim), Ok((_, after))) = (&body_at, this, &result)
+            && crate::interp::truthy(&hit_arg(&*self, after, 5, function.params[5]))
+        {
+            self.headshot_seen(victim, natives::vec3(Some(at)));
+        }
         if singular && let Some(object) = this {
             self.script.in_singular.remove(&object);
         }

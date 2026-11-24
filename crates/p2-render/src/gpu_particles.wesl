@@ -1,7 +1,7 @@
 // Detail droplets. `simulate` moves every slot of the pool and bounces it off the depth prepass where it is on screen;
 // `vertex` and `fragment` draw each live slot with its source's texture: a spinning cell that comes to lie on the
-// surface it lands on. A blood hit's streaks are drawn stretched along their motion and die where they land; its
-// mist is a soft puff that grows and fades.
+// surface it lands on. A blood hit's droplets die where they land; its streaks are drawn stretched along their motion
+// and its mist is a soft puff that grows and fades.
 
 import bevy_render::view::View;
 import package::p2_render::depth_surface::{eye_distance, normal_at, on_surface, world_at};
@@ -71,14 +71,16 @@ const LIFT: f32 = 0.4;
 // The most a chunk spins in the air, in radians a second.
 const SPIN: f32 = 10.0;
 const MIST_DRAG: f32 = 6.0;
-// In a droplet's `rest.w`: no explosion or hit pushes it (a blood hit's spray, which would otherwise fly again at every
-// shot into the same body).
+const STREAK_DRAG: f32 = 6.0;
+// In a droplet's `rest.w`: a blood hit's droplet, which dies where it lands and which no explosion or hit pushes (it
+// would otherwise fly again at every shot into the same body).
 const UNPUSHED: f32 = 1.0;
-// A puff reaches this many times its birth size by half its life.
+// A puff reaches this many times its birth size by `MIST_FULL` of its life.
 const MIST_GROWTH: f32 = 4.0;
-const MIST_ALPHA: f32 = 0.5;
+const MIST_FULL: f32 = 0.3;
+const MIST_ALPHA: f32 = 0.8;
 // A streak's tail reaches back over the way it moved in twice this many seconds.
-const STREAK_SHUTTER: f32 = 0.0167;
+const STREAK_SHUTTER: f32 = 0.025;
 
 fn alive(d: Droplet) -> bool {
     return d.velocity.w > 0.0 && d.place.w < d.velocity.w;
@@ -127,7 +129,13 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
     var life = d.velocity.w;
     // A droplet only comes to lie once it has stopped, so one lying still has no speed to move it.
     if !was_lying {
-        v = before * exp(-select(DRAG, MIST_DRAG, kind == MIST) * dt) - vec3(0.0, d.shape.w * dt, 0.0);
+        var drag = DRAG;
+        if kind == MIST {
+            drag = MIST_DRAG;
+        } else if kind == STREAK {
+            drag = STREAK_DRAG;
+        }
+        v = before * exp(-drag * dt) - vec3(0.0, d.shape.w * dt, 0.0);
         p += v * dt;
         turn += spin_of(slot) * dt;
     }
@@ -149,15 +157,14 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
             if behind > 0.0 && behind < THICKNESS {
                 let n = normal_at(depth, view.world_from_clip, view.world_position, pixel, size, surface);
                 let into = dot(v, n);
-                if into < 0.0 && kind == STREAK {
+                if into < 0.0 && (kind == STREAK || d.rest.w == UNPUSHED) {
                     life = age;
                 } else if into < 0.0 {
                     let along = (v - into * n) * KEEP;
                     let hop = -into * RESTITUTION;
                     v = along + hop * n;
                     p = on_surface(view.view_from_world, view.world_position, p, surface, n, LIFT);
-                    // A blood hit's droplet comes to rest only on a floor: on a wall or ceiling it falls on.
-                    if length(v) < REST_SPEED && (n.y > 0.5 || d.rest.w != UNPUSHED) {
+                    if length(v) < REST_SPEED {
                         v = vec3(0.0);
                         rest = vec4(n, d.rest.w);
                     }
@@ -203,8 +210,11 @@ fn vertex(@builtin(vertex_index) index: u32) -> DropletOutput {
     var offset = (right * turned.x + up * turned.y) * half;
     var alpha = 1.0 - smoothstep(0.85, 1.0, age);
     let kind = u32(d.shape.y);
+    // One pixel's size in world units here. A droplet narrower is drawn a pixel wide and as faint as its real size.
+    let pixel = 2.0 * length(d.place.xyz - view.world_position.xyz) / (view.clip_from_view[1][1] * view.viewport.w);
+    let share = min(1.0, half / pixel);
     if kind == MIST {
-        offset *= 1.0 + (MIST_GROWTH - 1.0) * smoothstep(0.0, 0.5, age);
+        offset *= 1.0 + (MIST_GROWTH - 1.0) * smoothstep(0.0, MIST_FULL, age);
         alpha = MIST_ALPHA * (1.0 - age) * (1.0 - age);
     } else if kind == STREAK {
         // Its motion across the screen; the head is at its place, the tail behind it.
@@ -214,7 +224,11 @@ fn vertex(@builtin(vertex_index) index: u32) -> DropletOutput {
         let along = select(up, motion / max(speed, 1e-4), speed > 1e-3);
         let side = normalize(cross(along, forward));
         let reach = max(half, speed * STREAK_SHUTTER);
-        offset = side * corner.x * half + along * (corner.y - 1.0) * reach;
+        offset = side * corner.x * max(half, pixel) + along * (corner.y - 1.0) * reach;
+        alpha *= share;
+    } else if !lying(d) {
+        offset *= max(half, pixel) / max(half, 1e-4);
+        alpha *= share * share;
     }
     out.colour = vec4(d.colour.rgb, alpha);
     out.position = view.clip_from_world * vec4(d.place.xyz + offset, 1.0);

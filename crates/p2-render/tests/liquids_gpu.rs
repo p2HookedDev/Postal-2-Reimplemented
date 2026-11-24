@@ -28,7 +28,7 @@ use p2_math::Vector;
 use p2_render::MainPassExtraSystems;
 use p2_render::frame_facts::FrameFacts;
 use p2_render::liquids::LiquidsPlugin;
-use p2_render::liquids::layer::{APRON, FILM, LayerFrame, LayerSlot, LayerSource, SIDE, SLOT_SIDE, SLOTS_SIDE, TEXELS, new_liquid_atlas};
+use p2_render::liquids::layer::{APRON, FILM, FILM_LIFE, LayerFrame, LayerSlot, LayerSource, SIDE, SLOT_SIDE, SLOTS_SIDE, TEXELS, new_liquid_atlas};
 use p2_render::liquids::layer_gpu::LayerGpuPlugin;
 use p2_render::particle_frame::{DrawnActor, DrawnEmitter, DrawnParticles, Liquid, LiquidRole, Pour};
 use p2_particles::StripPoint;
@@ -204,11 +204,11 @@ fn layer(slope: f32) -> (App, Arc<Mutex<Vec<u8>>>) {
     let mut slots = vec![LayerSlot::default(); 4];
     (slots[0].around[4], slots[0].around[5], slots[1].around[3], slots[1].around[4]) = (0, 1, 0, 1);
     (slots[1].atlas_x, slots[1].atlas_y) = (SLOT_SIDE, 0);
-    world.insert_resource(LayerFrame { capacity: 4, level: 1, steps: 1, slots, active: vec![0, 1], sources: Vec::new(), cleared: vec![0, 1], floors, atlas: Some(atlas.id()) });
+    world.insert_resource(LayerFrame { capacity: 4, level: 1, steps: 1, slots, active: vec![0, 1], sources: Vec::new(), cleared: vec![0, 1], floors, atlas: Some(atlas.id()), film_life: FILM_LIFE });
     (app, frames)
 }
 
-/// Holds a blood film over a disc of `radius` texels at texel (x, y) of slot 0, as a script's puddle does; the part
+/// Holds a blood film over a blot of `radius` texels at texel (x, y) of slot 0, as a script's puddle does; the part
 /// past slot 0's +x side lands in slot 1.
 fn hold(app: &mut App, [x, y]: [f32; 2], radius: f32) {
     let mut frame = app.world_mut().resource_mut::<LayerFrame>();
@@ -247,7 +247,9 @@ fn depth(atlas: &[u8], slot: u32, x: i32, y: i32) -> f32 {
 fn a_held_pool_is_smooth_across_its_tiles_and_dries_once_let_go() {
     let (mut app, frames) = layer(0.0);
     hold(&mut app, [120.0, 64.0], 20.0);
-    let held = |atlas: &[u8]| (depth(atlas, 0, 120, 64) - FILM).abs() < 0.02 && (depth(atlas, 1, 4, 64) - FILM).abs() < 0.02;
+    // A held film is a dome: the film in its middle, thinner toward its blot's rim, whose lobes keep 12.5 texels wet.
+    let rim = |atlas: &[u8]| depth(atlas, 1, 4, 64);
+    let held = |atlas: &[u8]| (depth(atlas, 0, 120, 64) - FILM).abs() < 0.02 && rim(atlas) > 0.02 && rim(atlas) < FILM - 0.02;
     let atlas = until(&mut app, &frames, "the disc never held its film on both tiles", held);
     assert!(depth(&atlas, 0, 20, 20) < 1e-3, "far away is dry: {}", depth(&atlas, 0, 20, 20));
     for y in [50, 64, 78] {
@@ -269,7 +271,7 @@ fn poured_liquid_runs_downhill_and_keeps_its_film_behind() {
     until(&mut app, &frames, "the layer never published its floor", |atlas| slot_texel(atlas, 0, 64, 30)[2] == -6.0);
     {
         let mut frame = app.world_mut().resource_mut::<LayerFrame>();
-        frame.sources = vec![LayerSource { x: 64.0, y: 30.0, radius: 6.0, amount: 600.0, kind: f32::from(FluidType::Urine as u8), adds: 1 }];
+        frame.sources = vec![LayerSource { x: 64.0, y: 30.0, radius: 6.0, amount: 600.0, kind: f32::from(FluidType::Urine as u8), adds: 1, seed: 0 }];
         (frame.slots[0].first_source, frame.slots[0].sources) = (0, 1);
     }
     app.update();

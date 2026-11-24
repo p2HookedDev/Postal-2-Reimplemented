@@ -4,9 +4,11 @@
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     mesh_view_bindings::view,
+    pbr_bindings,
     pbr_functions::main_pass_post_lighting_processing,
     pbr_types,
 };
+import package::p2_render::modern_base::LUMINANCE;
 import package::p2_render::shader_layers::{detail, glow, specular};
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::modern::sky_mask;
@@ -17,7 +19,7 @@ import package::p2_render::layer_types::LayerIndices;
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_cube};
 @if(BINDLESS)
-import bevy_pbr::render::mesh_bindings::mesh;
+import bevy_pbr::render::{mesh_bindings::mesh, pbr_bindings::material_indices};
 
 @if(BINDLESS) {
 @group(3) @binding(108) var<storage> layer_indices: array<LayerIndices>;
@@ -34,6 +36,28 @@ import bevy_pbr::render::mesh_bindings::mesh;
 @if(BINDLESS)
 fn indices(in: VertexOutput) -> LayerIndices {
     return layer_indices[mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu];
+}
+
+// The base texture's tone against the texture around it, in display space: `texel`'s luma over that of mip `MEAN_LEVEL`,
+// a fixed patch of the texture whatever the view. 1 on an even surface, below 1 in grout and cracks, and 1 again once
+// the view itself samples that coarse. Assumes a white base colour factor, as the map's materials have.
+const MEAN_LEVEL: f32 = 4.0;
+
+fn base_tone(in: VertexOutput, pbr_input: pbr_types::PbrInput, texel: vec3<f32>) -> f32 {
+    var tone = 1.0;
+@if(VERTEX_UVS_A) {
+    if (pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_BASE_COLOR_TEXTURE_BIT) != 0u {
+        let uv = (pbr_input.material.uv_transform * vec3(in.uv, 1.0)).xy;
+@if(BINDLESS)
+        let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+@if(BINDLESS)
+        let mean = textureSampleLevel(bindless_textures_2d[material_indices[slot].base_color_texture], bindless_samplers_filtering[material_indices[slot].base_color_sampler], uv, MEAN_LEVEL);
+@else
+        let mean = textureSampleLevel(pbr_bindings::base_color_texture, pbr_bindings::base_color_sampler, uv, MEAN_LEVEL);
+        tone = sqrt(dot(texel, LUMINANCE) / max(dot(mean.rgb, LUMINANCE), 1e-4));
+    }
+}
+    return tone;
 }
 
 fn premultiplied(flags: u32) -> bool {

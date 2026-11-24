@@ -6,7 +6,7 @@ use bevy::pbr::StandardMaterial;
 use super::*;
 use crate::view::SKY_LAYER;
 use p2_render_cpu::LE_SUNLIGHT;
-use p2_host::display::MODERN_GRAPHICS;
+use p2_host::display::{MODERN_GRAPHICS, MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
 use crate::actor_light::LightEnvironment;
 use crate::blended::TerrainLayer;
 use crate::terrain_material::TerrainLayers;
@@ -71,6 +71,32 @@ fn every_material_gets_the_flag_once() {
     let materials = world.resource::<Assets<LightmappedMaterial>>();
     assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| material.flag() & 7 == u16::from(bits))));
     assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| crate::material_class::levels_of(material.flag()).0 == level)));
+}
+
+#[test]
+fn the_pool_mirror_bit_follows_the_reflection_pass_into_every_key() {
+    use crate::shaders::SkyKey;
+    assert_eq!(level_bits(15, 15) & (POOL_MIRROR | 7), 0);
+    let settings = |level: &str, strength: &str| {
+        Settings::read(|query| match query {
+            MODERN_GRAPHICS => "True".to_owned(),
+            MODERN_REFLECTIONS => level.to_owned(),
+            MODERN_REFLECTION_STRENGTH => strength.to_owned(),
+            _ => String::new(),
+        })
+    };
+    assert_eq!([("2", "10"), ("0", "10"), ("2", "0")].map(|(level, strength)| mirror_bit(&settings(level, strength))), [POOL_MIRROR, 0, 0]);
+    let flag = f32::from(POOL_MIRROR | u16::from(MODERN_ON));
+    let mut layers = BakedLight::default();
+    layers.layers.detail.z = flag;
+    let mut actor = HardwareLighting::default();
+    actor.layers.detail.z = flag;
+    let mut ground = TerrainLayers::default();
+    ground.params.count.y = u32::from(POOL_MIRROR);
+    let mut layer = TerrainLayer::default();
+    layer.layers.detail.z = flag;
+    assert!([SkyKey::from(&layers), SkyKey::from(&actor), SkyKey::from(&ground), SkyKey::from(&layer)].iter().all(|key| key.mirror));
+    assert!(!SkyKey::from(&BakedLight::default()).mirror);
 }
 
 #[test]

@@ -1,12 +1,13 @@
 use bevy::app::{App, Plugin, PostUpdate};
-use bevy::asset::Handle;
+use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::ecs::change_detection::DetectChangesMut;
-use bevy::ecs::prelude::{Commands, Component, Entity, Query, Res, ResMut, Resource, With, Without};
+use bevy::ecs::prelude::{Commands, Component, Entity, Has, Local, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
 use bevy::light::{ClusteredDecal, SimulationLightSystems};
 use bevy::math::{Affine3A, Mat4, Vec3};
 use bevy::mesh::skinning::SkinnedMesh;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::transform::TransformSystems;
 use bevy::transform::components::{GlobalTransform, Transform};
 use p2_bevy_assets::to_bevy;
@@ -14,8 +15,9 @@ use p2_vm::ObjectId;
 use rustc_hash::FxHashMap;
 
 use crate::components::{FollowActor, MapScoped};
-use p2_host::display::{MODERN_DECAL_AGING, MODERN_WOUNDS, modern_on, modern_turned_off};
+use p2_host::display::{MODERN_DECAL_AGING, MODERN_LIQUIDS, MODERN_WOUNDS, Settings, modern_on, modern_turned_off};
 use crate::frame_facts::FrameFacts;
+use crate::screen_pass::modern_level;
 
 /// Blood drying in projector tag bits 3..7 (the frame buffer blend keeps bits 0..3); `projector.wesl` reads the same.
 const DRY_SHIFT: u32 = 3;
@@ -74,6 +76,7 @@ impl Plugin for WoundsPlugin {
                 drop_wounds.run_if(modern_turned_off(MODERN_WOUNDS)).in_set(WoundsSystems),
                 age_decals.run_if(modern_on(MODERN_DECAL_AGING)).in_set(WoundsSystems),
                 restore_decal_tags.run_if(modern_turned_off(MODERN_DECAL_AGING)).in_set(WoundsSystems),
+                mark_blood_decals.in_set(WoundsSystems),
                 place_wounds.after(TransformSystems::Propagate).before(SimulationLightSystems::AssignLightsToClusters)),
         );
     }
@@ -222,8 +225,12 @@ impl DecalAge {
     }
 }
 
+/// A decal of the game's blood placed with the map, drawn as our blood while our liquids are on.
+#[derive(Component)]
+pub struct BloodDecal;
+
 /// The retail splat textures name blood in their package, group or name.
-fn is_blood(texture: &str) -> bool {
+pub fn is_blood(texture: &str) -> bool {
     texture.to_ascii_lowercase().contains("blood")
 }
 
@@ -245,6 +252,31 @@ fn restore_decal_tags(mut decals: Query<(&mut ClusteredDecal, &DecalAge)>) {
     }
 }
 
+/// With our liquids on, the game's blood decals and wounds carry a flat normal map, which marks them for
+/// `projector.wesl` to draw as our blood; with them off, none does.
+fn mark_blood_decals(
+    settings: Option<Res<Settings>>,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut marker: Local<Option<Handle<Image>>>,
+    mut decals: Query<(&mut ClusteredDecal, Option<&DecalAge>, Has<BloodDecal>)>,
+) {
+    let on = modern_level(settings.as_deref(), MODERN_LIQUIDS) > 0;
+    if on && marker.is_none() {
+        let Some(images) = images.as_deref_mut() else { return };
+        let flat = Image::new_fill(Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2, &[128, 128, 255, 255], TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+        *marker = Some(images.add(flat));
+    }
+    for (mut decal, age, placed) in &mut decals {
+        // Our liquid's decals carry their data as a metallic-roughness map and share the wound's tag bits.
+        let wound = decal.tag & WOUND_TAG == WOUND_TAG && decal.metallic_roughness_texture.is_none();
+        let blood = age.is_some_and(|age| age.blood) || placed || wound;
+        let wanted = marker.as_ref().filter(|_| on && blood);
+        if decal.normal_map_texture.as_ref() != wanted {
+            decal.normal_map_texture = wanted.cloned();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +289,13 @@ mod tests {
         assert_eq!(bits("DRY_SHIFT"), DRY_SHIFT);
         assert_eq!(bits("FADE_SHIFT"), FADE_SHIFT);
         assert_eq!(bits("PROJECTOR") | bits("TARGET_ACTOR") | bits("WOUND"), WOUND_TAG);
+    }
+
+    #[test]
+    fn a_body_stands_its_wounds_as_blood_and_skips_the_paste() {
+        let shader = include_str!("actor_light.wesl");
+        assert!(shader.contains("splat_pool(pbr_input, ranges, normal, actor_target(in.instance_index))"));
+        assert!(shader.contains("actor_target(in.instance_index), pooled)"));
     }
 
     #[test]
@@ -321,10 +360,34 @@ mod tests {
     }
 
     #[test]
+    fn with_liquids_on_blood_decals_and_wounds_are_marked_and_nothing_else() {
+        fn liquids(level: &'static str) -> Settings {
+            Settings::read(move |query: &str| match query {
+                p2_host::display::MODERN_GRAPHICS => "1".to_owned(),
+                MODERN_LIQUIDS => level.to_owned(),
+                _ => String::new(),
+            })
+        }
+        let mut app = App::new();
+        app.insert_resource(liquids("10")).init_resource::<Assets<Image>>().add_systems(PostUpdate, mark_blood_decals);
+        let blood = app.world_mut().spawn((ClusteredDecal::default(), DecalAge::new(3, 0.0, "nathans.Skins.bloodsplatblend1"))).id();
+        let hole = app.world_mut().spawn((ClusteredDecal::default(), DecalAge::new(3, 0.0, "Effects.Scorch.BulletHole"))).id();
+        let wound = app.world_mut().spawn(ClusteredDecal { tag: WOUND_TAG, ..ClusteredDecal::default() }).id();
+        let placed = app.world_mut().spawn((ClusteredDecal::default(), BloodDecal)).id();
+        let pool = app.world_mut().spawn(ClusteredDecal { tag: WOUND_TAG, metallic_roughness_texture: Some(Handle::default()), ..ClusteredDecal::default() }).id();
+        let marked = |app: &App, entity: Entity| app.world().get::<ClusteredDecal>(entity).is_some_and(|decal| decal.normal_map_texture.is_some());
+        app.update();
+        assert!(marked(&app, blood) && marked(&app, wound) && marked(&app, placed) && !marked(&app, hole) && !marked(&app, pool));
+        app.insert_resource(liquids("0"));
+        app.update();
+        assert!(!marked(&app, blood) && !marked(&app, wound));
+    }
+
+    #[test]
     fn a_frames_game_step_ages_a_decals_tag() {
         let mut app = App::new();
         let on = |query: &str| if [p2_host::display::MODERN_GRAPHICS, MODERN_DECAL_AGING].contains(&query) { "1".to_owned() } else { String::new() };
-        app.insert_resource(p2_host::display::Settings::read(on)).insert_resource(FrameFacts { game_step: 4.5, ..FrameFacts::default() }).add_systems(PostUpdate, age_decals.run_if(modern_on(MODERN_DECAL_AGING)));
+        app.insert_resource(Settings::read(on)).insert_resource(FrameFacts { game_step: 4.5, ..FrameFacts::default() }).add_systems(PostUpdate, age_decals.run_if(modern_on(MODERN_DECAL_AGING)));
         let decal = app.world_mut().spawn((ClusteredDecal::default(), DecalAge::new(3, 5.0, "Effects.Scorch.BulletHole"))).id();
         app.update();
         assert_ne!(aged_tag(3, 5.0, 4.5, None), 3);

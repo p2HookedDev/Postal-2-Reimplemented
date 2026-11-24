@@ -308,8 +308,10 @@ fn mover_shadow(book: Book, held: vec4<f32>, column: u32, position: vec3<f32>, n
     return lit;
 }
 
-// Light from the placed lamps and the probes, before the surface's colour: terrain's layers share one sum.
-fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, gloss: bool, surface: vec3<f32>, flag: f32) -> LampLight {
+// Light from the placed lamps and the probes, before the surface's colour: terrain's layers share one sum. `ground` is
+// the surface's own normal under any liquid on it: the shadow maps hold the surface, and a liquid's tilt read there
+// cuts acne into the highlight.
+fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: vec3<f32>, gloss: bool, surface: vec3<f32>, flag: f32) -> LampLight {
     var sum = no_lamps();
     // Special-lit surfaces take only special lights, and no lamp is one.
     if surface.z > 0.5 {
@@ -379,17 +381,18 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, gloss: b
         var shadow = saturate(facing / SUN_FACING_FADE);
         var walled = shadow;
         if unit >= 1.0 {
-            let tilt = min(sqrt(saturate(1.0 - facing * facing)) / max(facing, 0.1), 4.0);
+            let faces = dot(ground, to_lamp);
+            let tilt = min(sqrt(saturate(1.0 - faces * faces)) / max(faces, 0.1), 4.0);
             // A face that would show its texels has a finer square of its own.
             let face = cube_face(position - lamp_position);
             let detail = detail_face(book, record, face);
             let packed = u32(look.w);
             let level = (packed >> 16u) & 15u;
             if detail.z > 0.0 {
-                shadow *= tile_shadow(book, detail.xy, detail.z, face, false, position, normal, lamp_position, lamp_radius, distance_to, tilt, side);
+                shadow *= tile_shadow(book, detail.xy, detail.z, face, false, position, ground, lamp_position, lamp_radius, distance_to, tilt, side);
             } else if level != ATLAS_UNMAPPED {
                 let corner = vec2(f32(packed & 255u), f32((packed >> 8u) & 255u)) * unit;
-                shadow *= tile_shadow(book, corner, unit * f32(1u << level), face, true, position, normal, lamp_position, lamp_radius, distance_to, tilt, side);
+                shadow *= tile_shadow(book, corner, unit * f32(1u << level), face, true, position, ground, lamp_position, lamp_radius, distance_to, tilt, side);
             }
             walled = shadow;
             if shadow > 0.0 && movers_near {
@@ -399,7 +402,7 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, gloss: b
                         column_read = true;
                         column = tile_column(book, position);
                     }
-                    shadow = min(shadow, mover_shadow(book, held, column, position, normal, lamp_position, lamp_radius, distance_to, tilt, side));
+                    shadow = min(shadow, mover_shadow(book, held, column, position, ground, lamp_position, lamp_radius, distance_to, tilt, side));
                 }
             }
         }

@@ -147,6 +147,7 @@ pub const QUERIES: &[&str] = &[
     MODERN_PHOTO_WARMTH,
     MODERN_PHOTO_HIDE_PLAYER,
     MSAA,
+    FLUID_DETAIL,
 ];
 
 const TEXTURE_DETAIL: [&str; 5] = [
@@ -170,6 +171,9 @@ pub const CONTRAST: &str = "ini:Engine.Engine.ViewportManager Contrast";
 pub const GAMMA: &str = "ini:Engine.Engine.ViewportManager Gamma";
 
 pub const MSAA: &str = "ini:Engine.Engine.RenderDevice MSAA";
+/// The game's fluid lifetime, 1 to 11, which its performance menu sets.
+pub const FLUID_DETAIL: &str = "Postal2Game.P2GameInfo FluidDetail";
+pub const NORMAL_FLUID_DETAIL: i32 = 5;
 
 pub const MODERN_GRAPHICS: &str = "ini:Engine.Engine.RenderDevice ModernGraphics";
 
@@ -348,6 +352,10 @@ impl Settings {
             trilinear: self.text(USE_TRILINEAR).is_empty() || self.flag(USE_TRILINEAR),
             detail_textures: self.text(DETAIL_TEXTURES).is_empty() || self.flag(DETAIL_TEXTURES),
         }
+    }
+
+    pub fn fluid_detail(&self) -> i32 {
+        self.number(FLUID_DETAIL, NORMAL_FLUID_DETAIL as f32) as i32
     }
 
     pub fn display_number(&self) -> usize {

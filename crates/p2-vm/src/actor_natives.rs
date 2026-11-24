@@ -103,6 +103,8 @@ pub struct PersonHit {
     pub damage: f32,
     /// `Health` above 0 when the hit was seen.
     pub alive: bool,
+    /// Retail's own headshot verdict for this shot, such as a close pistol shot to the back of the head.
+    pub headshot: bool,
 }
 
 #[derive(Debug, Default)]

@@ -25,6 +25,8 @@ const GUSH_WARP: f32 = 0.12;
 const LEAST_POUR: f32 = 100.0;
 /// Ropes a paste's sheet is drawn with: the main one, then thinner ones that drift apart along the arc.
 const SHEET_STRANDS: u32 = 4;
+/// Unreal units over which the burning front fades in.
+const FRONT_SOFT: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ring {
@@ -37,7 +39,8 @@ pub struct Ring {
 /// One frame of a stream as it is drawn.
 pub struct StreamDraw {
     pub kind: FluidType,
-    pub burning: f32,
+    /// How far back from where it lands it burns, in Unreal units, once it has caught fire.
+    pub burn_reach: Option<f32>,
     /// Display brightness.
     pub light: Vec3,
     /// Seconds into its retch.
@@ -128,6 +131,11 @@ pub fn stream_arc(path: &[Vec3], reach: f32) -> Vec<Ring> {
         .collect()
 }
 
+/// How much a ring burns, 0 to 1. Fire climbs in a straight line from where the stream lands, as the game's starter does.
+fn burning(stream: &StreamDraw, ring: &Ring, landing: &Ring) -> f32 {
+    stream.burn_reach.map_or(0.0, |reach| ((reach - ring.at.distance(landing.at)) / FRONT_SOFT + 0.5).clamp(0.0, 1.0))
+}
+
 /// The stream's vertices: a tube for a jet, a sheet for a paste. The seed word is the ring's share of the arc.
 pub fn ring_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
     if paste(stream.kind) { sheet_vertices(rings, stream, mesh) } else { tube_vertices(rings, stream, mesh) }
@@ -136,9 +144,9 @@ pub fn ring_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
 /// `SIDES` vertices a ring around a frame carried along the arc without twisting. A vertex's way is its offset from
 /// the axis: the jet's radius, thinned as it speeds up so the same flow passes every ring (r = r0 sqrt(v0 / v)).
 fn tube_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
-    let Some(first_ring) = rings.first() else { return };
-    let end = rings.last().map_or(1.0, |ring| ring.along.max(1e-6));
-    let look = Shape::Tube.look(stream_radius(stream.kind), stream.kind, stream.burning);
+    let (Some(first_ring), Some(last_ring)) = (rings.first(), rings.last()) else { return };
+    let end = last_ring.along.max(1e-6);
+    let width = stream_radius(stream.kind);
     let pour = stream.speed.max(LEAST_POUR);
     let mut side = first_ring.way.normalize_or(Vec3::NEG_Y).any_orthonormal_vector();
     let first = mesh.vertex_count();
@@ -147,7 +155,8 @@ fn tube_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
         side = (side - way * side.dot(way)).normalize_or(way.any_orthonormal_vector());
         let across = way.cross(side);
         let now = (pour * pour + 2.0 * stream.fall * (first_ring.at.y - ring.at.y)).max(0.25 * pour * pour).sqrt();
-        let radius = look[0] * (pour / now).sqrt();
+        let radius = width * (pour / now).sqrt();
+        let look = Shape::Tube.look(width, stream.kind, burning(stream, ring, last_ring));
         for corner in 0..SIDES {
             let turn = TAU * corner as f32 / SIDES as f32;
             let offset = (side * turn.cos() + across * turn.sin()) * radius;
@@ -167,11 +176,12 @@ fn tube_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
 /// The way's length is the stream's width there against its mean: the gush that left the nozzle `along / speed`
 /// seconds before, `retch` seconds in.
 fn sheet_vertices(rings: &[Ring], stream: &StreamDraw, mesh: &mut AirMesh) {
-    let look = Shape::Ribbon.look(stream_radius(stream.kind), stream.kind, stream.burning);
-    let end = rings.last().map_or(1.0, |ring| ring.along.max(1e-6));
+    let Some(last_ring) = rings.last() else { return };
+    let end = last_ring.along.max(1e-6);
     for strand in 0..SHEET_STRANDS {
         let first = mesh.vertex_count();
         for ring in rings {
+            let look = Shape::Ribbon.look(stream_radius(stream.kind), stream.kind, burning(stream, ring, last_ring));
             let swell = gush(stream.kind, stream.retch - ring.along / stream.speed.max(LEAST_POUR)).sqrt();
             for side in [-1.0, 1.0] {
                 let corner = [side * (strand + 1) as f32, ring.along];
@@ -198,7 +208,21 @@ mod tests {
     }
 
     fn stream(kind: FluidType) -> StreamDraw {
-        StreamDraw { kind, burning: 0.0, light: Vec3::ONE, retch: 0.0, speed: 200.0, fall: 950.0 }
+        StreamDraw { kind, burn_reach: None, light: Vec3::ONE, retch: 0.0, speed: 200.0, fall: 950.0 }
+    }
+
+    #[test]
+    fn fire_climbs_from_where_the_stream_lands() {
+        let rings = stream_arc(&line(21), 1.0);
+        let lit = StreamDraw { burn_reach: Some(90.0), ..stream(FluidType::Gas) };
+        let landing = &rings[RINGS - 1];
+        assert_eq!(burning(&lit, landing, landing), 1.0);
+        assert_eq!(burning(&lit, &rings[0], landing), 0.0);
+        assert!(rings.iter().all(|ring| burning(&stream(FluidType::Gas), ring, landing) == 0.0));
+        let mut mesh = AirMesh::default();
+        tube_vertices(&rings, &lit, &mut mesh);
+        let burn = |vertex: usize| mesh.looks[vertex][3];
+        assert_eq!((burn(0), burn((RINGS - 1) * SIDES as usize)), (0.0, 1.0));
     }
 
     #[test]

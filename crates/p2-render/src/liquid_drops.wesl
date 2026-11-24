@@ -29,7 +29,9 @@ fn vertex(in: AirIn) -> AirOut {
     let half_length = length(flat) * 0.5;
     var out: AirOut;
     out.half = vec2(radius, half_length);
-    out.local = vec2(in.corner.x * radius * ROOM, in.corner.y * (half_length + radius));
+    // Half a pixel more each way, so the edge's ramp centred on the edge is never clipped.
+    let edge = 0.5 * pixel_units(in.center);
+    out.local = vec2(in.corner.x * (radius * ROOM + edge), in.corner.y * (half_length + radius + edge));
     let world = in.center - axis * 0.5 + side * out.local.x + up * out.local.y;
     out.side = side;
     out.up = up;
@@ -45,7 +47,7 @@ fn vertex(in: AirIn) -> AirOut {
 fn fragment(in: AirOut) -> @location(0) vec4<f32> {
     let pixel = pixel_units(in.world);
     let radius = max(in.look.x, pixel);
-    // A drop smaller than a pixel is drawn one pixel wide, as faint as its area, so far drops do not flicker.
+    // A drop smaller than a pixel is drawn one pixel in radius, as faint as its real area, so far drops do not flicker.
     let area = min(1.0, in.look.x / pixel);
     let to_eye = normalize(view.world_position.xyz - in.world);
     let seed = in.seed;
@@ -66,7 +68,8 @@ fn fragment(in: AirOut) -> @location(0) vec4<f32> {
     }
     let right = select(0.0, 9.0, x > 0.0);
     w *= 1.0 + optics_of(in.look.y).ragged * WOBBLE * (noise1(s / radius * 1.3 + seed * 41.0 + right) - 0.5);
-    let cover = saturate((w - abs(x)) / pixel) * area * area;
+    // The ramp is centred on the edge, so a drawn disc adds up to its whole area.
+    let cover = saturate((w - abs(x)) / pixel + 0.5) * area * area;
     if cover <= 0.0 {
         discard;
     }

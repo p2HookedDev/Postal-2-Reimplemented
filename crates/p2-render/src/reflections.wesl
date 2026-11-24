@@ -74,6 +74,11 @@ fn class_surface(code: u32) -> vec3<f32> {
 const PUDDLE_SURFACE: vec3<f32> = vec3(0.1, 0.04, 0.0);
 // How far off a puddle's plane a pixel still lies in it, in world units.
 const PUDDLE_DEPTH: f32 = 4.0;
+// A lit pool's roughness and reflectance, under the gloss the lit pass records in the frame's alpha.
+const POOL_SURFACE: vec3<f32> = vec3(0.1, 0.02, 0.0);
+// Matches projector.wesl.
+const BLOOD_SHEEN: vec3<f32> = vec3(1.0, 0.3, 0.3);
+const LEAST_RECORD: f32 = 1.0 / 256.0;
 
 // 1 on a puddle, falling to 0 inside the sprite's uneven rim; only ground counts, never a wall that stands in the disc.
 fn wetness(at: vec3<f32>, normal: vec3<f32>) -> f32 {
@@ -178,25 +183,48 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let viewport = reflections.in_frame * vec4(size, size);
     let uv = in.uv * reflections.from_frame.zw + reflections.from_frame.xy;
     let z = depth_at(uv, viewport, size);
-    if z <= 0.0 || (surface.x >= ROUGH_TO && reflections.puddle_count.x == 0.0) {
+    if z <= 0.0 {
         return here;
     }
+    // A lit pool wrote alpha 1 plus its gloss, negative on blood; the sun rays read alpha later as sky 0, world 1.
+    let record = here.a - 1.0;
+    let mirror = select(0.0, abs(record), abs(record) >= LEAST_RECORD);
+    let unmarked = vec4(here.rgb, 1.0);
+    if surface.x >= ROUGH_TO && reflections.puddle_count.x == 0.0 && mirror == 0.0 {
+        return unmarked;
+    }
     let origin = view_at(reflections.view_from_clip, uv, z);
-    let normal = normalize((reflections.view_from_world * vec4(packed.xyz * 2.0 - 1.0, 0.0)).xyz);
+    // A pool on nearly level ground mirrors as level: the prepass's 10-bit normal of the ground's gentle rolls would
+    // step the mirror in bands. A slope keeps its own normal, as the lit pass lights it.
+    let ground = packed.xyz * 2.0 - 1.0;
+    let level = select(ground, vec3(0.0, 1.0, 0.0), mirror > 0.0 && ground.y > 0.98);
+    let normal = normalize((reflections.view_from_world * vec4(level, 0.0)).xyz);
     surface = mix(surface, PUDDLE_SURFACE, wetness(origin, normal));
-    let glossy = 1.0 - smoothstep(ROUGH_FROM, ROUGH_TO, surface.x);
+    var glossy = 1.0 - smoothstep(ROUGH_FROM, ROUGH_TO, surface.x);
+    var pool_tint = vec3(1.0);
+    if mirror > 0.0 {
+        // The liquid comes in by its record, so its rim leaves no ring, and never mirrors less than the floor under it.
+        let wet = mix(surface, POOL_SURFACE, mirror);
+        surface = vec3(wet.x, max(surface.y, wet.y), wet.z);
+        glossy = max(glossy, mirror);
+        pool_tint = mix(vec3(1.0), select(vec3(1.0), BLOOD_SHEEN, record < 0.0), mirror);
+    }
     if glossy <= 0.0 {
-        return here;
+        return unmarked;
     }
     let eye = normalize(-origin);
     // A ray that meets nothing on screen shows nothing: no stand-in light is put in its place.
     let hit = march(origin, reflect(-eye, normal), viewport, size, in.position.xy);
     if hit.z <= 0.0 {
-        return here;
+        return unmarked;
     }
-    let found = blurred(hit.xy * reflections.in_frame.zw + reflections.in_frame.xy, surface.x, size) * hit.z;
+    let seen = blurred(hit.xy * reflections.in_frame.zw + reflections.in_frame.xy, surface.x, size);
     let fresnel = surface.y + (1.0 - surface.y) * pow(1.0 - saturate(dot(normal, eye)), 5.0);
-    let tint = mix(vec3(1.0), here.rgb / max(max(here.r, max(here.g, here.b)), 1e-3), surface.z);
+    let tint = mix(vec3(1.0), here.rgb / max(max(here.r, max(here.g, here.b)), 1e-3), surface.z) * pool_tint;
+    if mirror > 0.0 {
+        // A liquid is a mirror over what shows through it: the room takes its Fresnel share, darker or brighter.
+        return vec4(mix(here.rgb, seen * tint, saturate(fresnel * mirror * hit.z * reflections.look.x)), 1.0);
+    }
     // The lit pass already gave the surface its light: a reflection shows only where it is brighter, and adds none.
-    return vec4(max(here.rgb, found * tint * (fresnel * glossy * reflections.look.x)), here.a);
+    return vec4(max(here.rgb, seen * hit.z * tint * (fresnel * glossy * reflections.look.x)), 1.0);
 }

@@ -79,11 +79,47 @@ struct Source {
     amount: f32,
     kind: f32,
     adds: u32,
+    seed: u32,
 }
 
-// How much of the texel `rel` texels from a source's middle its disc covers, with a soft edge a texel wide.
-fn cover_of(source: Source, rel: vec2<f32>) -> f32 {
-    return saturate(source.radius - length(rel) + 0.5);
+// A held source's outline is a blot fixed by its seed: broad lobes and small bumps around its middle, each this far
+// out in noise space and this share of the radius. Its first SHAPE_LEAST texels of radius stay round, so a trail splat
+// is a round blob, and the outline only ever grows with the radius, so a growing puddle covers its smaller self.
+const SHAPE_LOBES: f32 = 0.8;
+const SHAPE_LOBE: f32 = 0.35;
+const SHAPE_BUMPS: f32 = 2.6;
+const SHAPE_BUMP: f32 = 0.07;
+const SHAPE_LEAST: f32 = 3.0;
+// `SHAPE_REACH` in `liquids/layer.rs`: past the farthest lobe, in radii.
+const SHAPE_REACH: f32 = 1.45;
+
+// How much of the texel `rel` texels from a source's middle an outline `radius` out covers, with a soft edge a texel
+// wide.
+fn cover_of(radius: f32, rel: vec2<f32>) -> f32 {
+    return saturate(radius - length(rel) + 0.5);
+}
+
+fn lattice_of(c: vec2<i32>) -> f32 {
+    return unit_of(pcg(bitcast<u32>(c.x) ^ pcg(bitcast<u32>(c.y))));
+}
+
+fn shape_noise(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let c = vec2<i32>(cell);
+    let f = p - cell;
+    let t = f * f * (3.0 - 2.0 * f);
+    let low = mix(lattice_of(c), lattice_of(c + vec2(1, 0)), t.x);
+    let high = mix(lattice_of(c + vec2(0, 1)), lattice_of(c + vec2(1, 1)), t.x);
+    return mix(low, high, t.y);
+}
+
+// The outline's distance from a held source's middle in the direction of `rel`: it depends on the direction alone.
+fn outline_of(source: Source, rel: vec2<f32>) -> f32 {
+    let way = rel / max(length(rel), 1e-3);
+    let s = vec2(unit_of(pcg(source.seed)), unit_of(pcg(source.seed ^ 0x68e31da4u))) * 256.0;
+    let lobes = shape_noise(way * SHAPE_LOBES + s) - 0.5;
+    let bumps = shape_noise(way * SHAPE_BUMPS + s.yx) - 0.5;
+    return source.radius + 2.0 * (lobes * SHAPE_LOBE + bumps * SHAPE_BUMP) * max(source.radius - SHAPE_LEAST, 0.0);
 }
 
 @group(0) @binding(0) var<uniform> step: Step;
@@ -175,7 +211,8 @@ fn here(id: vec3<u32>) -> Here {
     return Here(slot, i32(id.x), i32(id.y), slot * TEXELS + id.y * u32(SIDE) + id.x);
 }
 
-// The slot's sources on each of its texels: a hold raises the depth to its film, a drop adds its volume over its disc.
+// The slot's sources on each of its texels: a hold raises the depth to its film over its blot, a drop adds its volume
+// over its disc.
 @compute @workgroup_size(8, 8, 1)
 fn hold(@builtin(global_invocation_id) id: vec3<u32>) {
     let at = here(id);
@@ -191,15 +228,27 @@ fn hold(@builtin(global_invocation_id) id: vec3<u32>) {
     let middle = vec2(f32(at.x), f32(at.y)) + 0.5;
     for (var k = 0u; k < slot.sources; k++) {
         let source = sources[slot.first_source + k];
-        let cover = cover_of(source, middle - vec2(source.x, source.y));
+        let rel = middle - vec2(source.x, source.y);
+        let held = (source.adds & ADDS) == 0u;
+        var outline = source.radius;
+        if held {
+            let far = source.radius * SHAPE_REACH + 0.5;
+            if dot(rel, rel) > far * far {
+                continue;
+            }
+            outline = outline_of(source, rel);
+        }
+        let cover = cover_of(outline, rel);
         if cover <= 0.0 {
             continue;
         }
         var added = 0.0;
-        if (source.adds & ADDS) != 0u {
-            added = source.amount * cover / (3.14159265 * max(source.radius * source.radius, 1.0) * AREA);
+        if held {
+            // A held film is a dome, as a liquid's meniscus is: deepest in its middle, thin at its rim.
+            let reach = length(rel) / max(outline, 1.0);
+            added = max(source.amount * cover * sqrt(saturate(1.0 - reach * reach)) - depth, 0.0);
         } else {
-            added = max(source.amount * cover - depth, 0.0);
+            added = source.amount * cover / (3.14159265 * max(source.radius * source.radius, 1.0) * AREA);
         }
         if added > 0.0 {
             let blood = select(0.0, 1.0, source.kind == BLOOD);

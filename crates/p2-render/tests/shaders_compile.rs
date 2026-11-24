@@ -11,7 +11,7 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 40] = [
+const ENTRIES: [(&str, &[&str]); 47] = [
     ("particle", &["P2_PARTICLE_LEVELS", "SKY_VIEW"]),
     ("actor_light", &["SKY_VIEW"]),
     ("sun_levels", &[]),
@@ -25,6 +25,13 @@ const ENTRIES: [(&str, &[&str]); 40] = [
     ("level_caster", &[]),
     ("actor_light", &[]),
     ("actor_light", &["VISIBILITY_RANGE_DITHER"]),
+    ("actor_light", &["POOL_MIRROR"]),
+    ("lightmapped", &["LIGHTMAP", "POOL_MIRROR"]),
+    ("mesh_light", &["POOL_MIRROR"]),
+    ("mesh_light", &["VERTEX_COLORS", "POOL_MIRROR"]),
+    ("terrain", &["POOL_MIRROR"]),
+    ("terrain_layer", &["TERRAIN_LAYER", "POOL_MIRROR"]),
+    ("blended", &["POOL_MIRROR"]),
     ("mesh_light", &["VISIBILITY_RANGE_DITHER"]),
     ("lightmapped", &[]),
     ("lightmapped", &["LIGHTMAP"]),

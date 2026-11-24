@@ -77,10 +77,12 @@ impl<L: LoaderRef> Vm<L> {
             _ => None,
         };
         let (at, momentum) = (crate::natives::vec3(args.get(2)), crate::natives::vec3(args.get(3)));
-        // A host that never drains the list (a test, the viewer) must not let it grow.
-        if self.store.is_a(victim, crate::Kind::Pawn) && self.actor_fx.person_hits.len() < MOST_KEPT_HITS {
+        // A host that never drains the list (a test, the viewer) must not let it grow. Every override in a damage
+        // chain enters with the same shot, which is one hit.
+        let repeat = self.actor_fx.person_hits.iter().any(|hit| hit.person == victim && hit.at == at);
+        if !repeat && self.store.is_a(victim, crate::Kind::Pawn) && self.actor_fx.person_hits.len() < MOST_KEPT_HITS {
             let alive = self.store.int_of(victim, Prop::Health) > 0;
-            self.actor_fx.person_hits.push(crate::PersonHit { person: victim, at, momentum, damage, alive });
+            self.actor_fx.person_hits.push(crate::PersonHit { person: victim, at, momentum, damage, alive, headshot: false });
         }
         let length = momentum.size();
         let throw = match args.get(4) {
@@ -93,6 +95,12 @@ impl<L: LoaderRef> Vm<L> {
         let tick = ragdolls.tick;
         ragdolls.hits.retain(|h| tick - h.tick <= HIT_TICKS);
         ragdolls.hits.push(SeenHit { actor: victim, tick, hit });
+    }
+
+    pub(crate) fn headshot_seen(&mut self, victim: ObjectId, at: p2_math::Vector) {
+        if let Some(hit) = self.actor_fx.person_hits.iter_mut().find(|hit| hit.person == victim && hit.at == at) {
+            hit.headshot = true;
+        }
     }
 
     fn take_hit(&mut self, actor: ObjectId) -> Option<Hit> {

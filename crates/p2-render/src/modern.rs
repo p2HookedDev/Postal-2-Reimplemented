@@ -97,6 +97,19 @@ impl Plugin for ModernGraphicsPlugin {
 pub const MODERN_ON: u8 = 1;
 pub const NO_RELIEF: u8 = 2;
 pub const NO_GLOSS: u8 = 4;
+/// Above the level bits of `level_bits`; read by the materials' pipeline keys, not by the shaders.
+pub const POOL_MIRROR: u16 = 1 << 11;
+
+/// The pools' record for the screen reflections is written only while that pass runs to read it back.
+fn mirror_bit(settings: &Settings) -> u16 {
+    use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
+    let pass = crate::reflections::look(settings.modern_level(MODERN_REFLECTIONS), settings.modern_level(MODERN_REFLECTION_STRENGTH), 0);
+    if pass.is_some() { POOL_MIRROR } else { 0 }
+}
+
+pub(crate) fn pool_mirror_on(flag: u32) -> bool {
+    flag & u32::from(POOL_MIRROR) != 0
+}
 
 pub fn modern_flag(settings: &Settings) -> u8 {
     if !settings.modern_graphics() {
@@ -152,7 +165,7 @@ fn follow_flag<M: ModernFlagged>(
     let added: Vec<AssetId<M>> = events.as_deref().map_or_else(Vec::new, |events| {
         cursor.read(events).filter_map(|event| match *event { AssetEvent::Added { id } => Some(id), _ => None }).collect()
     });
-    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.material_level(), settings.modern_level(MODERN_LAMP_SIZE));
+    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.material_level(), settings.modern_level(MODERN_LAMP_SIZE)) | mirror_bit(&settings);
     let stale: Vec<_> = if settings.is_changed() || materials.len() != *known {
         *known = materials.len();
         materials.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect()

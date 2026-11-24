@@ -7,9 +7,9 @@ pub(crate) fn projector_decal(
     t: &mut impl SceneAssets,
     projector: &ProjectorActor,
     images: &mut HashMap<String, Option<(Handle<Image>, Vec2, Option<FinalBlend>)>>,
-) -> Option<(Handle<Image>, Transform, u32)> {
+) -> Option<(Handle<Image>, Transform, u32, bool)> {
     let (image, size, final_blend) = images.entry(projector.texture.clone()).or_insert_with(|| projector_image(game, |image| t.add_image(image), &projector.texture)).clone()?;
-    Some((image, projector_transform(projector, size), projector_tag(projector, final_blend)))
+    Some((image, projector_transform(projector, size), projector_tag(projector, final_blend), p2_render::wounds::is_blood(&projector.texture)))
 }
 
 pub(super) const PROJECTOR_TAG: u32 = 1 << 31;

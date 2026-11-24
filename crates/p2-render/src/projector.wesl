@@ -1,6 +1,7 @@
 // Projector decals (tagged by `projector_tag`) are retail's projector pass over the finished surface,
 // unlit in display space: `project`, after the lighting. Every clustered decal of the game is a projector or a wound,
-// both tagged as projectors, so no decal blends into the base colour before the lighting.
+// both tagged as projectors, so no decal blends into the base colour before the lighting; only with our liquids on do
+// the game's blood ones stand in the world's pools as blood (`pool_at`), lit with them.
 
 import bevy_pbr::render::{
     pbr_types::{PbrInput, STANDARD_MATERIAL_FLAGS_UNLIT_BIT},
@@ -10,9 +11,9 @@ import bevy_pbr::render::{
     mesh_view_bindings,
 };
 import bevy_pbr::decal::clustered::get_view_z;
-import package::p2_render::color::{to_display, to_linear};
+import package::p2_render::color::{BLOOD_BODY, BLOOD_SIGMA, to_display, to_linear};
 @if(CLUSTERED_DECALS_ARE_USABLE)
-import bevy_pbr::decal::clustered::{clustered_decal_iterator_new, clustered_decal_iterator_next};
+import bevy_pbr::decal::clustered::{ClusteredDecalIterator, clustered_decal_iterator_new, clustered_decal_iterator_next};
 
 const PROJECTOR: u32 = 0x80000000u;
 // `EProjectorBlending` (the material stage, tag bits 8..16).
@@ -57,6 +58,7 @@ const FADE_SHIFT: u32 = 10u;
 const FADE_MASK: u32 = 0x1fu;
 const WOUND: u32 = 0x8000u;
 const DRY_TINT: vec3<f32> = vec3(0.6, 0.42, 0.36);
+const LUMA: vec3<f32> = vec3(0.2126, 0.7152, 0.0722);
 
 fn section_target(instance_index: u32, kind: u32) -> u32 {
     let tag = get_tag(instance_index);
@@ -107,11 +109,55 @@ fn decal_texel(index: i32, uv: vec2<f32>) -> vec4<f32> {
 }
 
 @if(CLUSTERED_DECALS_ARE_USABLE)
+fn decal_alpha_soft(index: i32, uv: vec2<f32>) -> f32 {
+    return textureSampleLevel(mesh_view_bindings::clustered_decal_textures[index], mesh_view_bindings::clustered_decal_sampler, uv, 1.0).a;
+}
+
+@if(CLUSTERED_DECALS_ARE_USABLE)
 fn faces_projector(offset: i32, normal: vec3<f32>) -> bool {
     let index = clustered_forward::get_clusterable_object_id(u32(offset));
     let m = mesh_view_bindings::clustered_decals.decals[index].local_from_world;
     let direction = -normalize(vec3(m[0].z, m[1].z, m[2].z));
     return dot(normalize(normal), direction) < -0.0001;
+}
+
+// The texel a game projector or wound leaves on `surface` at the fragment, or a negative alpha where it draws none.
+// BSP takes a projector only where it faces it; a `bUnlit` static mesh still takes projectors (unverified gap).
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn projector_texel(pbr_input: PbrInput, tag: u32, index: i32, offset: i32, uv: vec2<f32>, surface: u32) -> vec4<f32> {
+    let refused = vec4(-1.0);
+    let wound = (tag & WOUND) != 0u && surface == 0u;
+    if (tag & (PROJECTOR | 0x7u)) == (PROJECTOR | FB_LIQUID) {
+        return refused;
+    }
+    if (tag & PROJECTOR) == 0u || index < 0 || ((tag & surface & TARGETS) == 0u && !wound) {
+        return refused;
+    }
+    // `ProjectTag` filters actors only: BSP and terrain take the projector regardless.
+    if (tag & TAGGED) != 0u && (surface & TARGET_MESH) != 0u && (surface & TAGGED) == 0u {
+        return refused;
+    }
+    if (tag & ON_MOVER) != 0u && (surface & ON_MOVER) == 0u {
+        return refused;
+    }
+    // Only BSP's unlit flag means retail's (a surface without a lightmap, mesh_view); terrain and meshes are
+    // flagged unlit because their shaders light them themselves, which hid every projector on them.
+    if surface == TARGET_BSP && (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) != 0u && (tag & ON_UNLIT) == 0u {
+        return refused;
+    }
+    if (surface == TARGET_BSP || (tag & WOUND) != 0u) && !faces_projector(offset, pbr_input.world_normal) {
+        return refused;
+    }
+    let texel = decal_texel(index, uv);
+    if (tag & ALPHA_TEST) != 0u && texel.a * 255.0 <= f32((tag >> 22u) & 0xffu) {
+        return refused;
+    }
+    return texel;
+}
+
+// What of a decal is left as it fades out (tag bits 10..15).
+fn unfaded(tag: u32) -> f32 {
+    return 1.0 - f32((tag >> FADE_SHIFT) & FADE_MASK) / 31.0;
 }
 
 // Liquid standing on a surface (`liquid_layer.wesl`): what of the surface's colour shows through it and what it scatters
@@ -124,6 +170,8 @@ struct Pool {
     roughness: f32,
     // What colours the highlight and the reflection: a thin oil film's interference.
     sheen: vec3<f32>,
+    // What colours the reflection of the surroundings alone: blood keeps its hue there, its glints stay white.
+    tint: vec3<f32>,
     // Light it gives off itself, linear and past 1: burning fuel.
     glow: vec3<f32>,
     // How soaked the surface is: 1 under the liquid, fading over a ring past its edge that only darkens.
@@ -143,10 +191,19 @@ const POOL_PASTE_FILM: f32 = 0.8;
 // broad world noise of this size moves it this far in and out, so no pool is a circle.
 const POOL_EDGE: f32 = 0.25;
 const POOL_SOFT_UU: f32 = 0.6;
+// How much of the film's real slope its surface shows: a thin liquid's edge is a fine line of light, not a bevel.
+const POOL_RISE: f32 = 0.35;
 const POOL_WARP_SIZE_UU: f32 = 16.0;
-const POOL_WARP_UU: f32 = 1.5;
+const POOL_WARP_UU: f32 = 2.5;
+// A floor texel clearly darker than the texture around it, grout or a crack, draws the edge up to this many units
+// further out: from `POOL_GROUT_FROM` darker in display space, fully at `POOL_GROUT_FROM + POOL_GROUT_DARK`. On tile the
+// liquid creeps along the joints first; a texture's own grain stays under the dead band. Terrain passes the even tone.
+const POOL_GROUT_UU: f32 = 3.0;
+const POOL_GROUT_FROM: f32 = 0.1;
+const POOL_GROUT_DARK: f32 = 0.25;
+const POOL_EVEN_TONE: f32 = 1.0;
 // The surface stays soaked, darker and without gloss, this many units past where the liquid fades out.
-const POOL_SOAK_UU: f32 = 1.5;
+const POOL_SOAK_UU: f32 = 0.6;
 // A texel whose floor lies this far off the fragment's height is another surface: a wall, a kerb's other side, another
 // floor. Only the texels on the fragment's own floor are read, so liquid runs up to walls and kerbs and stops there.
 const POOL_REACH_UU: f32 = 8.0;
@@ -169,6 +226,18 @@ const POOL_GAS: u32 = 1u;
 const POOL_PUKE: u32 = 4u;
 const POOL_BLOODY_PUKE: u32 = 5u;
 const POOL_NAPALM: u32 = 8u;
+// Blood dried to a dull crust.
+const BLOOD_DRIED_ROUGHNESS: f32 = 0.7;
+// Fresh blood's reflection of its surroundings keeps its hue: an even white lift over its dark body reads as a paste.
+const BLOOD_SHEEN: vec3<f32> = vec3(1.0, 0.3, 0.3);
+// Fresh blood is uneven: broad patches lighter or darker, duller clots, a surface gently swelled, and a meniscus at
+// its edge that catches the light.
+const BLOOD_MOTTLE_UU: f32 = 11.0;
+const BLOOD_CLOT_UU: f32 = 5.0;
+const BLOOD_CLOT_ROUGHNESS: f32 = 0.12;
+const BLOOD_SWELL_UU: f32 = 9.0;
+const BLOOD_SWELL: f32 = 0.25;
+const BLOOD_MENISCUS: f32 = 0.4;
 // An oil film's thickness in nanometres, the spread world noise gives it, and how strongly it colours the highlight
 // where its patches and grazing angles show it.
 const POOL_OIL_NM: f32 = 380.0;
@@ -219,8 +288,8 @@ var<private> POOL_OPTICS: array<PoolOptics, 9> = array<PoolOptics, 9>(
     PoolOptics(vec3(0.03, 0.08, 0.25), vec3(0.0), 0.02),
     // Urine: the floor through clear yellow.
     PoolOptics(vec3(0.10, 0.33, 1.4), vec3(0.02, 0.016, 0.0), 0.04),
-    // Blood: near-black red where thick, crimson only where thin, a mirror when fresh.
-    PoolOptics(vec3(7.0, 45.0, 50.0), vec3(0.035, 0.0015, 0.001), 0.03),
+    // Blood: crimson, the floor showing through only where it is thin, a mirror when fresh.
+    PoolOptics(BLOOD_SIGMA, BLOOD_BODY, 0.03),
     // Puke: a paste.
     PoolOptics(vec3(1.5, 2.0, 4.0), vec3(0.30, 0.24, 0.07), 0.35),
     // BloodyPuke
@@ -234,7 +303,14 @@ var<private> POOL_OPTICS: array<PoolOptics, 9> = array<PoolOptics, 9>(
 );
 
 fn no_pool(normal: vec3<f32>) -> Pool {
-    return Pool(vec3(1.0), vec3(0.0), 0.0, normal, 1.0, vec3(1.0), vec3(0.0), 0.0);
+    return Pool(vec3(1.0), vec3(0.0), 0.0, normal, 1.0, vec3(1.0), vec3(1.0), vec3(0.0), 0.0);
+}
+
+// How sharply the pool mirrors the room, handed to the screen reflections in the frame's alpha past 1 (`reflections.wesl`);
+// negative where it is mostly blood (its tint more than half way to BLOOD_SHEEN), whose reflection keeps blood's hue.
+fn pool_mirror(pool: Pool) -> f32 {
+    let mirror = pool.wet * (1.0 - smoothstep(0.2, 0.5, pool.roughness));
+    return select(mirror, -mirror, pool.tint.g < 0.65);
 }
 
 // What a burning texel of `heat` in [0, 1] gives off at `ground`, a place in the surface's own plane, flickering by
@@ -252,17 +328,25 @@ fn thin_film(cos_v: f32, nm: f32) -> vec3<f32> {
     return 0.5 + 0.5 * cos(6.2831853 * 2.8 * nm * cos_t / vec3(650.0, 530.0, 450.0));
 }
 
-fn pool_hash(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+// The ramp of a random direction at the integer corner `c`, `off` from it. The direction comes from an integer hash: a
+// sine hash is not steady far from the world's origin, and the slopes taken of this noise magnify any step.
+fn pool_ramp(c: vec2<f32>, off: vec2<f32>) -> f32 {
+    let q = vec2<u32>(vec2<i32>(c)) * vec2(1597334673u, 3812015801u);
+    let h = (q.x ^ q.y) * 1597334673u;
+    let way = vec2(f32(h >> 20u), f32((h >> 8u) & 0xfffu)) - 2047.5;
+    return dot(way, off) * inverseSqrt(dot(way, way));
 }
 
-fn pool_noise(p: vec2<f32>) -> f32 {
+// Gradient noise in [0, 1] around 0.5, with value noise's spread, feature size and slopes: value noise's contours run
+// along its cell edges, and a threshold of it draws squares.
+fn pool_noise(at: vec2<f32>) -> f32 {
+    let p = at * 0.6;
     let i = floor(p);
     let f = p - i;
-    let u = f * f * (3.0 - 2.0 * f);
-    let low = mix(pool_hash(i), pool_hash(i + vec2(1.0, 0.0)), u.x);
-    let high = mix(pool_hash(i + vec2(0.0, 1.0)), pool_hash(i + vec2(1.0, 1.0)), u.x);
-    return mix(low, high, u.y);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let low = mix(pool_ramp(i, f), pool_ramp(i + vec2(1.0, 0.0), f - vec2(1.0, 0.0)), u.x);
+    let high = mix(pool_ramp(i + vec2(0.0, 1.0), f - vec2(0.0, 1.0)), pool_ramp(i + vec2(1.0, 1.0), f - vec2(1.0, 1.0)), u.x);
+    return saturate(0.5 + mix(low, high, u.y));
 }
 
 // Four hashes in [0, 1) of the integer cell `c`, from integers: steady at any distance from the world's origin.
@@ -337,8 +421,9 @@ fn pool_chunks(ground: vec2<f32>, soft: f32) -> PoolChunk {
 
 // The look of liquid of `kind`, `blood` of it blood and `thickness` units deep at `ground`, a place in the plane's own
 // axes. `splat` is the game's puke texture there (`puke_texture`), which colours puke as far as it covers.
-fn pool_look(kind: u32, blood: f32, wet: f32, thickness: f32, ground: vec2<f32>, chunk: PoolChunk, splat: vec4<f32>) -> PoolLook {
-    var optics = POOL_OPTICS[min(kind, 8u)];
+// `base` is the liquid blood's share is mixed into: the kind itself, or beside blood the other liquid there.
+fn pool_look(kind: u32, base: u32, blood: f32, wet: f32, thickness: f32, ground: vec2<f32>, chunk: PoolChunk, splat: vec4<f32>) -> PoolLook {
+    var optics = POOL_OPTICS[min(base, 8u)];
     let bleeding = POOL_OPTICS[POOL_BLOOD];
     optics = PoolOptics(mix(optics.sigma, bleeding.sigma, blood), mix(optics.body, bleeding.body, blood), mix(optics.roughness, bleeding.roughness, blood));
     var tilt = vec2(0.0);
@@ -417,19 +502,94 @@ fn puke_texture(index: i32, ground: vec2<f32>, pixel: f32) -> vec4<f32> {
     return vec4(sum.rgb / max(sum.a, 1e-4), saturate(sum.a * 2.0));
 }
 
+// The game's blood splat as blood standing on the surface, `wet` the share its texture covers there: as deep as it
+// covers, so its edge bends the surface as a pool's rim does; drying dulls it.
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn splat_tilt(tag: u32, index: i32, offset: i32, uv: vec2<f32>) -> vec3<f32> {
+    // Read two texels apart on the half-size mip: one texel apart, the 4-bit alpha's steps facet the highlight in squares.
+    let pitch = 2.0 / vec2<f32>(textureDimensions(mesh_view_bindings::clustered_decal_textures[index]));
+    let slope = vec2(
+        decal_alpha_soft(index, uv + vec2(pitch.x, 0.0)) - decal_alpha_soft(index, uv - vec2(pitch.x, 0.0)),
+        decal_alpha_soft(index, uv + vec2(0.0, pitch.y)) - decal_alpha_soft(index, uv - vec2(0.0, pitch.y))
+    ) / (2.0 * pitch) * unfaded(tag);
+    // The texture spans the decal: u along its local x, v against its local y.
+    let m = mesh_view_bindings::clustered_decals.decals[clustered_forward::get_clusterable_object_id(u32(offset))].local_from_world;
+    return (vec3(m[0].x, m[1].x, m[2].x) * slope.x - vec3(m[0].y, m[1].y, m[2].y) * slope.y) * (POOL_FILM * POOL_RISE);
+}
+
+// The game's blood splats over a fragment so far: their cover combined, and their slopes and drying weighted by cover.
+struct SplatSum {
+    wet: f32,
+    weight: f32,
+    dry: f32,
+    tilt: vec3<f32>,
+}
+
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn add_blood_splat(sum: ptr<function, SplatSum>, pbr_input: PbrInput, tag: u32, index: i32, offset: i32, uv: vec2<f32>, receiver: u32) {
+    let wet = projector_texel(pbr_input, tag, index, offset, uv, receiver).a * unfaded(tag);
+    if wet > 0.0 {
+        let dry = (tag >> DRY_SHIFT) & DRY_MASK;
+        // A dry splat is too dull for its rim's bend to show.
+        if dry < DRY_MASK {
+            (*sum).tilt += splat_tilt(tag, index, offset, uv);
+        }
+        (*sum).dry += f32(dry) / 15.0 * wet;
+        (*sum).weight += wet;
+        (*sum).wet = 1.0 - (1.0 - (*sum).wet) * (1.0 - wet);
+    }
+}
+
+// The game's blood splats over a fragment as one film: their cover combined, their slopes added, so overlapping
+// splats leave no crease in the highlight.
+fn blood_splat(normal: vec3<f32>, tilt: vec3<f32>, alpha: f32, dryness: f32) -> Pool {
+    // The game blends its splats in display space: a texel's alpha hides that share of the floor's display colour, which
+    // is more of its linear light. The floor under it is not soaked darker.
+    let wet = 1.0 - pow(1.0 - alpha, 2.2);
+    let surface = normalize(normal - (tilt - normal * dot(tilt, normal)));
+    let look = pool_look(POOL_BLOOD, POOL_BLOOD, 1.0, wet, wet * POOL_FILM, vec2(0.0), PoolChunk(0.0, vec2(0.0), vec4(0.0)), vec4(0.0));
+    return Pool(mix(vec3(1.0), look.through, wet), look.body * (1.0 - look.through) * wet, wet, surface, mix(look.roughness, BLOOD_DRIED_ROUGHNESS, dryness), vec3(1.0), BLOOD_SHEEN, vec3(0.0), 0.0);
+}
+
+// The game's blood splats on `receiver` alone, never our liquids: a body's wounds, where a floor pool must not lie.
+fn splat_pool(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: vec3<f32>, receiver: u32) -> Pool {
+    var pool = no_pool(normal);
+@if(CLUSTERED_DECALS_ARE_USABLE) {
+    var sum = SplatSum(0.0, 0.0, 0.0, vec3(0.0));
+    var decal_ranges = ranges;
+    var iterator = clustered_decal_iterator_new(pbr_input.world_position.xyz, &decal_ranges);
+    while clustered_decal_iterator_next(&iterator) {
+        if (iterator.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && iterator.normal_map_texture_index >= 0 {
+            add_blood_splat(&sum, pbr_input, iterator.tag, iterator.base_color_texture_index, iterator.decal_index_offset, iterator.uv, receiver);
+        }
+    }
+    if sum.wet > 0.0 {
+        pool = blood_splat(normal, sum.tilt, sum.wet, sum.dry / sum.weight);
+    }
+}
+    return pool;
+}
+
 // A floor tile's pool lies on floors and a plane tile's on every face turned to its normal: walls, slopes, ceilings.
 // The atlas is read as a cubic B-spline, smooth in its value and its slope, so no texel and no tile shows; the edge is
-// the depth's contour, soft and moved by broad world noise, with a soaked ring past it.
-fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: vec3<f32>) -> Pool {
+// the depth's contour, soft and moved by broad world noise, with a soaked ring past it. The game's blood splats that
+// draw on `receiver` (the projector targets `project` takes) stand on it too. `tone` is the floor texel's luma over the texture's around it.
+fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: vec3<f32>, receiver: u32, tone: f32) -> Pool {
     var pool = no_pool(normal);
 @if(CLUSTERED_DECALS_ARE_USABLE) {
     let on_floor = normal.y > 0.5;
     let world = pbr_input.world_position.xyz;
     // Sought only once puke is found here, as few places hold any.
     var puke = PUKE_UNSOUGHT;
+    var splats = SplatSum(0.0, 0.0, 0.0, vec3(0.0));
     var decal_ranges = ranges;
     var iterator = clustered_decal_iterator_new(world, &decal_ranges);
     while clustered_decal_iterator_next(&iterator) {
+        // The game's blood splats carry a normal map of their own while our liquids are on.
+        if (iterator.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && iterator.normal_map_texture_index >= 0 {
+            add_blood_splat(&splats, pbr_input, iterator.tag, iterator.base_color_texture_index, iterator.decal_index_offset, iterator.uv, receiver);
+            continue;
+        }
         // The liquid's texture rides as the decal's metallic-roughness map, which Bevy's own decal pass reads only under a
         // base colour, so a standard material lying in a pool does not take its data as colour.
         if (iterator.tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) || iterator.metallic_roughness_texture_index < 0 {
@@ -473,6 +633,10 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
         var fire = vec2(0.0);
         // The kind and blood share of the wettest texel around: at a rim the nearest may be dry.
         var wettest = vec2(0.0);
+        // The blood share by depth over the taps, a blood texel all blood: a volume fraction, so mixed kinds blend.
+        var share = 0.0;
+        // The depth and kind of the deepest tap that is not blood.
+        var other = vec2(0.0);
         // In texels: the depth's slope and the liquid surface's, which runs downhill.
         var depth_slope = vec2(0.0);
         var height_slope = vec2(0.0);
@@ -488,8 +652,12 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
                 weight_slope += s;
                 depth += t.x * w;
                 height += (t.z + t.x) * w;
+                share += t.x * w * select(fract(t.y) / 0.98, 1.0, u32(t.y) == POOL_BLOOD);
                 if t.x > wettest.x {
                     wettest = t.xy;
+                }
+                if u32(t.y) != POOL_BLOOD && t.x > other.x {
+                    other = vec2(t.x, floor(t.y));
                 }
                 if t.w >= POOL_FIRE_BASE {
                     let code = t.w - POOL_FIRE_BASE;
@@ -517,13 +685,15 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
         let kind = u32(wettest.y);
         let paste = kind == POOL_PUKE || kind == POOL_BLOODY_PUKE;
         let oily = kind == POOL_GAS || kind == POOL_NAPALM;
-        let blood = saturate(fract(wettest.y) / 0.98);
+        let blood = saturate(select(fract(wettest.y) / 0.98, share / (depth * weight), depth > 1e-5));
+        let bloody = select(blood, 0.0, paste);
         // World noise reads the fragment's place in the tile's own plane, so floors, walls and ceilings share one look.
         let ground = vec2(dot(world, along_u), dot(world, along_v));
         let flow = -(along_u * height_slope.x + along_v * height_slope.y);
         let rising = length(depth_world);
         let warp = (pool_noise(ground / POOL_WARP_SIZE_UU) - 0.5) * 2.0 * POOL_WARP_UU;
-        let inside = clamp((depth - POOL_FILM * POOL_EDGE) / max(rising, 1e-4), -16.0, 16.0) + warp;
+        let grout = POOL_GROUT_UU * saturate((POOL_EVEN_TONE - POOL_GROUT_FROM - tone) / POOL_GROUT_DARK);
+        let inside = clamp((depth - POOL_FILM * POOL_EDGE) / max(rising, 1e-4), -16.0, 16.0) + warp + grout;
         let soft = max(POOL_SOFT_UU, 0.7 * pixel);
         var wet = smoothstep(-soft, soft, inside);
         var chunk = PoolChunk(0.0, vec2(0.0), vec4(0.0));
@@ -531,7 +701,7 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
             chunk = pool_chunks(ground, soft);
             wet = max(wet, chunk.amount * saturate(inside + 2.0));
         }
-        let soak = max(wet, smoothstep(-soft - POOL_SOAK_UU, -soft, inside));
+        let soak = max(wet, smoothstep(-soft - POOL_SOAK_UU, -soft, inside) * (1.0 - bloody));
         // Scorch mottled by world noise, and on a dry surface, the soot mark and what still glows there.
         var soot = 0.0;
         if fire.y > 0.0 {
@@ -540,7 +710,7 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
         if wet <= pool.wet {
             pool.soak = max(pool.soak, soak);
             if pool.wet <= 0.0 && fire.x + fire.y > 0.004 {
-                pool = Pool(vec3(1.0 - POOL_SCORCH_DARK * soot), POOL_SOOT * soot, 0.0, normal, 1.0, vec3(1.0), pool_flame(ground, fire.x), pool.soak);
+                pool = Pool(vec3(1.0 - POOL_SCORCH_DARK * soot), POOL_SOOT * soot, 0.0, normal, 1.0, vec3(1.0), vec3(1.0), pool_flame(ground, fire.x), pool.soak);
             }
             continue;
         }
@@ -551,10 +721,20 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
             }
             splat = puke_texture(puke, ground, pixel);
         }
-        let look = pool_look(kind, blood, wet, max(depth, 0.0), ground, chunk, splat);
+        let mixed_into = select(kind, u32(other.y), kind == POOL_BLOOD && other.x > 0.0);
+        let look = pool_look(kind, mixed_into, blood, wet, max(depth, 0.0), ground, chunk, splat);
         // The liquid's surface: the plane tilted by the depth's slope, rippling where it runs downhill.
-        var tilt = depth_world + along_u * look.tilt.x + along_v * look.tilt.y;
+        var tilt = depth_world * POOL_RISE + along_u * look.tilt.x + along_v * look.tilt.y;
         var roughness = look.roughness;
+        var body = look.body;
+        if bloody > 0.0 {
+            let clot = smoothstep(0.62, 0.8, pool_noise(ground / BLOOD_CLOT_UU + 41.0)) * bloody;
+            body *= mix(1.0, mix(0.7, 1.2, pool_noise(ground / BLOOD_MOTTLE_UU + 7.0)) * mix(1.0, 0.7, clot), bloody);
+            roughness += BLOOD_CLOT_ROUGHNESS * clot;
+            let swell = pool_noise_slope(ground / BLOOD_SWELL_UU + 13.0) / BLOOD_SWELL_UU;
+            tilt += (along_u * swell.x + along_v * swell.y) * (BLOOD_SWELL * bloody);
+            tilt += depth_world / max(rising, 1e-4) * (BLOOD_MENISCUS * bloody * 4.0 * wet * (1.0 - wet));
+        }
         // A burning film shimmers and dulls a little.
         if fire.x > 0.01 {
             let t = mesh_view_bindings::globals.time;
@@ -574,7 +754,7 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
             }
         }
         let surface = normalize(normal - (tilt - normal * dot(tilt, normal)));
-        let scattered = look.body * (1.0 - look.through);
+        let scattered = body * (1.0 - look.through);
         var sheen = vec3(1.0);
         if oily {
             // Mostly a dark glossy wet surface with an oil sheen in patches. Fire burns it off.
@@ -586,7 +766,19 @@ fn pool_at(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, normal: ve
             glow = pool_flame(ground, fire.x);
         }
         let scorched = 1.0 - POOL_SCORCH_DARK * soot;
-        pool = Pool(mix(vec3(1.0), look.through, wet) * scorched, max(scattered, vec3(0.0)) * wet + POOL_SOOT * soot, wet, surface, roughness, sheen, glow, max(soak, pool.soak));
+        pool = Pool(mix(vec3(1.0), look.through, wet) * scorched, max(scattered, vec3(0.0)) * wet + POOL_SOOT * soot, wet, surface, roughness, sheen, mix(vec3(1.0), BLOOD_SHEEN, bloody), glow, max(soak, pool.soak));
+    }
+    if splats.wet > 0.0 {
+        let under = blood_splat(normal, splats.tilt, splats.wet, splats.dry / splats.weight);
+        if pool.wet > 0.0 {
+            // The splat lies on the surface under our liquid, which lets through what its absorption leaves.
+            let wet = pool.wet;
+            pool = Pool(pool.through * under.through, pool.color + pool.through * under.color, 1.0 - (1.0 - wet) * (1.0 - under.wet), normalize(mix(under.normal, pool.normal, wet)), mix(under.roughness, pool.roughness, wet), pool.sheen, mix(under.tint, pool.tint, wet), pool.glow, max(pool.soak, under.soak));
+        } else {
+            let soaked = pool.soak;
+            pool = under;
+            pool.soak = max(pool.soak, soaked);
+        }
     }
 }
     return pool;
@@ -603,46 +795,55 @@ fn wet_normal(bumped: vec3<f32>, pool: Pool) -> vec3<f32> {
     return normalize(mix(bumped, pool.normal, pool.wet));
 }
 
-// Over the lit linear `color`, in cluster order; `texture` is read by material blending. BSP takes a
-// projector only where it faces it; a `bUnlit` static mesh still takes projectors (unverified gap).
-fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: vec3<f32>, color: vec4<f32>, surface: u32) -> vec4<f32> {
+// Bevy's step to the next decal over the fragment, but passing over the decals `project` never draws here by their tag
+// before their box is tested: our liquid's data, and the game's blood once `pool_at` drew it. In a fight most of a
+// pixel's list is blood, and the box test is the walk's cost.
+@if(CLUSTERED_DECALS_ARE_USABLE)
+fn next_pasted_decal(iterator: ptr<function, ClusteredDecalIterator>, pooled: bool) -> bool {
+    if (*iterator).decal_index_offset == (*iterator).end_offset {
+        return false;
+    }
+    (*iterator).decal_index_offset += 1;
+    while (*iterator).decal_index_offset < (*iterator).end_offset {
+        let decal_index = i32(clustered_forward::get_clusterable_object_id(u32((*iterator).decal_index_offset)));
+        let tag = mesh_view_bindings::clustered_decals.decals[decal_index].tag;
+        let marked = i32(mesh_view_bindings::clustered_decals.decals[decal_index].normal_map_texture_index) >= 0;
+        if (tag & (PROJECTOR | 0x7u)) != (PROJECTOR | FB_LIQUID) && !(pooled && marked) {
+            let local = (mesh_view_bindings::clustered_decals.decals[decal_index].local_from_world * vec4((*iterator).world_position, 1.0)).xyz;
+            if all(local >= vec3(-0.5)) && all(local <= vec3(0.5)) {
+                (*iterator).base_color_texture_index = i32(mesh_view_bindings::clustered_decals.decals[decal_index].base_color_texture_index);
+                (*iterator).normal_map_texture_index = select(-1, 0, marked);
+                (*iterator).uv = local.xy * vec2(1.0, -1.0) + vec2(0.5);
+                (*iterator).tag = tag;
+                return true;
+            }
+        }
+        (*iterator).decal_index_offset += 1;
+    }
+    return false;
+}
+
+// Over the lit linear `color`, in cluster order; `texture` is read by material blending. `pooled`: the surface took
+// `pool_at` with these targets, which drew the game's blood splats already.
+fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: vec3<f32>, color: vec4<f32>, surface: u32, pooled: bool) -> vec4<f32> {
     var out = color;
 @if(CLUSTERED_DECALS_ARE_USABLE) {
     var decal_ranges = ranges;
     var iterator = clustered_decal_iterator_new(pbr_input.world_position.xyz, &decal_ranges);
     var base = vec3(0.0);
     var frame = vec3(0.0);
+    var shine = 1.0;
     var drawn = false;
-    while clustered_decal_iterator_next(&iterator) {
-        let wound = (iterator.tag & WOUND) != 0u && surface == 0u;
-        if (iterator.tag & (PROJECTOR | 0x7u)) == (PROJECTOR | FB_LIQUID) {
-            continue;
-        }
-        if (iterator.tag & PROJECTOR) == 0u || iterator.base_color_texture_index < 0 || ((iterator.tag & surface & TARGETS) == 0u && !wound) {
-            continue;
-        }
-        // `ProjectTag` filters actors only: BSP and terrain take the projector regardless.
-        if (iterator.tag & TAGGED) != 0u && (surface & TARGET_MESH) != 0u && (surface & TAGGED) == 0u {
-            continue;
-        }
-        if (iterator.tag & ON_MOVER) != 0u && (surface & ON_MOVER) == 0u {
-            continue;
-        }
-        // Only BSP's unlit flag means retail's (a surface without a lightmap, mesh_view); terrain and meshes are
-        // flagged unlit because their shaders light them themselves, which hid every projector on them.
-        if surface == TARGET_BSP && (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) != 0u && (iterator.tag & ON_UNLIT) == 0u {
-            continue;
-        }
-        if (surface == TARGET_BSP || (iterator.tag & WOUND) != 0u) && !faces_projector(iterator.decal_index_offset, pbr_input.world_normal) {
-            continue;
-        }
-        let texel = decal_texel(iterator.base_color_texture_index, iterator.uv);
-        if (iterator.tag & ALPHA_TEST) != 0u && texel.a * 255.0 <= f32((iterator.tag >> 22u) & 0xffu) {
+    while next_pasted_decal(&iterator, pooled) {
+        let texel = projector_texel(pbr_input, iterator.tag, iterator.base_color_texture_index, iterator.decal_index_offset, iterator.uv, surface);
+        if texel.a < 0.0 {
             continue;
         }
         if !drawn {
             base = to_display(texture);
             frame = to_display(color.rgb);
+            // The light on the surface, as its lit colour over its own, both in display space.
+            shine = clamp(dot(frame, LUMA) / max(dot(base, LUMA), 0.04), 0.0, 2.0);
             drawn = true;
         }
         let projected = to_display(texel.rgb);
@@ -656,15 +857,22 @@ fn project(pbr_input: PbrInput, ranges: ClusterableObjectIndexRanges, texture: v
             src = min(projected + base, vec3(1.0));
         }
         let under = frame;
-        switch iterator.tag & 0x7u {
-            case FB_OVERWRITE: { frame = src; }
-            case FB_MODULATE: { frame = 2.0 * src * frame; }
-            case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }
-            case FB_ALPHA_MODULATE: { frame = src + frame * (1.0 - texel.a); }
-            case FB_TRANSLUCENT: { frame = src + frame; }
-            case FB_DARKEN: { frame = frame * (1.0 - src); }
-            case FB_BRIGHTEN: { frame = src + frame * (1.0 - src); }
-            default: {}
+        // With our liquids on, the game's blood pictures (marked by a normal map of their own) lie where no pool is
+        // drawn (bodies, blended meshes, darken and see-through surfaces) as our fresh blood, lit as the surface under
+        // them, whatever their blend.
+        if iterator.normal_map_texture_index >= 0 {
+            frame = mix(frame, to_display(BLOOD_BODY) * shine, texel.a);
+        } else {
+            switch iterator.tag & 0x7u {
+                case FB_OVERWRITE: { frame = src; }
+                case FB_MODULATE: { frame = 2.0 * src * frame; }
+                case FB_ALPHA_BLEND: { frame = mix(frame, src, texel.a); }
+                case FB_ALPHA_MODULATE: { frame = src + frame * (1.0 - texel.a); }
+                case FB_TRANSLUCENT: { frame = src + frame; }
+                case FB_DARKEN: { frame = frame * (1.0 - src); }
+                case FB_BRIGHTEN: { frame = src + frame * (1.0 - src); }
+                default: {}
+            }
         }
         // Drying darkens what the splat changed, whatever its blend; fading takes the frame back to what lay under it.
         let dry = (iterator.tag >> DRY_SHIFT) & DRY_MASK;

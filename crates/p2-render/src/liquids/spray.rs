@@ -1,4 +1,5 @@
-//! What a hit leaves as liquid beyond its GPU spray: heavy drops that fly with the other drops and land in the pools.
+//! What a hit leaves as liquid beyond its GPU spray: heavy drops that fly with the other drops and pour nothing where
+//! they land; the scripts' splats mark the ground.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::message::MessageReader;
@@ -31,7 +32,7 @@ fn spray_liquids(settings: Option<Res<Settings>>, facts: Res<FrameFacts>, mut sp
     let cap = drop_cap(level);
     for spray in sprays.read() {
         air.light_drops_of(spray.source);
-        let feed = Feed { source: spray.source, kind: spray.kind, from: spray.at, velocity: [spray.velocity; 2], radius: [spray.radius; 2], pours: true };
+        let feed = Feed { source: spray.source, kind: spray.kind, from: spray.at, velocity: [spray.velocity; 2], radius: [spray.radius; 2], pours: false };
         air.drops.throw_from(&feed, 1.0, 1, 0.0, cap);
     }
 }

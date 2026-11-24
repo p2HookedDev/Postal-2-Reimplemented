@@ -317,6 +317,81 @@ mod monday {
         Some(())
     }
 
+    /// The game's own blood spawned on the floor ahead of the player on Suburbs-3, drawn at the player's settings:
+    /// a neck spout pouring, a puddle and a machine-gun splat. Writes the frame to look at; `None` without the game.
+    /// `close`: the pools a few steps ahead, looked at from above as a player stands over them.
+    pub fn blood_picture(size: UVec2, close: bool) -> Option<Vec<u8>> {
+        use p2_math::{Rotator, Vector};
+        use p2_render::frame_facts::FrameFacts;
+        use p2_render::level_collision::LevelCollision;
+        use p2_vm::Value;
+        let (mut app, target) = host(size, player_settings(&[])?, p2_render::modern::ModernGraphicsPlugin)?;
+        app.world_mut().resource_mut::<MeshView>().occlusion_culling = true;
+        let latest = Arc::new(Mutex::new(Vec::new()));
+        let store = latest.clone();
+        app.world_mut().spawn(Readback::texture(target.clone())).observe(move |event: On<ReadbackComplete>| {
+            store.lock().expect("lock").clone_from(&event.data);
+        });
+        first_frame(&mut app, &target);
+        for frame in 0..660 {
+            // Look down at the floor ahead for the last frames before the spawn.
+            let down_from = if close { 520 } else { 620 };
+            app.world_mut().resource_mut::<PlayerInput>().mouse = if frame >= down_from { [0.0, -3.0] } else { [0.0; 2] };
+            app.update();
+        }
+        app.world_mut().resource_mut::<PlayerInput>().mouse = [0.0; 2];
+        let world = app.world_mut();
+        let camera = world.query_filtered::<&Transform, bevy::ecs::query::With<SceneView>>().iter(world).next().copied()?;
+        let origin = world.resource::<FrameFacts>().origin;
+        let unreal = |at: bevy::math::Vec3| Vector::from(p2_bevy_assets::to_bevy(at - origin));
+        let forward = camera.rotation * bevy::math::Vec3::NEG_Z;
+        let flat = bevy::math::Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+        let side = bevy::math::Vec3::new(-flat.z, 0.0, flat.x);
+        let floor_at = |world: &bevy::ecs::world::World, along: f32, across: f32| {
+            let above = unreal(camera.translation + flat * along + side * across);
+            let collision = world.resource::<LevelCollision>().0.clone()?;
+            collision.first_hit(above, above - Vector::new(0.0, 0.0, 400.0)).map(|hit| hit.location)
+        };
+        let (puddle, splat, spout, shaded) = if close {
+            (floor_at(world, 45.0, -12.0)?, floor_at(world, 50.0, 25.0)?, floor_at(world, 40.0, 10.0)?, floor_at(world, 60.0, 8.0)?)
+        } else {
+            (floor_at(world, 150.0, -40.0)?, floor_at(world, 140.0, 45.0)?, floor_at(world, 110.0, 0.0)?, floor_at(world, 90.0, -110.0)?)
+        };
+        let mut play = world.resource_mut::<Play>();
+        play.world_mut()?.with_vm(|vm| {
+            let mut put = |package: &str, name: &str, at: Vector, rotation: Rotator| {
+                let class = vm.find_class(package, name).unwrap_or_else(|error| panic!("{package}.{name}: {error}"));
+                let made = vm.spawn(class, None, [Some(Value::Vector(at)), Some(Value::Rotator(rotation))]).ok().flatten();
+                eprintln!("SPAWN {package}.{name} at {at:?}: {made:?}");
+                made.map(|made| (made, class))
+            };
+            put("FX", "BloodPuddle", puddle + Vector::new(0.0, 0.0, 1.0), Rotator::ZERO);
+            put("FX", "BloodPuddle", shaded + Vector::new(0.0, 0.0, 1.0), Rotator::ZERO);
+            // A splat maker turns its splat to face back along its rotation: up, so the splat projects down.
+            put("Postal2Game", "BloodMachinegunSplatMaker", splat + Vector::new(0.0, 0.0, 10.0), Rotator { pitch: 16384, yaw: 0, roll: 0 });
+            // Close up, a fight's splats lie around and under the pool.
+            if close {
+                for (x, y) in [(0.0, 0.0), (18.0, 6.0), (-16.0, 10.0), (6.0, -18.0), (-10.0, -14.0), (26.0, -10.0)] {
+                    put("Postal2Game", "BloodMachinegunSplatMaker", puddle + Vector::new(x, y, 10.0), Rotator { pitch: 16384, yaw: 0, roll: 0 });
+                }
+            }
+            // As a cut throat starts: the game calls these on the spout it spawns.
+            let neck = spout + Vector::new(0.0, 0.0, 45.0);
+            if let Some((made, class)) = put("BasePeople", "BloodSpoutFeeder", neck, Rotator::ZERO) {
+                let start = vm.find_function(class, "SetStartSpeeds").ok().flatten().expect("SetStartSpeeds");
+                eprintln!("CALL SetStartSpeeds: {:?}", vm.call(&start, Some(made), class, [Value::Float(100.0), Value::Float(10.0), Value::Vector(Vector::ZERO)]));
+                let aim = vm.find_function(class, "SetDir").ok().flatten().expect("SetDir");
+                let way = Vector::new(0.0, 0.0, -1.0);
+                eprintln!("CALL SetDir: {:?}", vm.call(&aim, Some(made), class, [Value::Vector(neck), Value::Vector(way), Value::Float(0.0), Value::Bool(true)]));
+            }
+        })?;
+        for _ in 0..240 {
+            app.update();
+        }
+        let frame = latest.lock().expect("lock").clone();
+        (frame.len() == (size.x * size.y * 4) as usize).then_some(frame)
+    }
+
     pub fn differs(a: &[u8], b: &[u8], i: usize, threshold: u8) -> bool {
         (0..3).any(|c| a[i * 4 + c].abs_diff(b[i * 4 + c]) > threshold)
     }
@@ -374,6 +449,19 @@ fn monday_peeing_flicker_report() {
         let Some(run) = monday::run_with(occlusion, 600, 270, input) else { return };
         let flicker = monday::flickering(&run.frames[150..]);
         eprintln!("peeing, occlusion {occlusion}: flickering pixels per frame {flicker:?}");
+    }
+}
+
+/// Not a check of a number: the game's blood on the real map at the player's settings, written to look at.
+#[test]
+#[ignore = "needs a GPU and the game; writes a picture to look at"]
+fn monday_blood_picture() {
+    let size = bevy::math::UVec2::new(1280, 720);
+    for (close, name) in [(false, "monday_blood.rgba"), (true, "monday_blood_close.rgba")] {
+        let Some(frame) = monday::blood_picture(size, close) else { return };
+        let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+        std::fs::write(&path, &frame).expect("the picture written");
+        eprintln!("PICTURE {} {}x{}", path.display(), size.x, size.y);
     }
 }
 

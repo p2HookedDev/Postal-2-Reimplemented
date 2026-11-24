@@ -187,7 +187,7 @@ fn blood_chunks_throw_droplets_of_their_texture_that_fall_out_of_sight() {
 #[test]
 #[ignore = "needs a GPU"]
 fn a_chunk_lies_on_the_floor_it_lands_on_until_its_life_ends() {
-    let (mut app, frame) = thrown(Under::AFloor, BLOOD);
+    let (mut app, frame) = thrown(Under::AFloor, CONCRETE);
     let stopped = Instant::now();
     run_for(&mut app, 4.0);
     assert!(red_pixels(&frame) > 0, "no droplet lies on the floor four seconds after the last was thrown");
@@ -230,7 +230,8 @@ fn a_push_from_the_left_throws_lying_droplets_to_the_right() {
 
 #[test]
 #[ignore = "needs a GPU"]
-fn a_push_leaves_a_blood_hits_droplets_where_they_lie() {
-    let (lying, later) = pushed_from_the_left(BLOOD);
-    assert!((later - lying).abs() < 1.0, "a blood hit's droplets moved from column {lying} to {later} under a later push");
+fn a_blood_hits_droplets_never_lie_on_the_floor() {
+    let (mut app, frame) = thrown(Under::AFloor, BLOOD);
+    run_for(&mut app, 1.0);
+    assert_eq!(red_pixels(&frame), 0, "a blood hit's droplets still lie on the floor a second after the last was thrown");
 }

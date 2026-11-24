@@ -31,6 +31,6 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let layers = material_layers(vertex_output);
     var out: FragmentOutput;
     let layered = apply_layers(vertex_output, color, base_alpha, pbr_input, layers);
-    out.color = post_lighting(pbr_input, project(pbr_input, ranges, pbr_input.material.base_color.rgb, layered, mesh_target(vertex_output.instance_index)));
+    out.color = post_lighting(pbr_input, project(pbr_input, ranges, pbr_input.material.base_color.rgb, layered, mesh_target(vertex_output.instance_index), false));
     return out;
 }

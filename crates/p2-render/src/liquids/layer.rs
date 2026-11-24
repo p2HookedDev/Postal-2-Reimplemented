@@ -16,6 +16,7 @@ use bevy::render::extract_resource::ExtractResource;
 use bevy::render::render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat, TextureUsages};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use bevy::transform::components::Transform;
+use p2_host::display::NORMAL_FLUID_DETAIL;
 use p2_math::Vector;
 use p2_vm::FluidType;
 use rustc_hash::FxHashMap;
@@ -51,8 +52,14 @@ const STEP_UP: f32 = 24.0;
 const REACH: f32 = 128.0;
 /// Unreal units around a source whose tiles are made too, so its liquid has room to run.
 const ROOM: f32 = 48.0;
-/// Seconds a tile nothing feeds is kept: its film has dried by then.
-const IDLE: f32 = 12.0;
+/// `SHAPE_REACH` in `liquid_layer.wesl`: a held source's blot lies within this many radii of its middle.
+const SHAPE_REACH: f32 = 1.45;
+/// Seconds a film the scripts stop holding takes to dry at the game's normal fluid detail.
+pub const FILM_LIFE: f32 = 4.0;
+/// A tile nothing feeds is kept this many film lives: its film has dried by then.
+const IDLE_LIVES: f32 = 3.0;
+const MOST_FLUID_DETAIL: i32 = 11;
+const NEAR_FOREVER: f32 = 3600.0;
 /// `SCORCH_LIFE` in `liquid_layer.wesl`: a tile fire touched is kept this long, so its scorch fades out.
 pub const SCORCH_LIFE: f32 = 40.0;
 /// `ADDS` and `BURNING` in `liquid_layer.wesl`, the bits of `LayerSource::adds`.
@@ -129,6 +136,8 @@ pub struct LayerSource {
     pub kind: f32,
     /// `ADDS` when it adds volume, `BURNING` when the scripts' fire burns on it.
     pub adds: u32,
+    /// Picks a held source's blot; from its place in the world, so every tile it spans draws the same one.
+    pub seed: u32,
 }
 
 /// What a feed does to the floor under it.
@@ -153,8 +162,18 @@ pub struct Feeding {
     pub face: Option<Vector>,
 }
 
+impl Feeding {
+    /// How far its liquid reaches from `at`: a held blot's lobes stand past its radius.
+    fn reach(&self) -> f32 {
+        match self.feed {
+            Feed::Hold(_) => self.radius * SHAPE_REACH,
+            Feed::Add(_) => self.radius,
+        }
+    }
+}
+
 /// The frame's work for the render world. `floors` and `cleared` are handed over once.
-#[derive(Resource, Clone, Default, ExtractResource)]
+#[derive(Resource, Clone, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct LayerFrame {
     /// Slots the buffers hold.
@@ -168,6 +187,14 @@ pub struct LayerFrame {
     pub cleared: Vec<u32>,
     pub floors: Vec<(u32, Arc<Vec<f32>>)>,
     pub atlas: Option<AssetId<Image>>,
+    /// Seconds a film the scripts stop holding takes to dry, after the game's fluid detail.
+    pub film_life: f32,
+}
+
+impl Default for LayerFrame {
+    fn default() -> Self {
+        Self { capacity: 0, level: 0, steps: 0, slots: Vec::new(), active: Vec::new(), sources: Vec::new(), cleared: Vec::new(), floors: Vec::new(), atlas: None, film_life: FILM_LIFE }
+    }
 }
 
 /// A tile: its column of the world's grid, and which of the floors in that column.
@@ -305,6 +332,17 @@ pub struct Level<'a> {
     pub now: f32,
 }
 
+/// How long a fluid of `seconds` at the normal detail lives at the game's fluid `detail`, as the game scales its trails:
+/// shorter below normal, a whole multiple above, near forever at the top.
+pub fn fluid_life(detail: i32, seconds: f32) -> f32 {
+    match detail.clamp(1, MOST_FLUID_DETAIL) {
+        NORMAL_FLUID_DETAIL => seconds,
+        MOST_FLUID_DETAIL => NEAR_FOREVER,
+        short if short < NORMAL_FLUID_DETAIL => (NORMAL_FLUID_DETAIL + short) as f32 / 10.0 * seconds,
+        long => (long - NORMAL_FLUID_DETAIL + 1) as f32 * seconds,
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct LiquidLayer {
     tiles: FxHashMap<TileKey, Tile>,
@@ -370,7 +408,9 @@ fn layer_source(feeding: &Feeding, local: Vector) -> LayerSource {
         Feed::Add(volume) => (volume, ADDS),
     };
     let adds = if feeding.burning { adds | BURNING } else { adds };
-    LayerSource { x: local.x, y: local.y, radius: feeding.radius / TEXEL, amount, kind: f32::from(feeding.kind as u8), adds }
+    let [x, y, z] = [feeding.at.x, feeding.at.y, feeding.at.z].map(|v| v.round() as i32);
+    let seed = (x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663) ^ z.wrapping_mul(83_492_791)) as u32;
+    LayerSource { x: local.x, y: local.y, radius: feeding.radius / TEXEL, amount, kind: f32::from(feeding.kind as u8), adds, seed }
 }
 
 /// Takes a tile's finished trace, and hands it to the render world.
@@ -518,10 +558,10 @@ impl LiquidLayer {
         let Some(normal) = feeding.face else { return };
         let plane = self.plane_near(feeding.at, normal);
         let flat = plane.flat(feeding.at);
-        for [u, v] in touched(flat, feeding.radius + ROOM) {
+        for [u, v] in touched(flat, feeding.reach() + ROOM) {
             self.plane_tile(PlaneKey { u, v, ..plane }, level, cleared, commands);
         }
-        for [u, v] in touched(flat, feeding.radius) {
+        for [u, v] in touched(flat, feeding.reach()) {
             let key = PlaneKey { u, v, ..plane };
             let Some(tile) = self.planes.get_mut(&key) else { continue };
             (tile.last_fed, tile.kind) = (level.now, feeding.kind);
@@ -542,7 +582,7 @@ impl LiquidLayer {
                 self.feed_plane(feeding, level, &mut by_slot, &mut frame.cleared, commands);
                 continue;
             }
-            for column in touched(feeding.at, feeding.radius + ROOM) {
+            for column in touched(feeding.at, feeding.reach() + ROOM) {
                 self.tile(column, feeding.at, level, &mut frame.cleared, commands);
                 if feeding.burning
                     && let Some(tile) = self.layer_near(column, feeding.at, lift, BESIDE_REACH).and_then(|key| self.tiles.get_mut(&key))
@@ -550,7 +590,7 @@ impl LiquidLayer {
                     tile.burnt = now;
                 }
             }
-            for column in touched(feeding.at, feeding.radius) {
+            for column in touched(feeding.at, feeding.reach()) {
                 let Some(key) = self.layer_near(column, feeding.at, lift, FEED_REACH) else { continue };
                 let Some(tile) = self.tiles.get_mut(&key) else { continue };
                 (tile.last_fed, tile.kind) = (now, feeding.kind);
@@ -558,11 +598,12 @@ impl LiquidLayer {
                 by_slot[tile.slot as usize].push(layer_source(feeding, local));
             }
         }
-        let idle: Vec<TileKey> = self.tiles.iter().filter(|(_, tile)| now - tile.last_fed > IDLE && now - tile.burnt > SCORCH_LIFE).map(|(&key, _)| key).collect();
+        let kept = frame.film_life * IDLE_LIVES;
+        let idle: Vec<TileKey> = self.tiles.iter().filter(|(_, tile)| now - tile.last_fed > kept && now - tile.burnt > SCORCH_LIFE).map(|(&key, _)| key).collect();
         for key in idle {
             self.drop_tile(key, commands);
         }
-        let idle: Vec<PlaneKey> = self.planes.iter().filter(|(_, tile)| now - tile.last_fed > IDLE && now - tile.burnt > SCORCH_LIFE).map(|(&key, _)| key).collect();
+        let idle: Vec<PlaneKey> = self.planes.iter().filter(|(_, tile)| now - tile.last_fed > kept && now - tile.burnt > SCORCH_LIFE).map(|(&key, _)| key).collect();
         for key in idle {
             self.drop_plane(key, commands);
         }
@@ -637,6 +678,13 @@ mod tests {
     }
 
     #[test]
+    fn fluid_life_follows_the_game_detail() {
+        assert_eq!([1, 4, 5, 6, 10, 11].map(|detail| fluid_life(detail, 30.0)), [18.0, 27.0, 30.0, 60.0, 180.0, 3600.0]);
+        assert_eq!([-3, 0, 12, 99].map(|detail| fluid_life(detail, 30.0)), [18.0, 18.0, 3600.0, 3600.0]);
+        assert_eq!(fluid_life(NORMAL_FLUID_DETAIL, FILM_LIFE), 4.0);
+    }
+
+    #[test]
     fn the_shaders_know_the_layout() {
         let layer = include_str!("../liquid_layer.wesl");
         let projector = include_str!("../projector.wesl");
@@ -652,6 +700,18 @@ mod tests {
         assert_eq!(shader_const(projector, "POOL_PASTE_FILM") as f32, PASTE_FILM);
         assert_eq!(shader_const(layer, "PASTE_FILM") as f32, PASTE_FILM);
         assert_eq!((film_of(FluidType::Puke), film_of(FluidType::Gas)), (PASTE_FILM, FILM));
+        assert_eq!(shader_const(layer, "SHAPE_REACH") as f32, SHAPE_REACH);
+        assert!(f64::from(SHAPE_REACH) >= 1.0 + shader_const(layer, "SHAPE_LOBE") + shader_const(layer, "SHAPE_BUMP"), "the farthest lobe lies within the reach");
+    }
+
+    #[test]
+    fn a_held_source_draws_one_blot_in_every_tile_it_spans() {
+        let puddle = Feeding { at: Vector::new(250.4, -30.2, 12.0), radius: 20.0, kind: FluidType::Blood, feed: Feed::Hold(FILM), burning: false, face: None };
+        let (here, beside) = (layer_source(&puddle, Vector::new(125.2, 49.0, 0.0)), layer_source(&puddle, Vector::new(-2.8, 49.0, 0.0)));
+        assert_eq!(here.seed, beside.seed);
+        let other = layer_source(&Feeding { at: Vector::new(260.0, -30.0, 12.0), ..puddle }, Vector::ZERO);
+        assert_ne!(here.seed, other.seed);
+        assert_eq!((puddle.reach(), Feeding { feed: Feed::Add(5.0), ..puddle }.reach()), (20.0 * SHAPE_REACH, 20.0));
     }
 
     #[test]

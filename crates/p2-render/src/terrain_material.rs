@@ -136,7 +136,7 @@ impl TerrainLayers {
 
 impl From<&TerrainLayers> for SkyKey {
     fn from(extension: &TerrainLayers) -> Self {
-        Self { sky: extension.sky }
+        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.params.count.y) }
     }
 }
 
@@ -156,6 +156,7 @@ impl MaterialExtension for TerrainLayers {
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         crate::shaders::cast_both_sides(descriptor, key.mesh_key);
+        crate::shaders::mark_pool_mirror(descriptor, key.mesh_key, key.bind_group_data);
         crate::shaders::mark_sky(descriptor, key.bind_group_data);
         Ok(())
     }

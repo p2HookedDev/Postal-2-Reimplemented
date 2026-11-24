@@ -67,7 +67,8 @@ pub struct Scene {
     pub start: Option<(Vec3, i32)>,
     pub collision: Option<StaticCollision>,
     pub fogs: Vec<Option<ZoneFog>>,
-    pub decals: Vec<(Handle<Image>, Transform, u32)>,
+    /// Each with its tag and whether it is blood.
+    pub decals: Vec<(Handle<Image>, Transform, u32, bool)>,
     pub actors: Vec<MovingModel<FollowActor>>,
     pub attachments: Vec<MovingModel<FollowBone>>,
     pub lighting: Option<Arc<LightEnvironment>>,

@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 import package::p2_render::dynamic_light::dynamic_light;
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
-import package::p2_render::projector::{actor_target, cluster_ranges, no_pool, project};
+import package::p2_render::projector::{actor_target, cluster_ranges, pool_mirror, project, splat_pool};
 import package::p2_render::color::to_linear;
 import package::p2_render::modern::{
     Around, actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, lit_surface, sky_from_ambient, surface_of,
@@ -129,10 +129,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let overlay = (*shading).overlay != 0u;
     let sun_id = sun_index();
     let sun_on = sun_found(sun_id);
+    // Wounds stand as blood under the sun; elsewhere, and on a darken skin which takes no pool, `project` pastes them.
+    var pooled = false;
+    var mirror = 0.0;
     if modern && (sun_on || overlay) {
         let darken = (*shading).layers.blend.x != 0.0;
         if sun_on {
-            let incoming = modern_light(in, pbr_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken, no_pool(normal));
+            pooled = !darken;
+            let wounds = splat_pool(pbr_input, ranges, normal, actor_target(in.instance_index));
+@if(POOL_MIRROR)
+            mirror = select(0.0, pool_mirror(wounds), pooled);
+            let incoming = modern_light(in, pbr_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken, wounds);
             lit = shade_surface(incoming, (*shading).layers, base, normal, darken, false, dynamic_light(in.world_position, normal, ranges)).rgb;
         } else {
             let gloss = allows_gloss(flag) && !darken;
@@ -176,7 +183,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         }
     }
     let layered = apply_layers(in, vec4(lit, base.a), base_alpha, pbr_input, (*shading).layers);
-    out.color = post_lighting(pbr_input, project(pbr_input, ranges, base.rgb, layered, actor_target(in.instance_index)));
+    out.color = post_lighting(pbr_input, project(pbr_input, ranges, base.rgb, layered, actor_target(in.instance_index), pooled));
+    // The overlay camera has no reflection pass to read the record back.
+@if(POOL_MIRROR) {
+    if !overlay {
+        out.color.a = 1.0 + mirror;
+    }
+}
     // The overlay camera draws after the frame's tone pass, so its actors take the same curve here.
     if modern && overlay {
         out.color = vec4(pbr_neutral(out.color.rgb), out.color.a);

@@ -128,6 +128,8 @@ fn sky_from_ambient(around: ptr<function, Around>, normal: vec3<f32>) {
 struct Lit {
     matte: vec3<f32>,
     shine: vec3<f32>,
+    // The part of `shine` that mirrors the surroundings, not a light's highlight.
+    reflection: vec3<f32>,
 }
 
 fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen: vec3<f32>, ao: f32, gloss: bool, lamps: LampLight, surface: vec3<f32>, around: Around) -> Lit {
@@ -173,7 +175,7 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
     let direct_light = ambient + sqrt(sun_color) * (facing * direct) + lamps.diffuse;
     // A bounce adds in linear light, so it fills what is dark and leaves retail's colours where the map's lights already reach.
     let shown = min(sqrt(direct_light * direct_light + lamps.bounce * occlusion), vec3(DIFFUSE_LIMIT));
-    var lit = Lit(shown * shown * albedo * share * select(1.0 - metal, 1.0, classed), vec3(0.0));
+    var lit = Lit(shown * shown * albedo * share * select(1.0 - metal, 1.0, classed), vec3(0.0), vec3(0.0));
     if gloss {
         let spec = sun_color * direct * ggx(normal, to_sun, eye, facing, saturate(a + SUN_DISC), f0);
         let e0 = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
@@ -182,6 +184,7 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
         let rough_reflection = mix(1.0 - 0.6 * smoothstep(0.5, 1.0, rough), 1.0, metal);
         env *= rough_reflection * (f0 * ab.x + ab.y) * saturate(pow(nv + occlusion, exp2(-16.0 * rough * rough - 1.0)) - 1.0 + occlusion);
         lit.shine = (spec + env + lamps.specular * f0 + lamps.specular_edge * (vec3(1.0) - f0)) * cavity;
+        lit.reflection = env * cavity;
     }
     return lit;
 }

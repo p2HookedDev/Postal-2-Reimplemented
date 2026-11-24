@@ -24,8 +24,6 @@ use crate::shaders::{add_shaders, shader_file};
 const LAYER_SHADER: Handle<Shader> = uuid_handle!("3f6b2d84-9a1c-4e57-b0d3-8c2e5f71a946");
 /// Matches `@workgroup_size` in `liquid_layer.wesl`.
 const WORKGROUP: u32 = 8;
-/// Depth in Unreal units a liquid loses a second: a film the scripts stop holding is gone in a few seconds.
-const DRYING: f32 = FILM / 4.0;
 const GRAVITY: f32 = 950.0;
 /// What of a pipe's flow is kept from one step to the next: the liquid's thickness.
 const DAMPING: f32 = 0.9;
@@ -187,7 +185,7 @@ fn step_layer(
         queue.write_buffer(&buffers.floors, u64::from(*slot) * TEXELS as u64 * FLOOR_BYTES, &floor_bytes(floors));
     }
     buffers.frames = buffers.frames.wrapping_add(1);
-    let step = LayerStep { seconds: STEP, film: FILM, drying: DRYING, pull: GRAVITY * TEXEL, damping: DAMPING, seed: buffers.frames, pad: Vec2::ZERO };
+    let step = LayerStep { seconds: STEP, film: FILM, drying: FILM / frame.film_life, pull: GRAVITY * TEXEL, damping: DAMPING, seed: buffers.frames, pad: Vec2::ZERO };
     queue.write_buffer(&buffers.step, 0, &shader_bytes(&step));
     fill(&device, &queue, &mut buffers.slots, "liquid slots", &shader_bytes(frame.slots.as_slice()));
     fill(&device, &queue, &mut buffers.active, "liquid active", &shader_bytes(frame.active.as_slice()));

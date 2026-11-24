@@ -10,9 +10,11 @@ pub(crate) enum ScriptHook {
     Bolton(BoltonHook),
     /// Ours: where a stream meets static geometry, for our liquids.
     FluidHit,
+    /// Ours: retail's headshot verdict, read off its out byte when the call returns.
+    BodyLocation,
 }
 
-const HOOKS: [(&str, usize, ScriptHook); 7] = [
+const HOOKS: [(&str, usize, ScriptHook); 8] = [
     ("TakeDamage", 5, ScriptHook::TakeDamage),
     ("ProcessTraceHit", 4, ScriptHook::ProcessTraceHit),
     ("DropBoltons", 0, ScriptHook::Bolton(BoltonHook::DropBoltons)),
@@ -20,6 +22,7 @@ const HOOKS: [(&str, usize, ScriptHook); 7] = [
     ("PopOffHead", 0, ScriptHook::Bolton(BoltonHook::PopOffHead)),
     ("PinataStyleExplodeEffects", 0, ScriptHook::Bolton(BoltonHook::PinataStyleExplodeEffects)),
     ("CheckForFluidHit", 6, ScriptHook::FluidHit),
+    ("ModifyDamageByBodyLocation", 6, ScriptHook::BodyLocation),
 ];
 
 impl ScriptHook {
@@ -39,6 +42,7 @@ mod tests {
         assert_eq!(ScriptHook::of("TakeDamage", 4), None);
         assert_eq!(ScriptHook::of("ProcessTraceHit", 4), Some(ScriptHook::ProcessTraceHit));
         assert_eq!(ScriptHook::of("CheckForFluidHit", 6), Some(ScriptHook::FluidHit));
+        assert_eq!(ScriptHook::of("ModifyDamageByBodyLocation", 6), Some(ScriptHook::BodyLocation));
         assert_eq!(ScriptHook::of("Touch", 1), None);
     }
 }
