@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 import package::p2_render::dynamic_light::dynamic_light;
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
-import package::p2_render::projector::{actor_target, cluster_ranges, project};
+import package::p2_render::projector::{actor_target, cluster_ranges, no_pool, project};
 import package::p2_render::color::to_linear;
 import package::p2_render::modern::{
     Around, actor_highlight, actor_sun, allows_gloss, ambient_occlusion, is_modern, lit_surface, sky_from_ambient, surface_of,
@@ -132,7 +132,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if modern && (sun_on || overlay) {
         let darken = (*shading).layers.blend.x != 0.0;
         if sun_on {
-            let incoming = modern_light(in, pbr_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken);
+            let incoming = modern_light(in, pbr_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken, no_pool(normal));
             lit = shade_surface(incoming, (*shading).layers, base, normal, darken, false, dynamic_light(in.world_position, normal, ranges)).rgb;
         } else {
             let gloss = allows_gloss(flag) && !darken;

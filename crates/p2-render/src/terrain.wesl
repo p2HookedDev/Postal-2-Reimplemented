@@ -9,14 +9,14 @@ import bevy_pbr::{
         mesh_view_bindings::view,
     },
 };
-import package::p2_render::projector::{cluster_ranges, project, TARGET_TERRAIN};
+import package::p2_render::projector::{cluster_ranges, pool_at, project, wet_color, wet_normal, TARGET_TERRAIN};
 import package::p2_render::dynamic_light::dynamic_light;
 import package::p2_render::layer_bindings::post_lighting;
-import package::p2_render::modern::{modern_surface, with_light};
+import package::p2_render::modern::with_light;
 import package::p2_render::modern_base::{LUMINANCE, MODERN_ON, NO_RELIEF};
 import package::p2_render::relief::{relief_from, relief_shows};
 import package::p2_render::sun_shadow::{sun_found, sun_index};
-import package::p2_render::surface::{ModernLight, modern_light, retail_lit};
+import package::p2_render::surface::{ModernLight, modern_light, pooled_surface_lit, retail_lit};
 import package::p2_render::sky_view::sky_true_position;
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
@@ -180,11 +180,12 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let modern = (terrain.count.y & MODERN_ON) != 0u && sun_found(sun);
     let normal = normalize(pbr_input.world_normal);
     let ranges = cluster_ranges(pbr_input);
+    let pool = pool_at(pbr_input, ranges, normal);
     var incoming: ModernLight;
     var dynamic = vec3(0.0);
     if modern {
         // Terrain has no material class and no darken case.
-        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false);
+        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false, pool);
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
     }
     var color = vec3(0.0);
@@ -216,11 +217,12 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
             }
         }
         pbr_input.material.base_color = vec4(texel.rgb, 1.0);
+        let wet = wet_color(texel.rgb, pool);
         if modern {
-            let lit = modern_surface(pbr_input.material.base_color.rgb, position, bumped, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface);
-            color = mix(color, with_light(lit, pbr_input.material.base_color.rgb, dynamic), alpha);
+            let lit = pooled_surface_lit(wet, position, wet_normal(bumped, pool), incoming);
+            color = mix(color, with_light(lit, wet, dynamic), alpha);
         } else {
-            color = mix(color, retail_lit(pbr_input.material.base_color.rgb, light), alpha);
+            color = mix(color, retail_lit(wet, light), alpha);
         }
         texture = mix(texture, pbr_input.material.base_color.rgb, alpha);
     }

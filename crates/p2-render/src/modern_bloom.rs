@@ -31,7 +31,7 @@ use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSy
 use bevy::shader::Shader;
 
 use crate::screen_pass::{PassUniforms, ViewBindGroups, filtered_texture_and_sampler};
-use crate::shaders::add_shaders;
+use crate::shaders::{add_shaders, shader_file};
 
 const BLOOM_SHADER: Handle<Shader> = uuid_handle!("3b8e5d27-a6c1-4f94-8d02-7e1c9a54b6f3");
 /// Bevy's `Rg11b10Ufloat` cannot be a storage texture.
@@ -57,7 +57,7 @@ impl Plugin for ModernBloomPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        add_shaders(app, [(BLOOM_SHADER, Shader::from_wesl(include_str!("modern_bloom.wesl"), "p2_render/modern_bloom.wesl"))]);
+        add_shaders(app, [(BLOOM_SHADER, shader_file("modern_bloom.wesl"))]);
         app.add_plugins(ExtractComponentPlugin::<ModernBloom>::default());
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;

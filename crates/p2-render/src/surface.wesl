@@ -7,11 +7,12 @@ import bevy_pbr::render::{
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::layer_bindings::lit_color;
 import package::p2_render::layer_types::ShaderLayers;
-import package::p2_render::modern::{allows_gloss, ambient_occlusion, classed_surface, modern_glass, modern_surface, with_light};
+import package::p2_render::modern::{allows_gloss, ambient_occlusion, classed_surface, modern_glass, surface_light, view_around, with_light};
 import package::p2_render::modern_base::LampLight;
 import package::p2_render::sun_shadow::{sun_seen_from, sun_visibility};
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::lamp_shadow::lamp_light;
+import package::p2_render::projector::{Pool, no_pool, wet_color, wet_normal};
 @if(BINDLESS)
 import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
 
@@ -37,16 +38,33 @@ struct ModernLight {
     gloss: bool,
     lamps: LampLight,
     surface: vec3<f32>,
+    pool: Pool,
 }
 
-// The sun sees `normal`, the lamps light `bumped`.
-fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool) -> ModernLight {
+const POOL_REFLECTANCE: f32 = 0.02;
+
+// A special-lit surface takes only special lights, wet or dry. The pool's reflectance is negated as a material class's
+// is: it changes how the surface shines, while its colour comes from `wet_color`.
+fn pooled_surface(surface: vec3<f32>, pool: Pool) -> vec3<f32> {
+    let wet = pool.wet;
+    if wet <= 0.0 || surface.z > 0.5 {
+        return surface;
+    }
+    return vec3(mix(surface.x, pool.roughness, wet), surface.y * (1.0 - wet), -mix(abs(surface.z), POOL_REFLECTANCE, wet));
+}
+
+// The sun sees `normal`, the lamps light `bumped`, or the liquid's surface where `pool` stands.
+fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool) -> ModernLight {
     let position = pbr_input.world_position.xyz;
     let seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy);
-    let gloss = allows_gloss(flag) && !darken;
-    let surface = classed_surface(flag, blend);
-    let lamps = lamp_light(in, position, bumped, gloss, surface, flag);
-    return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface);
+    var standing = pool;
+    if darken {
+        standing = no_pool(normal);
+    }
+    let gloss = (allows_gloss(flag) || standing.wet > 0.0) && !darken;
+    let surface = pooled_surface(classed_surface(flag, blend), standing);
+    let lamps = lamp_light(in, position, wet_normal(bumped, standing), gloss, surface, flag);
+    return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface, standing);
 }
 
 // A darken surface takes the light alone, as it took the light map: `lit` is then the surface lit white.
@@ -62,8 +80,17 @@ fn shade_surface(incoming: ModernLight, layers: ShaderLayers, color: vec4<f32>, 
         let glass = modern_glass(color, incoming.position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface);
         return vec4(with_light(glass.rgb, color.rgb, dynamic), glass.a);
     }
-    let lit = modern_surface(select(color.rgb, vec3(1.0), darken), incoming.position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface);
-    return vec4(add_dynamic(layers, lit, color.rgb, darken, dynamic), color.a);
+    let wet = wet_color(color.rgb, incoming.pool);
+    let lit = pooled_surface_lit(select(wet, vec3(1.0), darken), incoming.position, wet_normal(normal, incoming.pool), incoming);
+    return vec4(add_dynamic(layers, lit, wet, darken, dynamic), color.a);
+}
+
+// `modern_surface` with the pool's sheen on the highlight and the reflection.
+fn pooled_surface_lit(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, incoming: ModernLight) -> vec3<f32> {
+    let display = to_display(color);
+    let around = view_around(normal, incoming.lamps, incoming.surface);
+    let lit = surface_light(display * display, position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, around);
+    return to_linear(sqrt(max(lit.matte + lit.shine * incoming.pool.sheen, vec3(0.0))));
 }
 
 // The texture under twice the light in display space, clamped to 1 as the frame buffer clamps it.

@@ -9,8 +9,10 @@ use p2_vm::FluidType;
 
 pub mod air_draw;
 pub mod drops;
-pub mod pool_draw;
-pub mod pools;
+pub mod layer;
+pub mod layer_gpu;
+pub mod run_draw;
+pub mod runs;
 pub mod stream_ribbon;
 pub mod world;
 
@@ -31,6 +33,6 @@ pub struct LiquidsPlugin;
 impl Plugin for LiquidsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<LiquidLanding>();
-        app.add_plugins((world::LiquidWorldPlugin, pool_draw::PoolDrawPlugin, air_draw::AirLiquidsPlugin));
+        app.add_plugins((world::LiquidWorldPlugin, layer_gpu::LayerGpuPlugin, run_draw::RunDrawPlugin, air_draw::AirLiquidsPlugin));
     }
 }

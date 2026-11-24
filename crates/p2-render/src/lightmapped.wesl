@@ -7,7 +7,7 @@ import bevy_pbr::{
         clustered_forward as clustering,
     },
 };
-import package::p2_render::projector::{cluster_ranges, project, TARGET_BSP};
+import package::p2_render::projector::{cluster_ranges, pool_at, project, wet_color, TARGET_BSP};
 import package::p2_render::dynamic_light::LE_NON_INCIDENCE;
 import package::p2_render::layer_bindings::{apply_layers, lit_color, post_lighting};
 import package::p2_render::material_layers::material_layers;
@@ -58,17 +58,18 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let normal = normalize(pbr_input.world_normal);
     let sun = sun_index();
     let modern = is_modern(layers.detail.z) && sun_found(sun);
+    let darken = layers.blend.x != 0.0;
+    let pool = pool_at(pbr_input, ranges, normal);
     var surface: vec3<f32>;
     var alpha = color.a;
     if modern {
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
-        let darken = layers.blend.x != 0.0;
-        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken);
+        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool);
         let shaded = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), vec3(0.0));
         surface = shaded.rgb;
         alpha = shaded.a;
     } else {
-        surface = lit_color(layers, color.rgb, view.exposure * pbr_input.lightmap_light);
+        surface = lit_color(layers, select(wet_color(color.rgb, pool), color.rgb, darken), view.exposure * pbr_input.lightmap_light);
     }
     let layered = apply_layers(vertex_output, vec4(surface, alpha), base_alpha, pbr_input, layers);
     var lit = layered.rgb;

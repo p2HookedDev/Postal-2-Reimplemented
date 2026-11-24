@@ -37,7 +37,7 @@ use crate::particle_draw::light::{ActorLight, ParticleLights};
 use crate::particle_draw::{ParticleDrawSystems, draw_particles};
 use crate::particle_frame::{DrawnActor, DrawnParticles, Liquid, LiquidRole, Pour};
 use crate::screen_pass::modern_level;
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 use crate::sun_levels::SunLevelAtlas;
 
 const RIBBON_SHADER: Handle<Shader> = uuid_handle!("b2d84f61-7a3e-4c95-8e10-5f6c29a1d7e3");
@@ -67,8 +67,8 @@ impl Plugin for AirLiquidsPlugin {
         add_shaders(
             app,
             [
-                (RIBBON_SHADER, Shader::from_wesl(include_str!("../liquid_ribbon.wesl"), "p2_render/liquid_ribbon.wesl")),
-                (DROPS_SHADER, Shader::from_wesl(include_str!("../liquid_drops.wesl"), "p2_render/liquid_drops.wesl")),
+                (RIBBON_SHADER, shader_file("liquid_ribbon.wesl")),
+                (DROPS_SHADER, shader_file("liquid_drops.wesl")),
             ],
         );
         app.add_plugins(MaterialPlugin::<LiquidAirMaterial>::default());
@@ -286,8 +286,8 @@ fn fly_liquids(mut commands: Commands, inputs: AirInputs, mut air: ResMut<AirLiq
     let air = &mut *air;
     let Some(drawn) = inputs.drawn.as_deref().filter(|_| level > 0 && inputs.facts.in_play) else {
         air.drops.list.clear();
-        show(&mut assets, &mut commands, AirPass::Ribbon, AirMesh::default());
-        show(&mut assets, &mut commands, AirPass::Drops, AirMesh::default());
+        show_mesh(&mut assets, &mut commands, AirPass::Ribbon, AirMesh::default());
+        show_mesh(&mut assets, &mut commands, AirPass::Drops, AirMesh::default());
         return;
     };
     if air.level != drawn.level {
@@ -323,8 +323,8 @@ fn fly_liquids(mut commands: Commands, inputs: AirInputs, mut air: ResMut<AirLiq
         };
         beads.quad(drop.at, way, light, shape.look(drop.radius, drop.kind, extra));
     }
-    show(&mut assets, &mut commands, AirPass::Ribbon, ribbons);
-    show(&mut assets, &mut commands, AirPass::Drops, beads);
+    show_mesh(&mut assets, &mut commands, AirPass::Ribbon, ribbons);
+    show_mesh(&mut assets, &mut commands, AirPass::Drops, beads);
 }
 
 fn pour_feeder(air: &mut AirLiquids, pouring: &Pouring, hit: &impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>, ribbons: &mut AirMesh) {
@@ -376,7 +376,7 @@ fn aimed(from: Vec3, velocity: Vec3, gravity: Vec3, hit: &impl Fn(Vec3, Vec3) ->
     points
 }
 
-fn show(assets: &mut AirAssets, commands: &mut Commands, pass: AirPass, mesh: AirMesh) {
+fn show_mesh(assets: &mut AirAssets, commands: &mut Commands, pass: AirPass, mesh: AirMesh) {
     let levels = assets.atlas.as_deref().and_then(|atlas| atlas.image.clone());
     let built = mesh.into_mesh();
     let Some((mut visibility, shown, material, _)) = assets.drawn.iter_mut().find(|(.., drawn)| **drawn == pass) else {

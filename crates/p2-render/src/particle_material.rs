@@ -21,7 +21,7 @@ use p2_particles::{DirectionUsage, DrawStyle};
 use p2_vm::ERenderStyle;
 
 use p2_host::display::{MODERN_PARTICLE_LIGHT, MODERN_SOFT_PARTICLES, Settings};
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 use crate::lamps::material_added;
 use crate::sun_levels::SunLevelAtlas;
 
@@ -47,7 +47,7 @@ impl Plugin for ParticlePlugin {
             app.init_asset::<ParticleMaterial>();
             return;
         }
-        let shader = Shader::from_wesl(include_str!("particle.wesl"), "p2_render/particle.wesl");
+        let shader = shader_file("particle.wesl");
         add_libraries(app);
         add_shaders(app, [(PARTICLE_SHADER, shader)]);
         let sprites = ShaderBuffer::new(vec![[0u32; RECORD_WORDS]], RenderAssetUsages::default());

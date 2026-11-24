@@ -310,7 +310,7 @@ pub struct ActorLightPlugin;
 
 impl Plugin for ActorLightPlugin {
     fn build(&self, app: &mut App) {
-        add_material::<ActorLitMaterial>(app, ACTOR_LIGHT_SHADER, include_str!("actor_light.wesl"), "p2_render/actor_light.wesl");
+        add_material::<ActorLitMaterial>(app, ACTOR_LIGHT_SHADER, "actor_light.wesl");
     }
 }
 

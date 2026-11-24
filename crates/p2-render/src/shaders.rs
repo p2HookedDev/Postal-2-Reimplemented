@@ -4,6 +4,25 @@ use bevy::pbr::{Material, MaterialPlugin, MeshPipelineKey};
 use bevy::render::RenderApp;
 use bevy::render::render_resource::RenderPipelineDescriptor;
 use bevy::shader::{Shader, ShaderDefVal};
+use std::path::PathBuf;
+use std::sync::LazyLock;
+
+/// The `shaders` folder beside the exe; a cargo build that has none reads this crate's own sources.
+static SHADER_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("shaders")));
+    beside.filter(|dir| dir.is_dir()).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")))
+});
+
+/// A shader read from the shader folder at start-up; WESL imports reach it as `package::p2_render::<stem>`.
+pub(crate) fn shader_file(name: &str) -> Shader {
+    let file = SHADER_DIR.join(name);
+    let source = std::fs::read_to_string(&file).unwrap_or_else(|error| {
+        bevy::log::error!("shader {}: {error}", file.display());
+        String::new()
+    });
+    let path = format!("p2_render/{name}");
+    if name.ends_with(".wgsl") { Shader::from_wgsl(source, path) } else { Shader::from_wesl(source, path) }
+}
 
 pub(crate) fn add_shaders(app: &mut App, shaders: impl IntoIterator<Item = (Handle<Shader>, Shader)>) {
     let mut assets = app.world_mut().resource_mut::<Assets<Shader>>();
@@ -45,28 +64,28 @@ impl Plugin for ShaderLibraryPlugin {
             return;
         }
         add_shaders(app, [
-            (DYNAMIC_LIGHT_SHADER, Shader::from_wesl(include_str!("dynamic_light.wesl"), "p2_render/dynamic_light.wesl")),
-            (SHADER_LAYERS_SHADER, Shader::from_wesl(include_str!("shader_layers.wesl"), "p2_render/shader_layers.wesl")),
-            (LAYER_BINDINGS_SHADER, Shader::from_wesl(include_str!("layer_bindings.wesl"), "p2_render/layer_bindings.wesl")),
-            (MODERN_SHADER, Shader::from_wesl(include_str!("modern.wesl"), "p2_render/modern.wesl")),
-            (MODERN_BASE_SHADER, Shader::from_wesl(include_str!("modern_base.wesl"), "p2_render/modern_base.wesl")),
-            (RELIEF_SHADER, Shader::from_wesl(include_str!("relief.wesl"), "p2_render/relief.wesl")),
-            (SUN_SHADOW_SHADER, Shader::from_wesl(include_str!("sun_shadow.wesl"), "p2_render/sun_shadow.wesl")),
-            (LAMP_SHADOW_SHADER, Shader::from_wesl(include_str!("lamp_shadow.wesl"), "p2_render/lamp_shadow.wesl")),
-            (crate::reflections::CLASS_PREPASS_SHADER, Shader::from_wesl(include_str!("reflections_prepass.wesl"), "p2_render/reflections_prepass.wesl")),
-            (PROBES_SHADER, Shader::from_wesl(include_str!("probes.wesl"), "p2_render/probes.wesl")),
-            (COLOR_SHADER, Shader::from_wesl(include_str!("color.wesl"), "p2_render/color.wesl")),
-            (PROJECTOR_SHADER, Shader::from_wesl(include_str!("projector.wesl"), "p2_render/projector.wesl")),
-            (TONE_CURVE_SHADER, Shader::from_wesl(include_str!("tone_curve.wesl"), "p2_render/tone_curve.wesl")),
-            (SCREEN_PASS_SHADER, Shader::from_wesl(include_str!("screen_pass.wesl"), "p2_render/screen_pass.wesl")),
-            (SURFACE_SHADER, Shader::from_wesl(include_str!("surface.wesl"), "p2_render/surface.wesl")),
-            (MATERIAL_LAYERS_SHADER, Shader::from_wesl(include_str!("material_layers.wesl"), "p2_render/material_layers.wesl")),
-            (LAYER_TYPES_SHADER, Shader::from_wesl(include_str!("layer_types.wesl"), "p2_render/layer_types.wesl")),
-            (DEPTH_SURFACE_SHADER, Shader::from_wesl(include_str!("depth_surface.wesl"), "p2_render/depth_surface.wesl")),
-            (SUN_LEVELS_SHADER, Shader::from_wesl(include_str!("sun_levels.wesl"), "p2_render/sun_levels.wesl")),
-            (SKY_VIEW_SHADER, Shader::from_wesl(include_str!("sky_view.wesl"), "p2_render/sky_view.wesl")),
-            (SKY_VERTEX_SHADER, Shader::from_wesl(include_str!("sky_vertex.wesl"), "p2_render/sky_vertex.wesl")),
-            (LIQUID_LOOK_SHADER, Shader::from_wesl(include_str!("liquid_look.wesl"), "p2_render/liquid_look.wesl")),
+            (DYNAMIC_LIGHT_SHADER, shader_file("dynamic_light.wesl")),
+            (SHADER_LAYERS_SHADER, shader_file("shader_layers.wesl")),
+            (LAYER_BINDINGS_SHADER, shader_file("layer_bindings.wesl")),
+            (MODERN_SHADER, shader_file("modern.wesl")),
+            (MODERN_BASE_SHADER, shader_file("modern_base.wesl")),
+            (RELIEF_SHADER, shader_file("relief.wesl")),
+            (SUN_SHADOW_SHADER, shader_file("sun_shadow.wesl")),
+            (LAMP_SHADOW_SHADER, shader_file("lamp_shadow.wesl")),
+            (crate::reflections::CLASS_PREPASS_SHADER, shader_file("reflections_prepass.wesl")),
+            (PROBES_SHADER, shader_file("probes.wesl")),
+            (COLOR_SHADER, shader_file("color.wesl")),
+            (PROJECTOR_SHADER, shader_file("projector.wesl")),
+            (TONE_CURVE_SHADER, shader_file("tone_curve.wesl")),
+            (SCREEN_PASS_SHADER, shader_file("screen_pass.wesl")),
+            (SURFACE_SHADER, shader_file("surface.wesl")),
+            (MATERIAL_LAYERS_SHADER, shader_file("material_layers.wesl")),
+            (LAYER_TYPES_SHADER, shader_file("layer_types.wesl")),
+            (DEPTH_SURFACE_SHADER, shader_file("depth_surface.wesl")),
+            (SUN_LEVELS_SHADER, shader_file("sun_levels.wesl")),
+            (SKY_VIEW_SHADER, shader_file("sky_view.wesl")),
+            (SKY_VERTEX_SHADER, shader_file("sky_vertex.wesl")),
+            (LIQUID_LOOK_SHADER, shader_file("liquid_look.wesl")),
         ]);
     }
 }
@@ -77,7 +96,7 @@ pub(crate) fn add_libraries(app: &mut App) {
     }
 }
 
-pub(crate) fn add_material<M: Material>(app: &mut App, handle: Handle<Shader>, source: &'static str, path: &'static str)
+pub(crate) fn add_material<M: Material>(app: &mut App, handle: Handle<Shader>, name: &str)
 where
     MaterialPlugin<M>: Plugin,
 {
@@ -86,7 +105,7 @@ where
         return;
     }
     add_libraries(app);
-    add_shaders(app, [(handle, Shader::from_wesl(source, path))]);
+    add_shaders(app, [(handle, shader_file(name))]);
     app.add_plugins(MaterialPlugin::<M>::default());
 }
 

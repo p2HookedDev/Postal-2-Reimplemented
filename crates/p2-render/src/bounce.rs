@@ -28,7 +28,7 @@ use crate::components::SceneView;
 use p2_host::display::{MODERN_BOUNCE_LIGHT, Settings};
 use crate::MainPassExtraSystems;
 use crate::screen_pass::{HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, tag_pass_views};
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 
 const BOUNCE_SHADER: Handle<Shader> = uuid_handle!("4f0d2b7e-9c31-4a8e-b6d5-1e7a3c90f2d8");
 const GATHERED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -56,7 +56,7 @@ impl Plugin for BounceLightPlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(BOUNCE_SHADER,Shader::from_wesl(include_str!("bounce.wesl"), "p2_render/bounce.wesl"))]);
+        add_shaders(app, [(BOUNCE_SHADER,shader_file("bounce.wesl"))]);
         add_view_pass::<BounceLight>(app);
         app.add_systems(PostUpdate, follow_bounce_settings.after(tag_pass_views));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

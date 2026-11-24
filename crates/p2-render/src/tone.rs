@@ -29,7 +29,7 @@ use crate::components::{CanvasLayer, SceneView, SunShadow};
 use p2_host::display::{
     MODERN_CHROMATIC_ABERRATION, MODERN_CONTRAST, MODERN_EXPOSURE, MODERN_GOD_RAYS, MODERN_PHOTO_WARMTH, MODERN_SATURATION, MODERN_VIGNETTE, NEUTRAL_LEVEL, Settings,
 };
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 
 const TONE_SHADER: Handle<Shader> = uuid_handle!("6d1f3a92-5b0e-4c87-a2d4-8e7c19b05f3a");
 const TONE_LAYER: usize = 9;
@@ -49,7 +49,7 @@ impl Plugin for TonePlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(TONE_SHADER,Shader::from_wesl(include_str!("tone.wesl"), "p2_render/tone.wesl"))]);
+        add_shaders(app, [(TONE_SHADER,shader_file("tone.wesl"))]);
         app.add_plugins(Material2dPlugin::<ToneMaterial>::default())
             .add_systems(Startup, setup)
             .add_systems(Update, apply.in_set(ToneSystems::Apply))

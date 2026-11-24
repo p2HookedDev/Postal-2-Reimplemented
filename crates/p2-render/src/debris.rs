@@ -35,7 +35,7 @@ use crate::level_collision::{LevelCollision, LevelTriangles};
 use crate::particle_draw::ParticleDrawSystems;
 use crate::particle_frame::{Blast, DrawnParticles};
 use crate::particle_throw::next_unit;
-use crate::shaders::add_shaders;
+use crate::shaders::{add_shaders, shader_file};
 use crate::slot_buffer::SlotBuffer;
 
 const PIECES_PER_LEVEL: usize = 64;
@@ -83,7 +83,7 @@ impl Plugin for DebrisPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        add_shaders(app, [(DEBRIS_SHADER, Shader::from_wesl(include_str!("debris.wesl"), "p2_render/debris.wesl"))]);
+        add_shaders(app, [(DEBRIS_SHADER, shader_file("debris.wesl"))]);
         let mut debris = Debris::default();
         debris.loose.tints.upload(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>());
         app.add_plugins(MaterialPlugin::<ExtendedMaterial<StandardMaterial, DebrisTint>>::default());

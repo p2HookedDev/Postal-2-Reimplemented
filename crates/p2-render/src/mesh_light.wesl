@@ -5,7 +5,7 @@ import bevy_pbr::{
         forward_io::{VertexOutput, FragmentOutput},
     },
 };
-import package::p2_render::projector::{cluster_ranges, mesh_target, project};
+import package::p2_render::projector::{cluster_ranges, mesh_target, pool_at, project, wet_color};
 import package::p2_render::dynamic_light::dynamic_light;
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -34,10 +34,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var light = in.color.rgb;
     let normal = normalize(pbr_input.world_normal);
     let sun = sun_index();
+    let darken = layers.blend.x != 0.0;
+    let pool = pool_at(pbr_input, ranges, normal);
     if is_modern(layers.detail.z) && sun_found(sun) {
         let bumped = base_relief(in, pbr_input, normal, layers.detail.z);
-        let darken = layers.blend.x != 0.0;
-        let incoming = modern_light(in, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken);
+        let incoming = modern_light(in, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool);
         color = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), dynamic_light(pbr_input.world_position, normal, ranges));
     } else {
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);
@@ -45,7 +46,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let baked = to_display(light) / 2.0;
             light = to_linear(2.0 * min(baked + dynamic, vec3(1.0)));
         }
-        color = vec4(lit_color(layers, color.rgb, light), color.a);
+        color = vec4(lit_color(layers, select(wet_color(color.rgb, pool), color.rgb, darken), light), color.a);
     }
 }
     color = apply_layers(in, color, color.a, pbr_input, layers);

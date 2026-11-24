@@ -33,7 +33,7 @@ use crate::components::SceneView;
 use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS, Settings};
 use crate::particle_frame::DrawnParticles;
 use crate::screen_pass::{PassUniformOffset, PassUniforms, PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, prepare_pass_uniforms, tag_pass_views};
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 use crate::view::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
@@ -55,7 +55,7 @@ impl Plugin for ReflectionsPlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(REFLECTIONS_SHADER, Shader::from_wesl(include_str!("reflections.wesl"), "p2_render/reflections.wesl"))]);
+        add_shaders(app, [(REFLECTIONS_SHADER, shader_file("reflections.wesl"))]);
         add_view_pass::<Reflections>(app);
         app.add_systems(PostUpdate, follow_reflection_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems).after(tag_pass_views));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

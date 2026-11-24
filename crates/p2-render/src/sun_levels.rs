@@ -26,7 +26,7 @@ use crate::lamps::{MaterialAtlas, MaterialSlot, follow_atlas};
 use crate::lightmapped::BakedLight;
 use crate::mesh_light::DynamicLit;
 use crate::modern::StillProp;
-use crate::shaders::add_shaders;
+use crate::shaders::{add_shaders, shader_file};
 use crate::sun_cache::SunCacheStale;
 
 pub(crate) const LEVEL_CASTER_SHADER: Handle<Shader> = uuid_handle!("e4a1c7d2-58b3-4f69-8c0e-2d71b9f4a635");
@@ -206,7 +206,7 @@ impl Plugin for SunLevelsPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        add_shaders(app, [(LEVEL_CASTER_SHADER, Shader::from_wesl(include_str!("level_caster.wesl"), "p2_render/level_caster.wesl"))]);
+        add_shaders(app, [(LEVEL_CASTER_SHADER, shader_file("level_caster.wesl"))]);
         app.add_plugins((ExtractResourcePlugin::<SunLevelFrame>::default(), ExtractResourcePlugin::<SunLevelAtlas>::default()));
         follow_atlas::<SunLevelAtlas>(app);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {

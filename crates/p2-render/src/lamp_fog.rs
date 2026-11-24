@@ -40,7 +40,7 @@ use crate::screen_pass::{
     HalfThenFull, PassUniformOffset, PassUniforms, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, prepare_pass_uniforms,
     tag_pass_views,
 };
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 use crate::view::ShownScene;
 
 const LAMP_FOG_SHADER: Handle<Shader> = uuid_handle!("5d8c2f71-0e4b-4a96-b3d7-91f6c4a2e83d");
@@ -66,7 +66,7 @@ impl Plugin for LampFogPlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(LAMP_FOG_SHADER, Shader::from_wesl(include_str!("lamp_fog.wesl"), "p2_render/lamp_fog.wesl"))]);
+        add_shaders(app, [(LAMP_FOG_SHADER, shader_file("lamp_fog.wesl"))]);
         add_view_pass::<LampFog>(app);
         app.add_systems(PostUpdate, follow_lamp_fog_settings.after(TransformSystems::Propagate).after(CameraUpdateSystems).after(tag_pass_views));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

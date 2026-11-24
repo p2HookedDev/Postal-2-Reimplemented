@@ -43,6 +43,6 @@ pub struct LightmappedPlugin;
 
 impl Plugin for LightmappedPlugin {
     fn build(&self, app: &mut App) {
-        add_material::<LightmappedMaterial>(app, LIGHTMAPPED_SHADER, include_str!("lightmapped.wesl"), "p2_render/lightmapped.wesl");
+        add_material::<LightmappedMaterial>(app, LIGHTMAPPED_SHADER, "lightmapped.wesl");
     }
 }

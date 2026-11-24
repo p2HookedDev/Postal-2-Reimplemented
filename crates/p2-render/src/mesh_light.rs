@@ -40,6 +40,6 @@ pub struct MeshLightPlugin;
 
 impl Plugin for MeshLightPlugin {
     fn build(&self, app: &mut App) {
-        add_material::<MeshLitMaterial>(app, MESH_LIGHT_SHADER, include_str!("mesh_light.wesl"), "p2_render/mesh_light.wesl");
+        add_material::<MeshLitMaterial>(app, MESH_LIGHT_SHADER, "mesh_light.wesl");
     }
 }

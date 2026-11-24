@@ -37,7 +37,7 @@ use crate::screen_pass::{
     HalfThenFull, PassView, ScreenStep, ViewBindGroups, add_view_pass, follow_view_pass, half_texture, half_viewport, modern_level, shader_bytes,
     tag_pass_views,
 };
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 
 const FIRE_SHADER: Handle<Shader> = uuid_handle!("b3e81c5a-6d27-4f90-8a1e-2c7d94f05b63");
 const MARCHED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -63,7 +63,7 @@ impl Plugin for FireVolumePlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(FIRE_SHADER, Shader::from_wesl(include_str!("fire_volume.wesl"), "p2_render/fire_volume.wesl"))]);
+        add_shaders(app, [(FIRE_SHADER, shader_file("fire_volume.wesl"))]);
         add_view_pass::<FireVolumes>(app);
         app.init_resource::<VolumeFires>().add_systems(PostUpdate, follow_fires.after(tag_pass_views).in_set(FireVolumeSystems));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

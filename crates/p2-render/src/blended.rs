@@ -13,7 +13,7 @@ use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, Speci
 use bevy::shader::{Shader, ShaderRef};
 
 use crate::shader_layers::{Layers, ShaderLayers};
-use crate::shaders::{SkyKey, add_shaders};
+use crate::shaders::{SkyKey, add_shaders, shader_file};
 use crate::terrain_material::{TERRAIN_SHADER, TerrainMaterial};
 
 pub type BlendedMaterial = ExtendedMaterial<StandardMaterial, OpaqueDecals>;
@@ -136,9 +136,9 @@ impl Plugin for BlendedPlugin {
             return;
         }
         crate::shaders::add_libraries(app);
-        let terrain = Shader::from_wesl(include_str!("terrain.wesl"), "p2_render/terrain.wesl");
-        let blended = Shader::from_wesl(include_str!("blended.wesl"), "p2_render/blended.wesl");
-        let layer = Shader::from_wesl(include_str!("terrain_layer.wesl"), "p2_render/terrain_layer.wesl");
+        let terrain = shader_file("terrain.wesl");
+        let blended = shader_file("blended.wesl");
+        let layer = shader_file("terrain_layer.wesl");
         add_shaders(app, [(TERRAIN_SHADER, terrain), (BLENDED_SHADER, blended), (TERRAIN_LAYER_SHADER, layer)]);
         app.add_plugins((
             MaterialPlugin::<TerrainMaterial>::default(),

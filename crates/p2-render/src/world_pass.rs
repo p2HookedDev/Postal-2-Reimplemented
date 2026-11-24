@@ -61,7 +61,7 @@ use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
 use bevy::shader::Shader;
 
 use crate::view::SectionMaterial;
-use crate::shaders::add_shaders;
+use crate::shaders::{add_shaders, shader_file};
 mod buffers;
 mod build;
 mod queue;
@@ -327,7 +327,7 @@ impl Plugin for WorldPassPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        add_shaders(app, [(CULL_SHADER, Shader::from_wesl(include_str!("world_cull.wesl"), "p2_render/world_cull.wesl"))]);
+        add_shaders(app, [(CULL_SHADER, shader_file("world_cull.wesl"))]);
         app.add_plugins((
             ExtractResourcePlugin::<WorldDraws>::default(),
             ExtractResourcePlugin::<WorldSeenZones>::default(),

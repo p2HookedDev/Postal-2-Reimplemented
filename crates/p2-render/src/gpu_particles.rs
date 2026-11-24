@@ -45,7 +45,7 @@ use crate::particle_draw::{ParticleDrawSystems, ParticleDraws, draw_particles};
 use crate::particle_frame::{Blast, DrawnParticles, push_from_person_hits};
 use crate::particle_throw::{LONGEST_DROPLET_LIFE, Spawner};
 use crate::screen_pass::{PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, shader_bytes, tag_pass_views};
-use crate::shaders::{add_libraries, add_shaders};
+use crate::shaders::{add_libraries, add_shaders, shader_file};
 
 const DROPLET_SHADER: Handle<Shader> = uuid_handle!("7c4e2a91-5b38-4d6f-a0e7-3f9b1c82d465");
 /// Matches the textures bound in `gpu_particles.wesl`.
@@ -82,7 +82,7 @@ impl Plugin for GpuParticlesPlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(DROPLET_SHADER, Shader::from_wesl(include_str!("gpu_particles.wesl"), "p2_render/gpu_particles.wesl"))]);
+        add_shaders(app, [(DROPLET_SHADER, shader_file("gpu_particles.wesl"))]);
         add_view_pass::<GpuDroplets>(app);
         app.init_resource::<Spawner>().init_resource::<PieceBirths>().add_systems(
             PostUpdate,

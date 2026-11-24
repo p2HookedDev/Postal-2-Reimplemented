@@ -23,7 +23,7 @@ use bevy::window::{PrimaryWindow, Window};
 use p2_host::display::{BRIGHTNESS, CONTRAST, GAMMA, Settings};
 use crate::components::{CanvasLayer, SceneView};
 use crate::tone::{ToneCamera, ToneFrame, TonePlugin};
-use crate::shaders::add_shaders;
+use crate::shaders::{add_shaders, shader_file};
 
 const GAMMA_SHADER: Handle<Shader> = uuid_handle!("3b8e5a14-6c27-4f0d-9d52-71a4c0e8b6f3");
 const GAMMA_LAYER: usize = 3;
@@ -40,7 +40,7 @@ impl Plugin for GammaPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
-        let shader = Shader::from_wgsl(include_str!("gamma.wgsl"), "p2_render/gamma.wgsl");
+        let shader = shader_file("gamma.wgsl");
         add_shaders(app, [(GAMMA_SHADER, shader)]);
         app.add_plugins((Material2dPlugin::<GammaMaterial>::default(), TonePlugin))
             .add_systems(Startup, setup)

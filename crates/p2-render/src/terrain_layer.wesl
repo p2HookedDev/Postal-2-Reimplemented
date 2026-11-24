@@ -6,7 +6,7 @@ import bevy_pbr::{
         mesh_view_bindings::view,
     },
 };
-import package::p2_render::projector::{cluster_ranges, project, TARGET_TERRAIN};
+import package::p2_render::projector::{cluster_ranges, pool_at, project, wet_color, TARGET_TERRAIN};
 import package::p2_render::layer_bindings::{apply_layers, post_lighting};
 import package::p2_render::material_layers::material_layers;
 import package::p2_render::dynamic_light::dynamic_light;
@@ -58,14 +58,15 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     let layers = material_layers(vertex_output);
     var surface: vec3<f32>;
     let sun = sun_index();
+    let normal = normalize(pbr_input.world_normal);
+    let pool = pool_at(pbr_input, ranges, normal);
     if is_modern(layers.detail.z) && sun_found(sun) {
-        let normal = normalize(pbr_input.world_normal);
         let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
         // A terrain layer has no darken or see-through case.
-        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, false);
+        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, false, pool);
         surface = shade_surface(incoming, layers, pbr_input.material.base_color, bumped, false, false, dynamic_light(pbr_input.world_position, normal, ranges)).rgb;
     } else {
-        surface = retail_lit(pbr_input.material.base_color.rgb, light);
+        surface = retail_lit(wet_color(pbr_input.material.base_color.rgb, pool), light);
     }
     var out: FragmentOutput;
     let layered = apply_layers(vertex_output, vec4(surface, alpha), base_alpha, pbr_input, layers);

@@ -29,7 +29,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp, RenderSystems};
-use bevy::shader::Shader;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use bevy::transform::TransformSystems;
 use bevy::transform::components::Transform;
@@ -47,7 +46,7 @@ use crate::bsp_light::{gpu_light, place};
 use crate::lightmapped::BakedLight;
 use crate::mesh_light::DynamicLit;
 use crate::modern::linear_light;
-use crate::shaders::add_shaders;
+use crate::shaders::{add_shaders, shader_file};
 use crate::terrain_material::TerrainLayers;
 use crate::view::ShownScene;
 use atlas::{ATLAS_SHADER, ATLAS_UNITS, BookRecords, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
@@ -602,8 +601,8 @@ impl Plugin for LampsPlugin {
             return;
         }
         add_shaders(app, [
-            (ATLAS_SHADER, Shader::from_wesl(include_str!("lamp_atlas.wesl"), "p2_render/lamp_atlas.wesl")),
-            (MOVER_CASTER_SHADER, Shader::from_wesl(include_str!("mover_caster.wesl"), "p2_render/mover_caster.wesl")),
+            (ATLAS_SHADER, shader_file("lamp_atlas.wesl")),
+            (MOVER_CASTER_SHADER, shader_file("mover_caster.wesl")),
         ]);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.init_resource::<PlainTilesDrawn>();
