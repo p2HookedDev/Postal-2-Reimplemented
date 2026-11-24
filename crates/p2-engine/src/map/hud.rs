@@ -48,7 +48,6 @@ impl Hud {
 const COVER_HOLD: f32 = 1.0;
 const COVER_FADE: f32 = 0.5;
 
-/// The first map comes in from black: covered while it loads, faded in once its scene runs.
 #[derive(Default)]
 pub(super) struct BootCover {
     shown: f32,
@@ -56,7 +55,6 @@ pub(super) struct BootCover {
 }
 
 impl BootCover {
-    /// The opacity after `seconds` more of the shown map; 0 once the cover is gone.
     pub(super) fn opacity(&mut self, seconds: f32, scene_started: bool) -> f32 {
         self.shown += seconds;
         match &mut self.faded {

@@ -463,9 +463,8 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    /// As retail, never by triangles and chosen by the `StaticMesh` set, whatever the draw type: `KPhysicsProps`
-    /// shapes with simple collision, otherwise one convex hull. A brush is one hull of its corners, so a concave
-    /// brush is filled in.
+    /// As retail, never by triangles and whatever the draw type: `KPhysicsProps` shapes with simple collision,
+    /// otherwise one convex hull. A brush is one hull of its corners, so a concave brush is filled in.
     fn karma_placed_shapes(&mut self, actor: ObjectId, without_props: WithoutProps) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
         let placement = self.drawn_placement(actor);
         let place = |p: &[f32; 3]| placement.in_body(*p);
