@@ -31,5 +31,5 @@ function Notify(UWindowDialogControl C, byte E)
 defaultproperties
 {
 	ModernText="Modern Graphics"
-	ModernHelp="Shadows, lighting, edge smoothing, bloom and other new graphics, with quality presets."
+	ModernHelp="Shadows, lighting, antialiasing, bloom and other new graphics, with quality presets."
 }

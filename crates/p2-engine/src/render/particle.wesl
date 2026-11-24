@@ -55,8 +55,8 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) uv_b: vec2<f32>,
     @location(5) color: vec4<f32>,
-    // The lamps' linear light at the emitter, from its header record; 0 without one.
-    @location(6) lamps: vec3<f32>,
+    // The light at the emitter from its header record (display light, its zone's ambient and lamps); below 0 unlit.
+    @location(6) light: vec3<f32>,
     // A modern puddle: the place across its quad (-1 to 1 each way) and its edge seed; all 0 for any other sprite.
     @location(7) puddle: vec3<f32>,
 }
@@ -79,6 +79,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.uv = vertex.uv;
     out.uv_b = vertex.uv_b;
     out.color = vertex.color;
+    out.light = vec3(-1.0);
     return out;
 }
 
@@ -108,7 +109,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.uv = vec2(select(sprite.uv.x, sprite.uv.z, along_right), select(sprite.uv.y, sprite.uv.w, along_up));
     out.uv_b = vec2(select(sprite.next_uv.x, sprite.next_uv.z, along_right), select(sprite.next_uv.y, sprite.next_uv.w, along_up));
     out.color = unpack4x8unorm(sprite.color);
-    out.lamps = sprites[first].center;
+    out.light = sprites[first].center;
     if sprite.unused != 0u {
         out.puddle = vec3(select(-1.0, 1.0, along_right), select(-1.0, 1.0, along_up), f32(sprite.unused));
     }
@@ -158,11 +159,16 @@ fn scene_fog_color() -> vec3<f32> {
 // A puff of smoke faces the sun with about half of itself.
 const PUFF_SUN: f32 = 0.5;
 const LIGHT_LIMIT: f32 = 2.0;
+// Matches `modern.rs` `sky_view_mark`.
+const SKY_VIEW_MARK: f32 = -0.5;
 
-// In display light, as the modern surfaces add their diffuse light: the zone's ambient, the lamps near the emitter
-// (unshadowed) and the sun where it reaches.
-fn particle_light(position: vec3<f32>, frag_coord: vec4<f32>, lamps: vec3<f32>) -> vec3<f32> {
-    var light = lights.ambient_color.rgb + to_display(lamps) * PUFF_SUN;
+// In display light, as the modern surfaces add their diffuse light: the emitter's light, which does not depend on the
+// view, and the sun where it reaches. The sky view and an emitter marked unlit draw it as retail does, unlit.
+fn particle_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>) -> vec3<f32> {
+    if emitter.x < 0.0 || lights.ambient_color.a < SKY_VIEW_MARK {
+        return vec3(1.0);
+    }
+    var light = emitter;
     let sun = sun_index();
     if sun < lights.n_directional_lights {
         let to_sun = lights.directional_lights[sun].direction_to_light;
@@ -227,7 +233,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     if params.lit != 0u {
-        color *= particle_light(in.world_position.xyz, in.position, in.lamps);
+        color *= particle_light(in.world_position.xyz, in.position, in.light);
     }
     // D3D fog mixes the colour towards a per-style fog colour: the scene's for regular and alpha blend,
     // grey 127 for modulated (neutral under 2x), black for the others (they add or darken nothing).

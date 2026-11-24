@@ -247,7 +247,7 @@ impl PlayWorld {
             view_key: Default::default(),
             hud_kept: Arc::default(),
             hud_view: None,
-            hud_canvas: [0.0; 2],
+            hud_canvas: HudCanvas::default(),
             hud_age: 0.0,
             hud_looks: FxHashMap::default(),
             unmeshed: Default::default(),
@@ -462,6 +462,13 @@ impl PlayWorld {
 
     pub fn view_location(&self) -> Option<Vector> {
         self.frame.view.as_ref().map(|view| view.location)
+    }
+
+    /// How far the eye stands from the actor the view follows: a first-person eye above its pawn, a cutscene camera
+    /// anywhere.
+    pub fn eye_to_view_target(&self) -> Option<f32> {
+        let view = self.frame.view.as_ref()?;
+        Some((self.actor(view.actor?)?.location - view.location).size())
     }
 
     pub fn origin(&self) -> Vec3 {

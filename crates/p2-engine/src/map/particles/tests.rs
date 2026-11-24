@@ -410,7 +410,7 @@ fn the_particle_step_never_draws_or_steps_a_flash_on_a_weapon_where_the_game_kee
         lamp_light: Vec3::ZERO,
         lamp_at: Vec3::ZERO,
         lamp_age: u8::MAX,
-        liquid: Default::default(),
+        puddle_seed: None,
     };
     app.insert_resource(Particles { actors: vec![emitter], ..Particles::default() });
     app.add_systems(Update, present_particles);
@@ -425,7 +425,7 @@ fn the_particle_step_never_draws_or_steps_a_flash_on_a_weapon_where_the_game_kee
     assert_eq!(stepped, None);
     let muzzle = Vector::from([5.0, 0.0, 98.0]);
     let on_bone = crate::animation::BoneFrame { location: muzzle, axes: [[1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into(), [0.0, 0.0, 1.0].into()] };
-    app.world_mut().resource_mut::<Play>().world_mut().expect("a world").shown.places.put_on_bone(flash, weapon, on_bone);
+    app.world_mut().resource_mut::<Play>().world_mut().expect("a world").shown.places.put_on_bone(flash, weapon, on_bone, on_bone);
     for _ in 0..3 {
         let (hidden, stepped, at) = frame(&mut app);
         assert!(!hidden);

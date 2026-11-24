@@ -114,7 +114,6 @@ pub const QUERIES: &[&str] = &[
     MODERN_SOFT_PARTICLES,
     MODERN_DECAL_AGING,
     MODERN_WOUNDS,
-    MODERN_MATERIALS,
     MODERN_SHARP_HUD,
     MODERN_WIDE_VIEW,
     MODERN_HUD_SAFE_AREA,
@@ -182,7 +181,6 @@ pub const MODERN_PARTICLE_LIGHT: &str = "ini:Engine.Engine.RenderDevice ModernPa
 pub const MODERN_SOFT_PARTICLES: &str = "ini:Engine.Engine.RenderDevice ModernSoftParticles";
 pub const MODERN_DECAL_AGING: &str = "ini:Engine.Engine.RenderDevice ModernDecalAging";
 pub const MODERN_WOUNDS: &str = "ini:Engine.Engine.RenderDevice ModernWounds";
-pub const MODERN_MATERIALS: &str = "ini:Engine.Engine.RenderDevice ModernMaterials";
 pub const MODERN_SHARP_HUD: &str = "ini:Engine.Engine.RenderDevice ModernSharpHud";
 pub const MODERN_WIDE_VIEW: &str = "ini:Engine.Engine.RenderDevice ModernWideView";
 pub const MODERN_HUD_SAFE_AREA: &str = "ini:Engine.Engine.RenderDevice ModernHudSafeArea";
@@ -203,7 +201,7 @@ pub const MODERN_VOLUMETRIC_FOG: &str = "ini:Engine.Engine.RenderDevice ModernVo
 pub const NEUTRAL_LEVEL: u8 = 5;
 
 /// Each level key with its value when unset (the High preset) and its top value.
-const LEVELS: [(&str, u8, u8); 37] = [
+const LEVELS: [(&str, u8, u8); 36] = [
     (MODERN_SHADOWS, 3, 4),
     (MODERN_SHADOW_DISTANCE, 4, 5),
     (MODERN_LAMP_SHADOWS, 3, 4),
@@ -220,27 +218,28 @@ const LEVELS: [(&str, u8, u8); 37] = [
     (MODERN_CONTRAST, NEUTRAL_LEVEL, 10),
     (MODERN_EXPOSURE, NEUTRAL_LEVEL, 10),
     (MODERN_REFLECTIONS, 2, 3),
-    (MODERN_REFLECTION_STRENGTH, 5, 10),
+    (MODERN_REFLECTION_STRENGTH, 10, 10),
     (MODERN_PARTICLE_LIGHT, 1, 1),
     (MODERN_SOFT_PARTICLES, 5, 10),
     (MODERN_DECAL_AGING, 1, 1),
     (MODERN_WOUNDS, 1, 1),
-    (MODERN_MATERIALS, 5, 10),
     (MODERN_SHARP_HUD, 1, 2),
     (MODERN_WIDE_VIEW, 1, 1),
     (MODERN_HUD_SAFE_AREA, 1, 1),
     (MODERN_PANINI, 0, 10),
-    (MODERN_FADE_IN, 5, 10),
+    (MODERN_FADE_IN, 4, 10),
     (MODERN_FOOT_PLACEMENT, 1, 1),
     (MODERN_HIT_REACTIONS, 5, 10),
     (MODERN_LAMP_SIZE, 5, 10),
     (MODERN_CUTSCENE_DOF, 4, 10),
     (MODERN_CUTSCENE_MOTION_BLUR, 3, 10),
-    (MODERN_TEMPORAL_AA, 0, 1),
-    (MODERN_BOUNCE_LIGHT, 3, 10),
+    // Held at 0 until each is sound: the temporal resolve ghosts and flickers, the fire volume and the lamp fog were
+    // rejected in play, bounce light brightens what is lit and not what is dark. A saved value above 0 reads as 0.
+    (MODERN_TEMPORAL_AA, 0, 0),
+    (MODERN_BOUNCE_LIGHT, 0, 0),
     (MODERN_LIQUID_FLOW, 1, 1),
-    (MODERN_FIRE_VOLUMES, 1, 2),
-    (MODERN_VOLUMETRIC_FOG, 3, 10),
+    (MODERN_FIRE_VOLUMES, 0, 0),
+    (MODERN_VOLUMETRIC_FOG, 0, 0),
 ];
 
 const ANTI_ALIASING_MSAA_2X: u8 = 3;
@@ -285,13 +284,14 @@ impl Settings {
         self.number(DISPLAY_NUMBER, 0.0) as usize
     }
 
-    /// Under modern graphics the anti-aliasing level picks the samples, and ambient occlusion needs them off.
+    /// Under modern graphics the anti-aliasing level picks the samples; ambient occlusion and temporal anti-aliasing
+    /// need them off.
     pub fn msaa_samples(&self) -> u32 {
         if self.modern_graphics() {
-            return match (self.modern_level(MODERN_AO), self.modern_level(MODERN_ANTI_ALIASING)) {
-                (1.., _) => 1,
-                (_, ANTI_ALIASING_MSAA_2X) => 2,
-                (_, ANTI_ALIASING_MSAA_4X) => 4,
+            let single = self.modern_level(MODERN_AO) > 0 || self.modern_level(MODERN_TEMPORAL_AA) > 0;
+            return match self.modern_level(MODERN_ANTI_ALIASING) {
+                ANTI_ALIASING_MSAA_2X if !single => 2,
+                ANTI_ALIASING_MSAA_4X if !single => 4,
                 _ => 1,
             };
         }
@@ -314,6 +314,12 @@ impl Settings {
         self.modern_graphics() && (text.trim().is_empty() || ini_truthy(text))
     }
 
+    /// The material classes follow the specular row: one row for how surfaces shine. Reflections need a level this
+    /// high before a tile or a metal is smooth enough to mirror.
+    pub fn material_level(&self) -> u8 {
+        if self.modern_level(MODERN_SPECULAR) > 0 { 8 } else { 0 }
+    }
+
     pub fn modern_level(&self, query: &str) -> u8 {
         let Some(&(_, high, top)) = LEVELS.iter().find(|(key, ..)| *key == query) else { return 0 };
         if !self.modern_graphics() {
@@ -323,7 +329,7 @@ impl Settings {
         match text.parse::<u8>() {
             _ if text.is_empty() => high,
             Ok(level) => level.min(top),
-            Err(_) if ini_truthy(text) => high.max(1),
+            Err(_) if ini_truthy(text) => high.max(1).min(top),
             Err(_) => 0,
         }
     }
@@ -446,11 +452,11 @@ mod tests {
     #[test]
     fn modern_levels_read_numbers_with_the_high_preset_as_default() {
         let high = LEVELS.map(|(key, ..)| with("True", key, "").modern_level(key));
-        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 5, 1, 5, 1, 1, 5, 1, 1, 1, 0, 5, 1, 5, 5, 4, 3, 0, 3, 1, 1, 3]);
+        assert_eq!(high, [3, 4, 3, 1, 2, 2, 2, 5, 4, 5, 2, 0, 5, 5, 5, 2, 10, 1, 5, 1, 1, 1, 1, 1, 0, 4, 1, 5, 5, 4, 3, 0, 0, 1, 0, 0]);
         let top = LEVELS.map(|(key, ..)| with("True", key, "99").modern_level(key));
-        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 10, 1, 1, 10, 2, 1, 1, 10, 10, 1, 10, 10, 10, 10, 1, 10, 1, 2, 10]);
+        assert_eq!(top, [4, 5, 4, 2, 3, 2, 4, 10, 10, 10, 10, 10, 10, 10, 10, 3, 10, 1, 10, 1, 1, 2, 1, 1, 10, 10, 1, 10, 10, 10, 10, 0, 0, 1, 0, 0]);
         assert!(LEVELS.iter().all(|&(key, ..)| with("False", key, "1").modern_level(key) == 0));
-        assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 1);
+        assert_eq!(with("True", MODERN_TEMPORAL_AA, "True").modern_level(MODERN_TEMPORAL_AA), 0);
         assert_eq!(with("True", MODERN_WOUNDS, "False").modern_level(MODERN_WOUNDS), 0);
         assert_eq!(with("True", MODERN_BLOOM, "7").modern_level(MODERN_BLOOM), 7);
         assert_eq!(with("True", MODERN_BLOOM, "0").modern_level(MODERN_BLOOM), 0);

@@ -1,4 +1,4 @@
-import package::p2_engine::modern_base::{DIELECTRIC_F0, LUMINANCE, LampLight, ggx, modern_bits, to_eye};
+import package::p2_engine::modern_base::{LUMINANCE, LampLight, fresnel_five, ggx, modern_bits, to_eye};
 import package::p2_engine::sun_shadow::{SHADOW_BIAS, SHADOW_NORMAL_OFFSET, SOFT_EDGE_UNITS, SUN_FACING_FADE};
 import package::p2_engine::probes::read_probes;
 import bevy_pbr::render::{
@@ -14,7 +14,7 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
 
 fn no_lamps() -> LampLight {
-    return LampLight(vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0);
+    return LampLight(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0);
 }
 
 // No retail light holds a shadow depth bias this large: a Bevy light that does is one of ours and takes no part in the
@@ -36,6 +36,8 @@ const LAMP_SOURCE_SHARE: f32 = 0.08;
 const LAMP_SIZE_SHIFT: u32 = 7u;
 const LAMP_SIZE_TOP: f32 = 10.0;
 const BOOK_SIZE_TEXEL: u32 = 6u;
+// Set above the tile in a lamp's colour texel when its size texel holds a size of its own. Matches `lamps.rs`.
+const BOOK_SIZED: u32 = 1048576u;
 // The book of lamps rides in the material's anisotropy texture, four floats a texel: a header (the grid's corner and
 // cell side; its sides and where the cells start), seven texels a lamp, a texel a cell (where its list starts and how
 // many lamps it holds) and the lists of lamps whose light gets into the cell, four a texel. Matches `lamps/cells.rs`.
@@ -414,7 +416,7 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, frag_coo
             continue;
         }
         var source = lamp_radius * LAMP_SOURCE_SHARE;
-        if sized > 0.0 {
+        if sized > 0.0 && (u32(look.w) & BOOK_SIZED) != 0u {
             source = mix(source, book_texel(in, record + BOOK_SIZE_TEXEL).x, sized);
         }
         let a = saturate(rough * rough + source / (2.0 * distance_to));
@@ -487,6 +489,9 @@ fn add_lamp(sum: ptr<function, LampLight>, shown: vec3<f32>, color: vec3<f32>, x
     if gloss {
         let window = saturate(1.0 - x2 * x2);
         let attenuation = LAMP_ENERGY * LAMP_CORE_SQUARED / max(x2, LAMP_CORE_SQUARED) * window * window * cone;
-        (*sum).specular += color * (attenuation * shadow) * ggx(normal, to_lamp, eye, facing, a, vec3(DIELECTRIC_F0));
+        let highlight = color * (attenuation * shadow) * ggx(normal, to_lamp, eye, facing, a, vec3(1.0));
+        let halfway = to_lamp + eye;
+        (*sum).specular += highlight;
+        (*sum).specular_edge += highlight * fresnel_five(saturate(dot(eye, halfway * inverseSqrt(max(dot(halfway, halfway), 1e-12)))));
     }
 }

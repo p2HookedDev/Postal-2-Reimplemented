@@ -8,13 +8,15 @@ use p2_math::Vector;
 use p2_particles::{Beam, CollisionHit, DirectionUsage, EmitterKind, MeshParticle, Owner, StripPoint};
 
 use super::*;
-use super::fluids::{camera_view, empty_quads, fill_beams, fill_flowing_strip, fill_strip};
+use super::fluids::{camera_view, empty_quads, fill_beams, fill_smooth_strip, fill_strip};
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
 use crate::mesh_view::alpha_key;
 use crate::emitter_changes::apply_command;
-use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS};
+use crate::render::particle_material::{PARTICLE_SPRITES, ParticleMaterial, RECORD_WORDS, takes_light};
 use crate::display::{MODERN_LIQUID_FLOW, MODERN_PARTICLE_LIGHT, Settings};
 use crate::render::lamps::{Lamp, Placed, lamp_sum};
+use crate::level_collision::StaticCollision;
+use crate::shown_scene::ShownScene;
 mod mesh_particles;
 mod sprites;
 mod bounds;
@@ -22,7 +24,7 @@ mod fire;
 use mesh_particles::{MeshPool, mesh_box, place_mesh_particles};
 pub(crate) use mesh_particles::PoolSlot;
 use sprites::{
-    MIN_QUADS, SpriteGrid, fill_draw_buffers, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
+    MIN_QUADS, SpriteGrid, emitter_light, fill_draw_buffers, grid_capacity, grid_place, sprite_box, sprite_grid, standard_alpha,
     upload_sprites, write_sprite_records,
 };
 use bounds::{apply_bounds, particles_box};
@@ -56,15 +58,17 @@ pub(super) struct ParticleActor {
     peak: usize,
     frames: ParticleFrames,
     turn: Turn,
-    /// The lamps' linear light at the emitter, for lit sprites under modern graphics; where and how many frames ago.
+    /// The `emitter_light` at the emitter, for lit sprites under modern graphics; where and how many frames ago.
     lamp_light: Vec3,
     lamp_at: Vec3,
     lamp_age: u8,
-    liquid: liquid_flow::Liquid,
+    puddle_seed: Option<u32>,
 }
 
 const LAMP_RECHECK_UNITS: f32 = 16.0;
 const LAMP_RECHECK_FRAMES: u8 = 30;
+/// A lamp's fitting often holds it inside its own collision, so the wall test stops this short of it.
+const LAMP_CLEARANCE: f32 = 16.0;
 
 /// What one frame's update hands from its part on the main thread to the part worked on several threads and back.
 #[derive(Default)]
@@ -204,6 +208,7 @@ impl Session {
                     // bounds. Its `Aabb` (the actor's, set with the mesh each frame) is for GPU occlusion culling.
                     let model = (Mesh3d(mesh.clone()), Transform::default(), Visibility::Hidden, NoFrustumCulling, ChildOf(parent));
                     let mut material = ParticleMaterial::new(image, &p);
+                    material.takes_light = takes_light(p.draw_style, &emitter_name);
                     if fogless {
                         material.params.fogged = 0;
                     }
@@ -213,7 +218,7 @@ impl Session {
                     EmitterMesh { entity, mesh, shown: false, strip_key: None, written: false }
                 });
                 t.times.add("spawned: emitters: meshes and entities", started);
-                let fire = fire::is_fire(&name, &emitter_name);
+                let fire = fire::is_fire(&emitter_name, p.draw_style);
                 draws.push(EmitterDraw { mesh: emitter_mesh, grid, disabled: p.disabled, pool, pending_model, name: emitter_name, fire, volume: false });
                 props.push(p);
             }
@@ -223,7 +228,7 @@ impl Session {
             t.times.add("spawned: emitters: log", started);
             let started = std::time::Instant::now();
             let seed = t.particles.actors.len() as u32 + 1;
-            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), lamp_light: Vec3::ZERO, lamp_at: Vec3::ZERO, lamp_age: u8::MAX, liquid: liquid_flow::Liquid::new(emitter.puddle.then_some(seed)) });
+            t.particles.actors.push(ParticleActor { actor, simulation: Emitter::new(emitter.settings, props, seed), parent, draws, objects, bounds: None, drawn_bounds: None, buffers: DrawBuffers::default(), zone_box: None, overlay: None, name, zone_seen: true, drawn: true, born: std::time::Instant::now(), peak: 0, frames: ParticleFrames::default(), turn: Turn::default(), lamp_light: Vec3::ZERO, lamp_at: Vec3::ZERO, lamp_age: u8::MAX, puddle_seed: emitter.puddle.then(|| liquid_flow::puddle_seed(seed)) });
             t.times.add("spawned: emitters: simulation", started);
             let started = std::time::Instant::now();
             if let Some(world) = t.play.world_mut() {
@@ -236,13 +241,25 @@ impl Session {
 }
 
 impl Particles {
-    /// One sum a drawn emitter, at last frame's place, again when it moves or on a slow rota.
-    fn light_emitters(&mut self, lamps: &[(Vec3, &Placed)], origin: Vec3) {
+    /// One sum a drawn emitter, at its place this frame, again when it moves or on a slow rota. A lamp a wall hides adds
+    /// nothing.
+    fn light_emitters(&mut self, world: &PlayWorld, lamps: &[(Vec3, &Placed)], level: Option<&StaticCollision>, zone_ambients: &[[f32; 3]]) {
+        let origin = world.origin();
         for p in self.actors.iter_mut().filter(|p| p.drawn) {
-            let here = p.turn.here + origin;
             p.lamp_age = p.lamp_age.saturating_add(1);
+            let Some((location, _)) = world.place(p.actor) else { continue };
+            let here = Vec3::from(to_bevy(location)) + origin;
             if p.lamp_age >= LAMP_RECHECK_FRAMES || here.distance_squared(p.lamp_at) > LAMP_RECHECK_UNITS * LAMP_RECHECK_UNITS {
-                (p.lamp_light, p.lamp_at, p.lamp_age) = (lamp_sum(lamps, here), here, 0);
+                let reaches = |at: Vec3| {
+                    level.is_none_or(|level| {
+                        let to_lamp = Vector::from(to_bevy(at - origin)) - location;
+                        let distance = to_lamp.size();
+                        distance <= LAMP_CLEARANCE || level.first_hit(location, location + to_lamp * (1.0 - LAMP_CLEARANCE / distance)).is_none()
+                    })
+                };
+                let zone = level.map_or(0, |level| p2_collision::point_zone(&level.model, location));
+                let ambient = Vec3::from(zone_ambients.get(usize::from(zone)).copied().unwrap_or_default());
+                (p.lamp_light, p.lamp_at, p.lamp_age) = (emitter_light(ambient, lamp_sum(lamps, here, reaches)), here, 0);
             }
         }
     }
@@ -370,14 +387,16 @@ pub(super) struct ParticleParams<'w, 's> {
     times: ResMut<'w, FrameTimes>,
     settings: Option<Res<'w, Settings>>,
     lamps: Query<'w, 's, (&'static Transform, &'static Placed), (With<Lamp>, Without<PoolSlot>)>,
+    shown: Option<Res<'w, ShownScene>>,
 }
 
 pub(super) fn present_particles(mut t: ParticleParams) {
     let started = std::time::Instant::now();
     let lit = t.settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_PARTICLE_LIGHT) > 0);
-    if lit && let Some(origin) = t.play.world().map(PlayWorld::origin) {
+    if lit && let Some(world) = t.play.world() {
         let lamps: Vec<(Vec3, &Placed)> = t.lamps.iter().map(|(at, placed)| (at.translation, placed)).collect();
-        t.particles.light_emitters(&lamps, origin);
+        let zone_ambients = t.shown.as_deref().and_then(|shown| shown.lighting.as_deref()).map_or(&[][..], |lighting| &lighting.zone_ambients[..]);
+        t.particles.light_emitters(world, &lamps, t.view.collision.0.as_deref(), zone_ambients);
     }
     t.particles.liquid_flow = t.settings.as_deref().is_some_and(|settings| settings.modern_level(MODERN_LIQUID_FLOW) > 0);
     update_particles(&mut ParticleTargets {
@@ -401,7 +420,6 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
     let Some(camera) = t.view.cameras.iter().next() else { return };
     let view = camera_view(camera, world.origin());
     let eye = Vec3::from_array(view.location.into());
-    let game_step = world.game_step();
     let collision = t.view.collision.0.clone();
     let leaves = collision.as_deref().map(|world| &world.model).filter(|model| !model.leaves.is_empty());
     let (mut removed, mut finished) = (Vec::new(), Vec::new());
@@ -491,8 +509,7 @@ pub(super) fn update_particles(t: &mut ParticleTargets) {
     let flow = particles.liquid_flow;
     for p in &mut particles.actors {
         let Turn { here, seen, seen_box, .. } = p.turn;
-        let mut buffers = std::mem::take(&mut p.buffers);
-        p.liquid.advance(flow, game_step, &mut buffers.particles, |start, end| collision.as_deref().and_then(|world| particle_collision(world, start, end)));
+        let buffers = std::mem::take(&mut p.buffers);
         let mesh_reach = (buffers.meshes.iter())
             .flat_map(|(particles, reach)| particles.iter().map(move |m| mesh_box(m, *reach)))
             .reduce(|(lo, hi), (min, max)| (lo.min(min), hi.max(max)));
@@ -553,7 +570,6 @@ fn fill_emitter_meshes(
 ) -> (Option<(Vec3, Vec3)>, bool) {
     let mut newly_shown = false;
     let flow = writes.liquid_flow;
-    let seconds = p.liquid.seconds;
     for (index, ((draw, (strip, sprites)), beams)) in p.draws.iter_mut().zip(particles).zip(beams).enumerate() {
         let EmitterDraw { mesh: Some(EmitterMesh { entity, mesh, shown, strip_key: drawn_key, written }), grid, volume, .. } = draw else { continue };
         let Some(props) = p.simulation.emitters().get(index).map(|e| e.props()) else { continue };
@@ -581,15 +597,14 @@ fn fill_emitter_meshes(
             }
         } else {
             let facing = (usage != DirectionUsage::None).then(|| normal.normalize_or_zero());
-            // A scrolling stream is written every frame; the switch is in the key so a still trail is redrawn when it moves.
-            let scrolls = flow && facing.is_none();
-            let key = (kind == EmitterKind::Strip && !scrolls).then(|| strip_key(strip, facing.unwrap_or(eye)) ^ u64::from(flow));
+            // The switch is in the key so a still trail is redrawn when it moves.
+            let key = (kind == EmitterKind::Strip).then(|| strip_key(strip, facing.unwrap_or(eye)) ^ u64::from(flow));
             if (key.is_none() || key != *drawn_key)
                 && let Some(mut mesh) = writes.meshes.get_mut(&*mesh)
             {
                 crate::diagnostics::mesh_written(if kind == EmitterKind::Strip { crate::diagnostics::MeshWrite::Strip } else { crate::diagnostics::MeshWrite::Beam });
                 if kind == EmitterKind::Strip && flow {
-                    fill_flowing_strip(&mut mesh, strip, facing, eye, seconds);
+                    fill_smooth_strip(&mut mesh, strip, facing, eye);
                 } else if kind == EmitterKind::Strip {
                     fill_strip(&mut mesh, strip, facing, eye);
                 } else {

@@ -425,7 +425,7 @@ pub struct ProjectorActor {
     pub targets: ProjectTargets,
     pub tagged: bool,
     pub follows: Option<ObjectId>,
-    /// `LifeSpan` when the frame was sent: 0 = no life span.
+    /// `LifeSpan` when the frame was sent, else the time a splat keeps its projection (its `UseLife`): 0 = neither.
     pub life: f32,
 }
 
@@ -455,7 +455,10 @@ pub fn projector_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Proje
         },
         max_trace: int(Prop::MaxTraceDistance, 1000) as f32,
         fov: int(Prop::FOV, 0),
-        life: vm.store.float_of(actor, Prop::LifeSpan),
+        life: match vm.store.float_of(actor, Prop::LifeSpan) {
+            life if life > 0.0 => life,
+            _ => vm.store.float_of(actor, "UseLife"),
+        },
         blending: match vm.store.get(actor, Prop::FrameBufferBlendingOp) {
             Some(Value::Byte(op)) => ProjectorBlending::from_byte(op),
             _ => ProjectorBlending::Modulate,

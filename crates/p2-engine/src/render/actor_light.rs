@@ -42,6 +42,9 @@ pub struct LightEnvironment {
     pub(crate) zone_ambients: Vec<[f32; 3]>,
     pub(crate) level_brightness: f32,
     pub(crate) sun: Option<(MeshLight, HardwareLight)>,
+    /// The still suns that shine together with `sun`: every one of the map, or its zone's after
+    /// [`Self::suns_of_one_zone`].
+    pub(crate) suns: Vec<MeshLight>,
     pub(crate) terrain: Vec<crate::render::terrain_light::TerrainSector>,
 }
 
@@ -102,7 +105,19 @@ impl LightEnvironment {
         // Highest key first: of fully equal suns the picker keeps the last, so the lowest key wins.
         ordered.sort_unstable_by_key(|&(&key, _)| std::cmp::Reverse(key));
         let sun = brightest_sun(ordered.into_iter().map(|(_, light)| light), level_brightness);
-        Self { lights, zone_ambients, level_brightness, sun, terrain: Vec::new() }
+        let suns = lights.values().filter(|light| light.effect == LE_SUNLIGHT && !light.dynamic).copied().collect();
+        Self { lights, zone_ambients, level_brightness, sun, suns, terrain: Vec::new() }
+    }
+
+    /// A map holds a copy of its suns in each outdoor zone, and a copy lights its own zone only (unverified in the
+    /// game's code; the maps repeat one set of suns many times over). Counting every copy made such a map many times
+    /// too bright, so only the picked sun's zone counts.
+    pub fn suns_of_one_zone(mut self, zone_of: impl Fn(Vector) -> u8) -> Self {
+        if let Some((sun, _)) = self.sun {
+            let zone = zone_of(sun.location);
+            self.suns.retain(|light| light.special_lit == sun.special_lit && zone_of(light.location) == zone);
+        }
+        self
     }
 
     pub fn with_terrain(self, terrain: Vec<crate::render::terrain_light::TerrainSector>) -> Self {

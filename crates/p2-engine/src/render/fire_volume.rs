@@ -1,5 +1,5 @@
-//! Modern graphics: fire as a volume. Each fire emitter the scripts keep burning near the eye is drawn as flame and
-//! smoke marched through rising noise in a box around its live sprites, and those sprites are hidden. Where a fire is,
+//! Modern graphics: fire as a volume. Each flame emitter the scripts keep burning near the eye is drawn as flame
+//! marched through rising noise in a box around its live sprites, and those sprites are hidden. Where a fire is,
 //! and when it starts, spreads and dies, stays with the scripts' emitters; nothing here changes them.
 
 use bevy::app::{App, Plugin, PostUpdate};
@@ -48,7 +48,7 @@ const MAX_VOLUMES: usize = 8;
 const REACH: f32 = 2048.0;
 const VOLUME_WORDS: usize = 12;
 
-/// Lays the marched volumes, colour premultiplied, over the frame and keeps the frame's alpha, the sun rays' mask.
+/// Adds the marched flame light, whose alpha is 0, to the frame and keeps the frame's alpha, the sun rays' mask.
 const OVER: BlendState = BlendState {
     color: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add },
     alpha: BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
@@ -238,6 +238,9 @@ fn prepare_fire_views(
     views: Query<(Entity, &ExtractedView, &ExtractedCamera, &FireVolumes)>,
 ) {
     for (entity, view, camera, fires) in &views {
+        // Asked for before the first fire is near: its sprites are hidden from the frame its volume is picked.
+        let march = pipelines.specialize(&pipeline_cache, &pipeline, None);
+        let composite = pipelines.specialize(&pipeline_cache, &pipeline, Some(view.target_format));
         if fires.volumes.is_empty() {
             continue;
         }
@@ -258,8 +261,6 @@ fn prepare_fire_views(
             },
         );
         let fires = render_device.create_buffer_with_data(&BufferInitDescriptor { label: Some("fire volumes"), contents: &fires_bytes(fires), usage: BufferUsages::UNIFORM });
-        let march = pipelines.specialize(&pipeline_cache, &pipeline, None);
-        let composite = pipelines.specialize(&pipeline_cache, &pipeline, Some(view.target_format));
         commands.entity(entity).insert(FireView { march, composite, marched, fires });
     }
 }

@@ -7,9 +7,8 @@ struct Reflections {
     clip_from_view: mat4x4<f32>,
     view_from_clip: mat4x4<f32>,
     view_from_world: mat4x4<f32>,
-    // x strength, y stride in pixels per step, z steps.
+    // x strength, y stride in pixels per step, z steps, w the materials level.
     look: vec4<f32>,
-    fallback: vec4<f32>,
 }
 
 @group(0) @binding(0) var scene: texture_2d<f32>;
@@ -32,8 +31,21 @@ struct FullscreenOutput {
     @location(0) uv: vec2<f32>,
 }
 
-// x roughness, y reflectance, z 1 on a metal. Matches `material_class.rs`.
+// The default class's roughness and reflectance, and the materials level that reaches a class. Match `modern.wesl` and `modern_base.wesl`.
+const DEFAULT_ROUGHNESS: f32 = 0.85;
+const DEFAULT_REFLECTANCE: f32 = 0.04;
+const MATERIALS_TOP: f32 = 10.0;
+
+// x roughness, y reflectance, z how far a metal, moved from the default surface by the materials level as the lit
+// shader moves it.
 fn surface_of_code(code: u32) -> vec3<f32> {
+    let scale = min(reflections.look.w / MATERIALS_TOP, 1.0);
+    let picked = class_surface(code);
+    return vec3(mix(DEFAULT_ROUGHNESS, picked.x, scale), mix(DEFAULT_REFLECTANCE, picked.y, scale), picked.z * scale);
+}
+
+// x roughness, y reflectance, z 1 on a metal. Matches `material_class.rs`.
+fn class_surface(code: u32) -> vec3<f32> {
     switch code {
         case 0u: {
             return vec3(0.15, 0.05, 0.0);
@@ -142,16 +154,14 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let origin = view_at(reflections.view_from_clip, in.uv, z);
     let normal = normalize((reflections.view_from_world * vec4(packed.xyz * 2.0 - 1.0, 0.0)).xyz);
     let eye = normalize(-origin);
-    var hit = vec3(0.0);
-    if reflections.look.z > 0.0 {
-        hit = march(origin, reflect(-eye, normal), size, in.position.xy);
+    // A ray that meets nothing on screen shows nothing: no stand-in light is put in its place.
+    let hit = march(origin, reflect(-eye, normal), size, in.position.xy);
+    if hit.z <= 0.0 {
+        return here;
     }
-    // A ray that fades out at the screen's edge or meets nothing shows the zone's ambient in its place.
-    var found = reflections.fallback.rgb;
-    if hit.z > 0.0 {
-        found = mix(found, blurred(hit.xy, surface.x, size), hit.z);
-    }
+    let found = blurred(hit.xy, surface.x, size) * hit.z;
     let fresnel = surface.y + (1.0 - surface.y) * pow(1.0 - saturate(dot(normal, eye)), 5.0);
-    let tint = select(vec3(1.0), here.rgb / max(max(here.r, max(here.g, here.b)), 1e-3), surface.z > 0.5);
-    return vec4(here.rgb + found * tint * (fresnel * glossy * reflections.look.x), here.a);
+    let tint = mix(vec3(1.0), here.rgb / max(max(here.r, max(here.g, here.b)), 1e-3), surface.z);
+    // The lit pass already gave the surface its light: a reflection shows only where it is brighter, and adds none.
+    return vec4(max(here.rgb, found * tint * (fresnel * glossy * reflections.look.x)), here.a);
 }

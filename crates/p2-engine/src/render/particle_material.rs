@@ -60,9 +60,18 @@ fn modern_params(soft_level: u8, light_level: u8, soft_edge: bool, takes_light: 
     (soft, u32::from(takes_light && light_level > 0))
 }
 
+const PUFF_WORDS: [&str; 4] = ["smoke", "dust", "steam", "blood"];
+
 /// Additive and brighten sprites (fire, sparks, flashes) and the multiplying ones are self-lit; covering ones take light.
-fn takes_light(style: DrawStyle) -> bool {
-    matches!(style, DrawStyle::Regular | DrawStyle::AlphaBlend | DrawStyle::AlphaModulate)
+/// The game also draws its hit puffs, dust, steam and blood spray with brighten: those are told from flames by the
+/// texture's name and take light.
+pub(crate) fn takes_light(style: DrawStyle, texture: &str) -> bool {
+    let texture = texture.to_ascii_lowercase();
+    match style {
+        DrawStyle::Regular | DrawStyle::AlphaBlend | DrawStyle::AlphaModulate => true,
+        DrawStyle::Brighten => PUFF_WORDS.iter().any(|word| texture.contains(word)),
+        _ => false,
+    }
 }
 
 fn follow_modern_levels(
@@ -129,12 +138,19 @@ pub struct SharedParticleKey {
     params: [u32; 5],
     no_depth: bool,
     soft_edge: bool,
+    takes_light: bool,
 }
 
 impl ParticleMaterial {
     pub fn shared_key(&self) -> SharedParticleKey {
         let ParticleParams { style, alpha_ref, alpha_test, blend_frames, fogged, .. } = self.params;
-        SharedParticleKey { texture: self.texture.id(), params: [style, alpha_ref.to_bits(), alpha_test, blend_frames, fogged], no_depth: self.no_depth, soft_edge: self.soft_edge }
+        SharedParticleKey {
+            texture: self.texture.id(),
+            params: [style, alpha_ref.to_bits(), alpha_test, blend_frames, fogged],
+            no_depth: self.no_depth,
+            soft_edge: self.soft_edge,
+            takes_light: self.takes_light,
+        }
     }
 
     pub fn new(texture: Handle<Image>, props: &p2_particles::EmitterProperties) -> Self {
@@ -149,7 +165,7 @@ impl ParticleMaterial {
             lit: 0,
         };
         let soft_edge = props.use_direction_as == DirectionUsage::None && props.draw_style != DrawStyle::Regular;
-        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, no_depth: false, soft_edge, takes_light: takes_light(props.draw_style) }
+        Self { texture, params, sprites: PARTICLE_SPRITES, style: props.draw_style, no_depth: false, soft_edge, takes_light: takes_light(props.draw_style, "") }
     }
 
     /// Alpha test 127 for masked, ref 0 for alpha blended (both as retail's `FinalBlend`), fogged like the scene (unverified
@@ -293,10 +309,21 @@ mod tests {
     #[test]
     fn additive_and_multiplying_sprites_stay_self_lit() {
         for style in [DrawStyle::Regular, DrawStyle::AlphaBlend, DrawStyle::AlphaModulate] {
-            assert!(takes_light(style));
+            assert!(takes_light(style, "nathans.Skins.firegroup3"));
         }
         for style in [DrawStyle::Translucent, DrawStyle::Brighten, DrawStyle::Modulated, DrawStyle::Darken] {
-            assert!(!takes_light(style));
+            assert!(!takes_light(style, "nathans.Skins.firegroup3"));
+        }
+    }
+
+    #[test]
+    fn a_brighten_puff_takes_light_and_a_brighten_flame_does_not() {
+        for texture in ["nathans.Skins.smoke5", "nathans.Skins.wispsmoke", "CigSmoke3", "nathans.Skins.bloodimpacts"] {
+            assert!(takes_light(DrawStyle::Brighten, texture), "{texture}");
+            assert!(!takes_light(DrawStyle::Translucent, texture), "{texture}");
+        }
+        for texture in ["nathans.Skins.expl1color", "nathans.Skins.softwhitedot", "nathans.Skins.blast1", ""] {
+            assert!(!takes_light(DrawStyle::Brighten, texture), "{texture}");
         }
     }
 

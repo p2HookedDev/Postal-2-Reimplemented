@@ -59,18 +59,16 @@ pub(super) fn fill_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<
     quads.write(mesh);
 }
 
-/// The modern stream: the drawn points smoothed into a ribbon, the texture scrolling downstream. A ribbon facing the eye
-/// (a stream in the air) also sags; one with a fixed normal (a trail on the ground) neither sags nor scrolls.
-pub(super) fn fill_flowing_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3, seconds: f32) {
-    use super::liquid_flow::{Hang, PIECES, phase, ribbon};
+/// The modern stream: the drawn points smoothed into a ribbon, each script segment keeping its span of the texture.
+pub(super) fn fill_smooth_strip(mesh: &mut Mesh, points: &[StripPoint], normal: Option<Vec3>, eye: Vec3) {
+    use super::liquid_flow::{PIECES, ribbon};
     let mut quads = Quads::default();
     if points.len() > 2 {
-        let smooth = ribbon(&points[..points.len() - 1], if normal.is_none() { Hang::Sags } else { Hang::Straight });
-        let shift = if normal.is_none() { phase(seconds) } else { 0.0 };
+        let smooth = ribbon(&points[..points.len() - 1]);
         let pieces = PIECES as f32;
         strip_quads(&mut quads, &smooth, normal, eye, |i| {
             let k = (i % PIECES) as f32;
-            [1.0 - k / pieces + shift, 1.0 - (k + 1.0) / pieces + shift]
+            [1.0 - k / pieces, 1.0 - (k + 1.0) / pieces]
         });
     }
     quads.write(mesh);

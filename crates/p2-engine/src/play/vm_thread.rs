@@ -68,6 +68,9 @@ pub(super) struct Sent {
     pub(super) view: ViewKey,
     pub(super) time_dilation: u32,
     pub(super) cull_volume: Option<ObjectId>,
+    /// Whether it stood past its `CullDistance` from the view target: that changes as the target moves, with no write
+    /// to the actor.
+    pub(super) beyond: bool,
     /// Its emitters and, unless `steady`, its owners and bone bases with theirs.
     pub(super) others: Vec<ObjectId>,
 }
@@ -164,7 +167,7 @@ pub(super) struct Job {
     pub(super) typed: String,
     pub(super) key_events: Vec<(&'static str, bool)>,
     pub(super) cursor: Option<[f32; 2]>,
-    pub(super) canvas: [f32; 2],
+    pub(super) canvas: HudCanvas,
     pub(super) followed: FxHashSet<ObjectId>,
     pub(super) visible: FxHashSet<ObjectId>,
     /// Actors no camera drew whose shadow a light did: they keep their pose moving, and the game is not told.
@@ -188,7 +191,7 @@ pub(super) struct Simulation {
     /// size, and the game time since.
     pub(super) hud_kept: Arc<[CanvasItem]>,
     pub(super) hud_view: Option<p2_vm::PlayerView>,
-    pub(super) hud_canvas: [f32; 2],
+    pub(super) hud_canvas: HudCanvas,
     pub(super) hud_age: f32,
     pub(super) hud_looks: FxHashMap<ObjectId, u64>,
     pub(super) seen: usize,

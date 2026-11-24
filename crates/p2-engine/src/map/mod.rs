@@ -114,7 +114,8 @@ impl bevy::app::Plugin for MapPlugin {
                     scene::present_material_switches,
                     // Before `update_particles`, which takes the frame's step.
                     fluids::present_fluids,
-                    particles::present_particles,
+                    // Wounds age by the same step.
+                    particles::present_particles.after(crate::render::wounds::present_wounds),
                 )
                     // Spawns and despawns queued by one part reach the world after the last part, as when all were one system.
                     .chain_ignore_deferred()
@@ -479,12 +480,10 @@ impl Session {
     }
 
     pub fn frame(&mut self, ctx: &egui::Context, rect: egui::Rect, contexts: &mut EguiContexts, t: &mut SceneTargets) {
-        // Menus keep the whole window: the cursor is read against it.
-        let playing = t.play.world().is_some_and(|world| world.pointer() == crate::play::Pointer::Captured);
-        let rect = if t.view.modern.safe_area && playing { crate::render::modern_view::hud_area(rect) } else { rect };
         let started = std::time::Instant::now();
         t.hud.start_frame(started);
         t.play.set_canvas_size([rect.width(), rect.height()]);
+        t.play.set_hud_inset(if t.view.modern.safe_area { crate::render::modern_view::hud_area(rect).min.x - rect.min.x } else { 0.0 });
         t.view.canvas_below = [false; OVERLAY_LAYERS.len()];
         // Until a new map's first VM frame is presented, the last image (the load screen) stays up, as in the
         // engine's frame buffer; its canvas actors belong to the level left.
@@ -595,7 +594,7 @@ impl Session {
         let map_name = map_name(package);
         // As travel begins the engine draws a few frames more: P2's screens count them (`TravelRenderCount`)
         // and leave their last image up during the load.
-        let [width, height] = t.play.canvas_size();
+        let canvas = t.play.canvas();
         if url.is_some()
             && let Some(world) = t.play.world_mut()
         {
@@ -603,7 +602,7 @@ impl Session {
             // in it (no HUD, no "PAUSED"), screens draw under the bar in `PreRender`. The image left up is the one
             // before it, where a screen drew over the HUD in `PostRender`.
             for frame in 1..=TRAVEL_FRAMES {
-                let items = world.hud(width, height);
+                let items = world.hud(canvas);
                 if frame < TRAVEL_FRAMES {
                     t.hud.last_hud = items.into();
                 }

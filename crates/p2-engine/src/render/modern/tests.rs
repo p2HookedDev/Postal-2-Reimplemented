@@ -4,6 +4,7 @@ use bevy::ecs::world::World;
 use bevy::pbr::StandardMaterial;
 
 use super::*;
+use p2_render_cpu::LE_SUNLIGHT;
 use crate::display::MODERN_GRAPHICS;
 use crate::render::blended::TerrainLayer;
 use crate::render::terrain_material::TerrainLayers;
@@ -63,7 +64,7 @@ fn every_material_gets_the_flag_once() {
     world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
     world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
     let bits = modern_flag(world.resource::<Settings>());
-    let level = world.resource::<Settings>().modern_level(MODERN_MATERIALS);
+    let level = world.resource::<Settings>().material_level();
     assert!(bits & MODERN_ON != 0);
     let materials = world.resource::<Assets<LightmappedMaterial>>();
     assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| material.flag() & 7 == u16::from(bits))));
@@ -218,4 +219,17 @@ fn suns_on_one_direction_add_up_and_others_are_fills() {
     assert!(shown[0] > alone[0] * 2.0, "the stacked suns are not in the sun: {shown:?} against one sun {alone:?}");
     assert!((shown[0] - together[0]).abs() < together[0] * 0.02, "{shown:?} against {together:?}");
     assert_eq!(fill_suns(&environment, environment.sun.as_ref()).len(), 1);
+}
+
+#[test]
+fn a_copy_of_the_suns_in_another_zone_does_not_add_up() {
+    let down = p2_math::Rotator { pitch: -16384, yaw: 0, roll: 0 };
+    let sun = |brightness: f32, x: f32| MeshLight { rotation: down, ..light(LE_SUNLIGHT, brightness, x) };
+    let one_zone = [sun(128.0, 1.0), sun(64.0, 2.0)];
+    let copies = [sun(128.0, 1.0), sun(64.0, 2.0), sun(128.0, 101.0), sun(64.0, 102.0), sun(128.0, 201.0), sun(64.0, 202.0)];
+    let environment = |lights: &[MeshLight]| LightEnvironment::new(lights.iter().enumerate().map(|(key, light)| (key as i32, *light)).collect(), Vec::new(), 1.0);
+    let zone_of = |at: Vector| (at.x / 100.0) as u8;
+    let wanted = sun_color(&environment(&one_zone));
+    assert!(sun_color(&environment(&copies))[0] > wanted[0] * 4.0);
+    assert_eq!(sun_color(&environment(&copies).suns_of_one_zone(zone_of)), wanted);
 }

@@ -92,14 +92,13 @@ impl Game {
         let (specular, specular_uv) = specular.map_or((None, Vec::new()), |(specular, uv)| (Some(specular), uv));
         state.specular_uv = specular_uv;
         let source = TextureSource { texture: walk.texture, opacity, wet: walk.wet, combine, glow, detail, specular, switch: walk.switch };
-        state.class = self.material_class(id, material, source) as u8;
+        state.class = self.material_class(id, material) as u8;
         Some((source, state))
     }
 
-    /// From the material's package, its groups and its own name, then its specular layer.
-    fn material_class(&mut self, id: PackageId, material: i32, source: TextureSource) -> MaterialClass {
-        let specular = specular_params(source);
-        let Some((package, export)) = self.export_of(id, material) else { return MaterialClass::of(&[], specular) };
+    /// From the material's package, its own name and its groups.
+    fn material_class(&mut self, id: PackageId, material: i32) -> MaterialClass {
+        let Some((package, export)) = self.export_of(id, material) else { return MaterialClass::Default };
         let pkg = self.data(package).0;
         let mut names = vec![self.package_name(package)];
         let mut at = Some(export);
@@ -109,7 +108,7 @@ impl Game {
             names.push(pkg.name(found.object_name));
             at = usize::try_from(found.package_index).ok().and_then(|outer| outer.checked_sub(1));
         }
-        MaterialClass::of(&names, specular)
+        MaterialClass::of(&names)
     }
 
     fn specular_source(&mut self, id: PackageId, p2_assets::SpecularLayer { material: specular, mask, mask_is_diffuse: diffuse_mask }: p2_assets::SpecularLayer, bake: bool) -> Option<(SpecularSource, Vec<UvModifier>)> {

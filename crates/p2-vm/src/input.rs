@@ -184,7 +184,13 @@ impl<L: LoaderRef> Vm<L> {
         };
         owner_filtered
             || (!self.store.flag_of(actor, Prop::bCorona)
-                && matches!(self.store.get(actor, Prop::Tag), Some(Value::Name(tag)) if self.host.input.cull_tags.contains(&tag)))
+                && (matches!(self.store.get(actor, Prop::Tag), Some(Value::Name(tag)) if self.host.input.cull_tags.contains(&tag)) || self.beyond_cull_distance(actor, viewer)))
+    }
+
+    /// Whether retail's cut at `CullDistance` hides the actor: measured from the view target, not from the eye.
+    pub fn beyond_cull_distance(&self, actor: ObjectId, view_target: Option<ObjectId>) -> bool {
+        let limit = self.store.float_of(actor, Prop::CullDistance);
+        view_target.filter(|_| limit != 0.0).is_some_and(|target| cut_by_distance(limit, (self.store.location(actor) - self.store.location(target)).size()))
     }
 
     /// Takes the `CullTag` names of the volume the view target is in: until the next call an actor with one of them
@@ -476,6 +482,11 @@ impl<L: LoaderRef> Vm<L> {
     }
 }
 
+/// A limit of 0 never cuts, a positive one cuts what is farther, a negative one what is nearer than its size.
+fn cut_by_distance(limit: f32, distance: f32) -> bool {
+    if limit > 0.0 { distance > limit } else { limit < 0.0 && distance < -limit }
+}
+
 fn parse_command<'a>(text: &'a str, word: &str) -> Option<&'a str> {
     let text = text.trim_start();
     let head = text.get(..word.len())?;
@@ -528,6 +539,13 @@ mod tests {
         vm.store.set(head, Prop::AttachmentBone, Value::Name(bone));
         assert_eq!(vm.view_chain(hat).collect::<Vec<_>>(), [wearer, head, body, player]);
         assert_eq!(vm.view_chain(player).count(), 0);
+    }
+
+    #[test]
+    fn the_cull_distance_cuts_farther_things_and_a_negative_one_nearer_things() {
+        assert!(!cut_by_distance(0.0, 1.0e9));
+        assert!(cut_by_distance(4000.0, 4000.5) && !cut_by_distance(4000.0, 4000.0));
+        assert!(cut_by_distance(-500.0, 499.0) && !cut_by_distance(-500.0, 500.0));
     }
 
     #[test]

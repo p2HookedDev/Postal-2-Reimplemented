@@ -30,11 +30,11 @@ use bevy::render::render_resource::BlendState;
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_math::Vector;
-use p2_render_cpu::{HardwareLight, LE_SUNLIGHT, MeshLight};
+use p2_render_cpu::{HardwareLight, MeshLight};
 
 use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow, UNSEEN_LAYER};
 use crate::display::{
-    MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_LAMP_SHADOWS, MODERN_LAMP_SIZE, MODERN_MATERIALS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
+    MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_LAMP_SHADOWS, MODERN_LAMP_SIZE, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
     MODERN_SHARPEN, MODERN_SPECULAR, MODERN_TEMPORAL_AA, Settings,
 };
 use crate::render::material_class::level_bits;
@@ -147,7 +147,7 @@ fn follow_flag<M: ModernFlagged>(
     let added: Vec<AssetId<M>> = events.as_deref().map_or_else(Vec::new, |events| {
         cursor.read(events).filter_map(|event| match *event { AssetEvent::Added { id } => Some(id), _ => None }).collect()
     });
-    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.modern_level(MODERN_MATERIALS), settings.modern_level(MODERN_LAMP_SIZE));
+    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.material_level(), settings.modern_level(MODERN_LAMP_SIZE));
     let stale: Vec<_> = if settings.is_changed() || materials.len() != *known {
         *known = materials.len();
         materials.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect()
@@ -440,7 +440,7 @@ const SAME_SUN_COS: f32 = 0.99452;
 /// shadowed sun's group is first when there is one, then the strongest others.
 fn sun_groups(environment: &LightEnvironment, sun: Option<&(MeshLight, HardwareLight)>) -> Vec<(Vector, [f32; 3])> {
     let strength = |light: &MeshLight| light.color(environment.level_brightness).iter().sum::<f32>();
-    let mut candidates: Vec<&MeshLight> = environment.lights.values().filter(|light| light.effect == LE_SUNLIGHT && !light.dynamic).collect();
+    let mut candidates: Vec<&MeshLight> = environment.suns.iter().collect();
     candidates.sort_by(|a, b| {
         strength(b).total_cmp(&strength(a)).then_with(|| <[f32; 3]>::from(a.location).partial_cmp(&<[f32; 3]>::from(b.location)).unwrap_or(std::cmp::Ordering::Equal))
     });

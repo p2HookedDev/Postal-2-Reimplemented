@@ -3,7 +3,7 @@
 //! text keeps smooth edges without a shader of its own.
 
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
-use bevy::image::{Image, ImageSampler};
+use bevy::image::Image;
 use bevy::math::Vec2;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
@@ -58,7 +58,7 @@ impl DistancePages {
         });
         let pixels = redraw(rgba, field, [width as usize, height as usize], factor, [size.width as usize, size.height as usize]);
         let mut page = Image::new(size, TextureDimension::D2, pixels, format, RenderAssetUsages::RENDER_WORLD);
-        page.sampler = ImageSampler::nearest();
+        page.sampler = image.sampler.clone();
         Some(page)
     }
 }
@@ -125,7 +125,8 @@ fn squared_line(f: &[f32], d: &mut [f32], lowest: &mut [usize], bounds: &mut [f3
     }
 }
 
-/// The page at `factor` pixels per texel: colour blended from the texels inside the glyphs, alpha from the field.
+/// The page at `factor` pixels per texel, premultiplied like its source: colour blended from the texels inside the
+/// glyphs, alpha from the field.
 pub(super) fn redraw(rgba: &[u8], field: &[f32], [width, height]: [usize; 2], factor: f32, [out_width, out_height]: [usize; 2]) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(out_width * out_height * 4);
     for y in 0..out_height {
@@ -138,14 +139,14 @@ pub(super) fn redraw(rgba: &[u8], field: &[f32], [width, height]: [usize; 2], fa
             let distance: f32 = taps.iter().map(|&(texel, weight)| field[texel] * weight).sum();
             let (mut colour, mut covered) = ([0.0f32; 3], 0.0);
             for &(texel, weight) in &taps {
-                let weight = weight * f32::from(rgba[texel * 4 + 3]);
-                covered += weight;
+                covered += weight * f32::from(rgba[texel * 4 + 3]);
                 for (channel, total) in colour.iter_mut().enumerate() {
                     *total += weight * f32::from(rgba[texel * 4 + channel]);
                 }
             }
-            pixels.extend(colour.map(|total| if covered > 0.0 { (total / covered).round() as u8 } else { 0 }));
-            pixels.push(((0.5 - distance * factor).clamp(0.0, 1.0) * 255.0).round() as u8);
+            let alpha = ((0.5 - distance * factor).clamp(0.0, 1.0) * 255.0).round();
+            pixels.extend(colour.map(|total| if covered > 0.0 { (total * alpha / covered).round() as u8 } else { 0 }));
+            pixels.push(alpha as u8);
         }
     }
     pixels
@@ -185,6 +186,7 @@ mod tests {
         assert_eq!(pixels.len(), 6 * 2 * 4);
         assert_eq!(&pixels[2 * 4..3 * 4], &[200, 100, 50, 255]);
         assert_eq!(pixels[3], 0);
+        assert_eq!(&pixels[4 * 4..5 * 4], &[0, 0, 0, 0]);
         assert_eq!(pixels[5 * 4 + 3], 0);
     }
 }

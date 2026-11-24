@@ -55,6 +55,7 @@ struct Rig {
     /// The lowest point of the bind pose: where the animation stands on flat ground.
     sole: Vec3,
     bind_ankles: [Vec3; 2],
+    bind_hips: [Vec3; 2],
 }
 
 type Shown = ([f32; 2], [Vec3; 2]);
@@ -80,6 +81,8 @@ impl Person {
 pub(super) struct Feet {
     people: FxHashMap<ObjectId, Person>,
     visited: FxHashSet<ObjectId>,
+    drawn: FxHashSet<ObjectId>,
+    drawn_before: FxHashSet<ObjectId>,
     generation: u64,
 }
 
@@ -105,7 +108,10 @@ pub(super) fn place_feet(
     if feet.generation != play.generation() {
         feet.generation = play.generation();
         feet.people.clear();
+        feet.drawn.clear();
     }
+    std::mem::swap(&mut feet.drawn, &mut feet.drawn_before);
+    feet.drawn.clear();
     let eye = world.view_location().map(|location| Vec3::from_array(location.into()));
     let cutscene = world.cutscene();
     let blend = 1.0 - (-time.delta_secs() * BLEND_RATE).exp();
@@ -116,10 +122,17 @@ pub(super) fn place_feet(
             continue;
         }
         let near = |place: &Mat4| eye.is_some_and(|eye| eye.distance(place.w_axis.truncate()) <= RANGE);
-        let placed = if cutscene || !world.drawn(actor) { None } else { mesh_place(world, item, actor).filter(near) };
-        if placed.is_none() && !feet.people.contains_key(&actor) {
+        let drawn = world.drawn(actor);
+        if drawn {
+            feet.drawn.insert(actor);
+        }
+        let placed = if cutscene || !drawn { None } else { mesh_place(world, item, actor).filter(near) };
+        let known = feet.people.contains_key(&actor);
+        if placed.is_none() && !known {
             continue;
         }
+        // Someone coming into view is first seen corrected; one already seen eases into it.
+        let snap = !known && !feet.drawn_before.contains(&actor);
         let Some(bones) = poses.bones.get_mut(&actor) else {
             feet.people.remove(&actor);
             continue;
@@ -146,7 +159,7 @@ pub(super) fn place_feet(
             }
             None => REST,
         };
-        person.shown = ease(person.shown, target, blend);
+        person.shown = if snap { target } else { ease(person.shown, target, blend) };
         let shown = person.shown;
         let rest = shown == REST;
         if person.applied != Some(shown) {
@@ -185,17 +198,28 @@ fn leg_rig(item: &AnimatedMesh) -> Option<Rig> {
     let legs = [leg(SIDES[0])?, leg(SIDES[1])?];
     let bind_ankle = |leg: &Leg| item.inverse_bind.get(leg.foot).map(|inverse| inverse.inverse().w_axis.truncate());
     let bind_ankles = [bind_ankle(&legs[0])?, bind_ankle(&legs[1])?];
+    let bind_hip = |leg: &Leg| item.inverse_bind.get(leg.thigh).map(|inverse| inverse.inverse().w_axis.truncate());
+    let bind_hips = [bind_hip(&legs[0])?, bind_hip(&legs[1])?];
     let upright = rotator_matrix(item.mesh.rot_origin) * Mat4::from_scale(Vec3::from_array(item.mesh.scale.into()));
     let height = |point: &[f32; 3]| upright.transform_point3(Vec3::from(*point)).z;
     let sole = item.mesh.positions.iter().min_by(|a, b| height(a).total_cmp(&height(b))).map(|point| Vec3::from(*point))?;
-    Some(Rig { legs, sole, bind_ankles })
+    Some(Rig { legs, sole, bind_ankles, bind_hips })
 }
 
 impl Rig {
+    /// Both hips above half their bind height over the sole: a body lying down, dead or alive, is left alone.
+    fn standing(&self, pose: &[Mat4], place: Mat4) -> bool {
+        let height = |point: Vec3| place.transform_point3(point).z - place.transform_point3(self.sole).z;
+        self.legs.iter().zip(self.bind_hips).all(|(leg, hip)| pose.get(leg.thigh).is_some_and(|bone| height(bone.w_axis.truncate()) >= 0.5 * height(hip)))
+    }
+
     /// At most one trace per foot, and none for a foot in the air.
     fn targets(&self, pose: &[Mat4], place: Mat4, statics: &StaticCollision) -> Shown {
         let floor = place.transform_point3(self.sole).z;
         let mut shown = REST;
+        if !self.standing(pose, place) {
+            return shown;
+        }
         for (side, leg) in self.legs.iter().enumerate() {
             let Some(bone) = pose.get(leg.foot) else { continue };
             let ankle = place.transform_point3(bone.w_axis.truncate());
@@ -365,6 +389,15 @@ mod tests {
         assert!(Vec3::Z.angle_between(limit_tilt(steep, 1.0)) <= MAX_TILT + 1e-4);
         assert_eq!(limit_tilt(steep, 0.0), Vec3::Z);
         assert_eq!(limit_tilt(Vec3::Z, 1.0), Vec3::Z);
+    }
+
+    #[test]
+    fn a_body_lying_down_is_not_standing() {
+        let (standing, _) = chain();
+        let rig = Rig { legs: [chain().1, chain().1], sole: Vec3::ZERO, bind_ankles: [Vec3::new(0.0, 0.0, 10.0); 2], bind_hips: [Vec3::new(0.0, 0.0, 90.0); 2] };
+        assert!(rig.standing(&standing, Mat4::IDENTITY));
+        let lying: Vec<Mat4> = standing.iter().map(|bone| Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2) * *bone).collect();
+        assert!(!rig.standing(&lying, Mat4::IDENTITY));
     }
 
     #[test]

@@ -31,9 +31,25 @@ pub(crate) struct Canvas {
     items: Vec<CanvasItem>,
     paths: FxHashMap<ObjectId, Arc<str>>,
     fonts: FxHashMap<ObjectId, Option<Arc<Font>>>,
+    hud_inset: f32,
 }
 
 impl<L: LoaderRef> Vm<L> {
+    /// How far the HUD's own drawing stays in from the left and right sides; interactions (menus, the map, loading
+    /// and day screens) keep the whole canvas.
+    pub fn set_hud_inset(&mut self, inset: f32) {
+        self.media.canvas.hud_inset = inset;
+    }
+
+    fn size_canvas(&mut self, canvas: ObjectId, width: f32, height: f32) {
+        for (property, value) in [(Prop::SizeX, Value::Int(width as i32)), (Prop::SizeY, Value::Int(height as i32))] {
+            self.store.set(canvas, property, value);
+        }
+        for (property, value) in [(Prop::ClipX, width), (Prop::ClipY, height)] {
+            self.store.set(canvas, property, Value::Float(value));
+        }
+    }
+
     pub fn render_hud(&mut self, controller: ObjectId, width: f32, height: f32) -> Result<Vec<CanvasItem>, Error> {
         let hud = self.store.object_of(controller, Prop::myHUD);
         let canvas = match self.media.canvas.object {
@@ -46,19 +62,23 @@ impl<L: LoaderRef> Vm<L> {
             }
         };
         self.event(canvas, crate::states::Event::Reset, Vec::new())?;
-        for (property, value) in [(Prop::SizeX, Value::Int(width as i32)), (Prop::SizeY, Value::Int(height as i32))] {
-            self.store.set(canvas, property, value);
-        }
-        for (property, value) in [(Prop::ClipX, width), (Prop::ClipY, height)] {
-            self.store.set(canvas, property, Value::Float(value));
-        }
+        self.size_canvas(canvas, width, height);
         if let Some(viewport) = self.viewport() {
             self.store.set(canvas, Prop::Viewport, Value::Object(Some(viewport)));
         }
         self.media.canvas.items.clear();
         self.process_interactions("Process_PreRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         if let Some(hud) = hud {
+            let inset = self.media.canvas.hud_inset.clamp(0.0, width / 2.0).floor();
+            if inset > 0.0 {
+                self.size_canvas(canvas, width - 2.0 * inset, height);
+            }
+            let first = self.media.canvas.items.len();
             self.event(hud, crate::states::Event::PostRender, [Value::Object(Some(canvas))])?;
+            if inset > 0.0 {
+                inset_hud_items(&mut self.media.canvas.items[first..], inset, width - 2.0 * inset);
+                self.size_canvas(canvas, width, height);
+            }
         }
         self.process_interactions("Process_PostRender", Value::Object(Some(canvas)), InteractionOrder::LocalFirst)?;
         let next = Vec::with_capacity(self.media.canvas.items.len());
@@ -264,6 +284,23 @@ fn glyph_advances<'a>(font: Option<&'a Font>, text: &'a str, scale: f32, space_x
     })
 }
 
+/// A tile across the whole narrowed canvas (a full-screen fill or overlay) still covers the whole window, at the same
+/// texels per pixel; everything else moves in by the inset.
+fn inset_hud_items(items: &mut [CanvasItem], inset: f32, narrowed: f32) {
+    for item in items {
+        match item {
+            CanvasItem::Tile { position, size, uv, .. } if size[0] > 0.0 && position[0] <= 0.0 && position[0] + size[0] >= narrowed => {
+                let per_pixel = uv[2] / size[0];
+                uv[0] -= inset * per_pixel;
+                uv[2] += 2.0 * inset * per_pixel;
+                size[0] += 2.0 * inset;
+            }
+            CanvasItem::Tile { position, .. } | CanvasItem::Text { position, .. } => position[0] += inset,
+            CanvasItem::Actor { .. } => {}
+        }
+    }
+}
+
 fn clip_tile(mut at: [f32; 2], mut size: [f32; 2], mut uv: [f32; 4], clip: [f32; 2]) -> Option<([f32; 2], [f32; 2], [f32; 4])> {
     for axis in 0..2 {
         if size[axis] <= 0.0 {
@@ -300,7 +337,16 @@ fn clip_text(mut x: f32, glyphs: &[(char, f32)], clip: f32) -> (String, Option<f
 
 #[cfg(test)]
 mod clip_tests {
-    use super::{clip_text, clip_tile};
+    use super::{CanvasItem, clip_text, clip_tile, inset_hud_items};
+
+    #[test]
+    fn only_a_tile_across_the_narrowed_canvas_fills_the_window() {
+        let tile = |position: [f32; 2], size: [f32; 2], uv: [f32; 4]| CanvasItem::Tile { material: "t".into(), position, size, uv, color: [255; 4], style: 1 };
+        let text = |position: [f32; 2]| CanvasItem::Text { text: "a".to_owned(), position, scale: [1.0; 2], color: [255; 4], font: None };
+        let mut items = vec![tile([0.0, 0.0], [100.0, 50.0], [0.0, 0.0, 200.0, 100.0]), tile([0.0, 0.0], [20.0, 20.0], [0.0, 0.0, 20.0, 20.0]), tile([80.0, 0.0], [20.0, 20.0], [0.0, 0.0, 20.0, 20.0]), text([5.0, 5.0])];
+        inset_hud_items(&mut items, 10.0, 100.0);
+        assert_eq!(items, vec![tile([0.0, 0.0], [120.0, 50.0], [-20.0, 0.0, 240.0, 100.0]), tile([10.0, 0.0], [20.0, 20.0], [0.0, 0.0, 20.0, 20.0]), tile([90.0, 0.0], [20.0, 20.0], [0.0, 0.0, 20.0, 20.0]), text([15.0, 5.0])]);
+    }
 
     #[test]
     fn clipped_tiles_are_cut_to_the_clip_box() {

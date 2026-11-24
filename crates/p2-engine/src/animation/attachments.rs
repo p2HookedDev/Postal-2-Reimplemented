@@ -84,7 +84,7 @@ pub(super) fn follow_bones(
         if let Some(world) = world {
             let told = told_bone(&poses.animated, follow.base, follow.bone, bone);
             let told = if told == bone { frame } else { follow.frame(body, told) };
-            world.shown.places.put_on_bone(follow.actor, follow.base, BoneFrame::of(told));
+            world.shown.places.put_on_bone(follow.actor, follow.base, BoneFrame::of(told), BoneFrame::of(frame));
         }
         transform.set_if_neq(follow.transform_at(frame));
     }
@@ -160,20 +160,20 @@ pub(super) fn place_attached(
     };
     for &(actor, _) in emitters.iter() {
         if let Some(attachment) = world.actor(actor).and_then(|actor| actor.attachment.as_ref())
-            && let Some((told, _)) = frame_of(attachment)
+            && let Some((told, drawn)) = frame_of(attachment)
         {
-            placed.push((actor, attachment.base, BoneFrame::of(told)));
+            placed.push((actor, attachment.base, BoneFrame::of(told), BoneFrame::of(drawn)));
         }
     }
     for &entity in due_models.iter() {
         let Ok((_, follow, mut transform, _)) = models.get_mut(entity) else { continue };
         let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) else { continue };
         let Some((told, drawn)) = frame_of(attachment) else { continue };
-        placed.push((follow.actor, attachment.base, BoneFrame::of(told)));
+        placed.push((follow.actor, attachment.base, BoneFrame::of(told), BoneFrame::of(drawn)));
         transform.set_if_neq(attached_transform(&follow, drawn));
     }
-    for (actor, base, frame) in placed.drain(..) {
-        world.shown.places.put_on_bone(actor, base, frame);
+    for (actor, base, told, drawn) in placed.drain(..) {
+        world.shown.places.put_on_bone(actor, base, told, drawn);
     }
 }
 
@@ -184,7 +184,7 @@ pub(super) struct AttachedBuffers {
     bases: FxHashMap<ObjectId, Option<(FollowActor, bool)>>,
     due_models: Vec<Entity>,
     emitters: Vec<(ObjectId, ObjectId)>,
-    placed: Vec<(ObjectId, ObjectId, BoneFrame)>,
+    placed: Vec<(ObjectId, ObjectId, BoneFrame, BoneFrame)>,
 }
 
 fn bone_slot(

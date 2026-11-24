@@ -138,7 +138,15 @@ pub(super) fn sprite_record(sprite: &SpriteParticle, grid_at: Vec3) -> [u32; REC
     record
 }
 
-/// The emitter's sprite count, and in the place of a sprite's centre the lamps' linear light at the emitter.
+/// Marks an emitter drawn by a view that is not the scene's: unlit, as retail draws every sprite.
+const UNLIT: Vec3 = Vec3::NEG_ONE;
+
+/// In display light, as `particle.wesl` adds it: a lamp lights a puff in its reach through and through.
+pub(super) fn emitter_light(zone_ambient: Vec3, lamps: Vec3) -> Vec3 {
+    zone_ambient + lamps.max(Vec3::ZERO).powf(1.0 / 2.2)
+}
+
+/// The emitter's sprite count, and in the place of a sprite's centre its `emitter_light`.
 pub(super) fn header_record(count: usize, lamps: Vec3) -> [u32; RECORD_WORDS] {
     let mut record = [0; RECORD_WORDS];
     record[0..3].copy_from_slice(&lamps.to_array().map(f32::to_bits));
@@ -148,8 +156,8 @@ pub(super) fn header_record(count: usize, lamps: Vec3) -> [u32; RECORD_WORDS] {
 
 pub(super) fn write_sprite_records(writes: &mut MeshWrites, p: &mut ParticleActor, particles: &[(Vec<StripPoint>, Vec<SpriteParticle>)], drawn: Option<(Vec3, Vec3)>) {
     let grid_at = drawn.map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
-    let lamps = p.lamp_light;
-    let puddle_seed = p.liquid.seed().filter(|_| writes.liquid_flow);
+    let lamps = if p.overlay.is_some() { UNLIT } else { p.lamp_light };
+    let puddle_seed = p.puddle_seed.filter(|_| writes.liquid_flow);
     for (draw, (_, sprites)) in p.draws.iter_mut().zip(particles) {
         let (Some(EmitterMesh { entity, shown: true, .. }), Some(grid)) = (&draw.mesh, &mut draw.grid) else { continue };
         let first = u32::try_from(writes.records.len()).unwrap_or(u32::MAX);
@@ -174,4 +182,16 @@ pub(super) fn upload_sprites(buffers: &mut Assets<ShaderBuffer>, records: &[[u32
     buffer.clear();
     buffer.extend_from_slice(records);
     buffer.resize_buffer(u64::from(capacity) * record_bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_room_of_ordinary_light_draws_a_lit_sprite_near_retail() {
+        let light = emitter_light(Vec3::splat(0.25), Vec3::splat(0.5));
+        assert!((light - Vec3::splat(0.98)).abs().max_element() < 0.01, "{light}");
+        assert_eq!(emitter_light(Vec3::splat(0.25), Vec3::splat(-1.0)), Vec3::splat(0.25));
+    }
 }

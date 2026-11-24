@@ -341,7 +341,9 @@ impl PreparedScene {
         phase("terrain");
         let actors: usize = placements.values().map(Vec::len).sum();
         let meshes = placements.keys().map(|(mesh, _)| mesh).collect::<HashSet<_>>().len();
-        let environment = Arc::new(LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).with_terrain(terrain_sectors));
+        let environment = Arc::new(
+            LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).suns_of_one_zone(|at| p2_collision::point_zone(&model, at)).with_terrain(terrain_sectors),
+        );
         let level = StaticLevel { pkg, file, model: &model, environment: &environment, sky_zone };
         let (parts, static_missing, static_batches) = static_models(game, t, &mut texture, &level, placements);
         missing += static_missing;

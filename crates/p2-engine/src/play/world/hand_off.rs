@@ -42,6 +42,10 @@ impl PlayWorld {
         self.frame.step * self.frame.time_dilation
     }
 
+    pub fn time_dilation(&self) -> f32 {
+        self.frame.time_dilation
+    }
+
     /// The hits on people in the tick now shown, each on one host frame only.
     pub fn person_hits(&self) -> &[p2_vm::PersonHit] {
         if self.fresh { &self.frame.person_hits } else { &[] }
@@ -133,8 +137,8 @@ impl PlayWorld {
         self.frame.paused
     }
 
-    pub fn hud(&mut self, width: f32, height: f32) -> Vec<CanvasItem> {
-        self.sim_mut().map(|sim| sim.hud([width, height])).unwrap_or_default()
+    pub fn hud(&mut self, canvas: HudCanvas) -> Vec<CanvasItem> {
+        self.sim_mut().map(|sim| sim.hud(canvas)).unwrap_or_default()
     }
 
     pub fn summary(&self) -> String {

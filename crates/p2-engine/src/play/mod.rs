@@ -144,7 +144,7 @@ pub struct Play {
     world: Option<PlayWorld>,
     generation: u64,
     pub threaded: bool,
-    canvas: [f32; 2],
+    canvas: HudCanvas,
     clock: StepClock,
     frame_clock: StepClock,
     /// Frame time the host's own simulations (particles, fluids) have not stepped yet: they step once per game tick,
@@ -171,7 +171,7 @@ impl Default for Play {
             world: None,
             generation: 0,
             threaded: true,
-            canvas: [1024.0, 768.0],
+            canvas: HudCanvas { size: [1024.0, 768.0], hud_inset: 0.0 },
             clock: StepClock::default(),
             frame_clock: StepClock::default(),
             unstepped: 0.0,
@@ -315,13 +315,24 @@ impl Play {
         }
     }
 
-    pub fn canvas_size(&self) -> [f32; 2] {
+    pub fn canvas(&self) -> HudCanvas {
         self.canvas
     }
 
     pub fn set_canvas_size(&mut self, size: [f32; 2]) {
-        self.canvas = size;
+        self.canvas.size = size;
     }
+
+    pub fn set_hud_inset(&mut self, inset: f32) {
+        self.canvas.hud_inset = inset;
+    }
+}
+
+/// The canvas the scripts draw on, in pixels, and how far the HUD's own drawing stays in from its left and right sides.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HudCanvas {
+    pub size: [f32; 2],
+    pub hud_inset: f32,
 }
 
 #[derive(SystemParam)]
@@ -436,7 +447,7 @@ fn look_ahead(play: Res<Play>, input: Res<PlayerInput>, mut play_cameras: PlayCa
     }
 }
 
-fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, backlog: &mut InputBacklog, times: &FrameTimes, step: f32, canvas: [f32; 2]) -> Job {
+fn next_job(world: &mut PlayWorld, drawn: DrawnActors, input: &PlayerInput, backlog: &mut InputBacklog, times: &FrameTimes, step: f32, canvas: HudCanvas) -> Job {
     let DrawnActors { models, attached, cameras: drawing_cameras, shadow_only } = drawn;
     world.followed.clear();
     world.visible.clear();

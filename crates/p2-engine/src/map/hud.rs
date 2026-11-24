@@ -199,14 +199,11 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
                         hud.hud_fonts.entry(path.to_owned()).or_insert(found).as_ref()
                     }
                 };
-                let (mut origin, mut scale) = (rect.min + egui::vec2(position[0], position[1]), *scale);
-                if sharp_hud {
+                let mut origin = rect.min + egui::vec2(position[0], position[1]);
+                let nearest = sharp_hud && !sharp_text && scale.iter().all(|&scale| sharp::whole_per_texel(scale * per_point, 1.0));
+                if nearest {
                     origin = sharp::on_pixel(origin, per_point);
-                    if !sharp_text {
-                        scale = scale.map(|scale| sharp::whole_pixels(scale, 1.0, per_point));
-                    }
                 }
-                let nearest = sharp_hud && scale[0].min(scale[1]) * per_point >= 1.0;
                 let magnified = scale[0].max(scale[1]) * per_point;
                 let smooth = sharp_text && magnified > 1.0;
                 match hud_font {
@@ -240,17 +237,21 @@ pub(super) fn paint_hud(ctx: &egui::Context, rect: egui::Rect, items: &[CanvasIt
             CanvasItem::Actor { .. } => {}
             CanvasItem::Tile { material, position, size, uv, color: c, style } => {
                 let Some((mut id, texels)) = session.cached_hud_texture(material, &mut targets.hud, contexts, &mut targets.assets.images) else { continue };
-                let (mut min, mut size) = (rect.min + egui::vec2(position[0], position[1]), *size);
+                let mut area = egui::Rect::from_min_size(rect.min + egui::vec2(position[0], position[1]), egui::vec2(size[0], size[1]));
+                let mut size = *size;
+                let mut whole = false;
                 if sharp_hud {
-                    min = sharp::on_pixel(min, per_point);
-                    size = [sharp::whole_pixels(size[0], uv[2].abs(), per_point), sharp::whole_pixels(size[1], uv[3].abs(), per_point)];
-                    if size[0] * per_point >= uv[2].abs() && size[1] * per_point >= uv[3].abs() {
+                    // Both edges snap, never the size: tiles of one picture keep sharing their edges.
+                    area = egui::Rect::from_min_max(sharp::on_pixel(area.min, per_point), sharp::on_pixel(area.max, per_point));
+                    size = [area.width(), area.height()];
+                    if sharp::whole_per_texel(size[0] * per_point, uv[2].abs()) && sharp::whole_per_texel(size[1] * per_point, uv[3].abs()) {
                         let hud = &mut *targets.hud;
-                        id = hud.nearest.texture(id, &hud.hud_images, contexts, &mut targets.assets.images);
+                        let copy = hud.nearest.texture(id, &hud.hud_images, contexts, &mut targets.assets.images);
+                        whole = copy != id;
+                        id = copy;
                     }
                 }
-                let area = egui::Rect::from_min_size(min, egui::vec2(size[0], size[1]));
-                let (u, v) = (inside_borders(uv[0], uv[2], texels.x, size[0]), inside_borders(uv[1], uv[3], texels.y, size[1]));
+                let (u, v) = if whole { ([uv[0], uv[2]], [uv[1], uv[3]]) } else { (inside_borders(uv[0], uv[2], texels.x, size[0]), inside_borders(uv[1], uv[3], texels.y, size[1])) };
                 let uv = egui::Rect::from_min_size(egui::pos2(u[0] / texels.x, v[0] / texels.y), egui::vec2(u[1] / texels.x, v[1] / texels.y));
                 let tint = if ERenderStyle::from_byte(*style) == Some(ERenderStyle::Translucent) { egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], 0) } else { color(*c) };
                 painter.image(id, area, uv, tint);

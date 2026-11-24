@@ -208,6 +208,7 @@ pub fn texture_to_ui_image(texture: &Texture, palette: Option<&[[u8; 4]]>, addit
         })
         .collect();
     let mut image = rgba_image(width, height, texels);
+    image.asset_usage = RenderAssetUsages::all();
     let mode = |clamp: bool| if clamp { ImageAddressMode::ClampToEdge } else { ImageAddressMode::Repeat };
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: mode(texture.clamp[0]),

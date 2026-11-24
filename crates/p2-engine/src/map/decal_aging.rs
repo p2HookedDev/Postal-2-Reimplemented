@@ -13,11 +13,13 @@ pub(super) struct DecalAgingPlugin;
 
 impl Plugin for DecalAgingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, age_decals.after(super::spawned::present_projections).in_set(MapSystems::Present));
+        // Before `present_particles`, which takes the frame's step.
+        app.add_systems(PostUpdate, age_decals.after(super::spawned::present_projections).before(super::particles::present_particles).in_set(MapSystems::Present));
     }
 }
 
-/// A spawned projector's decal: `tag` is the one `projector_tag` made, `life` the script's `LifeSpan` when it attached.
+/// A spawned projector's decal: `tag` is the one `projector_tag` made, `life` the seconds the script gave it to live
+/// when it attached.
 #[derive(Component)]
 pub(super) struct DecalAge {
     tag: u32,

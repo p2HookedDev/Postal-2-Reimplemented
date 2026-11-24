@@ -353,7 +353,15 @@ impl Plugin for WorldPassPlugin {
             .add_systems(ExtractSchedule, extract_modified_meshes)
             .add_systems(Render, queue_world.in_set(RenderSystems::QueueMeshes))
             .add_systems(Render, prepare_world_views.in_set(RenderSystems::PrepareResources))
-            .add_systems(Core3d, cull_world.before(Core3dSystems::Prepass));
+            // The shadow passes are in no set: without their own order a level that redraws can run before this
+            // frame's cull and draw none of the world.
+            .add_systems(
+                Core3d,
+                cull_world
+                    .before(Core3dSystems::Prepass)
+                    .before(bevy::pbr::per_view_shadow_pass::<{ bevy::pbr::EARLY_SHADOW_PASS }>)
+                    .before(bevy::pbr::shared_shadow_pass::<{ bevy::pbr::EARLY_SHADOW_PASS }>),
+            );
     }
 }
 

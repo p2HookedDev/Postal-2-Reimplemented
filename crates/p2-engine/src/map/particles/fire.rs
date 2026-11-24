@@ -1,15 +1,21 @@
 use super::*;
 use crate::render::fire_volume::FireBox;
+use p2_particles::DrawStyle;
 
 const FIRE_WORDS: [&str; 2] = ["fire", "flame"];
-const NEVER_FIRE_WORDS: [&str; 3] = ["muzzle", "flash", "spark"];
+const NEVER_FIRE_WORDS: [&str; 5] = ["muzzle", "flash", "spark", "smoke", "ember"];
 
-/// Told by name, as the class is not kept: the actor's object name carries its class, the texture its look. A smoke
-/// texture under a fire actor stays a sprite.
-pub(super) fn is_fire(actor: &str, texture: &str) -> bool {
-    let (actor, texture) = (actor.to_ascii_lowercase(), texture.to_ascii_lowercase());
-    let named = |words: &[&str]| words.iter().any(|word| actor.contains(word) || texture.contains(word));
-    named(&FIRE_WORDS) && !named(&NEVER_FIRE_WORDS) && !texture.contains("smoke")
+/// Told by the texture's name and an adding blend, as retail draws flames; anything else under a fire actor (smoke,
+/// embers, glows) stays sprites.
+pub(super) fn is_fire(texture: &str, style: DrawStyle) -> bool {
+    let texture = texture.to_ascii_lowercase();
+    let named = |word: &&str| texture.contains(*word);
+    matches!(style, DrawStyle::Translucent | DrawStyle::Brighten) && FIRE_WORDS.iter().any(named) && !NEVER_FIRE_WORDS.iter().any(named)
+}
+
+/// The volume draws one rising column; a fire spread wider than it is tall, such as a burning trail, stays sprites.
+fn is_column(fire: &FireBox) -> bool {
+    fire.half.x.max(fire.half.z) <= 2.0 * fire.half.y
 }
 
 /// The indices of the nearest `cap` distances within `reach`, nearest first.
@@ -52,7 +58,7 @@ impl Particles {
                 if draw.volume {
                     hidden.push((distance, fire));
                 }
-                if eligible {
+                if eligible && is_column(&fire) {
                     candidates.push((at, index));
                     distances.push(distance);
                 }
@@ -78,12 +84,22 @@ mod tests {
 
     #[test]
     fn fire_is_told_from_smoke_and_muzzle_flashes() {
-        assert!(is_fire("Transient.FireEmitter3", "nathans.Effects.flames1"));
-        assert!(is_fire("Transient.GasTrailEmitter0", "Zo_Smeg.fireball"));
-        assert!(!is_fire("Transient.FireEmitter3", "nathans.Effects.smoke2"));
-        assert!(!is_fire("Transient.MuzzleFlashEmitter1", "fx.fire_flash"));
-        assert!(!is_fire("Transient.BloodSpray2", "fx.blood"));
-        assert!(!is_fire("Transient.SparkEmitter0", "-"));
+        assert!(is_fire("nathans.Effects.flames1", DrawStyle::Translucent));
+        assert!(is_fire("Zo_Smeg.fireball", DrawStyle::Brighten));
+        assert!(!is_fire("nathans.Effects.flames1", DrawStyle::AlphaBlend));
+        assert!(!is_fire("nathans.Effects.smoke2", DrawStyle::Translucent));
+        assert!(!is_fire("nathans.Effects.fire_smoke", DrawStyle::Translucent));
+        assert!(!is_fire("fx.fire_flash", DrawStyle::Translucent));
+        assert!(!is_fire("fx.fire_embers", DrawStyle::Translucent));
+        assert!(!is_fire("fx.blood", DrawStyle::AlphaBlend));
+        assert!(!is_fire("-", DrawStyle::Translucent));
+    }
+
+    #[test]
+    fn only_a_column_becomes_a_volume() {
+        let fire = |half: Vec3| FireBox { centre: Vec3::ZERO, half, tint: Vec3::ONE.extend(1.0) };
+        assert!(is_column(&fire(Vec3::new(40.0, 60.0, 40.0))));
+        assert!(!is_column(&fire(Vec3::new(400.0, 40.0, 30.0))));
     }
 
     #[test]

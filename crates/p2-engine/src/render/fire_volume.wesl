@@ -1,6 +1,6 @@
 // Fire as a volume. `march` runs at half size: a ray from the eye crosses each fire's box, stops at the depth prepass,
-// and gathers flame light and smoke through noise that rises with time. `composite` runs at full size and lays a
-// bilinear sample of that, colour premultiplied, over the frame.
+// and gathers flame light through noise that rises with time. `composite` runs at full size and adds a bilinear sample
+// of that to the frame, as retail adds its flame sprites; the fire's smoke stays sprites.
 
 import bevy_render::view::View;
 
@@ -37,7 +37,8 @@ const EXTINCTION: f32 = 0.03;
 const EMISSION: f32 = 0.08;
 // Noise cells a second.
 const RISE: f32 = 1.5;
-const SMOKE: vec3<f32> = vec3(0.03, 0.028, 0.025);
+// Noise cells are this much taller than wide, so the flame breaks into rising tongues.
+const STRETCH: vec3<f32> = vec3(1.0, 0.5, 1.0);
 
 fn hash(p: vec3<f32>) -> f32 {
     let q = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419)) * 17.0;
@@ -82,8 +83,8 @@ fn flame(v: Volume, p: vec3<f32>) -> vec2<f32> {
     let height = saturate(local.y * 0.5 + 0.5);
     let core = saturate(1.0 - length(local.xz) / mix(1.0, 0.3, height));
     let cells = 1.5 / max(min(v.extent.x, v.extent.z), 8.0);
-    let n = fbm(p * cells - vec3(0.0, fires.seconds * RISE, 0.0));
-    let density = saturate(core * 1.5 - 0.35 + (n - 0.5) * 1.2) * saturate((1.0 - height) * 3.0) * v.tint.w;
+    let n = fbm(p * cells * STRETCH - vec3(0.0, fires.seconds * RISE, 0.0));
+    let density = saturate(core * 1.5 - 0.35 + (n - 0.5) * 2.0) * saturate((1.0 - height) * 3.0) * v.tint.w;
     let heat = saturate(density * 1.6 * (1.0 - height * 0.8));
     return vec2(density, heat);
 }
@@ -133,14 +134,14 @@ fn march(in: FullscreenOutput) -> @location(0) vec4<f32> {
             }
             let absorbed = 1.0 - exp(-fire.x * EXTINCTION * stride);
             let glow = black_body(fire.y) * v.tint.rgb * (fire.y * fire.y * EMISSION * fire.x * stride);
-            light += clear * (glow + SMOKE * absorbed * (1.0 - fire.y));
+            light += clear * glow;
             clear *= 1.0 - absorbed;
         }
         if clear < 0.01 {
             break;
         }
     }
-    return vec4(light, 1.0 - clear);
+    return vec4(light, 0.0);
 }
 
 @fragment

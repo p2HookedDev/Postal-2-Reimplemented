@@ -22,16 +22,16 @@ function RowChanged(int i)
 
 defaultproperties
 {
-	TitleText="Bodies and Cutscenes"
+	TitleText="Animation and Cutscenes"
 	BackHelp="Return to the Modern Graphics menu."
 
-	Labels(0)="Foot placement"
+	Labels(0)="Foot IK"
 	Labels(1)="Hit reactions"
-	Labels(2)="Cutscene focus blur"
+	Labels(2)="Cutscene depth of field"
 	Labels(3)="Cutscene motion blur"
 
-	Helps(0)="Feet land on stairs and slopes instead of floating or sinking."
-	Helps(1)="How strongly a living person flinches where they are hit. 0 turns it off."
-	Helps(2)="Cutscenes blur what is out of focus. 0 turns it off."
-	Helps(3)="Cutscenes blur fast movement. 0 turns it off."
+	Helps(0)="Feet rest on stairs and slopes instead of floating or sinking."
+	Helps(1)="How strongly people flinch where they are hit."
+	Helps(2)="Cutscenes blur what is out of focus."
+	Helps(3)="Cutscenes blur fast movement."
 }

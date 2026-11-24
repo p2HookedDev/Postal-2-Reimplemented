@@ -1,7 +1,7 @@
 //! A retail material's class, given at load from its names and layers, and the roughness and reflectance the modern
-//! lit shader takes from it. The `MODERN_MATERIALS` level scales how far a surface leaves today's shading.
+//! lit shader takes from it. `Settings::material_level` scales how far a surface leaves today's shading.
 
-use crate::render::shader_layers::{ShaderLayers, SpecularCoords, SpecularParams};
+use crate::render::shader_layers::ShaderLayers;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MaterialClass {
@@ -16,14 +16,15 @@ pub enum MaterialClass {
     Foliage = 7,
 }
 
-/// Name parts that mark each class, tried in this order: `carpet` holds `car`, so cloth comes before metal.
+/// Words that mark each class, or with a plural `s`, tried in this order. Only words that name bare metal are listed:
+/// `car`, `iron` and `rust` also name painted things.
 const NAME_PARTS: [(MaterialClass, &[&str]); 7] = [
     (MaterialClass::Cloth, &["cloth", "carpet", "fabric", "curtain", "rug", "towel", "mattress", "sofa", "couch"]),
     (MaterialClass::Foliage, &["foliage", "leaf", "leaves", "trees", "grass", "plant", "bush", "hedge", "flower", "ivy"]),
     (MaterialClass::Skin, &["skin", "flesh"]),
     (MaterialClass::TileOrGlass, &["glass", "window", "tile", "mirror", "porcelain", "ceramic", "marble", "chrome"]),
     (MaterialClass::Wood, &["wood", "plank", "crate", "board", "timber", "bark"]),
-    (MaterialClass::Metal, &["metal", "steel", "iron", "rail", "pipe", "alum", "car", "rust", "grate"]),
+    (MaterialClass::Metal, &["metal", "steel", "rail", "pipe", "alum", "grate"]),
     (MaterialClass::ConcreteOrPlaster, &["concrete", "plaster", "brick", "stone", "rock", "cement", "stucco", "asphalt", "road", "sidewalk", "wall"]),
 ];
 
@@ -31,16 +32,10 @@ impl MaterialClass {
     pub const ALL: [Self; 8] =
         [Self::Default, Self::Metal, Self::TileOrGlass, Self::Wood, Self::Cloth, Self::Skin, Self::ConcreteOrPlaster, Self::Foliage];
 
-    /// `names` are the material's package, group and object names; `specular` its shader's specular layer, if any.
-    pub fn of(names: &[&str], specular: Option<SpecularParams>) -> Self {
-        let lower: Vec<String> = names.iter().map(|name| name.to_ascii_lowercase()).collect();
-        let named = NAME_PARTS.iter().find(|(_, parts)| lower.iter().any(|name| parts.iter().any(|part| name.contains(part))));
-        match (named, specular) {
-            (Some(&(class, _)), _) => class,
-            (None, Some(SpecularParams { coords: SpecularCoords::Cube, world: true, .. })) => Self::Metal,
-            (None, Some(_)) => Self::TileOrGlass,
-            (None, None) => Self::Default,
-        }
+    /// `names` are the material's package, its own name, then its groups from the innermost. The first of the own name,
+    /// the groups and last the package that holds a class's word decides; a guess that is not sure stays the default.
+    pub fn of(names: &[&str]) -> Self {
+        names.iter().skip(1).chain(names.first()).find_map(|name| named_class(name)).unwrap_or_default()
     }
 
     /// The highlight's perceptual roughness. The default class keeps the shader's own.
@@ -74,6 +69,22 @@ impl MaterialClass {
     }
 }
 
+/// The first class with a word among the name's whole words, which split at every non-letter and where a lower case
+/// letter meets an upper case one: `Trailer` is not a `rail`.
+fn named_class(name: &str) -> Option<MaterialClass> {
+    let mut spaced = String::with_capacity(name.len() * 2);
+    let mut after_lower = false;
+    for c in name.chars() {
+        if after_lower && c.is_ascii_uppercase() {
+            spaced.push(' ');
+        }
+        spaced.push(if c.is_ascii_alphabetic() { c.to_ascii_lowercase() } else { ' ' });
+        after_lower = c.is_ascii_lowercase();
+    }
+    let is_word = |part: &str| spaced.split_whitespace().any(|word| word == part || word.strip_suffix('s') == Some(part));
+    NAME_PARTS.iter().find(|(_, parts)| parts.iter().any(|&part| is_word(part))).map(|&(class, _)| class)
+}
+
 /// The class goes in the layers' `blend`: y its index, z its roughness, w its reflectance. A zero `blend.z` is a
 /// material made before classes, which the shader shades as the default class.
 pub fn with_class(mut layers: ShaderLayers, class: MaterialClass) -> ShaderLayers {
@@ -102,30 +113,29 @@ pub fn levels_of(flag: u16) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::shader_layers::SpecularMode;
-
-    fn specular(coords: SpecularCoords, world: bool) -> SpecularParams {
-        SpecularParams { mode: SpecularMode::Add, world, constant: 1.0, coords }
-    }
 
     #[test]
     fn names_pick_the_class() {
-        assert_eq!(MaterialClass::of(&["Furniture", "Carpets", "RedCarpet"], None), MaterialClass::Cloth);
-        assert_eq!(MaterialClass::of(&["Metals", "Rails", "Railing01"], None), MaterialClass::Metal);
-        assert_eq!(MaterialClass::of(&["Hospital", "Floors", "WhiteTile"], None), MaterialClass::TileOrGlass);
-        assert_eq!(MaterialClass::of(&["Buildings", "Walls", "PlasterB"], None), MaterialClass::ConcreteOrPlaster);
-        assert_eq!(MaterialClass::of(&["Nature", "Trees", "Oak"], None), MaterialClass::Foliage);
-        assert_eq!(MaterialClass::of(&["Houses", "Floor", "OakPlanks"], None), MaterialClass::Wood);
-        assert_eq!(MaterialClass::of(&["Characters", "Skins", "DudeHead"], None), MaterialClass::Skin);
-        assert_eq!(MaterialClass::of(&["Town", "Streets", "Crosswalk"], None), MaterialClass::Default);
+        assert_eq!(MaterialClass::of(&["Furniture", "RedCarpet", "Carpets"]), MaterialClass::Cloth);
+        assert_eq!(MaterialClass::of(&["Metals", "Railing01", "Rails"]), MaterialClass::Metal);
+        assert_eq!(MaterialClass::of(&["Hospital", "WhiteTile", "Floors"]), MaterialClass::TileOrGlass);
+        assert_eq!(MaterialClass::of(&["Buildings", "PlasterB", "Walls"]), MaterialClass::ConcreteOrPlaster);
+        assert_eq!(MaterialClass::of(&["Nature", "Oak", "Trees"]), MaterialClass::Foliage);
+        assert_eq!(MaterialClass::of(&["Houses", "OakPlanks", "Floor"]), MaterialClass::Wood);
+        assert_eq!(MaterialClass::of(&["Characters", "DudeHead", "Skins"]), MaterialClass::Skin);
+        assert_eq!(MaterialClass::of(&["Town", "Crosswalk", "Streets"]), MaterialClass::Default);
+        assert_eq!(MaterialClass::of(&["Woods", "Thing", "Misc"]), MaterialClass::Wood);
+        assert_eq!(MaterialClass::of(&[]), MaterialClass::Default);
     }
 
     #[test]
-    fn layers_pick_the_class_when_names_say_nothing() {
-        assert_eq!(MaterialClass::of(&["P2Misc", "Misc", "Thing"], None), MaterialClass::Default);
-        assert_eq!(MaterialClass::of(&["P2Misc", "Misc", "Thing"], Some(specular(SpecularCoords::Cube, true))), MaterialClass::Metal);
-        assert_eq!(MaterialClass::of(&["P2Misc", "Misc", "Thing"], Some(specular(SpecularCoords::EnvMap, false))), MaterialClass::TileOrGlass);
-        assert_eq!(MaterialClass::of(&["Woods", "Misc", "Thing"], Some(specular(SpecularCoords::Cube, true))), MaterialClass::Wood);
+    fn only_whole_words_count_and_the_own_name_comes_first() {
+        for unsure in [["Trailers", "TrailerSide", "Ext"], ["Signs", "Billboard01", "Ads"], ["Props", "Rocket", "Drugs"], ["Misc", "Textile", "Glasses"]] {
+            assert_eq!(MaterialClass::of(&unsure), MaterialClass::Default, "{unsure:?}");
+        }
+        assert_eq!(MaterialClass::of(&["Tiles", "BrickWall", "Walls"]), MaterialClass::ConcreteOrPlaster);
+        assert_eq!(MaterialClass::of(&["Tiles", "Thing", "Misc"]), MaterialClass::TileOrGlass);
+        assert_eq!(MaterialClass::of(&["Town", "GuardRail", "Fences"]), MaterialClass::Metal);
     }
 
     #[test]

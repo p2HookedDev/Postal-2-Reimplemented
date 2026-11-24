@@ -140,7 +140,7 @@ fn flinch(
             person.bones[at].spring.kick(speed, strength);
         }
     }
-    let seconds = if world.game_paused() { 0.0 } else { time.delta_secs() };
+    let seconds = if world.game_paused() { 0.0 } else { time.delta_secs() * world.time_dilation() };
     flinches.people.retain(|&actor, person| {
         person.age += seconds;
         person.bones.iter_mut().for_each(|bone| bone.spring.step(seconds, strength));

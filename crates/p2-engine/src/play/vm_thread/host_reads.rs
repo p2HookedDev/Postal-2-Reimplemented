@@ -18,6 +18,7 @@ impl Simulation {
             (sent.steady || sent.view == view_key)
                 && sent.time_dilation == time_dilation
                 && sent.cull_volume == cull_volume
+                && (sent.frame.cull_distance == 0.0 || vm.beyond_cull_distance(actor, view_key.viewed) == sent.beyond)
                 // Whether its owner is the player's is in no stamp of its own.
                 && (sent.frame.emitters_disabled.is_empty() || vm.particle_time_scale(actor) == sent.frame.time_scale)
                 && store.object(actor).drawn() <= sent.read_at
@@ -41,10 +42,11 @@ impl Simulation {
         });
         let (read_at, steady) = (self.mark, now.attachment.is_none() && !owner_only);
         let vm = &self.vm;
+        let beyond = vm.beyond_cull_distance(actor, view_key.viewed);
         let others = || vm.store.objects_of(actor, Prop::Emitters).flatten().chain((!steady).then(|| vm.view_chain(actor)).into_iter().flatten());
         match self.sent.get_mut(&actor) {
             Some(sent) => {
-                (sent.read_at, sent.steady, sent.view, sent.time_dilation, sent.cull_volume) = (read_at, steady, view_key, time_dilation, cull_volume);
+                (sent.read_at, sent.steady, sent.view, sent.time_dilation, sent.cull_volume, sent.beyond) = (read_at, steady, view_key, time_dilation, cull_volume, beyond);
                 sent.others.clear();
                 sent.others.extend(others());
                 if sent.frame == now {
@@ -60,13 +62,13 @@ impl Simulation {
             }
             None => {
                 let others = others().collect();
-                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, view: view_key, time_dilation, cull_volume, others });
+                self.sent.insert(actor, Sent { frame: now.clone(), read_at, steady, view: view_key, time_dilation, cull_volume, beyond, others });
                 changes.push((actor, now));
             }
         }
     }
 
-    pub(in crate::play) fn draw_hud(&mut self, frame: &mut VmFrame, canvas: [f32; 2], step: f32) {
+    pub(in crate::play) fn draw_hud(&mut self, frame: &mut VmFrame, canvas: HudCanvas, step: f32) {
         self.hud_age += step;
         // With a menu or the mouse shown the HUD's scripts answer input: they run every tick.
         if self.hud_age >= HUD_PERIOD || frame.pointer != Pointer::Captured || self.hud_canvas != canvas || self.hud_kept.is_empty() {
@@ -79,8 +81,9 @@ impl Simulation {
         frame.hud_view = self.hud_view;
     }
 
-    pub(in crate::play) fn hud(&mut self, [width, height]: [f32; 2]) -> Vec<CanvasItem> {
+    pub(in crate::play) fn hud(&mut self, HudCanvas { size: [width, height], hud_inset }: HudCanvas) -> Vec<CanvasItem> {
         let Some(controller) = self.player else { return Vec::new() };
+        self.vm.set_hud_inset(hud_inset);
         self.vm.render_hud(controller, width, height).unwrap_or_else(|error| {
             bevy::log::warn!("HUD: {error}");
             Vec::new()

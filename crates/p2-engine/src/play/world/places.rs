@@ -8,8 +8,10 @@ pub(crate) struct Places {
     /// It is drawn through both to the newest tick's place, so the world moves at the frame rate while ticks are
     /// slower than frames.
     gliding: FxHashMap<ObjectId, [(Vector, Rotator); 2]>,
-    /// Kept until the actor leaves its base: handing a place to the game does not take it from here.
-    on_bones: FxHashMap<ObjectId, (ObjectId, BoneFrame)>,
+    /// Its base, the bone's frame the game is told and the frame it is drawn at: these differ while the drawn body
+    /// leaves the game's pose. Kept until the actor leaves its base: handing a place to the game does not take it
+    /// from here.
+    on_bones: FxHashMap<ObjectId, (ObjectId, BoneFrame, BoneFrame)>,
     untold: FxHashSet<ObjectId>,
 }
 
@@ -36,7 +38,7 @@ impl Places {
             }
         }
         let base = now.attachment.as_ref().filter(|_| !now.gone).map(|attachment| attachment.base);
-        if self.on_bones.get(&actor).is_some_and(|&(placed_on, _)| Some(placed_on) != base) {
+        if self.on_bones.get(&actor).is_some_and(|&(placed_on, ..)| Some(placed_on) != base) {
             self.on_bones.remove(&actor);
             self.untold.remove(&actor);
         }
@@ -61,16 +63,18 @@ impl Places {
     }
 
     fn on_bone(&self, actor: ObjectId) -> Option<(Vector, Rotator)> {
-        let (_, BoneFrame { location, axes: [x, y, z] }) = *self.on_bones.get(&actor)?;
+        let (_, _, BoneFrame { location, axes: [x, y, z] }) = *self.on_bones.get(&actor)?;
         Some((location, p2_vm::orthogonal_rotation(x, y, z)))
     }
 
+    /// The frame it is drawn at.
     pub(crate) fn bone_frame(&self, actor: ObjectId) -> Option<BoneFrame> {
-        self.on_bones.get(&actor).map(|&(_, frame)| frame)
+        self.on_bones.get(&actor).map(|&(.., drawn)| drawn)
     }
 
-    pub(crate) fn put_on_bone(&mut self, actor: ObjectId, base: ObjectId, frame: BoneFrame) {
-        if self.on_bones.insert(actor, (base, frame)) != Some((base, frame)) {
+    pub(crate) fn put_on_bone(&mut self, actor: ObjectId, base: ObjectId, told: BoneFrame, drawn: BoneFrame) {
+        let before = self.on_bones.insert(actor, (base, told, drawn));
+        if before.is_none_or(|(was_on, was_told, _)| (was_on, was_told) != (base, told)) {
             self.untold.insert(actor);
         }
     }
@@ -78,7 +82,7 @@ impl Places {
     /// The bone places made since the last call, of bases a camera drew, for the game to learn.
     pub(in crate::play) fn tell(&mut self, visible: &FxHashSet<ObjectId>, told: &mut Vec<(ObjectId, BoneFrame)>) {
         let on_bones = &self.on_bones;
-        told.extend(self.untold.drain().filter_map(|actor| on_bones.get(&actor).filter(|(base, _)| visible.contains(base)).map(|&(_, frame)| (actor, frame))));
+        told.extend(self.untold.drain().filter_map(|actor| on_bones.get(&actor).filter(|(base, ..)| visible.contains(base)).map(|&(_, told, _)| (actor, told))));
     }
 }
 
@@ -105,7 +109,7 @@ mod tests {
         places.changed(flash, None, &now);
         assert_eq!(places.shown(flash, &now, NEWEST), None);
         assert_eq!(places.newest(flash, &now), None);
-        places.put_on_bone(flash, weapon, bone_frame([5.0, 0.0, 98.0]));
+        places.put_on_bone(flash, weapon, bone_frame([5.0, 0.0, 98.0]), bone_frame([5.0, 0.0, 98.0]));
         let muzzle = Vector::from([5.0, 0.0, 98.0]);
         assert_eq!(places.shown(flash, &now, NEWEST).map(|(location, _)| location), Some(muzzle));
         assert_eq!(places.newest(flash, &now).map(|(location, _)| location), Some(muzzle));
@@ -116,12 +120,12 @@ mod tests {
         let (flash, weapon) = (id(1), id(2));
         let now = ActorFrame::kept_at([5.0, 0.0, 0.0], Some(weapon));
         let mut places = Places::default();
-        places.put_on_bone(flash, weapon, bone_frame([5.0, 0.0, 98.0]));
+        places.put_on_bone(flash, weapon, bone_frame([5.0, 0.0, 98.0]), bone_frame([5.0, 0.0, 98.0]));
         let (seen, mut told) = (FxHashSet::from_iter([weapon]), Vec::new());
         places.tell(&seen, &mut told);
         assert_eq!(told.len(), 1);
         told.clear();
-        places.put_on_bone(flash, weapon, bone_frame([5.0, 0.0, 98.0]));
+        places.put_on_bone(flash, weapon, bone_frame([5.0, 0.0, 98.0]), bone_frame([5.0, 0.0, 98.0]));
         places.tell(&seen, &mut told);
         assert!(told.is_empty());
         for _ in 0..3 {
@@ -133,8 +137,8 @@ mod tests {
     #[test]
     fn the_game_is_told_only_of_bases_a_camera_drew() {
         let mut places = Places::default();
-        places.put_on_bone(id(1), id(2), bone_frame([0.0; 3]));
-        places.put_on_bone(id(3), id(4), bone_frame([0.0; 3]));
+        places.put_on_bone(id(1), id(2), bone_frame([0.0; 3]), bone_frame([0.0; 3]));
+        places.put_on_bone(id(3), id(4), bone_frame([0.0; 3]), bone_frame([0.0; 3]));
         let mut told = Vec::new();
         places.tell(&FxHashSet::from_iter([id(4)]), &mut told);
         assert_eq!(told.iter().map(|&(actor, _)| actor).collect::<Vec<_>>(), [id(3)]);
@@ -145,19 +149,19 @@ mod tests {
         let (hat, head, other) = (id(1), id(2), id(3));
         let worn = ActorFrame::kept_at([0.0; 3], Some(head));
         let mut places = Places::default();
-        places.put_on_bone(hat, head, bone_frame([0.0, 0.0, 70.0]));
+        places.put_on_bone(hat, head, bone_frame([0.0, 0.0, 70.0]), bone_frame([0.0, 0.0, 70.0]));
         let moved = ActorFrame::kept_at([1.0, 0.0, 0.0], Some(head));
         places.changed(hat, Some(&worn), &moved);
         assert!(places.shown(hat, &moved, NEWEST).is_some());
         let elsewhere = ActorFrame::kept_at([1.0, 0.0, 0.0], Some(other));
         places.changed(hat, Some(&moved), &elsewhere);
         assert_eq!(places.shown(hat, &elsewhere, NEWEST), None);
-        places.put_on_bone(hat, other, bone_frame([0.0, 0.0, 70.0]));
+        places.put_on_bone(hat, other, bone_frame([0.0, 0.0, 70.0]), bone_frame([0.0, 0.0, 70.0]));
         let fallen = ActorFrame::kept_at([9.0, 0.0, 0.0], None);
         places.changed(hat, Some(&elsewhere), &fallen);
         assert_eq!(places.shown(hat, &fallen, NEWEST).map(|(location, _)| location), Some(Vector::from([9.0, 0.0, 0.0])));
         assert_eq!(places.bone_frame(hat).map(|frame| frame.location), None);
-        places.put_on_bone(hat, head, bone_frame([0.0; 3]));
+        places.put_on_bone(hat, head, bone_frame([0.0; 3]), bone_frame([0.0; 3]));
         let destroyed = ActorFrame { gone: true, ..ActorFrame::kept_at([0.0; 3], Some(head)) };
         places.changed(hat, Some(&worn), &destroyed);
         assert_eq!(places.bone_frame(hat).map(|frame| frame.location), None);

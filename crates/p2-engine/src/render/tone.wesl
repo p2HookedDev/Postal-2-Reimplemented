@@ -97,7 +97,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         color.r = textureSampleLevel(scene, scene_sampler, at + shift, 0.0).r;
         color.b = textureSampleLevel(scene, scene_sampler, at - shift, 0.0).b;
     }
-    color = color * post.grade.x + sun_rays(in.uv, in.position.xy);
+    color = color * post.grade.x + sun_rays(at, in.position.xy);
     color = pbr_neutral(color);
     let grey = dot(color, LUMINANCE);
     color = max(mix(vec3(grey), color, post.grade.y), vec3(0.0));

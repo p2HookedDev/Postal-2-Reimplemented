@@ -8,8 +8,8 @@ const CORONA_SHARE: f32 = 0.05;
 /// A source wider than this share of the radius would light its own surroundings as a wall.
 const LARGEST_SHARE: f32 = 0.25;
 
-/// `fixture` is the half size of the fixture mesh's largest side, `corona` the corona's world size, both where the map
-/// has them.
+/// `fixture` is the half size of the fixture mesh's largest side, `corona` the corona's base side in world units before
+/// its distance scaling, both where the map has them.
 pub fn lamp_size(radius: f32, corona: Option<f32>, fixture: Option<f32>) -> f32 {
     let size = match (fixture, corona) {
         (Some(fixture), _) if fixture > 0.0 => fixture,

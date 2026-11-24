@@ -19,8 +19,7 @@ function CreateMenuContents()
 	AddBox(1, "ModernWideView");
 	AddBox(2, "ModernHudSafeArea");
 	AddLevelSlider(3, "ModernPanini", 0, 10, 0);
-	AddLevelSlider(4, "ModernFadeIn", 0, 10, 5);
-	AddRow(AddCheckbox(Labels[5], Helps[5], ItemFont), "ModernTemporalAA", 0, 1);
+	AddLevelSlider(4, "ModernFadeIn", 0, 10, 0);
 	AddBack();
 	LoadRows();
 }
@@ -35,20 +34,18 @@ defaultproperties
 	BackHelp="Return to the Modern Graphics menu."
 
 	HudNames(0)="Original"
-	HudNames(1)="Whole pixels"
-	HudNames(2)="Sharp text"
+	HudNames(1)="Pixel perfect"
+	HudNames(2)="Smooth text"
 
-	Labels(0)="Sharp HUD"
-	Labels(1)="Wide view"
-	Labels(2)="HUD in centre"
-	Labels(3)="Edge correction"
-	Labels(4)="Fade in"
-	Labels(5)="Temporal smoothing"
+	Labels(0)="HUD scaling"
+	Labels(1)="Widescreen FOV"
+	Labels(2)="Centred HUD"
+	Labels(3)="Panini projection"
+	Labels(4)="Draw distance fade"
 
-	Helps(0)="Original scales the HUD as the game did. Whole pixels keeps it crisp; Sharp text also sharpens the writing."
-	Helps(1)="On a wide screen the view widens instead of being cut off at the top and bottom."
-	Helps(2)="Keeps the HUD inside a 16:9 area in the middle of a wide screen."
-	Helps(3)="Undoes the stretching at the edges of a wide field of view. 0 turns it off."
-	Helps(4)="Distant things fade in smoothly instead of popping into view. 0 turns it off."
-	Helps(5)="Smooths edges over several frames in place of the edge smoothing row. Can blur movement."
+	Helps(0)="Pixel perfect keeps the HUD crisp; Smooth text also smooths its lettering."
+	Helps(1)="Wide screens show more at the sides instead of cropping top and bottom."
+	Helps(2)="Keeps the HUD in a 16:9 area in the middle of wide screens."
+	Helps(3)="Reduces stretching at the screen edges with a wide field of view."
+	Helps(4)="Objects fade out near the draw distance instead of popping; higher widens the fade."
 }

@@ -1,6 +1,6 @@
 //! Modern graphics: screen-space bounce light. Between the opaque and the transparent passes a half-size pass gathers
-//! the lit colour of nearby surfaces that face each pixel, and a full-size pass adds a blur of it that keeps to
-//! surfaces of like depth and facing. Within one frame only: nothing is carried over from the last.
+//! the lit colour of nearby surfaces that face each pixel, and a full-size pass brightens the frame by a blur of it
+//! that keeps to surfaces of like depth and facing. Within one frame only: nothing is carried over from the last.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -37,11 +37,18 @@ use crate::render::shaders::add_shaders;
 const BOUNCE_SHADER: Handle<Shader> = uuid_handle!("4f0d2b7e-9c31-4a8e-b6d5-1e7a3c90f2d8");
 const GATHERED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 /// Tuned by eye later (unverified).
-const STRENGTH_PER_LEVEL: f32 = 0.2;
+const STRENGTH_PER_LEVEL: f32 = 0.05;
 
-/// Adds the gathered light times the blend constant and keeps the frame's alpha, the sun rays' mask.
-const ADD_SCALED: BlendState = BlendState {
-    color: BlendComponent { src_factor: BlendFactor::Constant, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
+/// The gathered light times the blend constant, the strength.
+const SCALED: BlendState = BlendState {
+    color: BlendComponent { src_factor: BlendFactor::Constant, dst_factor: BlendFactor::Zero, operation: BlendOperation::Add },
+    alpha: BlendComponent::REPLACE,
+};
+
+/// Adds the frame times the gathered light and keeps the frame's alpha, the sun rays' mask. No pass holds a surface's
+/// own colour, so the frame's lit colour stands in for it: a dark or shadowed surface takes little and stays dark.
+const ADD_BY_FRAME: BlendState = BlendState {
+    color: BlendComponent { src_factor: BlendFactor::Dst, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
     alpha: BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
 };
 
@@ -142,8 +149,8 @@ impl SpecializedRenderPipeline for BouncePipeline {
 
     fn specialize(&self, view_format: Option<TextureFormat>) -> RenderPipelineDescriptor {
         let (entry, format, blend) = match view_format {
-            None => ("gather", GATHERED_FORMAT, None),
-            Some(format) => ("composite", format, Some(ADD_SCALED)),
+            None => ("gather", GATHERED_FORMAT, SCALED),
+            Some(format) => ("composite", format, ADD_BY_FRAME),
         };
         RenderPipelineDescriptor {
             label: Some("bounce light".into()),
@@ -152,7 +159,7 @@ impl SpecializedRenderPipeline for BouncePipeline {
             fragment: Some(FragmentState {
                 shader: BOUNCE_SHADER,
                 entry_point: Some(entry.into()),
-                targets: vec![Some(ColorTargetState { format, blend, write_mask: ColorWrites::ALL })],
+                targets: vec![Some(ColorTargetState { format, blend: Some(blend), write_mask: ColorWrites::ALL })],
                 ..Default::default()
             }),
             ..Default::default()
@@ -230,6 +237,7 @@ fn bounce(
         });
         pass.set_render_pipeline(gather);
         pass.set_bind_group(0, &from_scene, &[offset.offset]);
+        pass.set_blend_constant(LinearRgba::rgb(light.0, light.0, light.0));
         pass.draw(0..3, 0..1);
     }
     let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
@@ -242,7 +250,6 @@ fn bounce(
     });
     pass.set_render_pipeline(composite);
     pass.set_bind_group(0, &from_gathered, &[offset.offset]);
-    pass.set_blend_constant(LinearRgba::rgb(light.0, light.0, light.0));
     pass.draw(0..3, 0..1);
 }
 

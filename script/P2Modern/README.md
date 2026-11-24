@@ -1,7 +1,8 @@
 # P2Modern: the Modern Graphics menu package
 
 Our own UnrealScript package that adds a "Modern Graphics" row to the Options menu and three pages for the modern
-graphics: a main page (master switch, quality preset), "Shadows and lighting" and "Image and effects", with combos,
+graphics: a main page (master switch, quality preset) and seven pages ("Shadows and lighting", "Image quality", "Post
+processing", "Reflections and light", "Blood and particles", "Screen and HUD", "Animation and cutscenes"), with combos,
 sliders and boxes. It is our code, not retail's; it uses only the stock Shell menu helpers (`AddComboBox`,
 `AddSlider`, `AddCheckbox`), so it looks like the retail pages.
 

@@ -25,7 +25,7 @@ function CreateMenuContents()
 
 defaultproperties
 {
-	TitleText="Image and Effects"
+	TitleText="Image Quality"
 	BackHelp="Return to the Modern Graphics menu."
 
 	SmoothingNames(0)="Off"
@@ -34,15 +34,15 @@ defaultproperties
 	SmoothingNames(3)="MSAA 2x"
 	SmoothingNames(4)="MSAA 4x"
 
-	Labels(0)="Edge smoothing"
+	Labels(0)="Antialiasing"
 	Labels(1)="Bloom"
 	Labels(2)="Sharpening"
-	Labels(3)="Surface relief"
-	Labels(4)="Generated specular"
+	Labels(3)="Bump mapping"
+	Labels(4)="Specular highlights"
 
-	Helps(0)="Smooths jagged edges. FXAA is the fastest, SMAA looks better, MSAA costs the most."
-	Helps(1)="A glow around bright light. 0 turns it off."
-	Helps(2)="A crisper picture. 0 turns it off."
-	Helps(3)="Bumps and depth on walls and floors, made from their own textures."
-	Helps(4)="Shine on surfaces, made from their own textures."
+	Helps(0)="Smooths jagged edges; FXAA is fastest, SMAA sharper, MSAA costs the most."
+	Helps(1)="A glow around bright lights."
+	Helps(2)="Makes the picture crisper."
+	Helps(3)="Walls and floors catch the light with bumps taken from their textures."
+	Helps(4)="Surfaces shine by their material: metal, tile, wood, cloth and skin differ."
 }

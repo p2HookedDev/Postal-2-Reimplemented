@@ -22,7 +22,7 @@ fn lighting(ambient: f32, lights: &[HardwareLightUniform]) -> SkinnedLighting {
 fn an_actor_is_lit_from_the_frame_on_its_entity() {
     use bevy::ecs::system::RunSystemOnce;
     let mut world = bevy::ecs::world::World::new();
-    let environment = LightEnvironment { lights: FxHashMap::default(), zone_ambients: vec![[0.5; 3]; 3], level_brightness: 1.0, sun: None, terrain: Vec::new() };
+    let environment = LightEnvironment { lights: FxHashMap::default(), zone_ambients: vec![[0.5; 3]; 3], level_brightness: 1.0, suns: Vec::new(), sun: None, terrain: Vec::new() };
     world.insert_resource(ShownScene { lighting: Some(Arc::new(environment)), ..ShownScene::default() });
     let collision = StaticCollision {
         model: crate::mesh_view::tests::two_zones(),

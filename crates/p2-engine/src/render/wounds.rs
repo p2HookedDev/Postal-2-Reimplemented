@@ -1,12 +1,10 @@
 use bevy::app::{App, Plugin, PostUpdate};
-use bevy::asset::{Assets, Handle, RenderAssetUsages};
-use bevy::ecs::prelude::{Commands, Entity, Query, Res, ResMut, Resource};
+use bevy::ecs::prelude::{Commands, Entity, Query, Res, ResMut, Resource, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::image::Image;
-use bevy::light::ClusteredDecal;
-use bevy::math::{Mat4, Quat, Vec2, Vec3};
+use bevy::light::{ClusteredDecal, SimulationLightSystems};
+use bevy::math::{Affine3A, Mat4, Vec3};
 use bevy::mesh::skinning::SkinnedMesh;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::transform::TransformSystems;
 use bevy::transform::components::{GlobalTransform, Transform};
 use p2_vm::ObjectId;
 use rustc_hash::FxHashMap;
@@ -20,14 +18,17 @@ use crate::play::Play;
 pub(crate) const DRY_SHIFT: u32 = 3;
 pub(crate) const DRY_STEPS: f32 = 15.0;
 const DRYING_SECONDS: f32 = 4.0;
-/// A projector (bit 31) aimed at actors (bit 19), alpha blended (2), with the wound bit 15: it also takes the bodies
-/// that refuse the game's projectors.
-const WOUND_TAG: u32 = 1 << 31 | 1 << 19 | 1 << 15 | 2;
+/// A projector (bit 31) aimed at actors (bit 19), with the wound bit 15: it also takes the bodies that refuse the
+/// game's projectors, and only the faces turned to the shot. `projector.wesl` draws its mark, without a texture.
+const WOUND_TAG: u32 = 1 << 31 | 1 << 19 | 1 << 15;
+/// A wound's own shape in tag bits 22..30, where a textured projector keeps its alpha test.
+const SEED_SHIFT: u32 = 22;
+const SEEDS: u32 = 256;
 const WOUNDS_PER_BODY: usize = 8;
 const WOUND_SIZE: f32 = 9.0;
 /// A hit farther than this from every bone (a hit without a place) leaves no mark.
 const BONE_REACH: f32 = 48.0;
-const BLOT_TEXELS: u32 = 32;
+const BACK_REACH: f32 = 2.0;
 
 /// 0 = wet, towards 1 = dry, `age` game seconds after the blood landed.
 pub(crate) fn dryness(age: f32) -> f32 {
@@ -38,7 +39,10 @@ pub(crate) struct WoundsPlugin;
 
 impl Plugin for WoundsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Wounds>().add_systems(PostUpdate, present_wounds.in_set(MapSystems::Present));
+        app.init_resource::<Wounds>().add_systems(
+            PostUpdate,
+            (present_wounds.in_set(MapSystems::Present), place_wounds.after(TransformSystems::Propagate).before(SimulationLightSystems::AssignLightsToClusters)),
+        );
     }
 }
 
@@ -47,13 +51,14 @@ struct Wound {
     joint: Entity,
     /// The decal's box in the joint's space.
     local: Mat4,
+    seed: u32,
     age: f32,
 }
 
 #[derive(Resource, Default)]
-struct Wounds {
-    blot: Option<Handle<Image>>,
+pub(crate) struct Wounds {
     bodies: FxHashMap<ObjectId, Vec<Wound>>,
+    made: u32,
 }
 
 /// Past [`WOUNDS_PER_BODY`] the oldest gives way and is returned.
@@ -66,46 +71,45 @@ fn add_oldest_out<T>(list: &mut Vec<T>, item: T, age: impl Fn(&T) -> f32) -> Opt
     Some(std::mem::replace(oldest, item))
 }
 
-/// The joint nearest `hit` among `joints` (joint-to-world) and a `size` box at `hit` in that joint's space.
-fn wound_frame(joints: &[Mat4], hit: Vec3, size: f32) -> Option<(usize, Mat4)> {
+/// The joint nearest `hit` among `joints` (joint-to-world) and, in that joint's space, a projector box `size` across
+/// shooting along `toward` (unit) from just before the hit to the joint's depth: the near half of the limb only. The
+/// box's own up is the world's as the body stands when hit, so the blood's run points down it.
+fn wound_frame(joints: &[Mat4], hit: Vec3, toward: Vec3, size: f32) -> Option<(usize, Mat4)> {
     let distance = |joint: &Mat4| joint.w_axis.truncate().distance(hit);
     let (index, joint) = joints.iter().enumerate().min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))?;
     if distance(joint) > BONE_REACH {
         return None;
     }
-    Some((index, joint.inverse() * Mat4::from_scale_rotation_translation(Vec3::splat(size), Quat::IDENTITY, hit)))
+    let depth = (joint.w_axis.truncate() - hit).dot(toward).max(size / 2.0) + BACK_REACH;
+    let up = (Vec3::Y - toward * toward.dot(Vec3::Y)).try_normalize().unwrap_or_else(|| toward.any_orthonormal_vector());
+    let across = up.cross(toward);
+    let centre = hit + toward * (depth / 2.0 - BACK_REACH);
+    let projector = Mat4::from_cols((across * size).extend(0.0), (up * size).extend(0.0), (-toward * depth).extend(0.0), centre.extend(1.0));
+    Some((index, joint.inverse() * projector))
 }
 
-fn wound_tag(age: f32) -> u32 {
-    WOUND_TAG | ((dryness(age) * DRY_STEPS).round() as u32) << DRY_SHIFT
+fn wound_tag(seed: u32, age: f32) -> u32 {
+    WOUND_TAG | (seed % SEEDS) << SEED_SHIFT | ((dryness(age) * DRY_STEPS).round() as u32) << DRY_SHIFT
 }
 
-/// Dark red, opaque at the middle and gone at the rim.
-fn blot_alpha(texel: Vec2) -> f32 {
-    let from_middle = (texel / BLOT_TEXELS as f32 * 2.0 - Vec2::ONE).length();
-    (1.0 - from_middle).clamp(0.0, 1.0).powf(0.6)
+/// After this frame's joints are placed, the transform written straight through: a wound does not trail its body.
+fn place_wounds(wounds: Res<Wounds>, joints: Query<&GlobalTransform, Without<ClusteredDecal>>, mut decals: Query<(&mut Transform, &mut GlobalTransform), With<ClusteredDecal>>) {
+    for wound in wounds.bodies.values().flatten() {
+        let (Ok(joint), Ok((mut transform, mut global))) = (joints.get(wound.joint), decals.get_mut(wound.decal)) else { continue };
+        let placed = joint.affine() * Affine3A::from_mat4(wound.local);
+        *transform = Transform::from_matrix(Mat4::from(placed));
+        *global = GlobalTransform::from(placed);
+    }
 }
 
-fn blot() -> Image {
-    let texels = (0..BLOT_TEXELS * BLOT_TEXELS)
-        .flat_map(|i| {
-            let alpha = blot_alpha(Vec2::new((i % BLOT_TEXELS) as f32 + 0.5, (i / BLOT_TEXELS) as f32 + 0.5));
-            [90, 6, 4, (alpha * 255.0).round() as u8]
-        })
-        .collect();
-    let size = Extent3d { width: BLOT_TEXELS, height: BLOT_TEXELS, depth_or_array_layers: 1 };
-    Image::new(size, TextureDimension::D2, texels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default())
-}
-
-/// Each hit on a person leaves a decal box on the bone nearest it, placed from that joint every frame.
-fn present_wounds(
+/// Each hit on a person that pushes it (a shot or a blow, not fire or a splash) leaves a mark on the bone nearest it.
+pub(crate) fn present_wounds(
     (settings, play): (Option<Res<Settings>>, Res<Play>),
     mut wounds: ResMut<Wounds>,
-    mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     skins: Query<(&FollowActor, &SkinnedMesh)>,
     joints: Query<&GlobalTransform>,
-    mut decals: Query<(&mut Transform, &mut ClusteredDecal)>,
+    mut decals: Query<&mut ClusteredDecal>,
 ) {
     let wounds = &mut *wounds;
     if settings.is_none_or(|settings| settings.modern_level(MODERN_WOUNDS) == 0) {
@@ -120,14 +124,13 @@ fn present_wounds(
     let step = if world.game_paused() { 0.0 } else { world.game_step() };
     wounds.bodies.retain(|_, body| {
         body.retain_mut(|wound| {
-            let Ok((mut transform, mut decal)) = decals.get_mut(wound.decal) else { return false };
-            let Ok(joint) = joints.get(wound.joint) else {
+            let Ok(mut decal) = decals.get_mut(wound.decal) else { return false };
+            let Ok(_) = joints.get(wound.joint) else {
                 commands.entity(wound.decal).despawn();
                 return false;
             };
             wound.age += step;
-            *transform = Transform::from_matrix(Mat4::from(joint.affine()) * wound.local);
-            let tag = wound_tag(wound.age);
+            let tag = wound_tag(wound.seed, wound.age);
             if decal.tag != tag {
                 decal.tag = tag;
             }
@@ -136,16 +139,18 @@ fn present_wounds(
         !body.is_empty()
     });
     let origin = world.origin();
-    for hit in world.person_hits() {
+    for hit in world.person_hits().iter().filter(|hit| hit.damage > 0.0) {
+        let [x, y, z]: [f32; 3] = hit.momentum.into();
+        let Some(toward) = Vec3::new(x, z, y).try_normalize() else { continue };
         let Some((_, skin)) = skins.iter().find(|(follow, _)| follow.actor == hit.person) else { continue };
         let placed: Vec<(Entity, Mat4)> = skin.joints.iter().filter_map(|&joint| Some((joint, Mat4::from(joints.get(joint).ok()?.affine())))).collect();
         let frames: Vec<Mat4> = placed.iter().map(|&(_, frame)| frame).collect();
         let [x, y, z]: [f32; 3] = hit.at.into();
-        let Some((index, local)) = wound_frame(&frames, origin + Vec3::new(x, z, y), WOUND_SIZE) else { continue };
-        let image = wounds.blot.get_or_insert_with(|| images.add(blot())).clone();
-        let decal = ClusteredDecal { base_color_texture: Some(image), tag: wound_tag(0.0), ..Default::default() };
-        let decal = commands.spawn((MapScoped, decal, Transform::from_matrix(frames[index] * local))).id();
-        let wound = Wound { decal, joint: placed[index].0, local, age: 0.0 };
+        let Some((index, local)) = wound_frame(&frames, origin + Vec3::new(x, z, y), toward, WOUND_SIZE) else { continue };
+        wounds.made = wounds.made.wrapping_add(1);
+        let seed = wounds.made;
+        let decal = commands.spawn((MapScoped, ClusteredDecal { tag: wound_tag(seed, 0.0), ..Default::default() }, Transform::from_matrix(frames[index] * local))).id();
+        let wound = Wound { decal, joint: placed[index].0, local, seed, age: 0.0 };
         if let Some(old) = add_oldest_out(wounds.bodies.entry(hit.person).or_default(), wound, |wound| wound.age)
             && let Ok(mut old) = commands.get_entity(old.decal)
         {
@@ -166,18 +171,20 @@ mod tests {
     }
 
     #[test]
-    fn a_wound_sits_on_the_nearest_joint_and_moves_with_it() {
+    fn a_wound_projects_along_the_shot_to_the_joint_and_moves_with_it() {
         let joints = [Mat4::IDENTITY, Mat4::from_translation(Vec3::new(0.0, 50.0, 0.0)), Mat4::from_translation(Vec3::new(30.0, 40.0, 0.0))];
         let hit = Vec3::new(28.0, 42.0, 5.0);
-        let (index, local) = wound_frame(&joints, hit, 9.0).unwrap();
+        let (index, local) = wound_frame(&joints, hit, Vec3::NEG_Z, 9.0).unwrap();
         assert_eq!(index, 2);
-        let (scale, _, at) = (joints[2] * local).to_scale_rotation_translation();
-        assert!(at.distance(hit) < 1e-4 && (scale - Vec3::splat(9.0)).length() < 1e-4);
-        let turned = Mat4::from_rotation_translation(Quat::from_rotation_y(1.0), Vec3::new(30.0, 40.0, 10.0));
-        let moved = (turned * local).w_axis.truncate();
-        assert!(moved.distance(turned.transform_point3(Vec3::new(-2.0, 2.0, 5.0))) < 1e-4);
-        assert!(wound_frame(&joints, Vec3::new(500.0, 0.0, 0.0), 9.0).is_none());
-        assert!(wound_frame(&[], hit, 9.0).is_none());
+        let placed = joints[2] * local;
+        assert!(placed.transform_point3(Vec3::new(0.0, 0.0, 0.5)).distance(hit + Vec3::Z * BACK_REACH) < 1e-4);
+        assert!(placed.transform_point3(Vec3::new(0.0, 0.0, -0.5)).distance(Vec3::new(28.0, 42.0, 0.0)) < 1e-4);
+        assert!((placed.x_axis.length() - 9.0).abs() < 1e-4 && (placed.y_axis.length() - 9.0).abs() < 1e-4);
+        let turned = Mat4::from_rotation_translation(bevy::math::Quat::from_rotation_y(1.0), Vec3::new(30.0, 40.0, 10.0));
+        let moved = (turned * local).transform_point3(Vec3::new(0.0, 0.0, 0.5));
+        assert!(moved.distance(turned.transform_point3(Vec3::new(-2.0, 2.0, 7.0))) < 1e-4);
+        assert!(wound_frame(&joints, Vec3::new(500.0, 0.0, 0.0), Vec3::NEG_Z, 9.0).is_none());
+        assert!(wound_frame(&[], hit, Vec3::NEG_Z, 9.0).is_none());
     }
 
     #[test]
@@ -192,16 +199,16 @@ mod tests {
     }
 
     #[test]
-    fn a_wound_tag_dries_and_keeps_its_bits() {
-        assert_eq!(wound_tag(0.0), WOUND_TAG);
-        assert_eq!(wound_tag(60.0), WOUND_TAG | 15 << DRY_SHIFT);
-        assert_eq!(WOUND_TAG & (0xf << DRY_SHIFT | 0x80), 0);
+    fn a_wound_keeps_its_seed_and_dries() {
+        assert_eq!(wound_tag(7, 0.0), WOUND_TAG | 7 << SEED_SHIFT);
+        assert_eq!(wound_tag(7 + SEEDS, 60.0), WOUND_TAG | 7 << SEED_SHIFT | 15 << DRY_SHIFT);
+        assert_eq!((WOUND_TAG | (SEEDS - 1) << SEED_SHIFT) & (0xf << DRY_SHIFT | 0x80 | 0x1f << 10 | 1 << 21), 0);
     }
 
     #[test]
-    fn the_blot_is_solid_in_the_middle_and_clear_at_the_rim() {
-        assert!(blot_alpha(Vec2::splat(BLOT_TEXELS as f32 / 2.0)) > 0.99);
-        assert_eq!(blot_alpha(Vec2::ZERO), 0.0);
-        assert_eq!(blot().data.map(|data| data.len()), Some((BLOT_TEXELS * BLOT_TEXELS * 4) as usize));
+    fn a_wounds_box_stands_upright_when_the_shot_is_level() {
+        let (_, local) = wound_frame(&[Mat4::IDENTITY], Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z, 9.0).unwrap();
+        assert!(local.y_axis.truncate().normalize().abs_diff_eq(Vec3::Y, 1e-5));
+        assert!(wound_frame(&[Mat4::IDENTITY], Vec3::new(0.0, 5.0, 0.0), Vec3::NEG_Y, 9.0).is_some());
     }
 }

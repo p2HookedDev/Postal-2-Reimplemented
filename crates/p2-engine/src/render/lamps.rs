@@ -94,11 +94,12 @@ fn on_threads<T: Send>(count: usize, threads: usize, work: impl Fn(usize) -> T +
 /// A lamp's texels in the book, as `lamp_shadow.wesl` reads them: place and radius (negative for a spot); linear colour
 /// and atlas tile; a spot's direction x and y, its cone's scale signed as the direction's z, and the cone's offset.
 /// The next three are written by the passes: two of detail squares, one of where its movers' tiles lie. The last holds
-/// the lamp's size.
+/// the lamp's size, which the shader reads only when the tile carries `LAMP_MARK`: the lamp has a size of its own.
 fn lamp_record(light: &MeshLight, level_brightness: f32, origin: Vec3, tile: u32) -> [[f32; 4]; RECORD_TEXELS] {
     let (at, spot) = scene_place(light, origin);
     let [r, g, b] = linear_light(light.color(level_brightness));
-    let look = [r, g, b, (tile & (LAMP_MARK - 1)) as f32];
+    let sized = if light.corona > 0.0 { LAMP_MARK } else { 0 };
+    let look = [r, g, b, ((tile & (LAMP_MARK - 1)) | sized) as f32];
     let size = [crate::render::lamp_size::lamp_size(light.world_radius(), Some(light.corona), None), 0.0, 0.0, 0.0];
     let Some(along) = spot else {
         return [[at.x, at.y, at.z, light.world_radius()], look, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4], size];
@@ -188,9 +189,10 @@ pub(crate) fn lamp_falloff(lamp_at: Vec3, range: f32, spot: Option<(Vec3, f32)>,
     (1.0 - x * x * (3.0 - 2.0 * x)) * cone
 }
 
-/// The linear light of the placed lamps at a point, with no shadow test.
-pub(crate) fn lamp_sum(lamps: &[(Vec3, &Placed)], point: Vec3) -> Vec3 {
-    lamps.iter().map(|(at, placed)| placed.color * lamp_falloff(*at, placed.range, placed.spot, point)).sum()
+/// The linear light of the placed lamps at a point, of those in range that `reaches` says light it.
+pub(crate) fn lamp_sum(lamps: &[(Vec3, &Placed)], point: Vec3, reaches: impl Fn(Vec3) -> bool) -> Vec3 {
+    let lit = lamps.iter().map(|(at, placed)| (*at, placed.color * lamp_falloff(*at, placed.range, placed.spot, point)));
+    lit.filter(|&(at, light)| light != Vec3::ZERO && reaches(at)).map(|(_, light)| light).sum()
 }
 
 #[derive(Resource, Default)]
@@ -612,12 +614,15 @@ mod tests {
         let placed = |color: Vec3, spot| Placed { number: 0, strength: color.element_sum(), color, range: 100.0, spot, reach: [0.0; 6] };
         let (red, blue, down) = (placed(Vec3::X, None), placed(Vec3::Z, None), placed(Vec3::Y, Some((Vec3::NEG_Y, 0.5))));
         let lamps = [(Vec3::ZERO, &red), (Vec3::new(500.0, 0.0, 0.0), &blue), (Vec3::new(0.0, 100.0, 0.0), &down)];
-        assert_eq!(lamp_sum(&lamps, Vec3::ZERO), Vec3::X);
-        let half = lamp_sum(&lamps, Vec3::new(50.0, 0.0, 0.0));
+        let open = |_: Vec3| true;
+        assert_eq!(lamp_sum(&lamps, Vec3::ZERO, open), Vec3::X);
+        let half = lamp_sum(&lamps, Vec3::new(50.0, 0.0, 0.0), open);
         assert!((half - Vec3::new(0.5, 0.0, 0.0)).length() < 1e-6, "{half}");
-        let under = lamp_sum(&lamps, Vec3::new(0.0, 50.0, 0.0));
+        let under = lamp_sum(&lamps, Vec3::new(0.0, 50.0, 0.0), open);
         assert!((under - Vec3::new(0.5, 0.5, 0.0)).length() < 1e-6, "{under}");
-        assert_eq!(lamp_sum(&lamps, Vec3::new(0.0, 0.0, 300.0)), Vec3::ZERO);
+        assert_eq!(lamp_sum(&lamps, Vec3::new(0.0, 0.0, 300.0), open), Vec3::ZERO);
+        let walled = lamp_sum(&lamps, Vec3::new(0.0, 50.0, 0.0), |at: Vec3| at != Vec3::ZERO);
+        assert!((walled - Vec3::new(0.0, 0.5, 0.0)).length() < 1e-6, "{walled}");
     }
 
     #[test]
@@ -640,6 +645,7 @@ mod tests {
         assert_eq!(record[6], [light.world_radius() * crate::render::lamp_size::LAMP_SOURCE_SHARE, 0.0, 0.0, 0.0]);
         let crowned = lamp_record(&MeshLight { corona: 160.0, ..light }, 1.0, Vec3::ZERO, tile);
         assert_eq!(crowned[6][0], crate::render::lamp_size::lamp_size(light.world_radius(), Some(160.0), None));
+        assert_eq!(crowned[1][3] as u32, LAMP_MARK | tile);
     }
 
     #[test]

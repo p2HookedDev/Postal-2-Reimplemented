@@ -1,7 +1,7 @@
 //! Modern graphics: screen-space reflections. After the main passes one full-screen pass marches the depth prepass
 //! along each reflecting pixel's mirrored ray and adds what it meets to the frame. A pixel reflects when its normal
 //! prepass alpha names a reflecting class, which our lit materials' prepass writes. A ray that leaves the screen or
-//! meets nothing takes the eye's zone ambient instead; level 1 marches nothing, so every ray takes it.
+//! meets nothing shows nothing: no stand-in light takes its place. Level 1 marches half as far as level 2.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
@@ -14,7 +14,6 @@ use bevy::ecs::prelude::{Commands, Component, Query, Res, ResMut, Resource, With
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::lifetimeless::Read;
-use bevy::light::AmbientLight;
 use bevy::math::{Mat4, Vec4};
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::{
@@ -39,7 +38,7 @@ const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13
 const CLASS_PREPASS_SHADER: Handle<Shader> = uuid_handle!("e2a4f9c1-7b36-4d58-9f0e-3c81b6d27a45");
 const HALF_SIZE_LEVEL: u8 = 2;
 const FULL_SIZE_LEVEL: u8 = 3;
-const NEUTRAL_STRENGTH: f32 = 5.0;
+const FULL_STRENGTH: f32 = 10.0;
 const FULL_SIZE_STEPS: f32 = 48.0;
 
 pub struct ReflectionsPlugin;
@@ -63,7 +62,8 @@ impl Plugin for ReflectionsPlugin {
             .add_systems(RenderStartup, init_reflections_pipeline)
             .add_systems(Render, prepare_reflections_pipelines.in_set(RenderSystems::Prepare))
             .add_systems(Render, prepare_pass_uniforms::<Reflections>.in_set(RenderSystems::PrepareResources))
-            .add_systems(Core3d, reflect.in_set(Core3dSystems::EarlyPostProcess));
+            // Before the temporal resolve, which steadies what was drawn through the frame's jitter.
+            .add_systems(Core3d, reflect.in_set(Core3dSystems::EarlyPostProcess).before(bevy::anti_alias::taa::temporal_anti_alias));
     }
 }
 
@@ -96,26 +96,29 @@ pub struct Reflections {
     view_from_clip: Mat4,
     view_from_world: Mat4,
     look: Vec4,
-    /// The zone's ambient in display light, as the lit shaders add it.
-    fallback: Vec4,
 }
 
-/// x the strength, y the march's stride in pixels (2 at half size), z its steps (0: the fallback alone). `None` while off.
-pub(crate) fn look(level: u8, strength: u8) -> Option<Vec4> {
+/// x the strength, 1 at the top level (a surface returns no more than reaches it), y the march's stride in pixels (2 at
+/// half size), z its steps, w the materials level. `None` while off. A ray that meets nothing on screen shows nothing.
+pub(crate) fn look(level: u8, strength: u8, materials: u8) -> Option<Vec4> {
     (level > 0 && strength > 0).then(|| {
         let stride = if level >= FULL_SIZE_LEVEL { 1.0 } else { 2.0 };
-        let steps = if level >= HALF_SIZE_LEVEL { FULL_SIZE_STEPS / stride } else { 0.0 };
-        Vec4::new(f32::from(strength) / NEUTRAL_STRENGTH, stride, steps, 0.0)
+        let steps = FULL_SIZE_STEPS / stride / if level >= HALF_SIZE_LEVEL { 1.0 } else { 2.0 };
+        Vec4::new((f32::from(strength) / FULL_STRENGTH).min(1.0), stride, steps, f32::from(materials))
     })
 }
 
 fn follow_reflection_settings(
     mut commands: Commands,
     settings: Option<Res<Settings>>,
-    views: Query<(Entity, &Camera, &GlobalTransform, &Msaa, Option<&AmbientLight>, Option<&Reflections>), With<SceneView>>,
+    views: Query<(Entity, &Camera, &GlobalTransform, &Msaa, Option<&Reflections>), With<SceneView>>,
 ) {
-    let wanted = look(modern_level(settings.as_deref(), MODERN_REFLECTIONS), modern_level(settings.as_deref(), MODERN_REFLECTION_STRENGTH));
-    for (entity, camera, place, msaa, ambient, shown) in &views {
+    let wanted = look(
+        modern_level(settings.as_deref(), MODERN_REFLECTIONS),
+        modern_level(settings.as_deref(), MODERN_REFLECTION_STRENGTH),
+        settings.as_deref().map_or(0, Settings::material_level),
+    );
+    for (entity, camera, place, msaa, shown) in &views {
         // The pass binds the prepass textures as single-sampled.
         let Some(look) = wanted.filter(|_| camera.is_active && matches!(msaa, Msaa::Off)) else {
             if shown.is_some() {
@@ -124,11 +127,7 @@ fn follow_reflection_settings(
             continue;
         };
         let clip_from_view = camera.clip_from_view();
-        let fallback = ambient.map_or(Vec4::ZERO, |ambient| {
-            let color = ambient.color.to_linear();
-            Vec4::new(color.red, color.green, color.blue, 0.0) * ambient.brightness
-        });
-        let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world: place.to_matrix().inverse(), look, fallback };
+        let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world: place.to_matrix().inverse(), look };
         if shown != Some(&reflections) {
             commands.entity(entity).insert(reflections);
         }
@@ -253,13 +252,12 @@ mod tests {
 
     #[test]
     fn levels_pick_the_march() {
-        assert_eq!(look(0, 5), None);
-        assert_eq!(look(2, 0), None);
-        assert_eq!(look(1, 5).map(|fallback_only| fallback_only.z), Some(0.0));
-        let (half, full) = (look(2, 5).expect("half size"), look(3, 10).expect("full size"));
-        assert_eq!((half.x, half.y), (1.0, 2.0));
-        assert_eq!((full.x, full.y), (2.0, 1.0));
-        assert!(half.z < full.z);
+        assert_eq!(look(0, 5, 5), None);
+        assert_eq!(look(2, 0, 5), None);
+        let (short, half, full) = (look(1, 5, 5).expect("a short march"), look(2, 5, 5).expect("half size"), look(3, 10, 0).expect("full size"));
+        assert_eq!((half.x, half.y, half.w), (0.5, 2.0, 5.0));
+        assert_eq!((full.x, full.y, full.w), (1.0, 1.0, 0.0));
+        assert!(0.0 < short.z && short.z < half.z && half.z < full.z);
     }
 
     #[test]
