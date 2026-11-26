@@ -4,7 +4,7 @@ use p2_bevy_assets::library::LoadError;
 use p2_render::level::{
     MaterialSwitches, switch_materials,
     BspParts, MaterialCache, MeshPlacing, Placement, StaticLevel, StaticParts, SwitchImage, TerrainParts, TerrainZones, antiportal_actors, bake_lamps, bsp_models,
-    bsp_groups, keep_restyled_out_of_world_pass, resolve_mesh_paths, static_collision, static_models, switched_images, terrain_models,
+    bsp_groups, mark_restyled, resolve_mesh_paths, static_collision, static_models, switched_images, terrain_models,
 };
 use p2_render::level_collision::LevelAlbedos;
 use p2_assets::FinalBlend;
@@ -290,7 +290,7 @@ impl PreparedScene {
         lamp_masked_all.extend(lamp_masked.into_values());
         phase("BSP and HUD, waited for");
         let switches = switched_images(game, &materials);
-        keep_restyled_out_of_world_pass(&mut models, switches.iter().map(|(_, switch)| switch));
+        mark_restyled(&mut models, switches.iter().map(|(_, switch)| switch));
         let blocking = collisions.len();
         let status = format!(
             "{name}: {drawn} of {} BSP polygons ({textured} textured, {lit} light-mapped); \

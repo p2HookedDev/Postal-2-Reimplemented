@@ -88,6 +88,7 @@ const COUNT_SIZE: u64 = 4;
 const WORKGROUP: u32 = 64;
 const CASTS: u32 = 1;
 const ZONED: u32 = 2;
+const UNDRAWN: u32 = 4;
 const WAIT_LOG_FRAMES: u32 = 300;
 const CHUNK_SIZE: u64 = 80;
 const CHUNK_FIRST_INDEX_AT: u64 = 32;
@@ -144,6 +145,8 @@ pub struct WorldSection {
     pub lightmap: Option<AssetId<Image>>,
     pub chunks: Arc<[Chunk]>,
     pub casts: bool,
+    /// False for a copy only the cached sun and sky levels draw.
+    pub drawn: bool,
     pub zones: Option<Vec<u8>>,
 }
 
@@ -165,6 +168,7 @@ pub struct WorldPlacement {
     pub world_from_local: Affine3A,
     pub chunks: Arc<[Chunk]>,
     pub casts: bool,
+    pub drawn: bool,
     pub zones: Option<Vec<u8>>,
 }
 
@@ -209,14 +213,14 @@ impl WorldTargets<'_, '_> {
     }
 
     pub fn add(&mut self, mesh: &Handle<Mesh>, material: &SectionMaterial, lightmap: Option<&Handle<Image>>, placement: WorldPlacement) {
-        let WorldPlacement { world_from_local, chunks, casts, zones } = placement;
+        let WorldPlacement { world_from_local, chunks, casts, drawn, zones } = placement;
         if chunks.is_empty() {
             return;
         }
         self.assets.meshes.push(mesh.clone());
         self.assets.materials.push(material.clone());
         self.assets.images.extend(lightmap.cloned());
-        self.pending.push(WorldSection { mesh: mesh.id(), material: material.id(), world_from_local, lightmap: lightmap.map(Handle::id), chunks, casts, zones });
+        self.pending.push(WorldSection { mesh: mesh.id(), material: material.id(), world_from_local, lightmap: lightmap.map(Handle::id), chunks, casts, drawn, zones });
     }
 
     pub fn finish(&mut self) {

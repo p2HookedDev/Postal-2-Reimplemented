@@ -29,6 +29,7 @@ struct CullView {
 
 const CASTS: u32 = 1u;
 const ZONED: u32 = 2u;
+const UNDRAWN: u32 = 4u;
 
 @group(0) @binding(0) var<storage> chunks: array<Chunk>;
 @group(0) @binding(1) var<storage> bucket_firsts: array<u32>;
@@ -43,6 +44,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let chunk = chunks[id.x];
     if view.casters_only != 0u && (chunk.flags & CASTS) == 0u {
+        return;
+    }
+    if view.casters_only == 0u && (chunk.flags & UNDRAWN) != 0u {
         return;
     }
     if (chunk.flags & ZONED) != 0u {

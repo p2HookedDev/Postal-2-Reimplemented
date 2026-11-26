@@ -89,7 +89,7 @@ pub(crate) use restyle::{SwitchedLook, restyle_switched};
 pub(crate) use restyle::rebind_materials;
 #[cfg(test)]
 use zone_culling::{follower_zones, layers_by_zone};
-use crate::scene::{LayeredByZone, MovingModel, Scene, SceneChange, SectionView, Skin, SkinJoint, ZoneCulled, points_box, sky_and_world};
+use crate::scene::{LayeredByZone, MovingModel, Scene, SceneChange, SectionView, Skin, SkinJoint, WorldPassUse, ZoneCulled, points_box, sky_and_world};
 pub use zone_culling::{NoSunCast, SeenWithin};
 
 pub struct MeshViewPlugin;
@@ -401,6 +401,8 @@ fn apply_change(
         spawn_actor_sections(&mut commands, parent, sections, transform, (follow.actor, follow), (&mut section_materials.actors, ActorLook::Follower), lit, ());
     }
     let world_supported = world.supported();
+    // Untextured, so no switch restyles it; both sides, since from the sun a room's ceiling is a back face.
+    let caster = SectionMaterial::Standard(section_materials.actors.materials.add(StandardMaterial { cull_mode: None, double_sided: true, ..Default::default() }));
     commands.entity(root).with_children(|parent| {
         for (image, transform, tag, blood) in decals {
             let mut decal = parent.spawn((ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() }, transform));
@@ -422,20 +424,28 @@ fn apply_change(
                     let world_chunks = section.chunks.filter(|_| !in_sky && world_supported && model.zone.as_ref().is_none_or(|zone| zone.only_from.is_none()) && matches!(section.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)));
                     let sort_node = section.bsp_node.and_then(|node| level.model()?.nodes.get(node).map(|bsp| SortedBspNode::new(node, bsp.plane, center)));
                     let terrain_layer = section.terrain_layer.map(TranslucentDraw::Terrain);
-                    (section.mesh, material, lightmap, world_chunks, sort_node, terrain_layer)
+                    let cast_copy = (section.world_pass == WorldPassUse::CastOnly).then_some(section.alpha_mode == AlphaMode::Opaque);
+                    (section.mesh, material, lightmap, world_chunks, sort_node, terrain_layer, cast_copy)
                 })
                 .collect();
             for instance in model.instances {
-                for (mesh, material, lightmap, world_chunks, sort_node, terrain_layer) in &sections {
+                for (mesh, material, lightmap, world_chunks, sort_node, terrain_layer, cast_copy) in &sections {
                     if let Some(chunks) = world_chunks {
                         let placement = WorldPlacement {
                             world_from_local: Transform::from_translation(-center).compute_affine() * instance.compute_affine(),
                             chunks: chunks.clone(),
                             casts: model.casts,
+                            drawn: cast_copy.is_none(),
                             zones: model.zone.as_ref().map(|zone| zone.zones.clone()).filter(|zones| !zones.is_empty()),
                         };
-                        world.add(mesh, material, lightmap.as_ref().map(|lightmap| &lightmap.image), placement);
-                        continue;
+                        match cast_copy {
+                            None => {
+                                world.add(mesh, material, lightmap.as_ref().map(|lightmap| &lightmap.image), placement);
+                                continue;
+                            }
+                            Some(true) => world.add(mesh, &caster, None, placement),
+                            Some(false) => {}
+                        }
                     }
                     let mut entity = parent.spawn((Mesh3d(mesh.clone()), instance));
                     material.insert(&mut entity);

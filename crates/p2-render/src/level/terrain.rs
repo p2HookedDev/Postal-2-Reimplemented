@@ -125,6 +125,7 @@ fn sector_sections(
             alpha_map: None,
             terrain: terrain_layers,
             chunks,
+            world_pass: crate::scene::WorldPassUse::Drawn,
             bsp_node: None,
             terrain_layer: None,
         }]
@@ -158,6 +159,7 @@ fn sector_sections(
                     alpha_map: Some(layer.alpha_map.clone()),
                     terrain: Vec::new(),
                     chunks,
+                    world_pass: crate::scene::WorldPassUse::Drawn,
                     bsp_node: None,
                     terrain_layer: (!opaque).then_some(layer.index as u32),
                 }

@@ -1,7 +1,3 @@
-//! Dumps a package's header, names, imports and exports; `--props` prints tagged properties, `--code` bytecode.
-//! `--shaders` counts Shader forms under a folder; `--reach`, `--zones` and `--walk` probe a map's zones.
-//! `--rig <.ka file> <mesh>` compares a ragdoll asset with the skeletal mesh it is used on.
-
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, HashMap};
@@ -16,7 +12,7 @@ use p2_package::{Export, MAP_EXTENSION, Package, TagValue};
 use p2_render_cpu::{Plane, VisibleZones, ZonePortals};
 use p2_script::{NativeName, ScriptObject, decode_script, disassemble, native_names, read_export};
 
-const USAGE: &str = "usage: p2-dump <package> [--props | --code | --reach | --zones | --walk | --rig <.ka file> <mesh>] | p2-dump <folder> --shaders";
+const USAGE: &str = "usage: p2-dump <package> [--props | --code | --reach | --zones | --walk | --above | --rig <.ka file> <mesh>] | p2-dump <folder> --shaders";
 
 
 fn level_model(pkg: &Package, data: &[u8]) -> anyhow::Result<Model> {
@@ -331,6 +327,108 @@ fn light_reaches(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Re
     Ok(())
 }
 
+const ABOVE_MESH_REACH: f32 = 1024.0;
+const ABOVE_MESH_PROPS: [&str; 12] = [
+    "StaticMesh",
+    "CullDistance",
+    "bAcceptsProjectors",
+    "Tag",
+    "bUnlit",
+    "bStatic",
+    "bMovable",
+    "bHidden",
+    "DrawScale",
+    "DrawScale3D",
+    "ForcedVisibilityZoneTag",
+    "bShadowCast",
+];
+
+fn location_of(pkg: &Package, object: &p2_package::ObjectData) -> Option<Vector> {
+    object.properties.iter().find_map(|property| match &property.value {
+        TagValue::Struct { data, .. } if pkg.name(property.name) == "Location" => {
+            let number = |at: usize| Some(f32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?));
+            Some(Vector::new(number(0)?, number(4)?, number(8)?))
+        }
+        _ => None,
+    })
+}
+
+fn above_probe(pkg: &Package, data: &[u8], out: &mut impl Write) -> anyhow::Result<()> {
+    let model = level_model(pkg, data)?;
+    let polygons = model.polygons();
+    let sky_zones: Vec<u8> = (0..model.zones.len())
+        .filter(|&zone| {
+            let export = usize::try_from(model.zones[zone].actor).ok().and_then(|actor| pkg.exports.get(actor.checked_sub(1)?));
+            export.is_some_and(|export| p2_script::class_name(pkg, export) == "SkyZoneInfo")
+        })
+        .filter_map(|zone| u8::try_from(zone).ok())
+        .collect();
+    let sky_location = pkg
+        .exports
+        .iter()
+        .filter(|export| p2_script::class_name(pkg, export) == "SkyZoneInfo")
+        .find_map(|export| location_of(pkg, &pkg.read_object(data, export).ok()?));
+    let sky_zone = sky_location.map(|location| p2_collision::point_zone(&model, location));
+    writeln!(out, "{} zones; SkyZoneInfo zones {sky_zones:?}; SkyZoneInfo at {sky_location:?} lies in zone {sky_zone:?}", model.zones.len())?;
+    let meshes: Vec<(&Export, p2_package::ObjectData, Vector)> = pkg
+        .exports
+        .iter()
+        .filter_map(|export| {
+            let object = pkg.read_object(data, export).ok()?;
+            object.properties.iter().any(|property| pkg.name(property.name) == "StaticMesh").then_some(())?;
+            let location = location_of(pkg, &object)?;
+            Some((export, object, location))
+        })
+        .collect();
+    for line in std::io::stdin().lines() {
+        let numbers: Vec<f32> = line?.split_whitespace().filter_map(|part| part.parse().ok()).collect();
+        let [x, y, z] = numbers[..] else { continue };
+        let eye = Vector::new(x, y, z);
+        writeln!(out, "\npoint {x} {y} {z}: zone {}", p2_collision::point_zone(&model, eye))?;
+        writeln!(out, "  BSP polygons over the point, lowest first: z range, normal z, flags, node zones, in sky, material")?;
+        let (up, top) = (Vector::new(0.0, 0.0, 1.0), Vector::new(x, y, 200_000.0));
+        let mut over: Vec<(f32, f32, &ModelPolygon)> = polygons
+            .iter()
+            .filter(|polygon| !ray_hits(&[polygon], eye, up).is_empty() || ray_hits(&[polygon], top, -up).first().is_some_and(|&(distance, _)| top.z - distance > z))
+            .map(|polygon| {
+                let heights = polygon.positions.iter().map(|p| p[2]);
+                (heights.clone().fold(f32::MAX, f32::min), heights.fold(f32::MIN, f32::max), polygon)
+            })
+            .collect();
+        over.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (low, high, polygon) in over {
+            let zones = model.nodes[polygon.node].zones;
+            writeln!(
+                out,
+                "    {low:.0}..{high:.0} {:.2} {:#010x} {zones:?} {} {}",
+                polygon.normal[2],
+                polygon.poly_flags,
+                sky_zone == Some(zones[1]),
+                pkg.object_name(polygon.material).unwrap_or("-")
+            )?;
+        }
+        writeln!(out, "  actors with a StaticMesh within {ABOVE_MESH_REACH} in xy and above z - 64:")?;
+        for (export, object, location) in &meshes {
+            let apart = ((location.x - x).powi(2) + (location.y - y).powi(2)).sqrt();
+            if apart > ABOVE_MESH_REACH || location.z < z - 64.0 {
+                continue;
+            }
+            write!(out, "    {} {} at {:.0} {:.0} {:.0}:", p2_script::class_name(pkg, export), pkg.name(export.object_name), location.x, location.y, location.z)?;
+            for property in object.properties.iter().filter(|property| ABOVE_MESH_PROPS.contains(&pkg.name(property.name))) {
+                let value = match &property.value {
+                    TagValue::Object(index) => pkg.object_name(*index).unwrap_or("-").to_string(),
+                    TagValue::Name(name) => pkg.name(*name).to_string(),
+                    TagValue::Struct { data, .. } => format!("{:?}", data.as_chunks::<4>().0.iter().map(|&c| f32::from_le_bytes(c)).collect::<Vec<_>>()),
+                    other => format!("{other:?}"),
+                };
+                write!(out, " {}={value}", pkg.name(property.name))?;
+            }
+            writeln!(out)?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = args.next().context(USAGE)?;
@@ -348,6 +446,7 @@ fn main() -> anyhow::Result<()> {
         Some("--reach") => light_reaches(&pkg, &data, &mut out)?,
         Some("--zones") => zone_survey(&pkg, &data, &mut out)?,
         Some("--walk") => walk_check(&pkg, &data, &mut out)?,
+        Some("--above") => above_probe(&pkg, &data, &mut out)?,
         Some("--rig") => {
             let (asset, mesh) = (args.next().context(USAGE)?, args.next().context(USAGE)?);
             rig_check(&pkg, &data, Path::new(&asset), &mesh.to_string_lossy(), &mut out)?;

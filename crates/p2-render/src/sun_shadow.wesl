@@ -5,7 +5,7 @@ import bevy_pbr::render::{
     shadow_sampling::sample_shadow_map_hardware,
 };
 import package::p2_render::sun_levels::{
-    LevelAtlas, LevelRecord, LevelSource, atlas_quad, level_atlas, level_count, level_is_sky, level_local, level_record, level_rows_xy, level_tap, level_texel_size, level_xy,
+    LevelAtlas, LevelRecord, LevelSource, atlas_quad, level_atlas, level_count, level_is_sky, level_local, level_record, level_rows_xy, level_tap, level_texel_size, level_xy, sky_tap,
 };
 @if(CONTACT_SHADOWS)
 import bevy_pbr::render::mesh_view_bindings::contact_shadows_settings;
@@ -406,8 +406,11 @@ fn sky_open(source: LevelSource, sun: u32, position: vec3<f32>, normal: vec3<f32
         if local.w == 0.0 {
             return 1.0;
         }
+        // Compared below the lift, so a ceiling that is the building's top, and the wall just under it, read roofed.
+        let depth = level_local(record, vec4(moved - record.direction_to_light * (spread + record.texel_size), 1.0)).z;
         let tap = SKY_KERNEL_TEXELS / record.size;
-        return 0.5 * (level_tap(atlas, record, local.xy + vec2(tap, tap), local.z) + level_tap(atlas, record, local.xy + vec2(-tap, -tap), local.z));
+        let taps = sky_tap(atlas, record, local.xy + vec2(tap, tap), depth) + sky_tap(atlas, record, local.xy + vec2(-tap, -tap), depth);
+        return select(1.0, taps.x / taps.y, taps.y > 0.0);
     }
     return 1.0;
 }

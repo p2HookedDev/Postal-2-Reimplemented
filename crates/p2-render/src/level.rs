@@ -14,7 +14,7 @@ mod terrain;
 
 pub use assets::{ActorTexture, PendingAssets, SceneAssets};
 pub use bsp::{BspParts, bsp_groups, bsp_models};
-pub use materials::{MaterialCache, SwitchImage, keep_restyled_out_of_world_pass, material_images, projector_image, switched_images};
+pub use materials::{MaterialCache, SwitchImage, mark_restyled, material_images, projector_image, switched_images};
 pub use mesh_sections::{SectionChunks, sections_of_static_mesh, skeletal_draw_meshes, skeletal_mesh_sections, skeletal_sections};
 pub use switches::{MaterialSwitches, switch_materials};
 pub use static_meshes::{MeshPlacing, Placement, StaticLevel, StaticParts, antiportal_actors, resolve_mesh_paths, static_models};

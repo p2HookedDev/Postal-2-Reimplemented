@@ -70,6 +70,7 @@ fn screen_texel(pixel: vec2<u32>) -> vec4<f32> {
     var best: array<f32, SCREEN_SLOTS>;
     var which: array<u32, SCREEN_SLOTS>;
     var shadows: array<vec2<f32>, SCREEN_SLOTS>;
+    var unheld_best = UNRANKED;
     for (var s = 0u; s < SCREEN_SLOTS; s++) {
         best[s] = UNRANKED;
     }
@@ -97,6 +98,12 @@ fn screen_texel(pixel: vec2<u32>) -> vec4<f32> {
                 through = kept_through;
             }
         }
+        unheld_best = max(unheld_best, score);
+    }
+    // The last slot fades out as the best lamp left out nears it, so a lamp's light never jumps where the two swap.
+    let last = SCREEN_SLOTS - 1u;
+    if unheld_best > 0.0 && best[last] > 0.0 {
+        shadows[last] *= 1.0 - unheld_best / best[last];
     }
     var held = 0u;
     for (var s = 0u; s < SCREEN_SLOTS; s++) {

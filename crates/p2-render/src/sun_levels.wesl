@@ -206,10 +206,26 @@ fn atlas_quad(atlas: LevelAtlas, at: vec2<f32>) -> vec4<f32> {
     );
 }
 
-fn level_tap(atlas: LevelAtlas, record: LevelRecord, uv: vec2<f32>, depth: f32) -> f32 {
+// The quad's atlas texel in xy, the blend toward its far corner in zw.
+fn tap_at(record: LevelRecord, uv: vec2<f32>) -> vec4<f32> {
     let spot = clamp(uv * record.size - 0.5, vec2(0.0), vec2(record.size - 1.0 - 1.0 / WEIGHT_STEPS));
     let base = floor(spot);
-    let blend = floor((spot - base) * WEIGHT_STEPS) / WEIGHT_STEPS;
-    let lit = step(atlas_quad(atlas, record.corner + base + 1.0), vec4(depth));
-    return mix(mix(lit.w, lit.z, blend.x), mix(lit.x, lit.y, blend.x), blend.y);
+    return vec4(record.corner + base + 1.0, floor((spot - base) * WEIGHT_STEPS) / WEIGHT_STEPS);
+}
+
+fn level_tap(atlas: LevelAtlas, record: LevelRecord, uv: vec2<f32>, depth: f32) -> f32 {
+    let at = tap_at(record, uv);
+    let lit = step(atlas_quad(atlas, at.xy), vec4(depth));
+    return mix(mix(lit.w, lit.z, at.z), mix(lit.x, lit.y, at.z), at.w);
+}
+
+// Open sky times weight, and the weight. A texel nothing was drawn into lies inside solid (a wall) or in the
+// void, and says nothing about the sky, so it weighs nothing.
+fn sky_tap(atlas: LevelAtlas, record: LevelRecord, uv: vec2<f32>, depth: f32) -> vec2<f32> {
+    let at = tap_at(record, uv);
+    let stored = atlas_quad(atlas, at.xy);
+    let blend = at.zw;
+    let corners = vec4((1.0 - blend.x) * blend.y, blend.x * blend.y, blend.x * (1.0 - blend.y), (1.0 - blend.x) * (1.0 - blend.y));
+    let weights = corners * select(vec4(0.0), vec4(1.0), stored > vec4(0.0));
+    return vec2(dot(step(stored, vec4(depth)), weights), dot(weights, vec4(1.0)));
 }

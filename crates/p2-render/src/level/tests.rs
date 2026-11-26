@@ -11,19 +11,19 @@ use p2_package::{LoadedPackage, Loader};
 use p2_script::{Objects, Source};
 
 use super::static_meshes::placed_box;
-use super::{SwitchImage, bsp_groups, keep_restyled_out_of_world_pass};
-use crate::scene::{ModelView, SectionView, points_box};
+use super::{SwitchImage, bsp_groups, mark_restyled};
+use crate::scene::{ModelView, SectionView, WorldPassUse, points_box};
 
 #[test]
-fn only_surfaces_a_switch_restyles_leave_the_world_pass() {
+fn only_surfaces_a_switch_restyles_are_marked() {
     let mut images = Assets::<Image>::default();
     let [restyled, image_only, plain] = [(); 3].map(|()| images.add(Image::default()));
     let section = |image: &Handle<Image>| SectionView { texture: Some(image.clone()), chunks: Some(Arc::from(Vec::new())), ..SectionView::textured(Handle::default(), None) };
     let mut models = [ModelView { sections: vec![section(&restyled), section(&image_only), section(&plain)], instances: Vec::new(), zone: None, casts: false }];
     let switch = |image: &Handle<Image>, whole| SwitchImage { image: image.id(), whole, shown: RenderState::default() };
-    keep_restyled_out_of_world_pass(&mut models, [switch(&restyled, true), switch(&image_only, false)].iter());
-    let in_table: Vec<bool> = models[0].sections.iter().map(|section| section.chunks.is_some()).collect();
-    assert_eq!(in_table, [false, true, true]);
+    mark_restyled(&mut models, [switch(&restyled, true), switch(&image_only, false)].iter());
+    let marked: Vec<WorldPassUse> = models[0].sections.iter().map(|section| section.world_pass).collect();
+    assert_eq!(marked, [WorldPassUse::CastOnly, WorldPassUse::Drawn, WorldPassUse::Drawn]);
 }
 
 fn ray_hits<'a>(polygons: &[&'a ModelPolygon], origin: [f32; 3], dir: [f32; 3]) -> Vec<(f32, &'a ModelPolygon)> {

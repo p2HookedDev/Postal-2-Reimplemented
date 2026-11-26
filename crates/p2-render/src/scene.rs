@@ -100,6 +100,13 @@ pub struct MaterialImages {
     pub state: RenderState,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WorldPassUse {
+    Drawn,
+    /// A material switch restyles the surface's material, which the world pass cannot follow.
+    CastOnly,
+}
+
 #[derive(Clone)]
 pub struct SectionView {
     pub mesh: Handle<Mesh>,
@@ -117,6 +124,7 @@ pub struct SectionView {
     pub alpha_map: Option<Handle<Image>>,
     pub terrain: Vec<TerrainPassLayer>,
     pub chunks: Option<Arc<[crate::world_pass::Chunk]>>,
+    pub world_pass: WorldPassUse,
     pub bsp_node: Option<usize>,
     pub terrain_layer: Option<u32>,
 }
@@ -171,6 +179,7 @@ impl SectionView {
             alpha_map: None,
             terrain: Vec::new(),
             chunks: None,
+            world_pass: WorldPassUse::Drawn,
             bsp_node: None,
             terrain_layer: None,
         }

@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 
 use super::{PendingAssets, SceneAssets};
 use crate::level_collision::mean_albedo;
-use crate::scene::{MaterialImages, ModelView};
+use crate::scene::{MaterialImages, ModelView, WorldPassUse};
 
 /// Shared by the threads that build a scene: each entry is made once, by the first thread that asks; another
 /// thread asking meanwhile waits for it. Entries only point down (material, source, detail or specular), so no
@@ -104,11 +104,11 @@ pub fn switched_images(game: &mut Game, materials: &MaterialCache) -> Vec<((Pack
     switched
 }
 
-pub fn keep_restyled_out_of_world_pass<'a>(models: &mut [ModelView], switches: impl Iterator<Item = &'a SwitchImage>) {
+pub fn mark_restyled<'a>(models: &mut [ModelView], switches: impl Iterator<Item = &'a SwitchImage>) {
     let restyled: HashSet<AssetId<Image>> = switches.filter(|switch| switch.whole).map(|switch| switch.image).collect();
     for section in models.iter_mut().flat_map(|model| &mut model.sections) {
         if section.texture.as_ref().is_some_and(|texture| restyled.contains(&texture.id())) {
-            section.chunks = None;
+            section.world_pass = WorldPassUse::CastOnly;
         }
     }
 }

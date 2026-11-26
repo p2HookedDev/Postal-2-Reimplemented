@@ -109,7 +109,8 @@ pub(super) fn chunk_table(
             push_vec3(&mut chunk_bytes, half);
             let zoned = if section.zones.is_some() { ZONED } else { 0 };
             let casts = if casts_shadow(section, bucket.properties.alpha_mode) { CASTS } else { 0 };
-            push_u32s(&mut chunk_bytes, &[section_index as u32, first_index, chunk.index_count, base_vertex, zoned | casts]);
+            let undrawn = if section.drawn { 0 } else { UNDRAWN };
+            push_u32s(&mut chunk_bytes, &[section_index as u32, first_index, chunk.index_count, base_vertex, zoned | casts | undrawn]);
             let mut zones = [0u32; 8];
             for &zone in section.zones.iter().flatten() {
                 zones[usize::from(zone >> 5)] |= 1 << (zone & 31);
