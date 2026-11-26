@@ -11,7 +11,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use p2_host::game_dir::{known_game_dir, save_game_dir};
 use p2_host::game_dir_form::GameDirForm;
 use p2_host::install;
-use p2_engine::map::{Hud, LoadMap, Particles, SpawnedActors};
+use p2_engine::map::{Hud, LoadMap, Particles, Session, SpawnedActors};
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
@@ -35,13 +35,18 @@ impl Plugin for LauncherPlugin {
         app.init_state::<GameState>()
             .insert_resource(form)
             .insert_resource(Launcher { installs, failure: None })
-            .add_systems(OnEnter(GameState::Launcher), release_cursor)
+            .add_systems(OnEnter(GameState::Launcher), (release_cursor, drop_session))
             .add_systems(EguiPrimaryContextPass, launcher.run_if(in_state(GameState::Launcher)));
     }
 }
 
 fn default_install(saved: Option<PathBuf>, found: &[PathBuf]) -> Option<PathBuf> {
     saved.or_else(|| found.first().cloned())
+}
+
+/// Removed at the state change: map systems later in the failing frame still read the session.
+fn drop_session(mut commands: Commands) {
+    commands.remove_resource::<Session>();
 }
 
 fn release_cursor(mut cursor: Single<&mut CursorOptions>) {

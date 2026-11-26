@@ -12,7 +12,7 @@ use bevy::render::settings::{Backends, WgpuFeatures, WgpuSettings};
 use bevy::app::{App, AppExit, Plugin, PluginGroup, Update};
 use bevy::ecs::error::Result;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::prelude::{Commands, MessageReader, MessageWriter, Query, Res, ResMut, Single};
+use bevy::ecs::prelude::{MessageReader, MessageWriter, Query, Res, ResMut, Single};
 use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::state::prelude::{NextState, in_state};
 use bevy::log::LogPlugin;
@@ -184,7 +184,6 @@ fn place_map(
     mut contexts: EguiContexts,
     mut view: ResMut<p2_render::view::MeshView>,
     mut area: ResMut<CanvasArea>,
-    mut commands: Commands,
     mut launcher: ResMut<Launcher>,
     mut next: ResMut<NextState<GameState>>,
     mut failed: MessageReader<MapFailed>,
@@ -199,7 +198,6 @@ fn place_map(
         launcher.failure = Some(failure.clone());
         view.viewport = None;
         area.0 = None;
-        commands.remove_resource::<Session>();
         next.set(GameState::Launcher);
     }
     Ok(())
