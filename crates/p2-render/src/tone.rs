@@ -1,44 +1,43 @@
-//! Modern graphics: the world's cameras draw linear light, bloom included, into a half-float image; one
-//! full-screen quad maps it through the tone curve into the frame the HUD and gamma ramp then draw on. The same
-//! quad adds the sun's rays, the colour settings, the vignette and the colour fringe.
+//! Modern graphics: the world's camera draws linear light, bloom included, into its half-float frame; one
+//! full-screen pass at the end of its post-processing maps it through the tone curve, before the anti-aliasing and
+//! sharpening. The same pass adds the sun's rays, the colour settings, the vignette and the colour fringe.
 
-use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
-use bevy::asset::{Asset, AssetEventSystems, Assets, Handle, RenderAssetUsages, uuid_handle};
-use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use bevy::camera::{Camera, Camera2d, CameraUpdateSystems, ClearColorConfig, Hdr};
-use bevy::color::Color;
+use bevy::anti_alias::contrast_adaptive_sharpening::cas;
+use bevy::anti_alias::fxaa::fxaa;
+use bevy::anti_alias::smaa::smaa;
+use bevy::app::{App, Plugin, PostUpdate};
+use bevy::asset::{Handle, uuid_handle};
+use bevy::camera::{Camera, CameraUpdateSystems, Projection};
+use bevy::core_pipeline::FullscreenShader;
+use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
+use bevy::core_pipeline::tonemapping::tonemapping;
 use bevy::ecs::entity::Entity;
-use bevy::ecs::prelude::{Commands, Component, Has, Query, Res, ResMut, Resource, Single, SystemSet, With, Without};
+use bevy::ecs::prelude::{Commands, Component, Local, Query, Res, ResMut, Resource, With};
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::light::DirectionalLight;
 use bevy::math::{Mat4, Vec2, Vec3, Vec4};
-use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::image::Image;
-use bevy::mesh::{Mesh, Mesh2d};
-use bevy::reflect::TypePath;
-use bevy::render::RenderApp;
-use bevy::render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureFormat, TextureUsages};
-use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-use bevy::shader::{Shader, ShaderRef};
-use bevy::shape::Rectangle;
-use bevy::sprite_render::{Material2d, Material2dPlugin, MeshMaterial2d};
+use bevy::render::diagnostic::RecordDiagnostics;
+use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::render_resource::{
+    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BufferId, CachedRenderPipelineId, ColorTargetState, ColorWrites, FilterMode, FragmentState,
+    Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerDescriptor, ShaderStages, ShaderType,
+    SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureViewId, binding_types,
+};
+use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
+use bevy::render::view::{ExtractedView, ViewTarget};
+use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
+use bevy::shader::Shader;
 use bevy::transform::TransformSystems;
 use bevy::transform::components::GlobalTransform;
-use bevy::window::{PrimaryWindow, Window};
 
-use crate::components::{CanvasLayer, SceneView, SunShadow};
+use crate::components::{SceneView, SunShadow};
+use crate::screen_pass::{PassUniformOffset, PassUniforms, ViewBindGroups, filtered_texture_and_sampler, follow_view_pass, prepare_pass_uniforms};
 use p2_host::display::{
     MODERN_CHROMATIC_ABERRATION, MODERN_CONTRAST, MODERN_EXPOSURE, MODERN_GOD_RAYS, MODERN_PHOTO_WARMTH, MODERN_SATURATION, MODERN_VIGNETTE, NEUTRAL_LEVEL, Settings,
 };
 use crate::shaders::{add_libraries, add_shaders, shader_file};
 
 const TONE_SHADER: Handle<Shader> = uuid_handle!("6d1f3a92-5b0e-4c87-a2d4-8e7c19b05f3a");
-const TONE_LAYER: usize = 9;
-const TONE_ORDER: isize = 0;
-
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ToneSystems {
-    Apply,
-}
 
 pub struct TonePlugin;
 
@@ -48,37 +47,32 @@ impl Plugin for TonePlugin {
             return;
         }
         add_libraries(app);
-        add_shaders(app, [(TONE_SHADER,shader_file("tone.wesl"))]);
-        app.add_plugins(Material2dPlugin::<ToneMaterial>::default())
-            .add_systems(Startup, setup)
-            .add_systems(Update, apply.in_set(ToneSystems::Apply))
-            // Before the frame's asset events go out, so the changed material reaches the renderer this frame.
-            .add_systems(PostUpdate, follow_effects.after(TransformSystems::Propagate).after(CameraUpdateSystems).before(AssetEventSystems));
+        add_shaders(app, [(TONE_SHADER, shader_file("tone.wesl"))]);
+        app.add_plugins(ExtractComponentPlugin::<ToneEffects>::default())
+            .add_systems(PostUpdate, follow_effects.after(TransformSystems::Propagate).after(CameraUpdateSystems));
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
+        render_app
+            .init_gpu_resource::<PassUniforms<ToneEffects>>()
+            .init_gpu_resource::<SpecializedRenderPipelines<TonePipeline>>()
+            .add_systems(RenderStartup, init_tone_pipeline)
+            .add_systems(Render, prepare_tone_pipelines.in_set(RenderSystems::Prepare))
+            .add_systems(Render, prepare_pass_uniforms::<ToneEffects>.in_set(RenderSystems::PrepareResources))
+            .add_systems(Core3d, draw_tone.in_set(Core3dSystems::PostProcess).after(tonemapping).before(fxaa).before(smaa).before(cas));
     }
 }
 
-#[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
-pub(crate) struct ToneMaterial {
-    #[texture(0)]
-    #[sampler(1)]
-    scene: Handle<Image>,
-    #[uniform(2)]
-    post: ToneEffects,
-}
-
-#[derive(ShaderType, Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ToneEffects {
+/// On the world camera while modern graphics are on.
+#[derive(Component, ShaderType, Debug, Clone, Copy, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_sync_target((Self, TonePipelineId, PassUniformOffset<Self>))]
+pub struct ToneEffects {
     sun: Vec4,
     tint: Vec4,
     grade: Vec4,
     lens: Vec4,
     balance: Vec4,
-}
-
-impl Default for ToneEffects {
-    fn default() -> Self {
-        Self { sun: Vec4::new(0.5, 0.5, 0.0, 1.0), tint: Vec4::ONE, grade: Vec4::new(1.0, 1.0, 1.0, 0.0), lens: Vec4::ZERO, balance: Vec4::ONE }
-    }
 }
 
 const WARMTH_PER_LEVEL: Vec3 = Vec3::new(0.03, 0.0, -0.04);
@@ -107,135 +101,144 @@ pub(crate) fn sun_on_screen(clip_from_world: Mat4, forward: Vec3, to_sun: Vec3) 
 }
 
 fn follow_effects(
+    mut commands: Commands,
     settings: Res<Settings>,
-    tone: Res<ToneFrame>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    views: Query<(&Camera, &GlobalTransform), With<SceneView>>,
+    views: Query<(Entity, &Camera, &GlobalTransform, &Projection, Option<&ToneEffects>), With<SceneView>>,
     suns: Query<(&DirectionalLight, &GlobalTransform), With<SunShadow>>,
-    projections: Query<(&Camera, &bevy::camera::Projection), With<SceneView>>,
-    mut materials: ResMut<Assets<ToneMaterial>>,
 ) {
-    if !settings.modern_graphics() {
-        return;
-    }
     let level = |query: &str| f32::from(settings.modern_level(query));
     let around_neutral = |query: &str| level(query) - f32::from(NEUTRAL_LEVEL);
-    let aspect = window.physical_width().max(1) as f32 / window.physical_height().max(1) as f32;
-    let mut wanted = ToneEffects {
-        sun: Vec4::new(0.5, 0.5, 0.0, aspect),
-        tint: Vec4::ONE,
-        grade: Vec4::new(
-            (around_neutral(MODERN_EXPOSURE) * EXPOSURE_STOPS_PER_LEVEL).exp2(),
-            1.0 + around_neutral(MODERN_SATURATION) * SATURATION_PER_LEVEL,
-            1.0 + around_neutral(MODERN_CONTRAST) * CONTRAST_PER_LEVEL,
-            level(MODERN_VIGNETTE) * VIGNETTE_PER_LEVEL,
-        ),
-        lens: {
-            let fov = projections.iter().find_map(|(camera, projection)| match projection {
-                bevy::camera::Projection::Perspective(perspective) if camera.is_active => Some(perspective.fov),
-                _ => None,
-            });
-            let panini = fov.map_or(Vec3::ZERO, |fov| crate::modern_view::panini(settings.modern_level(p2_host::display::MODERN_PANINI), fov, aspect));
-            Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, panini.x, panini.y, panini.z)
-        },
-        balance: white_balance(if settings.photo_active() { around_neutral(MODERN_PHOTO_WARMTH) } else { 0.0 }).extend(1.0),
-    };
     let rays = level(MODERN_GOD_RAYS) * RAYS_PER_LEVEL;
-    let view = views.iter().find(|(camera, _)| camera.is_active);
     let sun = suns.iter().map(|(light, place)| (light.color.to_linear(), place)).find(|(color, _)| color.red + color.green + color.blue > 0.0);
-    if rays > 0.0
-        && let (Some((camera, eye)), Some((color, place))) = (view, sun)
-        && let Some((at, facing)) = sun_on_screen(camera.clip_from_view() * eye.to_matrix().inverse(), eye.forward().as_vec3(), place.back().as_vec3())
-    {
-        let brightest = color.red.max(color.green).max(color.blue);
-        wanted.sun = Vec4::new(at.x, at.y, rays * facing, aspect);
-        wanted.tint = Vec4::new(color.red / brightest, color.green / brightest, color.blue / brightest, 1.0);
-    }
-    if materials.get(&tone.material).is_some_and(|material| material.post != wanted)
-        && let Some(mut material) = materials.get_mut(&tone.material)
-    {
-        material.post = wanted;
+    for (entity, camera, eye, projection, shown) in &views {
+        if !settings.modern_graphics() {
+            follow_view_pass(commands.entity(entity), shown, None);
+            continue;
+        }
+        // The pass covers the whole target, so its aspect, not the viewport's.
+        let aspect = camera.physical_target_size().map_or(1.0, |size| size.x.max(1) as f32 / size.y.max(1) as f32);
+        let mut wanted = ToneEffects {
+            sun: Vec4::new(0.5, 0.5, 0.0, aspect),
+            tint: Vec4::ONE,
+            grade: Vec4::new(
+                (around_neutral(MODERN_EXPOSURE) * EXPOSURE_STOPS_PER_LEVEL).exp2(),
+                1.0 + around_neutral(MODERN_SATURATION) * SATURATION_PER_LEVEL,
+                1.0 + around_neutral(MODERN_CONTRAST) * CONTRAST_PER_LEVEL,
+                level(MODERN_VIGNETTE) * VIGNETTE_PER_LEVEL,
+            ),
+            lens: {
+                let panini = match projection {
+                    Projection::Perspective(perspective) => crate::modern_view::panini(settings.modern_level(p2_host::display::MODERN_PANINI), perspective.fov, aspect),
+                    _ => Vec3::ZERO,
+                };
+                Vec4::new(level(MODERN_CHROMATIC_ABERRATION) * FRINGE_PER_LEVEL, panini.x, panini.y, panini.z)
+            },
+            balance: white_balance(if settings.photo_active() { around_neutral(MODERN_PHOTO_WARMTH) } else { 0.0 }).extend(1.0),
+        };
+        if rays > 0.0
+            && let Some((color, place)) = sun
+            && let Some((at, facing)) = sun_on_screen(camera.clip_from_view() * eye.to_matrix().inverse(), eye.forward().as_vec3(), place.back().as_vec3())
+        {
+            let brightest = color.red.max(color.green).max(color.blue);
+            wanted.sun = Vec4::new(at.x, at.y, rays * facing, aspect);
+            wanted.tint = Vec4::new(color.red / brightest, color.green / brightest, color.blue / brightest, 1.0);
+        }
+        follow_view_pass(commands.entity(entity), shown, Some(wanted));
     }
 }
 
-impl Material2d for ToneMaterial {
-    fn vertex_shader() -> ShaderRef {
-        ShaderRef::Handle(TONE_SHADER)
-    }
-
-    fn fragment_shader() -> ShaderRef {
-        ShaderRef::Handle(TONE_SHADER)
-    }
+#[derive(Resource)]
+pub struct TonePipeline {
+    layout: BindGroupLayoutDescriptor,
+    sampler: Sampler,
+    fullscreen: FullscreenShader,
 }
 
 #[derive(Component)]
-pub struct ToneCamera;
+pub struct TonePipelineId(CachedRenderPipelineId);
 
-#[derive(Resource)]
-pub(crate) struct ToneFrame {
-    pub(crate) image: Handle<Image>,
-    pub(crate) material: Handle<ToneMaterial>,
+fn init_tone_pipeline(mut commands: Commands, render_device: Res<RenderDevice>, fullscreen: Res<FullscreenShader>) {
+    let (sampled, filtering) = filtered_texture_and_sampler();
+    let layout = BindGroupLayoutDescriptor::new(
+        "tone",
+        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (sampled, filtering, binding_types::uniform_buffer::<ToneEffects>(true))),
+    );
+    let sampler = render_device.create_sampler(&SamplerDescriptor { label: "tone".into(), mag_filter: FilterMode::Linear, min_filter: FilterMode::Linear, ..Default::default() });
+    commands.insert_resource(TonePipeline { layout, sampler, fullscreen: fullscreen.clone() });
 }
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<ToneMaterial>>, mut meshes: ResMut<Assets<Mesh>>) {
-    let mut image = Image::new_target_texture(1, 1, TextureFormat::Rgba16Float, None);
-    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
-    let image = images.add(image);
-    let material = materials.add(ToneMaterial { scene: image.clone(), post: ToneEffects::default() });
-    let layers = RenderLayers::layer(TONE_LAYER);
-    commands.spawn((Mesh2d(meshes.add(Rectangle::new(2.0, 2.0))), MeshMaterial2d(material.clone()), layers.clone(), NoFrustumCulling));
-    // Bevy shares a main texture between cameras on one target only while their `Msaa` and `Hdr` agree:
-    // these match the canvas layers' so they draw on top of the quad.
-    commands.spawn((
-        Camera2d,
-        ToneCamera,
-        layers,
-        Msaa::Off,
-        Tonemapping::None,
-        DebandDither::Disabled,
-        Camera { is_active: false, order: TONE_ORDER, clear_color: ClearColorConfig::Custom(Color::BLACK), ..Default::default() },
-    ));
-    commands.insert_resource(ToneFrame { image, material });
+impl SpecializedRenderPipeline for TonePipeline {
+    type Key = TextureFormat;
+
+    fn specialize(&self, format: TextureFormat) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("tone".into()),
+            layout: vec![self.layout.clone()],
+            vertex: self.fullscreen.to_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: TONE_SHADER,
+                targets: vec![Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL })],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
 }
 
-#[expect(clippy::too_many_arguments, reason = "one system sizes the world image and follows the cameras around it")]
-fn apply(
+fn prepare_tone_pipelines(
     mut commands: Commands,
-    settings: Res<Settings>,
-    tone: Res<ToneFrame>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<ToneMaterial>>,
-    views: Query<&Camera, (With<SceneView>, Without<ToneCamera>)>,
-    canvases: Query<Has<Hdr>, With<CanvasLayer>>,
-    camera: Single<(Entity, &mut Camera, Has<Hdr>), With<ToneCamera>>,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<TonePipeline>>,
+    pipeline: Res<TonePipeline>,
+    views: Query<(Entity, &ExtractedView), With<ToneEffects>>,
 ) {
-    let modern = settings.modern_graphics();
-    let (width, height) = if modern { (window.physical_width().max(1), window.physical_height().max(1)) } else { (1, 1) };
-    let size = Extent3d { width, height, depth_or_array_layers: 1 };
-    if images.get(&tone.image).is_some_and(|image| image.texture_descriptor.size != size)
-        && let Some(mut image) = images.get_mut(&tone.image)
+    for (entity, view) in &views {
+        let id = pipelines.specialize(&pipeline_cache, &pipeline, view.target_format);
+        commands.entity(entity).insert(TonePipelineId(id));
+    }
+}
+
+/// Over the whole target, not only the viewport, as the canvas layers drawn after it show all of it.
+fn draw_tone(
+    view: ViewQuery<(&ViewTarget, &TonePipelineId, &PassUniformOffset<ToneEffects>)>,
+    pipeline_cache: Res<PipelineCache>,
+    pipeline: Res<TonePipeline>,
+    buffer: Res<PassUniforms<ToneEffects>>,
+    mut groups: Local<ViewBindGroups<(TextureViewId, BufferId)>>,
+    mut ctx: RenderContext,
+) {
+    let entity = view.entity();
+    let (target, id, offset) = view.into_inner();
+    let (Some(render_pipeline), Some(uniform), Some(uniforms)) =
+        (pipeline_cache.get_render_pipeline(id.0), buffer.0.binding(), buffer.0.buffer().map(|uniforms| uniforms.id()))
+    else {
+        return;
+    };
+    let post = target.post_process_write();
+    let bind_group = groups.get_or_make(entity, (post.source.id(), uniforms), || {
+        ctx.render_device().create_bind_group(
+            "tone",
+            &pipeline_cache.get_bind_group_layout(&pipeline.layout),
+            &BindGroupEntries::sequential((post.source, &pipeline.sampler, uniform)),
+        )
+    });
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let span = diagnostics.time_span(ctx.command_encoder(), "tone");
     {
-        image.resize(size);
-        // A resized image is a new texture: the material is prepared again, or it keeps reading the old one.
-        if let Some(mut material) = materials.get_mut(&tone.material) {
-            material.scene = tone.image.clone();
-        }
+        let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
+            label: Some("tone"),
+            color_attachments: &[Some(RenderPassColorAttachment { view: post.destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_render_pipeline(render_pipeline);
+        pass.set_bind_group(0, bind_group, &[offset.0]);
+        pass.draw(0..3, 0..1);
     }
-    let (entity, mut camera, hdr) = camera.into_inner();
-    let active = modern && views.iter().any(|view| view.is_active);
-    if camera.is_active != active {
-        camera.is_active = active;
-    }
-    let hdr_wanted = canvases.iter().any(|hdr| hdr);
-    if hdr != hdr_wanted {
-        if hdr_wanted {
-            commands.entity(entity).insert(Hdr);
-        } else {
-            commands.entity(entity).remove::<Hdr>();
-        }
-    }
+    span.end(ctx.command_encoder());
 }
 
 #[cfg(test)]

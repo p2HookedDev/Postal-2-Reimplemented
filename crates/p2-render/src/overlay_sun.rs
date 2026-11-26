@@ -2,6 +2,7 @@
 //! pixel sun shadows without shadow passes of their own.
 
 use bevy::app::{App, Plugin};
+use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::prelude::{Entity, Query, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::SystemChangeTick;
@@ -9,6 +10,7 @@ use bevy::pbr::{ExtractedDirectionalLight, LightEntity, ViewLightEntities, prepa
 use bevy::render::view::{ExtractedView, RenderShadowMapVisibleEntities, RenderVisibleEntities};
 use bevy::render::{Render, RenderApp, RenderSystems};
 
+use crate::components::OVERLAY_LAYERS;
 use crate::view::OverlayCamera;
 use crate::world_pass::WorldCamera;
 
@@ -32,21 +34,28 @@ fn one_shadowed_sun<'a>(mut shadowed: impl Iterator<Item = &'a ExtractedDirectio
 }
 
 /// The main world builds no cascades for the overlays, and `prepare_lights` unwraps a view's entry for every
-/// shadowed sun it sees. A missing scene entry still gets an empty list rather than that panic.
-fn share_sun_cascades(mut lights: Query<&mut ExtractedDirectionalLight>, scenes: Query<Entity, With<WorldCamera>>, overlays: Query<Entity, With<OverlayCamera>>) {
+/// shadowed sun it sees. A missing scene entry, or an overlay that draws no actor (the HUD's camera without a
+/// routed slot), still gets an empty list rather than that panic, and no cascade views are made for it.
+fn share_sun_cascades(
+    mut lights: Query<&mut ExtractedDirectionalLight>,
+    scenes: Query<Entity, With<WorldCamera>>,
+    overlays: Query<(Entity, Option<&RenderLayers>), With<OverlayCamera>>,
+) {
     if !one_shadowed_sun(lights.iter().filter(|light| light.shadow_maps_enabled)) {
         return;
     }
     let scene = scenes.single().ok();
+    let actors = OVERLAY_LAYERS.iter().fold(RenderLayers::none(), |layers, &layer| layers.with(layer));
     for mut light in &mut lights {
         if !light.shadow_maps_enabled {
             continue;
         }
         let cascades = scene.and_then(|scene| light.cascades.get(&scene).cloned()).unwrap_or_default();
         let frusta = scene.and_then(|scene| light.frusta.get(&scene).cloned()).unwrap_or_default();
-        for overlay in &overlays {
-            light.cascades.insert(overlay, cascades.clone());
-            light.frusta.insert(overlay, frusta.clone());
+        for (overlay, layers) in &overlays {
+            let draws = layers.is_none_or(|layers| layers.intersects(&actors));
+            light.cascades.insert(overlay, if draws { cascades.clone() } else { Vec::new() });
+            light.frusta.insert(overlay, if draws { frusta.clone() } else { Vec::new() });
         }
     }
 }
@@ -131,6 +140,19 @@ mod tests {
         assert_eq!(cascades.map(|cascades| cascades.iter().map(|cascade| cascade.texel_size).collect::<Vec<_>>()), Some(vec![SCENE_TEXEL; 2]));
         assert_eq!(light.and_then(|light| light.frusta.get(&overlay)).map(Vec::len), Some(2));
         assert_eq!(light.map(|light| light.cascades.len()), Some(2));
+    }
+
+    #[test]
+    fn an_overlay_that_draws_no_actor_gets_no_cascades() {
+        let mut world = World::new();
+        let scene = world.spawn(WorldCamera).id();
+        let idle = world.spawn((OverlayCamera(0), RenderLayers::none())).id();
+        let carrying = world.spawn((OverlayCamera(1), RenderLayers::layer(OVERLAY_LAYERS[0]))).id();
+        let sun = world.spawn(shadowed_sun(scene)).id();
+        world.run_system_once(share_sun_cascades).expect("runs");
+        let light = world.get::<ExtractedDirectionalLight>(sun);
+        assert_eq!(light.and_then(|light| light.cascades.get(&idle)).map(Vec::len), Some(0));
+        assert_eq!(light.and_then(|light| light.cascades.get(&carrying)).map(Vec::len), Some(2));
     }
 
     #[test]

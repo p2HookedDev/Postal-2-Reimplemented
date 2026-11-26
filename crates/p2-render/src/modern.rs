@@ -39,7 +39,6 @@ use p2_host::display::{
 use crate::material_class::level_bits;
 use crate::level_collision::LevelCollision;
 use crate::view::{NoSunCast, OverlayCamera};
-use crate::tone::ToneCamera;
 use crate::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step};
 use crate::blended::{OpaqueDecals, TerrainLayerMaterial};
 use crate::lightmapped::{BakedLight, LightmappedMaterial};
@@ -209,7 +208,6 @@ pub fn apply(
     settings: Res<Settings>,
     mut commands: Commands,
     mut cameras: Query<(Entity, &mut Camera, Has<SceneView>, Has<Hdr>, Has<OcclusionCulling>, Option<&RenderLayers>), With<Camera3d>>,
-    tone: Query<Entity, With<ToneCamera>>,
 ) {
     let bloom_level = settings.modern_level(MODERN_BLOOM);
     let sharpen = settings.modern_level(MODERN_SHARPEN);
@@ -220,7 +218,8 @@ pub fn apply(
     commands.insert_resource(WorldCasts(sun_level > 0));
     for (entity, mut shown, view, hdr, culled, layers) in &mut cameras {
         let mut camera = commands.entity(entity);
-        let hdr_wanted = settings.modern_graphics() && view;
+        // Every camera on the view's target, so they share its frame: Bevy shares one only while `Hdr` agrees.
+        let hdr_wanted = settings.modern_graphics();
         if hdr != hdr_wanted {
             if hdr_wanted {
                 camera.insert(Hdr);
@@ -231,14 +230,12 @@ pub fn apply(
         if !view {
             continue;
         }
-        // Bevy blends a camera's frame over the target by its alpha, and the alpha is the rays' mask (the sky stores 0),
-        // so under modern the view's frame replaces the target.
         let replaces = matches!(shown.output_mode, CameraOutputMode::Write { blend_state: Some(_), .. });
         if replaces != settings.modern_graphics() {
             shown.output_mode = if replaces {
                 CameraOutputMode::default()
             } else {
-                CameraOutputMode::Write { blend_state: Some(BlendState::REPLACE), clear_color: ClearColorConfig::None }
+                CameraOutputMode::Write { blend_state: Some(BlendState::REPLACE), clear_color: ClearColorConfig::Custom(Color::BLACK) }
             };
         }
         if bloom_level > 0 {
@@ -246,7 +243,7 @@ pub fn apply(
         } else {
             camera.remove::<ModernBloom>();
         }
-        let mut post = commands.entity(tone.single().unwrap_or(entity));
+        let mut post = commands.entity(entity);
         if sharpen > 0 {
             post.insert(ContrastAdaptiveSharpening { sharpening_strength: f32::from(sharpen) / 10.0, ..ContrastAdaptiveSharpening::default() });
         } else {

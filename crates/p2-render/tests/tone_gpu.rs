@@ -97,17 +97,19 @@ fn shown_after(modern: &'static str, bloom_level: u8, modern_on_at: Option<u32>,
         world.spawn((SunShadow, DirectionalLight { shadow_maps_enabled: false, ..DirectionalLight::default() }, Transform::IDENTITY.looking_to(Vec3::Z, Vec3::Y)));
     }
     let overlay = RenderLayers::layer(OVERLAY_LAYERS[0]);
-    let canvas = world
-        .spawn((
-            Camera3d::default(),
-            Camera { order: 1, clear_color: ClearColorConfig::None, ..Camera::default() },
-            Tonemapping::None,
-            DebandDither::Disabled,
-            Msaa::Off,
-            place,
-            overlay.clone(),
-        ))
-        .id();
+    let mut canvas = world.spawn((
+        Camera3d::default(),
+        Camera { order: 1, clear_color: ClearColorConfig::None, ..Camera::default() },
+        Tonemapping::None,
+        DebandDither::Disabled,
+        Msaa::Off,
+        place,
+        overlay.clone(),
+    ));
+    if modern == "True" {
+        canvas.insert(Hdr);
+    }
+    let canvas = canvas.id();
     unlit(&mut app, 4.0, Vec3::new(-4.0, 0.0, 0.0), 3.0, RenderLayers::default());
     unlit(&mut app, 0.25, Vec3::new(4.0, 0.0, 0.0), 3.0, RenderLayers::default());
     unlit(&mut app, 1.0, Vec3::new(0.0, 6.0, 0.0), 1.5, overlay);
@@ -122,6 +124,7 @@ fn shown_after(modern: &'static str, bloom_level: u8, modern_on_at: Option<u32>,
         if modern_on_at == Some(frame) {
             app.insert_resource(settings("True"));
             app.world_mut().entity_mut(view).insert(Hdr);
+            app.world_mut().entity_mut(canvas).insert(Hdr);
         }
         if !reading
             && let Some(target) = image_of(&app, canvas)
@@ -156,7 +159,7 @@ fn srgb(linear: f32) -> u8 {
 #[ignore = "needs a GPU"]
 fn the_tone_curve_rolls_off_bright_light_and_leaves_the_rest() {
     let Shown { bright, dim, canvas, view_draws_into_the_frame, .. } = shown("True", 0);
-    assert!(!view_draws_into_the_frame, "the view does not draw into the tone image");
+    assert!(view_draws_into_the_frame, "the view draws into another image with the modern graphics on");
     assert!((200..255).contains(&bright), "bright light not rolled off below white: {bright}");
     assert!(dim.abs_diff(srgb(0.25)) <= 3, "the curve changed a low value: {dim}, want {}", srgb(0.25));
     assert_eq!(canvas, 255, "the curve touched what is drawn after it");

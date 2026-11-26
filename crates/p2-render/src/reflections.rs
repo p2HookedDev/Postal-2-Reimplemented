@@ -40,7 +40,8 @@ use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS, Settings}
 use crate::particle_frame::DrawnParticles;
 use crate::screen_pass::{PassUniformOffset, PassUniforms, PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, prepare_pass_uniforms, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders, shader_file};
-use crate::stage_encoder::{AfterOpaque, submit_stage};
+use crate::stage_encoder::{AfterOpaque, StageEncoder, submit_stage};
+use crate::MainPassExtraSystems;
 use crate::view::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
@@ -75,7 +76,15 @@ impl Plugin for ReflectionsPlugin {
             .add_systems(Render, (prepare_pass_uniforms::<Reflections>, prepare_glass_copy).in_set(RenderSystems::PrepareResources))
             .add_systems(
                 Core3d,
-                copy_glass_frame.in_set(Core3dSystems::MainPass).after(main_opaque_pass_3d).before(submit_stage::<AfterOpaque>).before(main_transparent_pass_3d),
+                copy_glass_frame
+                    .in_set(Core3dSystems::MainPass)
+                    .after(main_opaque_pass_3d)
+                    .before(MainPassExtraSystems::Bounce)
+                    .before(MainPassExtraSystems::FireVolume)
+                    .before(MainPassExtraSystems::LampFog)
+                    .before(MainPassExtraSystems::GpuParticles)
+                    .before(submit_stage::<AfterOpaque>)
+                    .before(main_transparent_pass_3d),
             )
             .add_systems(Core3d, reflect.in_set(Core3dSystems::EarlyPostProcess).before(bevy::anti_alias::taa::temporal_anti_alias));
     }
@@ -215,12 +224,13 @@ fn prepare_glass_copy(
     }
 }
 
-fn copy_glass_frame(view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewTransmissionTexture)>, mut ctx: RenderContext) {
+/// First in the stage's shared encoder, so the copy still comes before the passes drawn after the opaque phase.
+fn copy_glass_frame(view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewTransmissionTexture)>, device: Res<RenderDevice>, mut stage: ResMut<StageEncoder<AfterOpaque>>) {
     let (camera, target, copy) = view.into_inner();
     let Some(size) = camera.physical_target_size else {
         return;
     };
-    ctx.command_encoder().copy_texture_to_texture(target.main_texture().as_image_copy(), copy.texture.as_image_copy(), size.to_extents());
+    stage.encoder(&device).copy_texture_to_texture(target.main_texture().as_image_copy(), copy.texture.as_image_copy(), size.to_extents());
 }
 
 #[derive(Resource)]

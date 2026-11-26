@@ -10,7 +10,11 @@ use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::prelude::{Changed, Component, Entity, Local, Query, RemovedComponents, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::{Quat, Vec3, Vec4};
+use bevy::pbr::{MeshInputUniform, MeshUniform, RenderMeshInstances, get_mesh_instance_world_from_local};
+use bevy::render::batching::gpu_preprocessing::BatchedInstanceBuffers;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
+use bevy::render::mesh::RenderMesh;
+use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_phase::{SortedPhaseItem, SortedRenderPhase, ViewSortedRenderPhases, sort_phase_system};
 use bevy::render::sync_world::MainEntity;
 use bevy::render::view::ExtractedView;
@@ -224,16 +228,27 @@ struct Partition {
     level: Vec<(ItemKey, TransparentSortingInfo3d)>,
 }
 
+/// Bevy keeps a sorted item from frame to frame with the centre it had when queued, and a moved transform does not
+/// queue it again: the centre is read anew, or a draw that moves (all of the sky, which follows the eye) sorts by
+/// where it once was.
 fn engine_translucent_order(
     views: Query<&ExtractedView>,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
     order: Res<TranslucentOrder>,
+    instances: Res<RenderMeshInstances>,
+    buffers: Option<Res<BatchedInstanceBuffers<MeshUniform, MeshInputUniform>>>,
+    meshes: Res<RenderAssets<RenderMesh>>,
     mut partition: Local<Partition>,
 ) {
+    let center_now = |entity: MainEntity| {
+        let queued = instances.render_mesh_queue_data(entity)?;
+        let mesh = meshes.get(queued.mesh_asset_id())?;
+        Some(get_mesh_instance_world_from_local(entity, queued.current_uniform_index, &instances, buffers.as_deref()).transform_point3(mesh.aabb_center))
+    };
     for view in &views {
         let Some(phase) = phases.get_mut(&view.retained_view_entity) else { continue };
         let ranks = order.ranks.get(&view.retained_view_entity.main_entity.id());
-        order_phase(phase, &order, view.world_from_view.translation(), ranks, &mut partition);
+        order_phase(phase, &order, view.world_from_view.translation(), ranks, &center_now, &mut partition);
     }
 }
 
@@ -242,6 +257,7 @@ fn order_phase(
     order: &TranslucentOrder,
     eye: Vec3,
     ranks: Option<&FxHashMap<usize, usize>>,
+    center_now: &impl Fn(MainEntity) -> Option<Vec3>,
     partition: &mut Partition,
 ) {
     if phase.items.is_empty() {
@@ -249,7 +265,13 @@ fn order_phase(
     }
     for (&key, item) in &phase.items {
         let side = if order.sky.contains(&key.1.id()) { &mut partition.sky } else { &mut partition.level };
-        side.push((key, item.sorting_info));
+        let sorting = match item.sorting_info {
+            TransparentSortingInfo3d::Sorted { mesh_center, depth_bias } => {
+                TransparentSortingInfo3d::Sorted { mesh_center: center_now(key.1).unwrap_or(mesh_center), depth_bias }
+            }
+            other => other,
+        };
+        side.push((key, sorting));
     }
     let sky = match order.sky_place {
         Some((sky_eye, turn)) => engine_list(order, partition.sky.drain(..), order.sky_ranks.as_ref(), sky_eye, |center| sky_eye + turn * (center - eye)),
@@ -355,15 +377,28 @@ mod tests {
         let order = TranslucentOrder::default();
         let mut partition = Partition::default();
         let mut empty = SortedRenderPhase::<Transparent3d>::default();
-        order_phase(&mut empty, &order, Vec3::ZERO, None, &mut partition);
+        order_phase(&mut empty, &order, Vec3::ZERO, None, &|_| None, &mut partition);
         assert!(empty.items.is_empty());
 
         let sorted = |z: f32| TransparentSortingInfo3d::Sorted { mesh_center: Vec3::Z * z, depth_bias: 0.0 };
         let mut phase = SortedRenderPhase::<Transparent3d>::default();
         phase.items.extend([item(1, sorted(10.0)), item(2, TransparentSortingInfo3d::AlwaysOnTop), item(3, sorted(500.0))]);
-        order_phase(&mut phase, &order, Vec3::ZERO, None, &mut partition);
+        order_phase(&mut phase, &order, Vec3::ZERO, None, &|_| None, &mut partition);
         let drawn: Vec<_> = phase.items.values().map(|item| (item.entity.0.index_u32(), item.distance)).collect();
         assert_eq!(drawn, [(3, 0.0), (1, 1.0), (2, 2.0)]);
         assert!(partition.sky.is_empty() && partition.level.is_empty());
+    }
+
+    #[test]
+    fn a_draw_sorts_by_where_it_is_now_not_where_it_was_queued() {
+        let order = TranslucentOrder::default();
+        let mut partition = Partition::default();
+        let sorted = |z: f32| TransparentSortingInfo3d::Sorted { mesh_center: Vec3::Z * z, depth_bias: 0.0 };
+        let mut phase = SortedRenderPhase::<Transparent3d>::default();
+        phase.items.extend([item(1, sorted(10.0)), item(2, sorted(500.0))]);
+        let moved = |entity: MainEntity| (entity.id().index_u32() == 1).then_some(Vec3::Z * 900.0);
+        order_phase(&mut phase, &order, Vec3::ZERO, None, &moved, &mut partition);
+        let drawn: Vec<_> = phase.items.values().map(|item| item.entity.0.index_u32()).collect();
+        assert_eq!(drawn, [1, 2]);
     }
 }

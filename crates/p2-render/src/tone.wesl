@@ -12,9 +12,9 @@ struct Post {
     balance: vec4<f32>,
 }
 
-@group(2) @binding(0) var scene: texture_2d<f32>;
-@group(2) @binding(1) var scene_sampler: sampler;
-@group(2) @binding(2) var<uniform> post: Post;
+@group(0) @binding(0) var scene: texture_2d<f32>;
+@group(0) @binding(1) var scene_sampler: sampler;
+@group(0) @binding(2) var<uniform> post: Post;
 
 const LUMINANCE: vec3<f32> = vec3(0.2126, 0.7152, 0.0722);
 const RAY_STEPS: i32 = 24;
@@ -25,14 +25,9 @@ const RAY_REACH: f32 = 1.3;
 const RAY_BRIGHTEST: f32 = 2.0;
 const VIGNETTE_FROM: f32 = 0.35;
 
-struct VertexOutput {
+struct FullscreenOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vertex(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>) -> VertexOutput {
-    return VertexOutput(vec4<f32>(position.xy, 0.5, 1.0), uv);
 }
 
 fn across(offset: vec2<f32>) -> f32 {
@@ -79,7 +74,7 @@ fn panini(uv: vec2<f32>, strength: f32, half: f32, zoom: f32, aspect: f32) -> ve
 }
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let from_middle = in.uv - vec2(0.5);
     var at = in.uv;
     if post.lens.y > 0.0 {
@@ -100,5 +95,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     color = shown * shown;
     let corner = saturate((across(from_middle) - VIGNETTE_FROM) / (across(vec2(0.5)) - VIGNETTE_FROM));
     color *= 1.0 - post.grade.w * corner * corner;
-    return vec4<f32>(color, 1.0);
+    // Clamped to what the window shows, so the layers drawn over it blend as over the window.
+    return vec4<f32>(saturate(color), 1.0);
 }

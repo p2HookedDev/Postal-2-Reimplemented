@@ -7,7 +7,7 @@ use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::camera::{Camera, Camera2d, Camera3d, ClearColorConfig, ImageRenderTarget, RenderTarget};
 use bevy::color::Color;
 use bevy::ecs::change_detection::DetectChanges;
-use bevy::ecs::prelude::{Commands, Has, Or, Query, Res, ResMut, Resource, Single, SystemSet, With, Without};
+use bevy::ecs::prelude::{Commands, Or, Query, Res, ResMut, Resource, Single, SystemSet, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::image::Image;
 use bevy::math::Vec4;
@@ -21,8 +21,8 @@ use bevy::sprite_render::{Material2d, Material2dPlugin, MeshMaterial2d};
 use bevy::window::{PrimaryWindow, Window};
 
 use p2_host::display::{BRIGHTNESS, CONTRAST, GAMMA, Settings};
-use crate::components::{CanvasLayer, SceneView};
-use crate::tone::{ToneCamera, ToneFrame, TonePlugin};
+use crate::components::CanvasLayer;
+use crate::tone::TonePlugin;
 use crate::view::HudCamera;
 use crate::shaders::{add_shaders, shader_file};
 
@@ -91,15 +91,13 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
     commands.insert_resource(Gamma { image, material, camera, ramp: None });
 }
 
-#[expect(clippy::too_many_arguments, reason = "one system retargets every camera the ramp and the tone pass share")]
 fn apply(
     settings: Res<Settings>,
     mut gamma: ResMut<Gamma>,
-    tone: Res<ToneFrame>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<GammaMaterial>>,
-    mut cameras: Query<(&mut RenderTarget, Has<SceneView>), (Or<(With<Camera3d>, With<CanvasLayer>, With<ToneCamera>)>, Without<HudCamera>)>,
+    mut cameras: Query<&mut RenderTarget, (Or<(With<Camera3d>, With<CanvasLayer>)>, Without<HudCamera>)>,
     mut ramp_camera: Query<&mut Camera>,
 ) {
     let last = gamma.ramp;
@@ -128,10 +126,8 @@ fn apply(
         }
     }
     let scale_factor = window.scale_factor();
-    let modern = settings.modern_graphics();
-    for (mut target, view) in &mut cameras {
-        let toned = modern && view;
-        let wanted = if toned { Some(&tone.image) } else if active { Some(&gamma.image) } else { None };
+    let wanted = active.then_some(&gamma.image);
+    for mut target in &mut cameras {
         let current = match &*target {
             RenderTarget::Image(image) => Some((&image.handle, image.scale_factor)),
             _ => None,
@@ -153,9 +149,10 @@ mod tests {
     use bevy::ecs::world::World;
 
     use super::*;
+    use crate::components::SceneView;
     use p2_host::display::MODERN_GRAPHICS;
 
-    fn wired(modern: &str, brightness: &str) -> (Handle<Image>, Handle<Image>, [Option<Handle<Image>>; 4]) {
+    fn wired(modern: &str, brightness: &str) -> (Handle<Image>, [Option<Handle<Image>>; 3]) {
         let mut world = World::new();
         world.insert_resource(Settings::read(|query| match query {
             MODERN_GRAPHICS => modern.to_owned(),
@@ -163,7 +160,6 @@ mod tests {
             _ => String::new(),
         }));
         let mut images = Assets::<Image>::default();
-        let toned = images.add(Image::new_target_texture(1, 1, TextureFormat::Rgba16Float, None));
         let ramped = images.add(Image::new_target_texture(1, 1, TextureFormat::Rgba8UnormSrgb, None));
         let mut materials = Assets::<GammaMaterial>::default();
         let material = materials.add(GammaMaterial { ramp: Vec4::new(0.5, 0.5, 1.0, 0.0), scene: ramped.clone() });
@@ -171,12 +167,10 @@ mod tests {
         world.insert_resource(materials);
         let camera = world.spawn((Camera2d, Camera { is_active: false, ..Default::default() })).id();
         world.insert_resource(Gamma { image: ramped.clone(), material, camera, ramp: None });
-        world.insert_resource(ToneFrame { image: toned.clone(), material: Handle::default() });
         world.spawn((Window::default(), PrimaryWindow));
         let cameras = [
             world.spawn((Camera3d::default(), SceneView::default())).id(),
             world.spawn((Camera3d::default(), CanvasLayer(0))).id(),
-            world.spawn((Camera2d, ToneCamera)).id(),
             world.spawn((Camera3d::default(), HudCamera)).id(),
         ];
         world.run_system_once(apply).expect("runs");
@@ -184,19 +178,16 @@ mod tests {
             Some(RenderTarget::Image(image)) => Some(image.handle.clone()),
             _ => None,
         });
-        (toned, ramped, targets)
+        (ramped, targets)
     }
 
     #[test]
-    fn world_cameras_draw_into_the_tone_image_under_modern() {
-        let (_, _, targets) = wired("False", "");
-        assert_eq!(targets, [None, None, None, None]);
-        let (toned, _, targets) = wired("True", "");
-        assert_eq!(targets, [Some(toned), None, None, None]);
-        let (toned, ramped, targets) = wired("True", "0.7");
-        assert_eq!(targets, [Some(toned), Some(ramped.clone()), Some(ramped), None]);
-        let (_, ramped, targets) = wired("False", "0.7");
-        assert_eq!(targets, [Some(ramped.clone()), Some(ramped.clone()), Some(ramped), None]);
+    fn world_cameras_draw_into_the_ramp_image_only_while_it_is_on_with_or_without_modern() {
+        for modern in ["False", "True"] {
+            assert_eq!(wired(modern, "").1, [None, None, None]);
+            let (ramped, targets) = wired(modern, "0.7");
+            assert_eq!(targets, [Some(ramped.clone()), Some(ramped), None]);
+        }
     }
 
     #[test]

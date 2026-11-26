@@ -175,7 +175,9 @@ fn static_mesh_models(
             (level.environment.mesh_colors(level.model, &mesh, sphere, instance.as_ref(), &lighting), fits, lighting)
         });
         let (lighting, relit): (Option<_>, Option<_>) = lit.map(|(colors, fits, lighting)| (colors, (fits, lighting))).unzip();
-        if fixed.is_some() && in_sky {
+        // A follower in both the sky and the level gets its sky copy from its zones as it is placed; drawn here too, it
+        // would draw twice in the sky.
+        if fixed.is_some() && in_sky && (follow.is_none() || !in_world) {
             parts.sky_models.push(ModelView { sections: sections(t, lighting.as_deref(), false, mirrored, &|_| true), instances: vec![transform], zone: None, casts: false });
             if !in_world {
                 continue;
