@@ -217,6 +217,25 @@ fn log_stage_timing(clocks: Res<StageClocks>, spans: Option<Res<SystemSpans>>, t
     }
 }
 
+pub(super) fn settings_line(settings: &Settings) -> String {
+    format!(
+        "modern {}, sun shadows {}, distance {}, lamps {}, contact {}, ao {}, indirect {}, anti-aliasing {}, bloom {}, sharpen {}, relief {}, specular {}, msaa {}",
+        settings.modern_graphics(),
+        settings.modern_level(MODERN_SHADOWS),
+        settings.modern_level(MODERN_SHADOW_DISTANCE),
+        settings.modern_level(MODERN_LAMP_SHADOWS),
+        settings.modern_level(MODERN_CONTACT_SHADOWS),
+        settings.modern_level(MODERN_AO),
+        settings.modern_level(MODERN_INDIRECT),
+        settings.modern_level(MODERN_ANTI_ALIASING),
+        settings.modern_level(MODERN_BLOOM),
+        settings.modern_level(MODERN_SHARPEN),
+        settings.modern_effect(MODERN_RELIEF),
+        settings.modern_effect(MODERN_SPECULAR),
+        settings.msaa_samples()
+    )
+}
+
 fn log_scene_counts(
     clocks: Res<StageClocks>,
     settings: Option<Res<Settings>>,
@@ -227,22 +246,7 @@ fn log_scene_counts(
     mut since: Local<f32>,
 ) {
     if let Some(settings) = settings.as_ref().filter(|settings| settings.is_changed()) {
-        bevy::log::info!(
-            "settings: modern {}, sun shadows {}, distance {}, lamps {}, contact {}, ao {}, indirect {}, anti-aliasing {}, bloom {}, sharpen {}, relief {}, specular {}, msaa {}",
-            settings.modern_graphics(),
-            settings.modern_level(MODERN_SHADOWS),
-            settings.modern_level(MODERN_SHADOW_DISTANCE),
-            settings.modern_level(MODERN_LAMP_SHADOWS),
-            settings.modern_level(MODERN_CONTACT_SHADOWS),
-            settings.modern_level(MODERN_AO),
-            settings.modern_level(MODERN_INDIRECT),
-            settings.modern_level(MODERN_ANTI_ALIASING),
-            settings.modern_level(MODERN_BLOOM),
-            settings.modern_level(MODERN_SHARPEN),
-            settings.modern_effect(MODERN_RELIEF),
-            settings.modern_effect(MODERN_SPECULAR),
-            settings.msaa_samples()
-        );
+        bevy::log::info!("settings: {}", settings_line(settings));
     }
     if !a_second_passed(&mut since, time.delta_secs()) {
         return;

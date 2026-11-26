@@ -62,6 +62,7 @@ pub struct ModernGraphicsPlugin;
 
 impl Plugin for ModernGraphicsPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<crate::debug_view::DebugView>();
         app.add_plugins(crate::lamps::LampsPlugin);
         app.add_plugins(crate::probes::ProbesPlugin);
         app.add_plugins(SunCachePlugin);
@@ -174,6 +175,7 @@ impl ModernFlagged for TerrainMaterial {
 
 fn follow_flag<M: ModernFlagged>(
     settings: Res<Settings>,
+    debug_view: Res<crate::debug_view::DebugView>,
     events: Option<Res<Messages<AssetEvent<M>>>>,
     mut cursor: Local<MessageCursor<AssetEvent<M>>>,
     mut known: Local<usize>,
@@ -182,8 +184,8 @@ fn follow_flag<M: ModernFlagged>(
     let added: Vec<AssetId<M>> = events.as_deref().map_or_else(Vec::new, |events| {
         cursor.read(events).filter_map(|event| match *event { AssetEvent::Added { id } => Some(id), _ => None }).collect()
     });
-    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.material_level(), settings.modern_level(MODERN_LAMP_SIZE)) | mirror_bit(&settings);
-    let stale: Vec<_> = if settings.is_changed() || materials.len() != *known {
+    let bits = u16::from(modern_flag(&settings)) | level_bits(settings.material_level(), settings.modern_level(MODERN_LAMP_SIZE)) | mirror_bit(&settings) | debug_view.flag_bits();
+    let stale: Vec<_> = if settings.is_changed() || debug_view.is_changed() || materials.len() != *known {
         *known = materials.len();
         materials.iter().filter(|(_, material)| material.flag() != bits).map(|(id, _)| id).collect()
     } else {

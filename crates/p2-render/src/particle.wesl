@@ -204,7 +204,7 @@ fn lying_light(position: vec3<f32>, frag_coord: vec4<f32>, emitter: vec3<f32>, l
     }
     let facing = select(-normal, normal, dot(normal, view.world_position.xyz - position) >= 0.0);
     let seen = sun_seen(LevelSource(0u, 0u), vec4(position, 1.0), facing, frag_coord.xy);
-    let lamp_light = LampLight(lamps, vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0);
+    let lamp_light = LampLight(lamps, vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0, vec3(0.0));
     let white = modern_surface(vec3(1.0), position, facing, seen, ambient_occlusion(frag_coord.xy), false, lamp_light, surface_of(0.0));
     return to_display(white);
 }

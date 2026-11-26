@@ -6,6 +6,7 @@ pub mod asset_churn;
 pub mod blended;
 pub mod canvas;
 pub mod compiling;
+pub mod debug_view;
 pub mod bsp_light;
 pub mod gamma;
 pub mod lamps;

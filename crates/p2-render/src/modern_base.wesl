@@ -16,7 +16,8 @@ fn modern_bits(flag: f32) -> u32 {
 
 // `diffuse` in display light, `specular` and `bounce` in linear light; `specular_edge` is the highlight's part
 // that grows towards grazing. `sky` is what a probe sees of the sky, x below 0 without a probe; `grounded` is
-// how much light from all around reaches past nearby movers, 1 in the open.
+// how much light from all around reaches past nearby movers, 1 in the open. `unshadowed` is the lamp light, in
+// display light, that no shadow test held.
 struct LampLight {
     diffuse: vec3<f32>,
     specular: vec3<f32>,
@@ -24,6 +25,7 @@ struct LampLight {
     bounce: vec3<f32>,
     sky: vec4<f32>,
     grounded: f32,
+    unshadowed: vec3<f32>,
 }
 
 fn fresnel_five(cosine: f32) -> f32 {

@@ -45,9 +45,12 @@ use p2_render::components::{FollowActor, FollowBone};
 use p2_render::view::SceneView;
 use crate::play::Play;
 
+mod dump;
 mod system_spans;
 mod stage_timing;
 
+use dump::Dump;
+use p2_render::debug_view::DebugView;
 use system_spans::{SpanTiming, SystemSpans, WGPU};
 use stage_timing::a_second_passed;
 pub use stage_timing::{FrameWindow, StageTimingPlugin, log_frame_times};
@@ -212,7 +215,8 @@ impl Plugin for DiagnosticsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DiagnosticsLog>()
             .init_resource::<Overlay>()
-            .add_systems(Update, (log_state, write_file))
+            .init_resource::<Dump>()
+            .add_systems(Update, (log_state, write_file, dump::advance_dump))
             .add_systems(Last, flush_on_exit)
             .add_systems(EguiPrimaryContextPass, overlay);
     }
@@ -228,19 +232,22 @@ fn log_state(session: Option<ResMut<Session>>, play: Res<Play>, mut last: Local<
     let Some(mut session) = session else { return };
     let session = session.bypass_change_detection();
     let map = session.map().unwrap_or("none");
-    let kind = if session.loading().is_some() {
-        "loading"
-    } else {
-        match play.world() {
-            None => "not playing",
-            Some(world) if world.shows_mouse() => "menu",
-            Some(_) => "playing",
-        }
-    };
+    let kind = state_kind(session, &play);
     if last.0 != kind || last.1 != map {
         let state = if kind == "loading" { format!("loading (leaving map {map})") } else { format!("{kind}, map {map}") };
         bevy::log::info!(target: "diagnostics", "state {state}");
         *last = (kind, map.to_owned());
+    }
+}
+
+fn state_kind(session: &Session, play: &Play) -> &'static str {
+    if session.loading().is_some() {
+        return "loading";
+    }
+    match play.world() {
+        None => "not playing",
+        Some(world) if world.shows_mouse() => "menu",
+        Some(_) => "playing",
     }
 }
 
@@ -289,12 +296,12 @@ fn overlay(
     mut contexts: EguiContexts,
     keys: Res<ButtonInput<KeyCode>>,
     mut overlay: ResMut<Overlay>,
-    log: Res<DiagnosticsLog>,
-    particles: Option<Res<Particles>>,
+    (log, particles): (Res<DiagnosticsLog>, Option<Res<Particles>>),
     (play, mut times): (Res<Play>, ResMut<FrameTimes>),
     cameras: Query<&Transform, With<SceneView>>,
+    (mut dump, debug_view): (ResMut<Dump>, Option<ResMut<DebugView>>),
 ) -> Result {
-    if keys.just_pressed(KeyCode::F10) {
+    if keys.just_pressed(KeyCode::F10) && dump.run.is_none() {
         overlay.open = !overlay.open;
     }
     if !overlay.open {
@@ -307,6 +314,8 @@ fn overlay(
     let recent: Vec<String> = log.lines.lock().map(|log| log.lines.iter().skip(log.lines.len().saturating_sub(RECENT)).map(shown).collect()).unwrap_or_default();
     let flag = |on: bool, name: &'static str| if on { name } else { "" };
     let mut profile = times.vm_profile;
+    let mut chosen = debug_view.as_deref().copied();
+    let mut dump_asked = false;
     egui::Window::new("Diagnostics (F10)").default_pos([8.0, 40.0]).default_width(600.0).show(contexts.ctx_mut()?, |ui| {
         ui.label(overlay.summary.as_str());
         ui.horizontal(|ui| {
@@ -314,6 +323,16 @@ fn overlay(
             ui.radio_value(&mut profile, VmProfile::Off, "off");
             ui.radio_value(&mut profile, VmProfile::TickByClass, "tick by class");
             ui.radio_value(&mut profile, VmProfile::Work, "work and functions");
+        });
+        ui.horizontal(|ui| {
+            if let Some(chosen) = chosen.as_mut() {
+                egui::ComboBox::from_label("Debug view (needs modern graphics)").selected_text(chosen.name()).show_ui(ui, |ui| {
+                    for view in DebugView::ALL {
+                        ui.selectable_value(chosen, view, view.name());
+                    }
+                });
+            }
+            dump_asked = ui.button("Dump").on_hover_text("A screenshot of every debug view and a report, in a dumps folder beside the game").clicked();
         });
         ui.separator();
         ui.label(format!("Particle emitter actors within {NEAR} units, nearest the view direction first:"));
@@ -343,5 +362,9 @@ fn overlay(
     if times.vm_profile != profile {
         times.vm_profile = profile;
     }
+    if let (Some(mut view), Some(chosen)) = (debug_view, chosen) {
+        view.set_if_neq(chosen);
+    }
+    dump.requested |= dump_asked;
     Ok(())
 }

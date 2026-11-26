@@ -21,7 +21,7 @@ import bevy_pbr::render::mesh_view_bindings::depth_prepass_texture;
 @group(1) @binding(5) var pass_atlas_sampler: sampler;
 
 fn no_lamps() -> LampLight {
-    return LampLight(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0);
+    return LampLight(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0, vec3(0.0));
 }
 
 // The atlas side in units, and the guard band around a face in texels. Matches `lamps/atlas.rs`.
@@ -520,11 +520,14 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: 
         }
         var shadow = saturate(lamp.facing / SUN_FACING_FADE);
         var walled = shadow;
+        var untested = unit < 1.0;
         if unit >= 1.0 {
             var through = unheld;
             if i < SCREEN_LIST_LAMPS && (screen.x & (1u << i)) != 0u {
                 through = screen_shadow(screen, countOneBits(screen.x & ((1u << i) - 1u)));
             } else {
+@if(SCREEN_SHADOWS_ONLY)
+                untested = true;
 @if(!SCREEN_SHADOWS_ONLY)
                 through = lamp_shadows(book, lamp, position, ground, side, unit, &column, movers_near, lookup);
             }
@@ -534,6 +537,7 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: 
         }
         let lamp_gives = lamp.shown * (lamp.facing * walled);
         unshaded += lamp_gives;
+        sum.unshadowed += select(vec3(0.0), lamp_gives, untested);
         given += lamp_gives * lamp_gives;
         reaching += lamp_gives * lamp_gives * (shadow / max(walled, 1e-4));
         if shadow <= 0.0 {

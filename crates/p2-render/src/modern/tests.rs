@@ -35,6 +35,7 @@ fn every_material_kind_follows_the_setting() {
     world.init_resource::<Messages<AssetEvent<ActorLitMaterial>>>();
     world.init_resource::<Messages<AssetEvent<TerrainMaterial>>>();
     world.init_resource::<Messages<AssetEvent<TerrainLayerMaterial>>>();
+    world.init_resource::<crate::debug_view::DebugView>();
     let mut flags = |on: bool| {
         let value = if on { "True" } else { "False" };
         world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() }));
@@ -64,6 +65,7 @@ fn every_material_gets_the_flag_once() {
     world.insert_resource(materials);
     world.init_resource::<Messages<AssetEvent<LightmappedMaterial>>>();
     world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
+    world.init_resource::<crate::debug_view::DebugView>();
     world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
     let bits = modern_flag(world.resource::<Settings>());
     let level = world.resource::<Settings>().material_level();

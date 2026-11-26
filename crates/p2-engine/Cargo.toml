@@ -28,6 +28,7 @@ p2-host.workspace = true
 p2-render.workspace = true
 p2-particles.workspace = true
 p2-render-cpu.workspace = true
+chrono.workspace = true
 
 [lints]
 workspace = true
