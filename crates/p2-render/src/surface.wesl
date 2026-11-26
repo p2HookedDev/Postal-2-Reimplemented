@@ -5,8 +5,17 @@ import bevy_pbr::render::{
 import package::p2_render::color::{to_display, to_linear};
 import package::p2_render::layer_bindings::lit_color;
 import package::p2_render::layer_types::ShaderLayers;
-import package::p2_render::modern::{Lit, allows_gloss, ambient_occlusion, classed_surface, modern_glass, surface_light, view_around, with_light};
-import package::p2_render::modern_base::{LUMINANCE, LampLight, modern_bits};
+import package::p2_render::modern::{GLASS_CLASS, Lit, allows_gloss, ambient_occlusion, classed_surface, mirrors_screen, modern_glass, surface_light, view_around, with_light};
+import package::p2_render::modern_base::{LUMINANCE, LampLight, modern_bits, to_eye};
+@if(GLASS_MIRROR && DEPTH_PREPASS)
+import bevy_pbr::{
+    render::{
+        mesh_view_bindings::{depth_prepass_texture, view, view_transmission_sampler, view_transmission_texture},
+        utils::interleaved_gradient_noise,
+        view_transformations::{ndc_to_uv, position_world_to_ndc},
+    },
+    ssr::raymarch,
+};
 import package::p2_render::sun_shadow::{ShadowLookup, sun_faced, sun_seen_from, sun_visibility};
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::lamp_shadow::lamp_light;
@@ -99,16 +108,81 @@ fn add_dynamic(layers: ShaderLayers, lit: vec3<f32>, color: vec3<f32>, darken: b
 }
 
 fn shade_surface(incoming: ModernLight, layers: ShaderLayers, color: vec4<f32>, normal: vec3<f32>, darken: bool, see_through: bool, dynamic: vec3<f32>) -> vec4<f32> {
+    if incoming.view == GLASS_VIEW {
+        return glass_view(incoming, layers, color, normal, see_through && !darken);
+    }
     if incoming.view != 0u {
         return debug_shade(incoming, color, normal, dynamic);
     }
     if see_through && !darken {
-        let glass = modern_glass(color, incoming.position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface);
+        let mirror = glass_mirror(incoming, layers, normal);
+        let mirrors = mirrors_screen(see_through, layers.blend.y);
+        let glass = modern_glass(color, incoming.position, normal, incoming.seen, incoming.occlusion, incoming.gloss, incoming.lamps, incoming.surface, mirror, mirrors);
         return vec4(with_light(glass.rgb, color.rgb, dynamic), glass.a);
     }
     let wet = wet_color(color.rgb, incoming.pool);
     let lit = pooled_surface_lit(select(wet, vec3(1.0), darken), incoming.position, wet_normal(normal, incoming.pool), incoming);
     return vec4(add_dynamic(layers, lit, wet, darken, dynamic), color.a);
+}
+
+const GLASS_STEPS: u32 = 24u;
+const GLASS_REFINE_STEPS: u32 = 4u;
+// In world units: how far a ray may pass behind the depth and still hit it; a room seen through the pane lies
+// further back (unverified).
+const GLASS_THICKNESS: f32 = 16.0;
+const GLASS_EDGE_FADE: f32 = 0.08;
+
+// What a see-through glass surface mirrors from the frame copied before the translucents, in the light
+// `surface_light` takes, with the hit's weight in alpha; 0 on a miss that does not end in the sky.
+fn glass_mirror(incoming: ModernLight, layers: ShaderLayers, normal: vec3<f32>) -> vec4<f32> {
+@if(GLASS_MIRROR && DEPTH_PREPASS) {
+    if !incoming.gloss || layers.blend.y != GLASS_CLASS {
+        return vec4(0.0);
+    }
+    let start = position_world_to_ndc(incoming.position);
+    var march = raymarch::depth_ray_march_new_from_depth(vec2<f32>(textureDimensions(depth_prepass_texture)));
+    raymarch::depth_ray_march_from_cs(&march, start);
+    let ray = reflect(-to_eye(incoming.position), normal);
+    raymarch::depth_ray_march_to_ws_dir(&march, ray);
+    march.linear_steps = GLASS_STEPS;
+    march.bisection_steps = GLASS_REFINE_STEPS;
+    march.use_secant = true;
+    march.depth_thickness_linear_z = GLASS_THICKNESS;
+    march.jitter = interleaved_gradient_noise(ndc_to_uv(start.xy) * view.viewport.zw, 0u);
+    let found = raymarch::depth_ray_march_march(&march);
+    if !found.hit {
+        // A ray up and away from the eye runs to the frame's edge or to its direction's point at infinity; sky there
+        // is what it mirrors. One turned towards the eye ends at a flipped point, so it keeps the estimate.
+        let end = ndc_to_uv(march.ray_end_cs.xy);
+        let size = vec2<i32>(textureDimensions(depth_prepass_texture));
+        let away = dot(ray, view.world_from_view[2].xyz) < 0.0;
+        if ray.y <= 0.0 || !away || textureLoad(depth_prepass_texture, clamp(vec2<i32>(end * vec2<f32>(size)), vec2(0), size - 1), 0) > 0.0 {
+            return vec4(0.0);
+        }
+        let sky = to_display(textureSampleLevel(view_transmission_texture, view_transmission_sampler, end, 0.0).rgb);
+        return vec4(sky * sky, 1.0);
+    }
+    let uv = found.hit_uv;
+    let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    let seen = to_display(textureSampleLevel(view_transmission_texture, view_transmission_sampler, uv, 0.0).rgb);
+    return vec4(seen * seen, smoothstep(0.0, GLASS_EDGE_FADE, edge));
+}
+    return vec4(0.0);
+}
+
+// `DebugView::GlassMirror`: a pane's mirror at full strength where its ray hit or reached the sky, dark red where
+// the march found nothing, blue on a see-through surface that does not march; any other surface is its texture
+// dimmed.
+const GLASS_VIEW: u32 = 10u;
+
+fn glass_view(incoming: ModernLight, layers: ShaderLayers, color: vec4<f32>, normal: vec3<f32>, glass: bool) -> vec4<f32> {
+    if !glass {
+        return vec4(color.rgb * 0.2, color.a);
+    }
+    let marched = incoming.gloss && mirrors_screen(glass, layers.blend.y);
+    let mirror = glass_mirror(incoming, layers, normal);
+    let missed = select(vec3(0.0, 0.0, 0.3), vec3(0.15, 0.0, 0.0), marched);
+    return vec4(mix(missed, mirror.rgb, mirror.a), 1.0);
 }
 
 // One part of the light alone, numbered as `DebugView`. The light views are display light on a grey texture,

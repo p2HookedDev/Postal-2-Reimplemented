@@ -117,7 +117,9 @@ macro_rules! layered_extension {
 
         impl From<&$name> for SkyKey {
             fn from(extension: &$name) -> Self {
-                Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32), light: crate::modern::light_source(extension.layers.detail.z as u32) }
+                let mirror = crate::modern::pool_mirror_on(extension.layers.detail.z as u32);
+                let glass = mirror && crate::material_class::class_of(&extension.layers) == p2_bevy_assets::material_class::MaterialClass::TileOrGlass;
+                Self { sky: extension.sky, mirror, light: crate::modern::light_source(extension.layers.detail.z as u32), glass }
             }
         }
 

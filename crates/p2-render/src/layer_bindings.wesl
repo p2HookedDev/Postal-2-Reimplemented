@@ -11,7 +11,7 @@ import bevy_pbr::render::{
 import package::p2_render::modern_base::LUMINANCE;
 import package::p2_render::shader_layers::{detail, glow, specular};
 import package::p2_render::color::{to_display, to_linear};
-import package::p2_render::modern::sky_mask;
+import package::p2_render::modern::{is_see_through, mirrors_screen, sky_mask};
 import package::p2_render::sky_view::sky_before_near;
 import package::p2_render::layer_types::ShaderLayers;
 @if(BINDLESS)
@@ -97,7 +97,8 @@ fn apply_layers(in: VertexOutput, color: vec4<f32>, base_alpha: f32, pbr_input: 
         out = color.a * (out * (1.0 - k) + emissive.rgb);
         alpha = 1.0 - (1.0 - color.a) * (1.0 - k);
     }
-    if mode != 0u {
+    // On a pane that mirrors the screen, the real reflection replaces retail's fixed shine.
+    if mode != 0u && !mirrors_screen(is_see_through(pbr_input.material.flags), layers.blend.y) {
         let normal = normalize(pbr_input.world_normal);
         let to_eye = normalize(view.world_position.xyz - pbr_input.world_position.xyz);
         let reflected = reflect(-to_eye, normal);

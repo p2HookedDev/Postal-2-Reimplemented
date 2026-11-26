@@ -224,7 +224,7 @@ pub struct HardwareLighting {
 
 impl From<&HardwareLighting> for SkyKey {
     fn from(extension: &HardwareLighting) -> Self {
-        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32), light: crate::modern::light_source(extension.layers.detail.z as u32) }
+        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32), light: crate::modern::light_source(extension.layers.detail.z as u32), glass: false }
     }
 }
 

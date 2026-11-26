@@ -39,7 +39,7 @@ struct FullscreenOutput {
 
 // The default class's roughness and reflectance, and the materials level that reaches a class. Match
 // `modern.wesl` and `modern_base.wesl`.
-const DEFAULT_ROUGHNESS: f32 = 0.85;
+const DEFAULT_ROUGHNESS: f32 = 0.7;
 const DEFAULT_REFLECTANCE: f32 = 0.04;
 const MATERIALS_TOP: f32 = 10.0;
 
@@ -75,6 +75,8 @@ const POOL_SURFACE: vec3<f32> = vec3(0.1, 0.02, 0.0);
 // Matches projector.wesl.
 const BLOOD_SHEEN: vec3<f32> = vec3(1.0, 0.3, 0.3);
 const LEAST_RECORD: f32 = 1.0 / 256.0;
+// Matches `projector.wesl`.
+const BLOOD_RECORD: f32 = 2.0;
 
 fn wetness(at: vec3<f32>, normal: vec3<f32>) -> f32 {
     let ground = smoothstep(0.7, 0.9, dot(normal, normalize(reflections.view_from_world[1].xyz)));
@@ -170,6 +172,11 @@ fn blurred(uv: vec2<f32>, rough: f32, size: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     let here = textureSampleLevel(scene, scene_sampler, in.uv, 0.0);
+    // See-through glass stored a negative alpha: it mirrored the screen itself, and the prepass holds what lies
+    // behind it.
+    if here.a < 0.0 {
+        return vec4(here.rgb, 1.0);
+    }
     let size = vec2<f32>(textureDimensions(depth));
     let packed = textureLoad(normals, clamp(vec2<i32>(in.position.xy), vec2(0), vec2<i32>(size) - 1), 0);
     var surface = surface_of_code(u32(round(packed.a * 3.0)));
@@ -180,9 +187,16 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
     if z <= 0.0 {
         return here;
     }
-    // A lit pool wrote alpha 1 plus its gloss, negative on blood; the sun rays read alpha later as sky 0, world 1.
+    // A translucent blended over see-through glass pulled its negative alpha up to under 1.
+    if here.a < 1.0 - LEAST_RECORD {
+        return vec4(here.rgb, 1.0);
+    }
+    // A lit pool wrote alpha 1 plus its gloss, 2 more on blood (`pool_mirror`); the sun rays read alpha later as
+    // sky 0, world 1.
     let record = here.a - 1.0;
-    let mirror = select(0.0, abs(record), abs(record) >= LEAST_RECORD);
+    let blood = record > BLOOD_RECORD - 0.5;
+    let gloss = select(record, record - BLOOD_RECORD, blood);
+    let mirror = select(0.0, min(gloss, 1.0), gloss >= LEAST_RECORD);
     let unmarked = vec4(here.rgb, 1.0);
     if surface.x >= ROUGH_TO && reflections.puddle_count.x == 0.0 && mirror == 0.0 {
         return unmarked;
@@ -200,7 +214,7 @@ fn fragment(in: FullscreenOutput) -> @location(0) vec4<f32> {
         let wet = mix(surface, POOL_SURFACE, mirror);
         surface = vec3(wet.x, max(surface.y, wet.y), wet.z);
         glossy = max(glossy, mirror);
-        pool_tint = mix(vec3(1.0), select(vec3(1.0), BLOOD_SHEEN, record < 0.0), mirror);
+        pool_tint = mix(vec3(1.0), select(vec3(1.0), BLOOD_SHEEN, blood), mirror);
     }
     if glossy <= 0.0 {
         return unmarked;

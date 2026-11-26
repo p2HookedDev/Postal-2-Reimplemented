@@ -3,7 +3,7 @@ use bevy::asset::{AssetApp, Assets, Handle, uuid_handle};
 use bevy::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::pbr::{Material, MaterialPlugin, MeshPipelineKey};
 use bevy::render::RenderApp;
-use bevy::render::render_resource::RenderPipelineDescriptor;
+use bevy::render::render_resource::{BlendComponent, BlendFactor, BlendOperation, RenderPipelineDescriptor};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::settings::WgpuFeatures;
 use bevy::shader::{Shader, ShaderDefVal};
@@ -140,6 +140,8 @@ pub struct SkyKey {
     pub sky: bool,
     pub mirror: bool,
     pub light: LightSource,
+    /// A glass-class surface while the screen reflections run; it mirrors the screen if it is see-through.
+    pub glass: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -198,6 +200,31 @@ pub(crate) fn mark_pool_mirror(descriptor: &mut RenderPipelineDescriptor, mesh_k
         && let Some(fragment) = descriptor.fragment.as_mut()
     {
         fragment.shader_defs.push("POOL_MIRROR".into());
+    }
+}
+
+/// See-through glass marches its own reflection against the depth prepass and reads the frame copied before the
+/// translucents. Its alpha blend stores minus the frame's alpha squared, negative under any number of panes, which
+/// tells the reflections pass to leave the pixel alone; that pass sets the alpha back to 1. Retail's house windows
+/// are premultiplied (an opacity mask under a specular); that blend's alpha component is the same. An additive
+/// pane shares Bevy's premultiplied key: it marks its pixels, but `is_see_through` gives it no mirror.
+pub(crate) fn mark_glass_mirror(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
+    let blend = mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS);
+    let premultiplied = blend == MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA;
+    let wanted = key.glass
+        && !key.sky
+        && mesh_key.msaa_samples() == 1
+        && (blend == MeshPipelineKey::BLEND_ALPHA || premultiplied)
+        && mesh_key.contains(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::VIEW_TRANSMISSION_TEXTURE);
+    let Some(fragment) = descriptor.fragment.as_mut().filter(|_| wanted) else {
+        return;
+    };
+    fragment.shader_defs.push("GLASS_MIRROR".into());
+    if premultiplied {
+        fragment.shader_defs.push("P2_SEE_THROUGH".into());
+    }
+    if let Some(blend) = fragment.targets.first_mut().and_then(|target| target.as_mut()).and_then(|target| target.blend.as_mut()) {
+        blend.alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::DstAlpha, operation: BlendOperation::Subtract };
     }
 }
 
@@ -272,11 +299,11 @@ mod tests {
             mark_pool_mirror(&mut descriptor, mesh_key, key);
             descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("POOL_MIRROR"))
         };
-        let world = SkyKey { sky: false, mirror: true, light: LightSource::Retail };
+        let world = SkyKey { sky: false, mirror: true, light: LightSource::Retail, glass: false };
         assert!(marked(MeshPipelineKey::BLEND_OPAQUE, world));
         assert!(marked(MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::MAY_DISCARD, world));
-        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: false, mirror: false, light: LightSource::Retail }));
-        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: true, mirror: true, light: LightSource::Retail }));
+        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: false, mirror: false, light: LightSource::Retail, glass: false }));
+        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: true, mirror: true, light: LightSource::Retail, glass: false }));
         for blend in [
             MeshPipelineKey::BLEND_ALPHA,
             MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA,
@@ -288,6 +315,42 @@ mod tests {
         let mut depth_only = RenderPipelineDescriptor::default();
         mark_pool_mirror(&mut depth_only, MeshPipelineKey::BLEND_OPAQUE, world);
         assert!(depth_only.fragment.is_none());
+    }
+
+    #[test]
+    fn only_see_through_glass_over_the_depth_and_the_copy_mirrors_and_marks_its_alpha() {
+        use bevy::render::render_resource::{BlendState, ColorTargetState, ColorWrites, TextureFormat};
+        let marked = |mesh_key: MeshPipelineKey, key: SkyKey| {
+            let target = ColorTargetState { format: TextureFormat::Rgba16Float, blend: Some(BlendState::ALPHA_BLENDING), write_mask: ColorWrites::ALL };
+            let mut descriptor = RenderPipelineDescriptor { fragment: Some(FragmentState { targets: vec![Some(target)], ..Default::default() }), ..Default::default() };
+            mark_glass_mirror(&mut descriptor, mesh_key, key);
+            let fragment = descriptor.fragment.expect("a fragment stage");
+            let alpha = fragment.targets[0].as_ref().and_then(|target| target.blend).map(|blend| blend.alpha);
+            let def = fragment.shader_defs.contains(&ShaderDefVal::from("GLASS_MIRROR"));
+            assert_eq!(def, alpha != Some(BlendState::ALPHA_BLENDING.alpha));
+            def
+        };
+        let glass = SkyKey { sky: false, mirror: true, light: LightSource::Modern, glass: true };
+        let over = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::VIEW_TRANSMISSION_TEXTURE;
+        assert!(marked(over | MeshPipelineKey::BLEND_ALPHA, glass));
+        assert!(!marked(over | MeshPipelineKey::BLEND_ALPHA, SkyKey { glass: false, ..glass }));
+        assert!(!marked(over | MeshPipelineKey::BLEND_ALPHA, SkyKey { sky: true, ..glass }));
+        assert!(marked(over | MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA, glass));
+        assert!(!marked(over | MeshPipelineKey::BLEND_OPAQUE, glass));
+        let see_through = |blend: MeshPipelineKey| {
+            let mut descriptor = RenderPipelineDescriptor { fragment: Some(FragmentState::default()), ..Default::default() };
+            mark_glass_mirror(&mut descriptor, over | blend, glass);
+            descriptor.fragment.is_some_and(|fragment| fragment.shader_defs.contains(&ShaderDefVal::from("P2_SEE_THROUGH")))
+        };
+        assert!(see_through(MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA) && !see_through(MeshPipelineKey::BLEND_ALPHA));
+        assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_ALPHA, glass));
+        assert!(!marked(over | MeshPipelineKey::BLEND_ALPHA | MeshPipelineKey::from_msaa_samples(4), glass));
+    }
+
+    #[test]
+    fn the_shaders_know_glass_by_its_class_number() {
+        let glass = p2_bevy_assets::material_class::MaterialClass::TileOrGlass as u8;
+        assert_eq!(shader_const(include_str!("modern.wesl"), "GLASS_CLASS"), f64::from(glass));
     }
 
     #[test]
@@ -308,14 +371,14 @@ mod tests {
             test_depth_early(&mut descriptor, mesh_key, key);
             descriptor.depth_stencil.and_then(|depth| depth.depth_write_enabled) == Some(true)
         };
-        let world = SkyKey { sky: false, mirror: false, light: LightSource::Retail };
+        let world = SkyKey { sky: false, mirror: false, light: LightSource::Retail, glass: false };
         let prepass = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_OPAQUE;
         assert!(!writes(prepass | MeshPipelineKey::MAY_DISCARD, world, &[]));
         assert!(!writes(prepass | MeshPipelineKey::VISIBILITY_RANGE_DITHER, world, &[]));
         assert!(writes(prepass, world, &[]));
         assert!(writes(MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::MAY_DISCARD, world, &[]));
         assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, world, &["PREPASS_PIPELINE"]));
-        assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, SkyKey { sky: true, mirror: false, light: LightSource::Retail }, &[]));
+        assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, SkyKey { sky: true, mirror: false, light: LightSource::Retail, glass: false }, &[]));
         assert!(writes(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE | MeshPipelineKey::MAY_DISCARD, world, &[]));
     }
 
@@ -331,14 +394,14 @@ mod tests {
             mark_screen_sun(&mut descriptor, mesh_key, key);
             descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("SCREEN_SUN"))
         };
-        let world = SkyKey { sky: false, mirror: false, light: LightSource::Retail };
+        let world = SkyKey { sky: false, mirror: false, light: LightSource::Retail, glass: false };
         let both = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::BLEND_OPAQUE;
         let bindless: &[&str] = &["BINDLESS"];
         assert!(marked(both, world, &[], bindless));
         assert!(marked(both | MeshPipelineKey::MAY_DISCARD, world, &[], bindless));
         assert!(!marked(both, world, &[], &[]));
         assert!(!marked(both, world, &["PREPASS_PIPELINE"], bindless));
-        assert!(!marked(both, SkyKey { sky: true, mirror: false, light: LightSource::Retail }, &[], bindless));
+        assert!(!marked(both, SkyKey { sky: true, mirror: false, light: LightSource::Retail, glass: false }, &[], bindless));
         assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_OPAQUE, world, &[], bindless));
         assert!(!marked(both | MeshPipelineKey::from_msaa_samples(4), world, &[], bindless));
         assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::BLEND_ALPHA, world, &[], bindless));

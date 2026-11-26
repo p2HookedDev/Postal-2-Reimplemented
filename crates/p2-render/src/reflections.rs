@@ -1,27 +1,35 @@
 //! Screen-space reflections: a full-screen pass marches the depth prepass along each reflecting pixel's ray.
 //! A ray that leaves the screen or hits nothing adds nothing. Puddles are sprites with no prepass, so the pass is
 //! given their places; a lit pool stores its gloss in frame alpha above 1 (negated on blood), reset to 1 here.
+//! See-through glass is not in the prepass: it marches in its own shader, reading a copy of the frame taken
+//! before the translucents, and marks its pixels for this pass to skip.
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Handle, uuid_handle};
 use bevy::camera::{Camera, CameraUpdateSystems};
 use bevy::core_pipeline::FullscreenShader;
+use bevy::core_pipeline::core_3d::{Transparent3d, main_opaque_pass_3d, main_transparent_pass_3d};
 use bevy::core_pipeline::prepass::{NORMAL_PREPASS_FORMAT, ViewPrepassTextures};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::prelude::{Commands, Component, Has, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::image::ToExtents;
 use bevy::math::{Mat4, URect, UVec2, Vec4};
+use bevy::pbr::{ScreenSpaceTransmission, ScreenSpaceTransmissionQuality, ViewTransmissionTexture};
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::diagnostic::RecordDiagnostics;
 use bevy::render::extract_component::ExtractComponent;
+use bevy::render::render_phase::ViewSortedRenderPhases;
 use bevy::render::render_resource::{
     AddressMode, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BufferId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
     FilterMode, FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-    SamplerDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat, TextureId, TextureSampleType,
-    TextureViewId, binding_types,
+    SamplerDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension, TextureFormat, TextureId,
+    TextureSampleType, TextureUsages, TextureViewId, binding_types,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
-use bevy::render::view::{ExtractedView, ViewTarget};
+use bevy::render::texture::TextureCache;
+use bevy::render::view::{ExtractedView, Msaa, ViewTarget};
 use bevy::render::{GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use bevy::transform::TransformSystems;
@@ -32,6 +40,7 @@ use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS, Settings}
 use crate::particle_frame::DrawnParticles;
 use crate::screen_pass::{PassUniformOffset, PassUniforms, PassView, ViewBindGroups, add_view_pass, follow_view_pass, modern_level, prepare_pass_uniforms, tag_pass_views};
 use crate::shaders::{add_libraries, add_shaders, shader_file};
+use crate::stage_encoder::{AfterOpaque, submit_stage};
 use crate::view::ShownScene;
 
 const REFLECTIONS_SHADER: Handle<Shader> = uuid_handle!("b3e1c7d4-2a95-4f6e-8c13-7d0f5a92e4b1");
@@ -50,6 +59,7 @@ impl Plugin for ReflectionsPlugin {
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
+        crate::stage_encoder::build(app);
         add_libraries(app);
         add_shaders(app, [(REFLECTIONS_SHADER, shader_file("reflections.wesl"))]);
         add_view_pass::<Reflections>(app);
@@ -62,7 +72,11 @@ impl Plugin for ReflectionsPlugin {
             .init_gpu_resource::<SpecializedRenderPipelines<ReflectionsPipeline>>()
             .add_systems(RenderStartup, init_reflections_pipeline)
             .add_systems(Render, prepare_reflections_pipelines.in_set(RenderSystems::Prepare))
-            .add_systems(Render, prepare_pass_uniforms::<Reflections>.in_set(RenderSystems::PrepareResources))
+            .add_systems(Render, (prepare_pass_uniforms::<Reflections>, prepare_glass_copy).in_set(RenderSystems::PrepareResources))
+            .add_systems(
+                Core3d,
+                copy_glass_frame.in_set(Core3dSystems::MainPass).after(main_opaque_pass_3d).before(submit_stage::<AfterOpaque>).before(main_transparent_pass_3d),
+            )
             .add_systems(Core3d, reflect.in_set(Core3dSystems::EarlyPostProcess).before(bevy::anti_alias::taa::temporal_anti_alias));
     }
 }
@@ -123,14 +137,21 @@ fn follow_reflection_settings(
     settings: Option<Res<Settings>>,
     drawn: Option<Res<DrawnParticles>>,
     scene: Option<Res<ShownScene>>,
-    views: Query<(Entity, &Camera, &GlobalTransform, Has<PassView>, Option<&Reflections>), With<SceneView>>,
+    views: Query<(Entity, &Camera, &GlobalTransform, Has<PassView>, Option<&Reflections>, Has<ScreenSpaceTransmission>), With<SceneView>>,
 ) {
     let wanted = look(
         modern_level(settings.as_deref(), MODERN_REFLECTIONS),
         modern_level(settings.as_deref(), MODERN_REFLECTION_STRENGTH),
         settings.as_deref().map_or(0, Settings::material_level),
     );
-    for (entity, camera, place, drawn_in, shown) in &views {
+    // Adding or removing it respecializes every mesh pipeline, so it follows modern graphics, not the reflections.
+    let bound = settings.as_deref().is_some_and(Settings::modern_graphics);
+    for (entity, camera, place, drawn_in, shown, copied) in &views {
+        if bound && drawn_in && !copied {
+            commands.entity(entity).insert(GLASS_COPY);
+        } else if !(bound && drawn_in) && copied {
+            commands.entity(entity).remove::<ScreenSpaceTransmission>();
+        }
         let viewport = camera.physical_viewport_rect().filter(|rect| rect.size().min_element() > 0);
         let target = camera.physical_target_size().filter(|size| size.min_element() > 0);
         let (Some(look), Some(viewport), Some(target)) = (wanted.filter(|_| drawn_in), viewport, target) else {
@@ -148,6 +169,58 @@ fn follow_reflection_settings(
         let reflections = Reflections { clip_from_view, view_from_clip: clip_from_view.inverse(), view_from_world, look, puddles, puddle_count, in_frame, from_frame };
         follow_view_pass(commands.entity(entity), shown, Some(reflections));
     }
+}
+
+/// Bevy binds the copy as the view's transmission texture to every mesh shader; with no steps it never copies or
+/// prepares one itself, as none of our materials transmit.
+const GLASS_COPY: ScreenSpaceTransmission = ScreenSpaceTransmission { steps: 0, quality: ScreenSpaceTransmissionQuality::Low };
+
+/// Glass reads the copy only through a single-sampled view while the reflections run, and without any translucent
+/// draw no glass is drawn.
+fn prepare_glass_copy(
+    mut commands: Commands,
+    mut textures: ResMut<TextureCache>,
+    render_device: Res<RenderDevice>,
+    phases: Res<ViewSortedRenderPhases<Transparent3d>>,
+    mut sampler: Local<Option<Sampler>>,
+    views: Query<(Entity, &ExtractedCamera, &ExtractedView, &Msaa, Has<ScreenSpaceTransmission>, Has<Reflections>, Has<ViewTransmissionTexture>)>,
+) {
+    for (entity, camera, view, msaa, copied, mirrored, held) in &views {
+        let drawn = phases.get(&view.retained_view_entity).is_some_and(|phase| !phase.items.is_empty());
+        let Some(size) = camera.physical_target_size.filter(|_| copied && mirrored && drawn && msaa.samples() == 1) else {
+            if held {
+                commands.entity(entity).remove::<ViewTransmissionTexture>();
+            }
+            continue;
+        };
+        let copy = textures.get(
+            &render_device,
+            TextureDescriptor {
+                label: Some("glass_mirror_copy"),
+                size: size.to_extents(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: view.target_format,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+        );
+        let sampler = sampler
+            .get_or_insert_with(|| {
+                render_device.create_sampler(&SamplerDescriptor { label: "glass_mirror_copy".into(), mag_filter: FilterMode::Linear, min_filter: FilterMode::Linear, ..Default::default() })
+            })
+            .clone();
+        commands.entity(entity).insert(ViewTransmissionTexture { texture: copy.texture, view: copy.default_view, sampler });
+    }
+}
+
+fn copy_glass_frame(view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewTransmissionTexture)>, mut ctx: RenderContext) {
+    let (camera, target, copy) = view.into_inner();
+    let Some(size) = camera.physical_target_size else {
+        return;
+    };
+    ctx.command_encoder().copy_texture_to_texture(target.main_texture().as_image_copy(), copy.texture.as_image_copy(), size.to_extents());
 }
 
 #[derive(Resource)]
@@ -266,6 +339,14 @@ fn reflect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pass_reads_the_pool_records_and_the_default_surface_as_the_lit_shaders_write_them() {
+        use crate::shaders::shader_const;
+        let pass = include_str!("reflections.wesl");
+        assert_eq!(shader_const(pass, "BLOOD_RECORD"), shader_const(include_str!("projector.wesl"), "BLOOD_RECORD"));
+        assert_eq!(shader_const(pass, "DEFAULT_ROUGHNESS"), shader_const(include_str!("modern.wesl"), "DEFAULT_ROUGHNESS"));
+    }
 
     #[test]
     fn levels_pick_the_march() {

@@ -67,7 +67,7 @@ pub(crate) fn build(app: &mut App) {
         );
 }
 
-fn submit_stage<S: Send + Sync + 'static>(mut stage: ResMut<StageEncoder<S>>, mut ctx: RenderContext) {
+pub(crate) fn submit_stage<S: Send + Sync + 'static>(mut stage: ResMut<StageEncoder<S>>, mut ctx: RenderContext) {
     if let Some(mut encoder) = stage.encoder.take() {
         std::mem::swap(ctx.command_encoder(), &mut encoder);
     }

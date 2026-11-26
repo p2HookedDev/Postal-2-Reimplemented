@@ -291,6 +291,7 @@ struct Pool {
 
 // The atlas (`liquids/layer.rs`): slots of 128 texels with a 2-texel apron, 8 to a row, 2 Unreal units a texel.
 const POOL_SIDE: f32 = 128.0;
+const BLOOD_RECORD: f32 = 2.0;
 const POOL_APRON: i32 = 2;
 const POOL_SLOT_SIDE: i32 = 132;
 const POOL_SLOTS_SIDE: u32 = 8u;
@@ -405,11 +406,11 @@ fn no_pool(normal: vec3<f32>) -> Pool {
 }
 
 // How sharply the pool mirrors the room, handed to the screen reflections in the frame's alpha past 1
-// (`reflections.wesl`); negative where it is mostly blood (its tint more than half way to BLOOD_SHEEN), whose
-// reflection keeps blood's hue.
+// (`reflections.wesl`); BLOOD_RECORD more where it is mostly blood, whose reflection keeps blood's hue. Never
+// negative: a translucent blended over see-through glass's negative alpha lands under 1.
 fn pool_mirror(pool: Pool) -> f32 {
     let mirror = pool.wet * (1.0 - smoothstep(0.2, 0.5, pool.roughness));
-    return select(mirror, -mirror, pool.tint.g < 0.65);
+    return select(mirror, BLOOD_RECORD + mirror, pool.tint.g < 0.65);
 }
 
 fn pool_flame(ground: vec2<f32>, heat: f32) -> vec3<f32> {

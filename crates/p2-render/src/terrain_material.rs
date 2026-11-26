@@ -135,7 +135,7 @@ impl TerrainLayers {
 
 impl From<&TerrainLayers> for SkyKey {
     fn from(extension: &TerrainLayers) -> Self {
-        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.params.count.y), light: crate::modern::light_source(extension.params.count.y) }
+        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.params.count.y), light: crate::modern::light_source(extension.params.count.y), glass: false }
     }
 }
 

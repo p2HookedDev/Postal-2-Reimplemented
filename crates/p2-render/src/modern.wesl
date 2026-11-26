@@ -129,6 +129,8 @@ struct Lit {
     matte: vec3<f32>,
     shine: vec3<f32>,
     reflection: vec3<f32>,
+    // What the reflected light is multiplied by: its tint, Fresnel term and occlusion.
+    reflection_weight: vec3<f32>,
 }
 
 fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen: vec3<f32>, ao: f32, gloss: bool, lamps: LampLight, surface: vec3<f32>, around: Around) -> Lit {
@@ -160,7 +162,8 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
     // Added over a dark texture, an untinted reflection greys it. A rough surface's keeps the texture's hue.
     let shown_color = sqrt(albedo);
     let hue = shown_color / max(max(shown_color.r, max(shown_color.g, shown_color.b)), 1e-3);
-    env *= mix(hue, vec3(1.0), max(smoothstep(0.4, 0.8, 1.0 - rough), metal));
+    let tint = mix(hue, vec3(1.0), max(smoothstep(0.4, 0.8, 1.0 - rough), metal));
+    env *= tint;
     // A dark texel is grime for a highlight only. Taking it off the diffuse too would square the texture's contrast.
     let cavity = mix(saturate(dot(sqrt(albedo), LUMINANCE) * 4.0), 1.0, metal);
     let occlusion = ao * lamps.grounded;
@@ -175,15 +178,17 @@ fn surface_light(albedo: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen
     // A bounce adds in linear light, so it fills what is dark and leaves retail's colours where the map's lights
     // already reach.
     let shown = min(sqrt(direct_light * direct_light + lamps.bounce * occlusion), vec3(DIFFUSE_LIMIT));
-    var lit = Lit(shown * shown * albedo * share * select(1.0 - metal, 1.0, classed), vec3(0.0), vec3(0.0));
+    var lit = Lit(shown * shown * albedo * share * select(1.0 - metal, 1.0, classed), vec3(0.0), vec3(0.0), vec3(0.0));
     if gloss {
         let spec = sun_color * direct * ggx(normal, to_sun, eye, facing, saturate(a + SUN_DISC), f0);
         let e0 = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
         let ab = vec2(-1.04, 1.04) * (min(e0.x * e0.x, exp2(-9.28 * nv)) * e0.x + e0.y) + e0.zw;
         let rough_reflection = mix(1.0 - 0.6 * smoothstep(0.5, 1.0, rough), 1.0, metal);
-        env *= rough_reflection * (f0 * ab.x + ab.y) * saturate(pow(nv + occlusion, exp2(-16.0 * rough * rough - 1.0)) - 1.0 + occlusion);
+        let weight = rough_reflection * (f0 * ab.x + ab.y) * saturate(pow(nv + occlusion, exp2(-16.0 * rough * rough - 1.0)) - 1.0 + occlusion);
+        env *= weight;
         lit.shine = (spec + env + lamps.specular * f0 + lamps.specular_edge * (vec3(1.0) - f0)) * cavity;
         lit.reflection = env * cavity;
+        lit.reflection_weight = tint * weight * cavity;
     }
     return lit;
 }
@@ -200,13 +205,26 @@ fn lit_surface(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, seen: v
 }
 
 // What blending shows of a see-through surface: its highlight and reflection stay whole at any opacity, which
-// takes more alpha than the texture's.
-fn modern_glass(color: vec4<f32>, position: vec3<f32>, normal: vec3<f32>, seen: vec3<f32>, ao: f32, gloss: bool, lamps: LampLight, surface: vec3<f32>) -> vec4<f32> {
+// takes more alpha than the texture's. `mirror` is what the surface sees on screen, in the light `surface_light`
+// takes, with the hit's weight in alpha: it stands in for the probes' and the sky's reflection. A mirroring
+// pane's texture paints what hangs behind the glass, so neither the sun nor the open sky lights it, from either side.
+fn modern_glass(color: vec4<f32>, position: vec3<f32>, normal: vec3<f32>, seen: vec3<f32>, ao: f32, gloss: bool, lamps: LampLight, surface: vec3<f32>, mirror: vec4<f32>, mirrors: bool) -> vec4<f32> {
     let display = to_display(color.rgb);
-    let lit = surface_light(display * display, position, normal, seen, ao, gloss, lamps, surface, view_around(normal, lamps, surface));
-    let matte = to_linear(sqrt(max(lit.matte, vec3(0.0))));
-    let highlight = max(to_linear(sqrt(max(lit.matte + lit.shine, vec3(0.0)))) - matte, vec3(0.0));
-    let alpha = saturate(color.a + dot(highlight, LUMINANCE));
+    let albedo = display * display;
+    let around = view_around(normal, lamps, surface);
+    let shining = select(surface, vec3(surface.xy, -MIRROR_REFLECTANCE), mirrors);
+    let lit = surface_light(albedo, position, normal, seen, ao, gloss, lamps, shining, around);
+    var behind = lit.matte;
+    if mirrors {
+        behind = surface_light(albedo, position, normal, vec3(0.0, seen.y, 0.0), ao, false, lamps, surface, around).matte;
+    }
+    let matte = to_linear(sqrt(max(behind, vec3(0.0))));
+    let shine = lit.shine + (mirror.rgb * lit.reflection_weight - lit.reflection) * mirror.a;
+    let highlight = max(to_linear(sqrt(max(behind + shine, vec3(0.0)))) - matte, vec3(0.0));
+    // A mirroring pane dims what is behind it only by the share it reflects, as glass does; the highlight's own
+    // brightness over a dark pane would make it nearly opaque. The colour may pass 1: the frame is HDR.
+    let kept = select(dot(highlight, LUMINANCE), (1.0 - color.a) * dot(lit.reflection_weight, LUMINANCE), mirrors);
+    let alpha = saturate(color.a + kept);
     return vec4((matte * color.a + highlight) / max(alpha, 1e-4), alpha);
 }
 
@@ -225,10 +243,28 @@ fn sky_mask(material_flags: u32, alpha: f32) -> f32 {
     return select(alpha, 0.0, solid && sky_view());
 }
 
-// Only an alpha-blend pipeline has the def, so the glass path is compiled into no other.
+// Only an alpha-blend pipeline and a premultiplied glass one have the def, so the glass path is compiled into no
+// other.
 fn is_see_through(material_flags: u32) -> bool {
 @if(P2_SEE_THROUGH) {
-    return (material_flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS) == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_BLEND;
+    let mode = material_flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
+    return mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_BLEND || mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_PREMULTIPLIED;
+}
+@else {
+    return false;
+}
+}
+
+// `MaterialClass::TileOrGlass` as `blend.y` holds it.
+const GLASS_CLASS: f32 = 2.0;
+// Stylised: a mirroring pane reflects a quarter of the light head on, where real glass reflects 4 %, so what it
+// mirrors reads over the pane at any angle, not only at grazing ones.
+const MIRROR_REFLECTANCE: f32 = 0.25;
+
+// A see-through glass pane that marches its own mirror (`mark_glass_mirror`): only while the reflections run.
+fn mirrors_screen(see_through: bool, material_class: f32) -> bool {
+@if(GLASS_MIRROR && DEPTH_PREPASS) {
+    return see_through && material_class == GLASS_CLASS;
 }
 @else {
     return false;

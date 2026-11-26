@@ -20,11 +20,14 @@ pub enum DebugView {
     Occlusion = 7,
     Normals = 8,
     Albedo = 9,
+    GlassMirror = 10,
 }
 
 impl DebugView {
-    pub const ALL: [Self; 10] =
-        [Self::Off, Self::Lighting, Self::Sun, Self::SkySeen, Self::Lamps, Self::UnshadowedLamps, Self::Bounce, Self::Occlusion, Self::Normals, Self::Albedo];
+    pub const ALL: [Self; 11] = [
+        Self::Off, Self::Lighting, Self::Sun, Self::SkySeen, Self::Lamps, Self::UnshadowedLamps, Self::Bounce, Self::Occlusion, Self::Normals,
+        Self::Albedo, Self::GlassMirror,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -38,6 +41,7 @@ impl DebugView {
             Self::Occlusion => "occlusion",
             Self::Normals => "normals",
             Self::Albedo => "albedo",
+            Self::GlassMirror => "glass mirror",
         }
     }
 
@@ -62,5 +66,6 @@ mod tests {
     #[test]
     fn the_shader_reads_the_view_where_it_is_packed() {
         assert_eq!(crate::shaders::shader_const(include_str!("surface.wesl"), "DEBUG_VIEW_SHIFT"), f64::from(DEBUG_VIEW_SHIFT));
+        assert_eq!(crate::shaders::shader_const(include_str!("surface.wesl"), "GLASS_VIEW"), f64::from(DebugView::GlassMirror as u8));
     }
 }
