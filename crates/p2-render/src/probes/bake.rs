@@ -160,9 +160,10 @@ pub(super) struct ProbeWorld<'a> {
     pub(super) zone_ambients: &'a [[f32; 3]],
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ProbeBake {
-    pub(super) spacing: f32,
-    pub(super) pixels: Vec<u8>,
+    pub(crate) spacing: f32,
+    pub(crate) pixels: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Default)]

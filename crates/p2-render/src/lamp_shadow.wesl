@@ -237,22 +237,28 @@ fn detail_face(book: Book, record: u32, face: u32) -> vec3<f32> {
 // A lamp's record ends with where its mover tiles start in the book's third-last row and how many there are.
 // Each tile is two texels: its axis out of the lamp and the tangent of its half angle; its square's corner,
 // side in texels and how far its shadow has faded in. Matches `lamps/movers.rs`.
-const TILE_GRID_SIDE: u32 = 64u;
-const TILE_GRID_COLUMN_TEXELS: u32 = 8u;
+const TILE_GRID_SIDE: u32 = 128u;
+const TILE_NAMES_FROM: u32 = 8193u;
+const TEST_ALL: f32 = -1.0;
 // How much wider than its tangent a tile reaches. Matches `lamps/tile_grid.rs`.
 const REACH_WIDENING: f32 = 1.4143;
 
-// The rows before the tiles hold a column grid around the eye (low corner in x and z, column side, 1), then
-// `TILE_GRID_COLUMN_TEXELS` a column naming its tiles, -1 first when more shade it than fit.
-// Returns where the column under `position` starts, 0 outside the grid. Matches `lamps/tile_grid.rs`.
-fn tile_column(book: Book, position: vec3<f32>) -> u32 {
+// The first name and count of the grid column under `position`, the count `TEST_ALL` outside the grid. The grid's
+// rows sit before the tiles' row as `lamps/tile_grid.rs` lays them out.
+fn tile_column(book: Book, position: vec3<f32>) -> vec2<f32> {
     let row = (book.size.y - TILE_GRID_FROM_END) * BOOK_WIDTH;
     let grid = book_texel(book, row);
     let column = floor((position.xz - grid.xy) / max(grid.z, 1.0));
     if grid.w <= 0.0 || any(column < vec2(0.0)) || any(column >= vec2(f32(TILE_GRID_SIDE))) {
-        return 0u;
+        return vec2(0.0, TEST_ALL);
     }
-    return row + 1u + (u32(column.y) * TILE_GRID_SIDE + u32(column.x)) * TILE_GRID_COLUMN_TEXELS;
+    let at = u32(column.y) * TILE_GRID_SIDE + u32(column.x);
+    let pair = book_texel(book, row + 1u + at / 2u);
+    return select(pair.xy, pair.zw, at % 2u == 1u);
+}
+
+fn tile_name(book: Book, slot: u32) -> u32 {
+    return u32(book_texel(book, (book.size.y - TILE_GRID_FROM_END) * BOOK_WIDTH + TILE_NAMES_FROM + slot / 4u)[slot % 4u]);
 }
 
 fn mover_tile_shadow(book: Book, at: u32, lit: f32, from_lamp: vec3<f32>, normal: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
@@ -284,36 +290,37 @@ fn mover_tile_shadow(book: Book, at: u32, lit: f32, from_lamp: vec3<f32>, normal
     return min(lit, mix(1.0, shade, saturate(square.w)));
 }
 
-// `held` is the lamp's tile start and count; `column` the point's grid column, 0 outside it, where all tiles
-// are walked. Names are read here rather than carried through the lamp loop, so the loop holds fewer registers.
-fn mover_shadow(book: Book, held: vec4<f32>, column: u32, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
+// `held` is the lamp's tile start and count. A column's names rise, so the lamp's tiles are one run of them.
+fn mover_shadow(book: Book, held: vec4<f32>, column: vec2<f32>, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
     let start = u32(held.x);
-    let count = u32(held.y);
+    let end = start + u32(held.y);
     let row = (book.size.y - TILES_FROM_END) * BOOK_WIDTH;
     let from_lamp = position - lamp_position;
-    var names = vec4(-1.0);
-    if column > 0u {
-        names = book_texel(book, column);
-    }
     var lit = 1.0;
-    if names.x < 0.0 {
-        for (var tile = 0u; tile < count && lit > 0.0; tile++) {
-            lit = mover_tile_shadow(book, row + (start + tile) * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
+    if column.y == TEST_ALL {
+        for (var tile = start; tile < end && lit > 0.0; tile++) {
+            lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
         }
         return lit;
     }
-    for (var slot = 0u; slot < 4u * TILE_GRID_COLUMN_TEXELS && lit > 0.0; slot++) {
-        if slot > 0u && slot % 4u == 0u {
-            names = book_texel(book, column + slot / 4u);
+    let first = u32(column.x);
+    let last = first + u32(column.y);
+    var low = first;
+    var high = last;
+    while low < high {
+        let middle = (low + high) / 2u;
+        if tile_name(book, middle) < start {
+            low = middle + 1u;
+        } else {
+            high = middle;
         }
-        let name = u32(names[slot % 4u]);
-        if name == 0u {
+    }
+    for (var slot = low; slot < last && lit > 0.0; slot++) {
+        let tile = tile_name(book, slot);
+        if tile >= end {
             break;
         }
-        let tile = name - 1u;
-        if tile >= start && tile < start + count {
-            lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
-        }
+        lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
     }
     return lit;
 }
@@ -370,7 +377,8 @@ fn lamp_at(book: Book, list: vec2<u32>, i: u32, position: vec3<f32>, normal: vec
     return at;
 }
 
-const COLUMN_UNREAD: u32 = 0xffffffffu;
+// A count no column holds.
+const COLUMN_UNREAD: vec2<f32> = vec2(0.0, -2.0);
 
 fn shadow_tilt(ground: vec3<f32>, to_lamp: vec3<f32>) -> f32 {
     let faces = dot(ground, to_lamp);
@@ -386,7 +394,7 @@ fn plain_tile(packed: u32, unit: f32) -> vec3<f32> {
     return vec3(vec2(f32(packed & 255u), f32((packed >> 8u) & 255u)) * unit, unit * f32(1u << level));
 }
 
-fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, side: f32, unit: f32, column: ptr<function, u32>, movers_near: bool, lookup: ShadowLookup) -> vec2<f32> {
+fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, side: f32, unit: f32, column: ptr<function, vec2<f32>>, movers_near: bool, lookup: ShadowLookup) -> vec2<f32> {
     let tilt = shadow_tilt(ground, lamp.to_lamp);
     let face = cube_face(position - lamp.position);
     let detail = detail_face(book, lamp.record, face);
@@ -404,12 +412,12 @@ fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>
     return vec2(walled, movers);
 }
 
-fn lamp_movers(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, tilt: f32, side: f32, column: ptr<function, u32>, lookup: ShadowLookup) -> f32 {
+fn lamp_movers(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, tilt: f32, side: f32, column: ptr<function, vec2<f32>>, lookup: ShadowLookup) -> f32 {
     let held = book_texel(book, lamp.record + 5u);
     if held.y <= 0.0 {
         return 1.0;
     }
-    if *column == COLUMN_UNREAD {
+    if (*column).y == COLUMN_UNREAD.y {
         *column = tile_column(book, position);
     }
     return mover_shadow(book, held, *column, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
@@ -604,7 +612,7 @@ fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: 
     var movers_near = true;
     if list.y > 2u && unit >= 1.0 && book.size.y >= 8u {
         column = tile_column(book, position);
-        movers_near = column == 0u || book_texel(book, column).x != 0.0;
+        movers_near = column.y != 0.0;
     }
 @if(CACHED_LAMPS)
     var four = vec4(1.0);

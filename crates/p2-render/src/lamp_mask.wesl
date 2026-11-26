@@ -3,7 +3,7 @@
 
 import bevy_pbr::render::mesh_view_bindings::view;
 import package::p2_render::lamp_shadow::{SCREEN_SUN_FROM, SCREEN_SUN_PIXELS};
-import package::p2_render::sun_levels::LevelSource;
+import package::p2_render::sun_levels::{LevelSource, share_records};
 import package::p2_render::sun_shadow::{sun_held, sun_index, world_lookup};
 
 @group(1) @binding(0) var depth: texture_depth_2d;
@@ -16,7 +16,9 @@ const GROUP_SIDE: u32 = 8u;
 var<workgroup> suns: array<array<u32, GROUP_SIDE>, GROUP_SIDE>;
 
 @compute @workgroup_size(GROUP_SIDE, GROUP_SIDE, 1)
-fn shade(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_id) local: vec3<u32>) {
+fn shade(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_id) local: vec3<u32>, @builtin(local_invocation_index) invocation: u32) {
+    share_records(LevelSource(0u, 0u), invocation, GROUP_SIDE * GROUP_SIDE);
+    workgroupBarrier();
     let size = textureDimensions(depth);
     // The header, which `shadow_mask.rs` marks unwritten before the pass: 1, then two columns of the view's matrix,
     // so another view keeps its own shadows.

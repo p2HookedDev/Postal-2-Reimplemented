@@ -3,7 +3,7 @@ use super::*;
 pub(super) struct MapActors {
     pub(super) terrain_infos: Vec<p2_assets::Terrain>,
     pub(super) start: Option<(Vector, Rotator)>,
-    pub(super) mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>>,
+    pub(super) mesh_paths: BTreeMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>>,
     pub(super) zone_fogs: Vec<Option<p2_render::scene::ZoneFog>>,
     pub(super) terrain_zones: Vec<bool>,
     pub(super) mesh_lights: FxHashMap<i32, p2_render_cpu::MeshLight>,
@@ -24,7 +24,7 @@ pub(super) struct MapActors {
 pub(super) fn read_map_actors(started: StartedVm, model: &Model) -> MapActors {
     let mut terrain_infos = Vec::new();
     let mut start = None;
-    let mut mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>> = HashMap::new();
+    let mut mesh_paths: BTreeMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>> = BTreeMap::new();
     let mut zone_fogs = Vec::new();
     let mut terrain_zones = Vec::new();
     let mut mesh_lights = FxHashMap::default();

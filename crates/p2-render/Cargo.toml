@@ -24,6 +24,9 @@ p2-host.workspace = true
 p2-particles.workspace = true
 p2-physics.workspace = true
 p2-render-cpu.workspace = true
+serde.workspace = true
+postcard.workspace = true
+lz4_flex.workspace = true
 
 [dev-dependencies]
 p2-test-package.workspace = true

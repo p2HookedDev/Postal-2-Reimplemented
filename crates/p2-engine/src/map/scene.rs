@@ -6,6 +6,7 @@ use p2_render::level::{
     BspParts, MaterialCache, MeshPlacing, Placement, StaticLevel, StaticParts, SwitchImage, TerrainParts, TerrainZones, antiportal_actors, bake_lamps, bsp_models,
     bsp_groups, mark_restyled, resolve_mesh_paths, static_collision, static_models, switched_images, terrain_models,
 };
+use p2_render::lamps::LoadBake;
 use p2_render::level_collision::LevelAlbedos;
 use p2_assets::FinalBlend;
 use p2_math::{Rotator, Vector};
@@ -206,7 +207,7 @@ impl PreparedScene {
         let bsp = spawn_bsp_and_hud(game, t, &materials, model.clone(), sky_zone, id, HudAssets::wanted(&started.vm, painted))?;
         phase("HUD");
 
-        let mut placements: HashMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>> = HashMap::new();
+        let mut placements: BTreeMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>> = BTreeMap::new();
         let mut missing = 0;
         let MapActors {
             terrain_infos,
@@ -287,7 +288,7 @@ impl PreparedScene {
         models.extend(static_drawn);
         sky_models.extend(terrain_sky);
         sky_models.extend(static_sky);
-        lamp_masked_all.extend(lamp_masked.into_values());
+        lamp_masked_all.extend(lamp_masked);
         phase("BSP and HUD, waited for");
         let switches = switched_images(game, &materials);
         mark_restyled(&mut models, switches.iter().map(|(_, switch)| switch));
@@ -331,8 +332,13 @@ impl PreparedScene {
             shadow_surfaces,
         };
         phase("rest");
-        bake_lamps(&mut scene);
-        phase("lamps and probes");
+        let baked = bake_lamps(&mut scene);
+        phase(BAKE_PHASE);
+        match (times.last_mut(), baked) {
+            (Some(field), Some(LoadBake::Baked { lamps, probes })) => *field = format!("lamps {} ms, probes {} ms", lamps.as_millis(), probes.as_millis()),
+            (Some(field), Some(LoadBake::Cached)) => field.push_str(" from cache"),
+            _ => {}
+        }
         bevy::log::info!("load: {package} scene built in {} ms ({})", clock.elapsed().as_millis(), times.join(", "));
         Ok(Self { emitter_models, package: package.to_owned(), game: built, animations, vm_animations, assets, scene, played, animated: animated_meshes, emitters, sprites, coronas, actor_textures, fluids, status, hud, switches })
     }

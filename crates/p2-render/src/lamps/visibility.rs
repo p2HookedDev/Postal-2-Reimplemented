@@ -40,7 +40,7 @@ const READY_TEXEL: usize = 2;
 /// One patch's work for the visibility pass, laid out as the shader reads it (64 bytes). Block texel (i, j) is the
 /// point `origin + i * u + j * v`; `atlas` packs the block's x in the low 16 bits, y in the high.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PatchJob {
     pub origin: [f32; 3],
     pub groups: u32,
@@ -52,7 +52,7 @@ pub struct PatchJob {
     pub atlas: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VisibilityPlan {
     pub size: [u32; 2],
     pub jobs: Vec<PatchJob>,

@@ -1,5 +1,5 @@
 // The cached sun levels as `sun_levels.rs` lays them out: depth tiles with one row of records under them.
-// Bevy's 1 x 1 default image stands for no levels. The image is fetched at each read.
+// Bevy's 1 x 1 default image stands for no levels. The image is fetched at each read, outside the mask pass.
 @if(!P2_PARTICLE_LEVELS && !BINDLESS)
 import bevy_pbr::render::pbr_bindings;
 @if(!P2_PARTICLE_LEVELS && BINDLESS)
@@ -17,6 +17,15 @@ import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d
 const HEADER_TEXELS: u32 = 1u;
 const RECORD_TEXELS: u32 = 24u;
 const WEIGHT_STEPS: f32 = 256.0;
+
+// The mask pass reads the frame's records once per workgroup: room for eight levels, where the settings make at
+// most five; a texel past it is read from the image.
+@if(LAMP_MASK_PASS)
+const SHARED_TEXELS: u32 = HEADER_TEXELS + 8u * RECORD_TEXELS;
+@if(LAMP_MASK_PASS)
+var<workgroup> shared_records: array<f32, SHARED_TEXELS>;
+@if(LAMP_MASK_PASS)
+var<workgroup> shared_packed: u32;
 
 struct LevelSource {
     texture: u32,
@@ -125,14 +134,44 @@ fn unpacked(texel: vec4<f32>, packed: bool) -> f32 {
     return texel.x;
 }
 
+fn loaded_packed(source: LevelSource, size: vec2<u32>) -> bool {
+    return size.x > 1u && source_load(source, vec2(0u, size.y - 1u)).w < 1.0;
+}
+
 fn level_atlas(source: LevelSource) -> LevelAtlas {
     let size = source_size(source);
-    let packed = size.x > 1u && source_load(source, vec2(0u, size.y - 1u)).w < 1.0;
-    return LevelAtlas(source, size, packed);
+@if(LAMP_MASK_PASS) {
+    return LevelAtlas(source, size, shared_packed != 0u);
+}
+@else {
+    return LevelAtlas(source, size, loaded_packed(source, size));
+}
+}
+
+fn loaded_texel(atlas: LevelAtlas, index: u32) -> f32 {
+    return unpacked(source_load(atlas.source, vec2(index, atlas.size.y - 1u)), atlas.packed);
 }
 
 fn record_texel(atlas: LevelAtlas, index: u32) -> f32 {
-    return unpacked(source_load(atlas.source, vec2(index, atlas.size.y - 1u)), atlas.packed);
+@if(LAMP_MASK_PASS) {
+    if index < SHARED_TEXELS {
+        return shared_records[index];
+    }
+}
+    return loaded_texel(atlas, index);
+}
+
+// Every invocation of the workgroup calls this, then a barrier, before any record is read.
+@if(LAMP_MASK_PASS)
+fn share_records(source: LevelSource, invocation: u32, invocations: u32) {
+    let size = source_size(source);
+    let atlas = LevelAtlas(source, size, loaded_packed(source, size));
+    if invocation == 0u {
+        shared_packed = u32(atlas.packed);
+    }
+    for (var index = invocation; index < min(size.x, SHARED_TEXELS); index += invocations) {
+        shared_records[index] = loaded_texel(atlas, index);
+    }
 }
 
 fn record_row(atlas: LevelAtlas, at: u32) -> vec4<f32> {

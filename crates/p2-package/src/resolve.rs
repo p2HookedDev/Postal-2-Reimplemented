@@ -61,7 +61,7 @@ pub fn map_file(path: &Path) -> std::io::Result<memmap2::Mmap> {
     unsafe { memmap2::Mmap::map(&file) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PackageId(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

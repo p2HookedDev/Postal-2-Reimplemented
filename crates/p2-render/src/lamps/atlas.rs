@@ -27,6 +27,7 @@ use bevy::shader::Shader;
 use p2_assets::{Terrain, fan_triangles, poly_flags};
 use p2_math::Vector;
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 
 use super::{LAMP_SHADOW_SPAN, LampAtlas};
 use super::cells::{BOOK_WIDTH, HEADER_TEXELS, RECORD_TEXELS};
@@ -49,7 +50,7 @@ pub(super) const UNMAPPED: u32 = UNMAPPED_LEVEL << 16;
 pub(super) const NEAR: f32 = 8.0;
 pub(super) const GUARD_TEXELS: f32 = 3.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Tile {
     x: u32,
     y: u32,
@@ -134,7 +135,7 @@ fn box_near_sphere((low, high): ([f32; 3], [f32; 3]), center: [f32; 3], radius: 
     gap <= radius * radius
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct LampDraw {
     position: [f32; 3],
     radius: f32,
@@ -143,7 +144,7 @@ struct LampDraw {
     count: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct MaskedRange {
     lamp: usize,
     group: usize,
@@ -151,7 +152,10 @@ struct MaskedRange {
     count: u32,
 }
 
+/// The bake cache leaves out what [`LampBake::restore`] takes back from the world.
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LampBake {
+    #[serde(skip)]
     pub(super) vertices: Vec<[f32; 3]>,
     indices: Vec<u32>,
     draws: Vec<LampDraw>,
@@ -160,11 +164,17 @@ pub(super) struct LampBake {
     masked_vertices: Vec<[f32; 6]>,
     masked_indices: Vec<u32>,
     masked_ranges: Vec<MaskedRange>,
+    #[serde(skip)]
     masked_images: Vec<Handle<Image>>,
     pub(super) records: Vec<[f32; 4]>,
 }
 
 impl LampBake {
+    pub(super) fn restore(&mut self, triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster]) {
+        self.vertices = triangles.as_flattened().to_vec();
+        self.masked_images = masked.iter().map(|caster| caster.image.clone()).collect();
+    }
+
     pub(super) fn keep_record_rows(&mut self, book: &[[f32; 4]]) {
         let rows = (HEADER_TEXELS + self.tiles.len() * RECORD_TEXELS).div_ceil(BOOK_WIDTH);
         self.records = book.iter().copied().chain(std::iter::repeat([0.0; 4])).take(rows * BOOK_WIDTH).collect();
@@ -239,8 +249,8 @@ pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], la
             masked_ranges.push(MaskedRange { lamp, group, first, count });
         }
     }
-    LampBake {
-        vertices: triangles.iter().flatten().copied().collect(),
+    let mut bake = LampBake {
+        vertices: Vec::new(),
         indices,
         draws,
         draw_index: draw_index(&tiles),
@@ -248,9 +258,11 @@ pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], la
         masked_vertices,
         masked_indices,
         masked_ranges,
-        masked_images: masked.iter().map(|caster| caster.image.clone()).collect(),
+        masked_images: Vec::new(),
         records: Vec::new(),
-    }
+    };
+    bake.restore(triangles, masked);
+    bake
 }
 
 pub(crate) struct WorldTriangles {

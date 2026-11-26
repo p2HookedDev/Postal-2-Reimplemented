@@ -1,7 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use bevy::asset::{AssetId, Handle};
-use bevy::image::Image;
+use bevy::asset::Handle;
 use bevy::material::AlphaMode;
 use bevy::math::Vec3;
 use bevy::mesh::Mesh;
@@ -79,7 +78,7 @@ pub struct StaticParts {
     pub collisions: Vec<MeshCollision>,
     pub lamp_casters: Vec<[[f32; 3]; 3]>,
     pub lamp_caster_albedos: Vec<[f32; 3]>,
-    pub lamp_masked: HashMap<AssetId<Image>, MaskedCaster>,
+    pub lamp_masked: Vec<MaskedCaster>,
     batches: BTreeMap<BatchKey, (SectionView, MeshBatch, ([f32; 3], [f32; 3]))>,
     pub lit_actors: usize,
 }
@@ -154,8 +153,11 @@ fn static_mesh_models(
             };
             for (section, view) in base.iter().zip(&views) {
                 if let (AlphaMode::Mask(cutoff @ ..=1.0), Some(image)) = (view.alpha_mode, &view.texture) {
-                    let caster = parts.lamp_masked.entry(image.id()).or_insert_with(|| MaskedCaster { image: image.clone(), cutoff, triangles: Vec::new() });
-                    caster.triangles.extend(masked_triangles(section, &transform));
+                    let index = parts.lamp_masked.iter().position(|caster| caster.image.id() == image.id()).unwrap_or_else(|| {
+                        parts.lamp_masked.push(MaskedCaster { image: image.clone(), cutoff, triangles: Vec::new() });
+                        parts.lamp_masked.len() - 1
+                    });
+                    parts.lamp_masked[index].triangles.extend(masked_triangles(section, &transform));
                 }
             }
             for (index, triangle) in placed.triangles().iter().enumerate() {
@@ -230,8 +232,8 @@ fn static_mesh_models(
 pub fn resolve_mesh_paths(
     game: &mut Game,
     id: PackageId,
-    mesh_paths: HashMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>>,
-    placements: &mut HashMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>>,
+    mesh_paths: BTreeMap<(String, Vec<Option<String>>), Vec<MeshPlacing<Option<String>>>>,
+    placements: &mut BTreeMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>>,
 ) -> usize {
     let mut missing = 0;
     for ((mesh, skins), actors) in mesh_paths {
@@ -275,7 +277,7 @@ pub fn static_models(
     t: &mut PendingAssets,
     texture: &mut impl FnMut(&mut Game, &mut PendingAssets, PackageId, i32) -> Option<MaterialImages>,
     level: &StaticLevel,
-    placements: HashMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>>,
+    placements: BTreeMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>>,
 ) -> (StaticParts, usize, usize) {
     let (mut parts, mut missing) = (StaticParts::default(), 0);
     for (mesh, placements) in placements {

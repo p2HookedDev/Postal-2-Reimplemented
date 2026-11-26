@@ -23,7 +23,8 @@ use crate::lamps::atlas::{WorldTriangles, world_triangles};
 use crate::lamps::{MaterialAtlas, MaterialSlot, follow_atlas, map_lamps};
 use crate::modern::sun_color;
 use crate::view::ShownScene;
-use bake::{ProbeBake, ProbeGrid, ProbeWorld, bake_probes};
+use bake::{ProbeGrid, ProbeWorld, bake_probes};
+pub(crate) use bake::ProbeBake;
 
 fn probe_grid(level: u8) -> Option<ProbeGrid> {
     match level {
@@ -57,8 +58,9 @@ pub(crate) struct ProbeJob {
 
 pub(crate) type ProbePrebake = crate::lamps::Prebaked<i32, Option<ProbeBake>>;
 
-pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8) -> ProbePrebake {
-    probe_grid(level).map_or_else(ProbePrebake::default, |grid| ProbePrebake::new(grid.columns, bake_map(environment, collision, world, origin, grid)))
+/// The grid's columns with what was baked; `None` when the level bakes no probes.
+pub(crate) fn prebake(environment: &LightEnvironment, collision: &StaticCollision, world: &WorldTriangles, origin: Vec3, level: u8) -> Option<(i32, Option<ProbeBake>)> {
+    probe_grid(level).map(|grid| (grid.columns, bake_map(environment, collision, world, origin, grid)))
 }
 
 fn atlas_image(grid: ProbeGrid, pixels: Vec<u8>) -> Image {

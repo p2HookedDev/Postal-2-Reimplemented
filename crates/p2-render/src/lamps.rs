@@ -3,6 +3,7 @@
 //! ([`faces`]); what moves casts into tiles of its own ([`movers`]).
 
 pub(crate) mod atlas;
+mod bake_cache;
 mod cells;
 mod decal_bins;
 mod faces;
@@ -18,6 +19,7 @@ pub mod visibility;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::asset::{Asset, AssetEvent, AssetEventSystems, Assets, Handle, RenderAssetUsages};
@@ -218,8 +220,12 @@ struct DetailSquares {
     book: Option<FaceBook>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct LampJobResult {
-    lamps: Vec<(MeshLight, Vec<u8>, [f32; 6])>,
+    /// Not cached: [`map_lamps`] gives them again.
+    #[serde(skip)]
+    lights: Vec<MeshLight>,
+    zones_reach: Vec<(Vec<u8>, [f32; 6])>,
     bake: Option<LampBake>,
     book: Vec<[f32; 4]>,
     listed: String,
@@ -286,8 +292,8 @@ fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangl
         VisibilityPlan { size, jobs: patch_jobs(&surfaces, &patches, &book[patches_start..patches_start + patches.len()]) }
     });
     let zones = on_threads(lamps.len(), |lamp| p2_collision::light_zones(&collision.model, lamps[lamp].location, lamps[lamp].world_radius()));
-    let lamps = lamps.into_iter().zip(zones).zip(cells.reach).map(|((light, zones), reach)| (light, zones, reach)).collect();
-    LampJobResult { lamps, bake, book, listed, visibility, patches }
+    let zones_reach = zones.into_iter().zip(cells.reach).collect();
+    LampJobResult { lights: lamps, zones_reach, bake, book, listed, visibility, patches }
 }
 
 /// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them. Rows after the texels hold
@@ -337,18 +343,50 @@ pub fn bakes_at_load() -> bool {
     LOAD_LEVELS.load(Ordering::Relaxed) & LOAD_MODERN != 0
 }
 
-pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCollision, surfaces: &[ShadowSurface], origin: Vec3) -> Option<Arc<LightBakes>> {
+pub enum LoadBake {
+    Cached,
+    Baked { lamps: Duration, probes: Duration },
+}
+
+/// A file in the bake cache made by this build for the same inputs stands in for the bake; a fresh bake is saved
+/// on a thread of its own.
+pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCollision, surfaces: &[ShadowSurface], origin: Vec3) -> Option<(Arc<LightBakes>, LoadBake)> {
     if !bakes_at_load() {
         return None;
     }
     let levels = LOAD_LEVELS.load(Ordering::Relaxed);
-    let side = lamp_quality((levels & 255) as u8).atlas_side;
+    let (side, probe_level) = (lamp_quality((levels & 255) as u8).atlas_side, (levels >> 8 & 255) as u8);
     let world = world_triangles(collision, origin);
-    let (lamps, probes) = std::thread::scope(|scope| {
-        let probes = scope.spawn(|| crate::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8));
-        (lamp_job(environment, collision, &world.triangles, surfaces, origin, side), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
-    });
-    Some(Arc::new(LightBakes { lamps: Prebaked::new(side, lamps), probes }))
+    let inputs = bake_cache::BakeInputs { environment, collision, world: &world, surfaces, origin, side, probe_level };
+    let place = bake_cache::folder().zip(bake_cache::exe_stamp().map(|stamp| bake_cache::key(&inputs, stamp)));
+    let (baked, how) = match place.as_ref().and_then(|(folder, key)| bake_cache::load(folder, *key)) {
+        Some(mut baked) => {
+            baked.lamps.lights = map_lamps(environment);
+            if let Some(bake) = &mut baked.lamps.bake {
+                bake.restore(&world.triangles, &collision.lamp_masked);
+            }
+            (baked, LoadBake::Cached)
+        }
+        None => {
+            let ((lamps, lamp_time), (probes, probe_time)) = std::thread::scope(|scope| {
+                let probes = scope.spawn(|| {
+                    let start = Instant::now();
+                    (crate::probes::prebake(environment, collision, &world, origin, probe_level), start.elapsed())
+                });
+                let start = Instant::now();
+                let lamps = lamp_job(environment, collision, &world.triangles, surfaces, origin, side);
+                ((lamps, start.elapsed()), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+            });
+            let baked = bake_cache::Baked { lamps, probes };
+            if let Some((folder, key)) = place {
+                let copy = baked.clone();
+                let _ = std::thread::Builder::new().name("bake cache".into()).spawn(move || bake_cache::save(&folder, key, &copy));
+            }
+            (baked, LoadBake::Baked { lamps: lamp_time, probes: probe_time })
+        }
+    };
+    let probes = baked.probes.map_or_else(crate::probes::ProbePrebake::default, |(columns, bake)| Prebaked::new(columns, bake));
+    Some((Arc::new(LightBakes { lamps: Prebaked::new(side, baked.lamps), probes }), how))
 }
 
 /// A lamp that could light no zone the eye can see costs nothing: zone culling hides it, as it hides meshes. A
@@ -426,7 +464,7 @@ fn follow_lamps(
         return;
     }
     let (Some(environment), Some(shown), Some(model)) = (environment, shown.as_deref(), level.as_ref().and_then(|level| level.model())) else { return };
-    let Some(LampJobResult { lamps: map, bake, book: texels, listed, visibility: plan, patches }) = job.ready.take().or_else(|| job.task.take().map(block_on)) else { return };
+    let Some(LampJobResult { lights, zones_reach: map, bake, book: texels, listed, visibility: plan, patches }) = job.ready.take().or_else(|| job.task.take().map(block_on)) else { return };
     if let Some(collision) = level.as_ref().and_then(|level| level.0.clone()).filter(|_| !patches.is_empty()) {
         // The shown charts sit in world space on Bevy's axes; swapping the axes back gives the collision's frame.
         let surfaces = shown.shadow_surfaces.clone();
@@ -439,12 +477,12 @@ fn follow_lamps(
         let open = move |from: Vec3, way: Vec3| reaches_sky(&collision, p2_bevy_assets::to_bevy(from).into(), p2_bevy_assets::to_bevy(way).into());
         job.sky = std::thread::Builder::new().name("sky bake".into()).spawn(move || bake_sky(&surfaces, &patches, open, solid)).ok().map(|thread| (thread, cancel));
     }
-    for (index, (light, zones, reach)) in map.iter().enumerate() {
+    for (index, (light, (zones, reach))) in lights.iter().zip(&map).enumerate() {
         spawn_lamp(&mut commands, index, light, *reach, &environment, shown.origin, lamp_zone(light, model, zones));
     }
     if !map.is_empty() {
-        let zones: usize = map.iter().map(|(_, zones, _)| zones.len()).sum();
-        let unknown = map.iter().filter(|(_, zones, _)| zones.is_empty()).count();
+        let zones: usize = map.iter().map(|(zones, _)| zones.len()).sum();
+        let unknown = map.iter().filter(|(zones, _)| zones.is_empty()).count();
         bevy::log::info!("modern lamps: {}, {:.1} zones a lamp on average, {unknown} inside solid with no zone known; {listed}", map.len(), zones as f32 / map.len() as f32);
     }
     book.image = Some(images.add(book_image(&texels)));

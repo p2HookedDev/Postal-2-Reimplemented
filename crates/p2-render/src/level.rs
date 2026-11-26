@@ -40,10 +40,11 @@ pub fn static_collision(
     }
 }
 
-pub fn bake_lamps(scene: &mut Scene) {
-    if let (Some(collision), Some(environment)) = (&scene.collision, &scene.lighting) {
-        scene.light_bakes = crate::lamps::bake_for_load(environment, collision, &scene.shadow_surfaces, -scene.center);
-    }
+pub fn bake_lamps(scene: &mut Scene) -> Option<crate::lamps::LoadBake> {
+    let (Some(collision), Some(environment)) = (&scene.collision, &scene.lighting) else { return None };
+    let (bakes, how) = crate::lamps::bake_for_load(environment, collision, &scene.shadow_surfaces, -scene.center)?;
+    scene.light_bakes = Some(bakes);
+    Some(how)
 }
 
 #[cfg(test)]
