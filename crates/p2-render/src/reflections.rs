@@ -79,7 +79,7 @@ impl Plugin for ReflectionsPlugin {
                 copy_glass_frame
                     .in_set(Core3dSystems::MainPass)
                     .after(main_opaque_pass_3d)
-                    .before(MainPassExtraSystems::Bounce)
+                    .after(MainPassExtraSystems::Bounce)
                     .before(MainPassExtraSystems::FireVolume)
                     .before(MainPassExtraSystems::LampFog)
                     .before(MainPassExtraSystems::GpuParticles)
@@ -224,7 +224,8 @@ fn prepare_glass_copy(
     }
 }
 
-/// First in the stage's shared encoder, so the copy still comes before the passes drawn after the opaque phase.
+/// In the stage's shared encoder after the bounce light, which lights the opaque surfaces the glass mirrors, and
+/// before the fog, fire and particles, which glass does not mirror.
 fn copy_glass_frame(view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewTransmissionTexture)>, device: Res<RenderDevice>, mut stage: ResMut<StageEncoder<AfterOpaque>>) {
     let (camera, target, copy) = view.into_inner();
     let Some(size) = camera.physical_target_size else {

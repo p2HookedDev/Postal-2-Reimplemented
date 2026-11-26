@@ -213,7 +213,9 @@ fn modern_glass(color: vec4<f32>, position: vec3<f32>, normal: vec3<f32>, seen: 
     let albedo = display * display;
     let around = view_around(normal, lamps, surface);
     let shining = select(surface, vec3(surface.xy, -MIRROR_REFLECTANCE), mirrors);
-    let lit = surface_light(albedo, position, normal, seen, ao, gloss, lamps, shining, around);
+    // A mirroring pane's dark texel is the room behind the glass, not grime on it, so it must not dim the reflection;
+    // its matte comes from `behind` below.
+    let lit = surface_light(select(albedo, vec3(1.0), mirrors), position, normal, seen, ao, gloss, lamps, shining, around);
     var behind = lit.matte;
     if mirrors {
         behind = surface_light(albedo, position, normal, vec3(0.0, seen.y, 0.0), ao, false, lamps, surface, around).matte;
