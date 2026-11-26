@@ -18,7 +18,7 @@ use crate::probes::ProbeBake;
 
 const MAGIC: &[u8; 4] = b"P2LB";
 /// Raise with any change to what is cached.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const KEPT_FILES: usize = 8;
 
 #[derive(Clone, Serialize, Deserialize)]

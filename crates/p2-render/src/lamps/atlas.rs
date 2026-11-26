@@ -157,13 +157,19 @@ struct MaskedRange {
 pub(super) struct LampBake {
     #[serde(skip)]
     pub(super) vertices: Vec<[f32; 3]>,
+    #[serde(with = "whole_triangles")]
     indices: Vec<u32>,
     draws: Vec<LampDraw>,
     draw_index: Vec<Option<usize>>,
     tiles: Vec<Option<Tile>>,
+    #[serde(skip)]
     masked_vertices: Vec<[f32; 6]>,
+    #[serde(skip)]
     masked_indices: Vec<u32>,
     masked_ranges: Vec<MaskedRange>,
+    /// Each range's caster triangles, in range order.
+    #[serde(with = "differences")]
+    masked_triangles: Vec<u32>,
     #[serde(skip)]
     masked_images: Vec<Handle<Image>>,
     pub(super) records: Vec<[f32; 4]>,
@@ -173,6 +179,16 @@ impl LampBake {
     pub(super) fn restore(&mut self, triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster]) {
         self.vertices = triangles.as_flattened().to_vec();
         self.masked_images = masked.iter().map(|caster| caster.image.clone()).collect();
+        let mut taken = self.masked_triangles.iter();
+        self.masked_vertices.clear();
+        for range in &self.masked_ranges {
+            let Some(caster) = masked.get(range.group) else { continue };
+            for &triangle in taken.by_ref().take(range.count as usize / 3) {
+                let corners = caster.triangles.get(triangle as usize).into_iter().flatten();
+                self.masked_vertices.extend(corners.map(|&[x, y, z, u, v]| [x, y, z, u, v, caster.cutoff]));
+            }
+        }
+        self.masked_indices = (0..self.masked_vertices.len() as u32).collect();
     }
 
     pub(super) fn keep_record_rows(&mut self, book: &[[f32; 4]]) {
@@ -199,6 +215,53 @@ impl LampBake {
     }
 }
 
+/// Rising numbers as their differences, which are small and pack into one or two bytes each.
+mod differences {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(values: &[u32], serializer: S) -> Result<S::Ok, S::Error> {
+        let mut last = 0;
+        serializer.collect_seq(values.iter().map(|&value| {
+            let step = i64::from(value) - last;
+            last = i64::from(value);
+            step
+        }))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u32>, D::Error> {
+        let mut last = 0i64;
+        Vec::<i64>::deserialize(deserializer)?
+            .into_iter()
+            .map(|step| {
+                last += step;
+                u32::try_from(last).map_err(D::Error::custom)
+            })
+            .collect()
+    }
+}
+
+/// Indices that name whole triangles in order (`3t, 3t + 1, 3t + 2`), kept as the triangles' numbers.
+mod whole_triangles {
+    use serde::ser::Error as _;
+    use serde::{Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(indices: &[u32], serializer: S) -> Result<S::Ok, S::Error> {
+        let triangles = indices
+            .chunks(3)
+            .map(|corners| match *corners {
+                [a, b, c] if a % 3 == 0 && b == a + 1 && c == a + 2 => Ok(a / 3),
+                _ => Err(S::Error::custom("lamp indices that are not whole triangles")),
+            })
+            .collect::<Result<Vec<u32>, _>>()?;
+        super::differences::serialize(&triangles, serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u32>, D::Error> {
+        Ok(super::differences::deserialize(deserializer)?.into_iter().flat_map(|triangle| [3 * triangle, 3 * triangle + 1, 3 * triangle + 2]).collect())
+    }
+}
+
 fn draw_index(tiles: &[Option<Tile>]) -> Vec<Option<usize>> {
     let mut next = 0;
     tiles.iter().map(|tile| tile.map(|_| { next += 1; next - 1 })).collect()
@@ -221,31 +284,30 @@ pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], la
         });
         found.sort_unstable();
         let own: Vec<u32> = found.into_iter().flat_map(|index| [0, 1, 2].map(|corner| index * 3 + corner)).collect();
-        let groups: Vec<(usize, Vec<[f32; 6]>)> = masked
+        let groups: Vec<(usize, Vec<u32>)> = masked
             .iter()
             .zip(&caster_bounds)
             .enumerate()
             .filter(|(_, (_, reach))| box_near_sphere(**reach, position, radius))
             .map(|(group, (caster, _))| {
-                let near = caster.triangles.iter().filter(|triangle| box_near_sphere(point_bounds(triangle.iter().copied()), position, radius));
-                (group, near.flat_map(|triangle| triangle.map(|[x, y, z, u, v]| [x, y, z, u, v, caster.cutoff])).collect::<Vec<_>>())
+                let near = caster.triangles.iter().enumerate().filter(|(_, triangle)| box_near_sphere(point_bounds(triangle.iter().copied()), position, radius));
+                (group, near.map(|(index, _)| index as u32).collect::<Vec<_>>())
             })
-            .filter(|(_, vertices)| !vertices.is_empty())
+            .filter(|(_, near)| !near.is_empty())
             .collect();
         Some((own, groups))
     });
     let mut indices = Vec::new();
     let mut draws = Vec::new();
-    let (mut masked_vertices, mut masked_indices, mut masked_ranges) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut masked_triangles, mut masked_ranges) = (Vec::new(), Vec::new());
     for ((&(position, radius), tile), near) in lamps.iter().zip(&tiles).zip(near) {
         let (Some(tile), Some((own, groups))) = (*tile, near) else { continue };
         let lamp = draws.len();
         draws.push(LampDraw { position, radius, tile, first: indices.len() as u32, count: own.len() as u32 });
         indices.extend(own);
-        for (group, vertices) in groups {
-            let (first, count) = (masked_indices.len() as u32, vertices.len() as u32);
-            masked_indices.extend((0..count).map(|corner| masked_vertices.len() as u32 + corner));
-            masked_vertices.extend(vertices);
+        for (group, near) in groups {
+            let (first, count) = (masked_triangles.len() as u32 * 3, near.len() as u32 * 3);
+            masked_triangles.extend(near);
             masked_ranges.push(MaskedRange { lamp, group, first, count });
         }
     }
@@ -255,9 +317,10 @@ pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], la
         draws,
         draw_index: draw_index(&tiles),
         tiles,
-        masked_vertices,
-        masked_indices,
+        masked_vertices: Vec::new(),
+        masked_indices: Vec::new(),
         masked_ranges,
+        masked_triangles,
         masked_images: Vec::new(),
         records: Vec::new(),
     };
@@ -739,6 +802,27 @@ mod tests {
         let through_float = tile.packed() as f32 as u32;
         assert_eq!(through_float, tile.packed());
         assert_eq!((through_float & 255, (through_float >> 8) & 255, (through_float >> 16) & 15), (127, 126, 3));
+    }
+
+    #[test]
+    fn a_stored_bake_restores_its_indices_and_masked_vertices() {
+        let triangle = |x: f32| [[x, 0.0, 0.0], [x, 5.0, 0.0], [x, 0.0, 5.0]];
+        let world: Vec<_> = [900.0, 10.0, 20.0, -30.0, 2000.0].map(triangle).to_vec();
+        let leaf = |x: f32| [[x, 0.0, 0.0, 0.0, 0.0], [x, 5.0, 0.0, 1.0, 0.0], [x, 0.0, 5.0, 0.0, 1.0]];
+        let masked = [
+            MaskedCaster { image: Handle::default(), cutoff: 0.5, triangles: vec![leaf(5.0), leaf(950.0), leaf(-40.0)] },
+            MaskedCaster { image: Handle::default(), cutoff: 0.25, triangles: vec![leaf(1990.0), leaf(15.0)] },
+        ];
+        let fresh = lamp_bake(&world, &masked, &[([0.0; 3], 100.0), ([2000.0, 0.0, 0.0], 50.0), ([0.0; 3], 0.0)]);
+        assert_eq!(fresh.masked_vertices.len(), 12);
+        let stored = postcard::to_stdvec(&fresh).unwrap();
+        let mut loaded: LampBake = postcard::from_bytes(&stored).unwrap();
+        loaded.restore(&world, &masked);
+        assert_eq!(loaded.indices, fresh.indices);
+        assert_eq!(loaded.masked_vertices, fresh.masked_vertices);
+        assert_eq!(loaded.masked_indices, fresh.masked_indices);
+        assert_eq!(loaded.vertices, fresh.vertices);
+        assert!(stored.len() < 4 * fresh.indices.len() + 24 * fresh.masked_vertices.len(), "{} bytes", stored.len());
     }
 
     #[test]
