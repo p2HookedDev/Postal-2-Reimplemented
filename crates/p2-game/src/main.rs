@@ -70,10 +70,16 @@ fn run() {
     #[cfg(feature = "profile")]
     let log = LogPlugin { filter: format!("{}wgpu_core=info", bevy::log::DEFAULT_FILTER), ..log };
     let mut app = App::new();
-    // Never the timed, event-woken updates Bevy runs a window without focus on: every mouse event then makes a frame
-    // of its own between the timed ones, and what moves on screen jitters.
+    // Without focus, frames come from a timer alone, so the game leaves the CPU and GPU to the program in front. No
+    // event wakes a frame: each mouse event would make one of its own between the timed ones, and motion would jitter.
     app.insert_resource(bevy::camera::ClearColor(bevy::color::Color::BLACK));
-    app.insert_resource(bevy::winit::WinitSettings { focused_mode: bevy::winit::UpdateMode::Continuous, unfocused_mode: bevy::winit::UpdateMode::Continuous });
+    let unfocused_mode = bevy::winit::UpdateMode::Reactive {
+        wait: std::time::Duration::from_secs_f64(1.0 / 30.0),
+        react_to_device_events: false,
+        react_to_user_events: false,
+        react_to_window_events: false,
+    };
+    app.insert_resource(bevy::winit::WinitSettings { focused_mode: bevy::winit::UpdateMode::Continuous, unfocused_mode });
     app.add_plugins((
         DefaultPlugins
             // Without DX12 among the backends Bevy turns off wgpu's validation of every indirect draw. Bevy's pass timing

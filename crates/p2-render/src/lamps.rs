@@ -76,12 +76,12 @@ const SHADOWED_CELL: f32 = 128.0;
 const UNSHADOWED_CELL: f32 = 512.0;
 const ITEMS_PER_BATCH: usize = 8;
 
-/// Runs `work` in the light-bake pool of all threads but two, which are left to the game.
-/// Bakes running at once share the pool, each thread taking whichever bake's work is left.
+/// Runs `work` in the light-bake pool of half the threads: the sky bake runs during play, beside the game and
+/// other programs. Bakes running at once share the pool, each thread taking whichever bake's work is left.
 pub(crate) fn in_bake_pool<R: Send>(work: impl FnOnce() -> R + Send) -> R {
     static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     let pool = POOL.get_or_init(|| {
-        let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().saturating_sub(2).max(1));
+        let threads = std::thread::available_parallelism().map_or(1, |threads| (threads.get() / 2).max(1));
         rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|index| format!("light bake {index}")).build().ok()
     });
     match pool {

@@ -63,11 +63,10 @@ const TICK_PERIOD: f32 = 1.0 / 120.0;
 
 const STEP_FRAMES: usize = 12;
 
-/// Gives Bevy's system threads [`p2_vm::SCRIPT_STACK`] (the main thread helps run systems too, its stack is set
-/// at link time). Call before the app is built: the compute pool made here is the one the app's `TaskPoolPlugin`
-/// keeps (`get_or_init`).
+/// Gives Bevy's system threads [`p2_vm::SCRIPT_STACK`]. Call before the app is built: the app's `TaskPoolPlugin`
+/// keeps the compute pool made here (`get_or_init`). Half the threads, so the other pools and programs keep the rest.
 pub fn init_script_stacks() {
-    let threads = bevy::tasks::available_parallelism().saturating_sub(3).max(1);
+    let threads = (bevy::tasks::available_parallelism() / 2).max(1);
     bevy::tasks::ComputeTaskPool::get_or_init(|| {
         bevy::tasks::TaskPoolBuilder::new().num_threads(threads).stack_size(p2_vm::SCRIPT_STACK).thread_name("Compute Task Pool".into()).build()
     });
