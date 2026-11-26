@@ -304,6 +304,7 @@ fn overlay(
     if keys.just_pressed(KeyCode::F10) && dump.run.is_none() {
         overlay.open = !overlay.open;
     }
+    dump.requested |= keys.just_pressed(KeyCode::F11);
     if !overlay.open {
         return Ok(());
     }
@@ -332,7 +333,7 @@ fn overlay(
                     }
                 });
             }
-            dump_asked = ui.button("Dump").on_hover_text("A screenshot of every debug view and a report, in a dumps folder beside the game").clicked();
+            dump_asked = ui.button("Dump").on_hover_text("A screenshot of every debug view and a report, in a dumps folder beside the game; F11 starts it in play").clicked();
         });
         ui.separator();
         ui.label(format!("Particle emitter actors within {NEAR} units, nearest the view direction first:"));

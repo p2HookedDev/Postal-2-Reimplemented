@@ -16,7 +16,7 @@ import package::p2_render::modern::with_light;
 import package::p2_render::modern_base::{LUMINANCE, MODERN_ON, NO_RELIEF};
 import package::p2_render::relief::{relief_from, relief_shows};
 import package::p2_render::sun_shadow::{sun_found, sun_index, world_lookup};
-import package::p2_render::surface::{ModernLight, modern_light, pooled_surface_lit, retail_lit};
+import package::p2_render::surface::{ModernLight, debug_shade, modern_light, pooled_surface_lit, retail_lit};
 import package::p2_render::sky_view::sky_true_position;
 @if(BINDLESS)
 import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
@@ -217,7 +217,9 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         }
         pbr_input.material.base_color = vec4(texel.rgb, 1.0);
         let wet = wet_color(texel.rgb, pool);
-        if modern {
+        if modern && incoming.view != 0u {
+            color = mix(color, debug_shade(incoming, vec4(wet, 1.0), wet_normal(bumped, pool), dynamic).rgb, alpha);
+        } else if modern {
             let lit = pooled_surface_lit(wet, position, wet_normal(bumped, pool), incoming);
             color = mix(color, with_light(lit, wet, dynamic), alpha);
         } else {
