@@ -93,7 +93,8 @@ fn report_lost_vm(play: Res<Play>, session: Res<Session>, mut next: ResMut<NextS
 }
 
 fn drop_failed_map(mut failed: MessageReader<MapFailed>, mut session: ResMut<Session>, mut t: SceneTargets) {
-    if failed.read().last().is_some() {
+    if let Some(MapFailed(failure)) = failed.read().last() {
+        bevy::log::error!("{failure}");
         session.clear(&mut t);
         t.scenes.write(p2_render::world::scene::SceneChange::Clear);
     }

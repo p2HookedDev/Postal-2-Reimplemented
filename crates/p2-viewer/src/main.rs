@@ -15,7 +15,7 @@ use browser::{AssetBrowserPlugin, Browser};
 use controls::ViewerControlsPlugin;
 use game_dir::GameDirPlugin;
 use p2_engine::P2EnginePlugins;
-use p2_engine::diagnostics::{DiagnosticsPlugin, capture_layer, install_panic_hook};
+use p2_engine::diagnostics::{DiagnosticsPlugin, capture_layer, start_diagnostics};
 use p2_host::settings::DisplayPlugin;
 use p2_host::game_dir_form::GameDirForm;
 use p2_render::post::gamma::GammaPlugin;
@@ -28,7 +28,7 @@ enum ViewerState {
 }
 
 fn main() {
-    install_panic_hook();
+    start_diagnostics(concat!("p2-viewer ", env!("CARGO_PKG_VERSION")));
     let mut args = std::env::args().skip(1);
     let package = args.next();
     let asset = args.next();

@@ -6,7 +6,7 @@ use bevy::ecs::error::Result;
 use bevy::ecs::prelude::{Commands, MessageReader, MessageWriter, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists;
-use bevy::log::warn;
+use bevy::log::{error, info, warn};
 use bevy::math::UVec2;
 use bevy::state::prelude::{AppExtStates, NextState, OnEnter, States, in_state};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
@@ -141,6 +141,7 @@ fn launcher(
         exit.write(AppExit::Success);
     }
     if play && let Some(info) = form.info.clone() {
+        info!("playing from {}: {}", info.dir.display(), info.edition());
         match new_game(&info.dir) {
             Ok((package, session)) => {
                 if let Err(e) = save_game_dir(&info.dir) {
@@ -154,7 +155,10 @@ fn launcher(
                 commands.insert_resource(Hud::default());
                 next.set(GameState::Playing);
             }
-            Err(e) => state.failure = Some(format!("{e:#}")),
+            Err(e) => {
+                error!("could not start: {e:#}");
+                state.failure = Some(format!("{e:#}"));
+            }
         }
     }
     Ok(())

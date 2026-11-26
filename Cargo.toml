@@ -125,10 +125,12 @@ opt-level = 3
 [profile.dev.package.p2-movie]
 opt-level = 3
 
+# Our shipped PDBs name the functions and lines in a player's panic backtrace.
 [profile.release]
 codegen-units = 1
-strip = true
+debug = "line-tables-only"
 
 # At opt-level "s" rustc shares generic instances, which put 102781 exports in `bevy_dylib`, past Windows' 65535.
 [profile.release.package."*"]
 opt-level = 3
+debug = false

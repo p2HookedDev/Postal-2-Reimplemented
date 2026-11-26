@@ -42,13 +42,15 @@ jobs:
             }
           }
           $dlls = @($dlls.Values)
+          $symbols = @($exe) + @($dlls | Where-Object { (Split-Path $_ -Leaf) -like "p2_dylib_*" }) | ForEach-Object { [IO.Path]::ChangeExtension($_, ".pdb") }
+          foreach ($pdb in $symbols) { if (-not (Test-Path $pdb)) { throw "no $pdb" } }
           New-Item -ItemType Directory -Force dist/P2Reimplemented/Packages | Out-Null
           Copy-Item script/P2Modern/P2Modern.u dist/P2Reimplemented/Packages/
           New-Item -ItemType Directory -Force dist/P2Reimplemented/assets | Out-Null
           Copy-Item -Recurse assets/shaders dist/P2Reimplemented/assets/shaders
           Copy-Item -Recurse crates/p2-render/textures dist/P2Reimplemented/textures
           Copy-Item $exe, LICENSE, README.md dist/P2Reimplemented/
-          Copy-Item $dlls, "$env:SystemRoot/System32/vcruntime140.dll" dist/P2Reimplemented/
+          Copy-Item ($dlls + $symbols + "$env:SystemRoot/System32/vcruntime140.dll") dist/P2Reimplemented/
           Compress-Archive dist/P2Reimplemented "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip"
 
       - name: Publish

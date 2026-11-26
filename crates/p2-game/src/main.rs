@@ -11,13 +11,14 @@ use bevy::render::settings::{Backends, WgpuFeatures, WgpuSettings};
 use bevy::window::WindowPlugin;
 use bevy_egui::EguiPlugin;
 use p2_engine::P2EnginePlugins;
-use p2_engine::diagnostics::{P2DiagnosticsPlugins, install_panic_hook, log_plugin};
+use p2_engine::diagnostics::{P2DiagnosticsPlugins, log_plugin, start_diagnostics};
 use p2_engine::map::MapLoadPlugin;
 // Links our crates from their DLLs instead of into the exe.
 use p2_dylib_engine as _;
 
 fn main() {
-    install_panic_hook();
+    let build = if cfg!(debug_assertions) { "debug" } else { "release" };
+    start_diagnostics(&format!("Postal2Reimplemented {}, commit {}, {build} build", env!("CARGO_PKG_VERSION"), env!("P2_COMMIT")));
     p2_engine::play::init_script_stacks();
     App::new()
         .add_plugins((

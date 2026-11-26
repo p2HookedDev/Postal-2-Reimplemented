@@ -134,8 +134,13 @@ fn append_text(text: &str) {
     let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()));
 }
 
-pub fn install_panic_hook() {
+pub fn start_diagnostics(build: &str) {
     STARTED.get_or_init(Instant::now);
+    if let Some(path) = file_path() {
+        let _ = std::fs::rename(&path, path.with_file_name("diagnostics-previous.txt"));
+    }
+    let started = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    append_text(&format!("{}\n", file_line(Level::INFO, "diagnostics", &format!("{build}, started {started}"))));
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Some(log) = RUNNING.get() {
@@ -297,8 +302,7 @@ fn write_file(
     let text = log.take_pending();
     let Some(path) = file_path() else { return };
     if file.is_none() {
-        let emptied = if first { std::fs::File::create(&path).map(drop) } else { Ok(()) };
-        match emptied.and_then(|()| std::fs::OpenOptions::new().create(true).append(true).open(&path)) {
+        match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
             Ok(opened) => *file = Some(opened),
             Err(error) => bevy::log::warn_once!("opening {}: {error}", path.display()),
         }

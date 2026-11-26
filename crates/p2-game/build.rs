@@ -4,6 +4,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         println!("cargo:rustc-link-arg-bins=/STACK:67108864");
     }
+    println!("cargo:rustc-env=P2_COMMIT={}", commit());
     let Some(profile_dir) = std::env::var_os("OUT_DIR").map(PathBuf::from).and_then(|out| Some(out.ancestors().nth(3)?.to_path_buf())) else { return };
     copy_dlls(&profile_dir);
 }
@@ -30,6 +31,22 @@ fn copy_dlls(profile_dir: &Path) {
             }
         }
     }
+}
+
+fn commit() -> String {
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git").args(args).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let mut watched = vec!["HEAD".to_owned(), "packed-refs".to_owned()];
+    watched.extend(git(&["symbolic-ref", "-q", "HEAD"]));
+    for name in watched {
+        // A missing watched file would rerun this script on every build.
+        if let Some(path) = git(&["rev-parse", "--git-path", &name]).filter(|path| Path::new(path).is_file()) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
+    git(&["rev-parse", "--short=8", "HEAD"]).unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn std_dll_dir() -> Option<PathBuf> {
