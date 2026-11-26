@@ -28,13 +28,21 @@ jobs:
         shell: pwsh
         run: |
           $exe = "target/release/p2-game.exe"
-          if (Select-String -Path $exe -SimpleMatch "VCRUNTIME140" -Quiet) { throw "the exe needs VCRUNTIME140.dll" }
+          # Bevy and Rust's std are DLLs the exe imports by hashed name; the C runtime ships beside them.
+          $imports = [regex]::Matches([IO.File]::ReadAllText((Resolve-Path $exe), [Text.Encoding]::Latin1), "(bevy_dylib|std)-[0-9a-f]+\.dll") | ForEach-Object Value | Sort-Object -Unique
+          $sysroot = (rustc --print sysroot).Trim()
+          $dlls = foreach ($name in $imports) {
+            $path = @("target/release/deps/$name", "$sysroot/lib/rustlib/x86_64-pc-windows-msvc/lib/$name") | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $path) { throw "the exe imports $name, which is not built" }
+            $path
+          }
           New-Item -ItemType Directory -Force dist/P2Reimplemented/Packages | Out-Null
           Copy-Item script/P2Modern/P2Modern.u dist/P2Reimplemented/Packages/
           New-Item -ItemType Directory -Force dist/P2Reimplemented/shaders | Out-Null
           Copy-Item crates/p2-render/src/*.wesl, crates/p2-render/src/*.wgsl dist/P2Reimplemented/shaders/
           Copy-Item -Recurse crates/p2-render/textures dist/P2Reimplemented/textures
           Copy-Item $exe, LICENSE, README.md dist/P2Reimplemented/
+          Copy-Item $dlls, "$env:SystemRoot/System32/vcruntime140.dll" dist/P2Reimplemented/
           Compress-Archive dist/P2Reimplemented "dist/P2Reimplemented-$env:GITHUB_REF_NAME-windows-x64.zip"
 
       - name: Publish
