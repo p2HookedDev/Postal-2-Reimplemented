@@ -64,8 +64,6 @@ pub(crate) fn subtitle_index(tags: Option<&Value>, tag: &str) -> Option<i32> {
     i32::try_from(index).ok()
 }
 
-/// `SubSound` (a config array, thousands long) by lower-case sound path. Script only reads that array's length; a
-/// console `set`, a restored save and leaving the level drop this.
 #[derive(Debug, Default)]
 pub(crate) struct SubtitleSounds {
     manager: Option<ObjectId>,

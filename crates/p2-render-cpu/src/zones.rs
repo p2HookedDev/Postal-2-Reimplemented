@@ -26,8 +26,6 @@ impl From<[f32; 4]> for Plane {
 
 const MAX_VOLUMES: usize = 512;
 
-/// Closer than this to a portal's plane (units), the eye sees through all of it: the volume behind is the one in
-/// front (the eye-through-polygon planes degenerate there).
 const IN_PORTAL: f32 = 1.0;
 
 struct Portal {
@@ -36,8 +34,7 @@ struct Portal {
     zones: [u8; 2],
 }
 
-/// A `PF_AntiPortal` surface: retail builds its occluder from the source brush poly; ours is the convex hull of
-/// the surface's BSP fragments, which lies inside that poly (so it never hides more than retail).
+/// Ours is the hull of the surface's BSP fragments, inside retail's source brush poly, so it never hides more than retail.
 struct Antiportal {
     polygon: Vec<Vector>,
     plane: Plane,
@@ -182,9 +179,6 @@ impl ZonePortals {
         Self { portals, antiportals, actors, members }
     }
 
-    /// Each portal of a reached zone that the eye faces from that zone's side is clipped by the zone's view
-    /// volumes; what is left opens the zone behind. Antiportals hide what lies wholly behind them in that zone,
-    /// portals included. Zone 0 (outside the world) sees everything.
     pub fn visible(&self, eye: Vector, zone: u8, view: &[Plane], seen: &mut VisibleZones) {
         let VisibleZones { walked, capped, planes, volumes, occluders, antiportals_used, actors_used, antiportal_sides, portal_sides, whole, queue } =
             seen;
@@ -305,7 +299,6 @@ pub struct VisibleZones {
 }
 
 impl VisibleZones {
-    /// The walk passed its cap, so everything counts as seen: incomplete volumes would hide what is in view.
     pub fn capped(&self) -> bool {
         self.capped
     }
@@ -345,8 +338,6 @@ fn bounding_box<'a>(points: impl Iterator<Item = &'a Vector>) -> (Vector, Vector
     (min.into(), max.into())
 }
 
-/// One portal per surface and zone pair, both facings as one: the hull of its BSP fragments. Retail opens a
-/// portal surface once, through its source brush poly; the hull covers every fragment and lies inside that poly.
 fn portal_hulls(fragments: impl IntoIterator<Item = (usize, [u8; 2], [f32; 4], Vec<Vector>)>) -> Vec<Portal> {
     let mut merged: BTreeMap<(usize, [u8; 2], [u32; 4]), Vec<Vector>> = BTreeMap::new();
     for (surface, [back, front], plane, points) in fragments {

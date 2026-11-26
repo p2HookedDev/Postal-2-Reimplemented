@@ -35,8 +35,6 @@ pub struct ActorFrame {
     pub burning: bool,
 }
 
-/// Channels above 0 blend over channel 0. Bone names are lower case and shared, so frames allocate
-/// no strings. An empty start bone means the root. Without a channel 0 they blend over the mesh's own pose.
 pub struct ActorPose {
     pub base: Option<ChannelPose>,
     pub blends: Vec<(ChannelPose, f32, Arc<str>)>,

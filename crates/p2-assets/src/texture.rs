@@ -87,12 +87,9 @@ pub fn texture_heights(texture: &Texture) -> Option<(u32, u32, Vec<u16>)> {
     Some((mip.width, mip.height, heights))
 }
 
-/// Mip 0 of a weight texture as one alpha byte per texel: RGBA8 alpha, P8 palette red (retail copies
-/// red into alpha for terrain alpha maps), L8 value. `None` for other formats.
 pub fn texture_alpha(texture: &Texture, palette: Option<&[[u8; 4]]>) -> Option<(u32, u32, Vec<u8>)> {
     let mip = texture.mips.first().filter(|mip| !mip.data.is_empty())?;
     let alpha = match texture.format {
-        // Stored B, G, R, A.
         TextureFormat::Rgba8 => mip.data.as_chunks::<4>().0.iter().map(|texel| texel[3]).collect(),
         TextureFormat::P8 => {
             let palette = palette?;
@@ -182,8 +179,6 @@ fn decode_dxt(format: TextureFormat, width: u32, height: u32, data: &[u8]) -> Op
     Some(out)
 }
 
-/// The 16 texels of an 8-byte colour block (two RGB565 end points, 2-bit indices). `one_bit_alpha` (DXT1): with
-/// `c0 <= c1` index 3 is transparent black.
 fn color_block(block: &[u8], one_bit_alpha: bool) -> [[u8; 4]; 16] {
     let c0 = u16::from_le_bytes([block[0], block[1]]);
     let c1 = u16::from_le_bytes([block[2], block[3]]);

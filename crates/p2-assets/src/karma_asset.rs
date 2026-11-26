@@ -4,7 +4,6 @@ use crate::Error;
 #[derive(Debug, Clone, PartialEq)]
 pub struct KarmaAsset {
     pub id: String,
-    /// Asset units per Unreal unit (0.02 in every shipped file: Karma's 1/50).
     pub scale: f32,
     pub mass_scale: f32,
     pub geometries: Vec<KaGeometry>,

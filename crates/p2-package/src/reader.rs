@@ -109,8 +109,6 @@ impl<'a> Reader<'a> {
         usize::try_from(self.compact()?).map_err(|_| Error::Invalid { what: "array count", offset })
     }
 
-    /// Compact length including the terminator; a negative length means UTF-16, otherwise one Latin-1
-    /// byte per character. An unpaired surrogate becomes U+FFFD.
     pub fn fstring(&mut self) -> Result<String, Error> {
         let len = self.compact()?;
         let count = len.unsigned_abs() as usize;

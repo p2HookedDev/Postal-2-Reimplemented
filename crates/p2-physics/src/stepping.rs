@@ -111,7 +111,6 @@ impl World {
         }
     }
 
-    /// A kinematic body makes no contacts with dormant (fixed) bodies and may not wake sleeping ones.
     fn wake_near_movers(&mut self, moves: &[(RigidBodyHandle, Pose, Pose)]) {
         let colliders = &self.colliders;
         let reach: Vec<Aabb> = moves

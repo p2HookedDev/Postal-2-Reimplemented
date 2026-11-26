@@ -178,7 +178,6 @@ pub enum UvModifier {
     Oscillator { rate: [f32; 2], phase: [f32; 2], amplitude: [f32; 2], kind: [OscillationType; 2], offset: [f32; 2] },
 }
 
-/// 2D affine UV transform: `u' = m[0][0]·u + m[0][1]·v + m[0][2]`, `v' = m[1][0]·u + m[1][1]·v + m[1][2]`.
 pub type UvMatrix = [[f32; 3]; 2];
 
 const UV_IDENTITY: UvMatrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
@@ -251,8 +250,6 @@ pub struct RenderState {
     pub wet: Option<i32>,
     pub color: Option<[u8; 4]>,
     pub color_blend: bool,
-    /// Set by a `Shader` with `OB_Darken`: the frame buffer is multiplied by one minus the colour,
-    /// drawn as [`Blending::Modulate`] of the inverted colour.
     pub darken: bool,
     pub alpha_ref: Option<u8>,
     /// The innermost `FinalBlend` of the chain: as in retail, each one met overwrites the frame buffer
@@ -393,9 +390,6 @@ impl MaterialClass {
     }
 }
 
-/// Follows `material` (an object reference in `pkg`) down to the texture a simple renderer should draw, adding
-/// the chain's render state to `state`. Stops at the first import; following it is the caller's job (same
-/// `state`).
 pub fn base_texture<'a, R: Resolve + ?Sized>(
     objects: &mut Objects<'a, R>,
     src: Source<'a>,
@@ -502,8 +496,6 @@ fn shader(object: &ObjectProperties, pkg: &Package, state: &mut RenderState) -> 
     if opacity && reference("Opacity") != reference("Diffuse") && state.opacity.is_none() {
         state.opacity = Some(reference("Opacity"));
     }
-    // `OB_Normal` without `Opacity` is opaque: a `bAlphaTexture` diffuse's alpha then only masks
-    // the specular.
     let output = OutputBlending::from_byte(byte("OutputBlending"));
     let blending = match output {
         OutputBlending::Normal if opacity => Blending::Alpha,
@@ -550,8 +542,6 @@ fn final_blend(object: &ObjectProperties, state: &mut RenderState) -> &'static [
 
 fn tex_modifier(class: MaterialClass, object: &ObjectProperties, state: &mut RenderState) {
     let (float, byte) = (|name| object.float(name), |name| object.byte(name));
-    // `TexModifier.TexCoordSource`: the first one that is not `TCS_NoChange` (13) picks the coordinates; vertex
-    // streams (0..7) are drawn, generated coordinates (world, camera, environment map) are not yet.
     if state.uv_stream.is_none() {
         let source = if class == MaterialClass::TexCoordSource { u8::try_from(object.int("SourceChannel")).unwrap_or(0) } else { byte("TexCoordSource") };
         if source < 8 {
@@ -568,7 +558,6 @@ fn tex_modifier(class: MaterialClass, object: &ObjectProperties, state: &mut Ren
         MaterialClass::TexRotator => {
             let offset = [float("UOffset"), float("VOffset")];
             let rotation = object.rotator("Rotation");
-            // TR_FixedRotation 0, TR_ConstantlyRotating 1; oscillating rotation (2) is not applied yet.
             let constant = byte("TexRotationType") == 1;
             state.uv.push(UvModifier::Rotator { rotation, constant, offset });
         }

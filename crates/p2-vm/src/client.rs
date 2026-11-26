@@ -76,8 +76,6 @@ impl<L: LoaderRef> Vm<L> {
         self.store.set(viewport, Prop::WindowsMouseY, Value::Float(y));
     }
 
-    /// `Some(ratio)` while on. The host draws the level in a band `height / ratio` high, centred, the rest black; the
-    /// HUD still draws over the whole screen.
     pub fn cinematics(&self) -> Option<f32> {
         let client = &self.host.client;
         client.cinematics.then(|| client.cinematics_ratio.unwrap_or(CINEMATICS_RATIO))

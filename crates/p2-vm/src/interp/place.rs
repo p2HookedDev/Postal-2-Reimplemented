@@ -107,7 +107,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// A static array's index clamps into range, as retail; a dynamic array's is a hop into its elements.
     pub(super) fn element(&self, mut place: Place, index: i32) -> Target {
         match place.shape {
             _ if place.dim > 1 => {

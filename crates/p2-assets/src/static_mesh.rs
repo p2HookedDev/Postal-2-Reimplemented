@@ -32,12 +32,8 @@ pub struct StaticMesh {
     pub uvs: Vec<Vec<[f32; 2]>>,
     pub indices: Vec<u16>,
     pub collision_model: i32,
-    /// `CollisionTriangles`: the triangles collision tests when the simplified model is not used, as indices into
-    /// `positions`. Only triangles of materials with `EnableCollision` are here.
     pub collision_triangles: Vec<[u32; 3]>,
     pub collision_materials: Vec<u32>,
-    /// Number of `CollisionNodes` (the BSP tree over `collision_triangles`); without nodes the triangles are not
-    /// tested.
     pub collision_nodes: usize,
     pub use_simple_box_collision: bool,
     pub use_simple_line_collision: bool,
@@ -95,7 +91,6 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
     r.i32()?;
 
     let collision_model = r.compact()?;
-    // Plane and three side planes (16 floats), three vertex indices, material index.
     let (collision_triangles, collision_materials) = array(r, |r| {
         r.bytes(64)?;
         let vertices = [count(r)?, count(r)?, count(r)?].map(|i| i as u32);
@@ -103,7 +98,6 @@ pub fn read_static_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result<S
     })?
     .into_iter()
     .unzip();
-    // Triangle index, coplanar index, two child indices, box.
     let collision_nodes = array(r, |r| {
         (0..4).try_for_each(|_| r.compact().map(drop))?;
         skip_box(r)
@@ -160,7 +154,6 @@ pub struct StaticMeshInstance {
 #[derive(Debug, Clone)]
 pub struct StaticMeshLight {
     pub actor: i32,
-    /// One bit per mesh vertex (LSB first): the light reaches it (faces it and is not shadowed).
     pub visibility: Vec<u8>,
     pub applied: bool,
 }

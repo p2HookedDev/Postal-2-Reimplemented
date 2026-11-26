@@ -86,8 +86,7 @@ pub struct EmitterProperties {
     pub relative_warmup_time: f32,
     pub use_direction_as: DirectionUsage,
     pub projection_normal: Vector,
-    /// A cache set when the emitter initialises; only the `SetProjectionNormal` natives change it, so a
-    /// script writing `ProjectionNormal` directly changes nothing drawn. Zero until one of those ran.
+    /// Only the `SetProjectionNormal` natives change this cache, so a script writing `ProjectionNormal` changes nothing drawn.
     pub real_projection_normal: Vector,
     pub use_collision: bool,
     pub damping_factor_range: RangeVector,

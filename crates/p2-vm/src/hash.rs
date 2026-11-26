@@ -7,8 +7,6 @@ use crate::profiling::Work;
 use crate::{LoaderRef, ObjectId, Prop, Vm};
 
 const CELL: f32 = 256.0;
-/// Actors wider than a cell go into every cell their reach covers, up to this many cells (a reach of about 2000
-/// units); wider ones are candidates of every query.
 const MAX_SPREAD_CELLS: i64 = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,9 +37,6 @@ fn cell(v: f32) -> i32 {
     (v / CELL).floor() as i32
 }
 
-/// A long line's corridor instead of its bounding rectangle (a diagonal shot across a map covered hundreds of
-/// cells and every actor in them). Square cells of `size` units within `pad` of `a`..`b`, column by column
-/// without repeats.
 pub(crate) fn segment_cells(a: [f32; 2], b: [f32; 2], pad: f32, size: f32) -> impl Iterator<Item = (i32, i32)> {
     let index = move |v: f32| (v / size).floor() as i32;
     let (x0, x1) = (index(a[0].min(b[0]) - pad), index(a[0].max(b[0]) + pad));
@@ -133,8 +128,6 @@ impl CollisionHash {
         found
     }
 
-    /// The box grows by a cell, the largest radius of an actor kept by its location's cell.
-    /// A box of more cells than the hash has actors walks the actors, so a huge radius stays cheap.
     pub(crate) fn near(&mut self, min: [f32; 2], max: [f32; 2]) -> Vec<Entry> {
         let (x0, x1) = (cell(min[0] - CELL), cell(max[0] + CELL));
         let (y0, y1) = (cell(min[1] - CELL), cell(max[1] + CELL));
@@ -195,8 +188,6 @@ impl<L: LoaderRef> Vm<L> {
         (hash.placed.len(), hash.always.len(), stale)
     }
 
-    /// Nothing before the first query, which reads every actor. A static actor has the whole hash read again at the
-    /// next query.
     pub(crate) fn relocate(&mut self, actor: ObjectId) {
         if !self.hash.built {
             return;

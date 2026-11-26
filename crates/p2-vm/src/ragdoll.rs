@@ -19,23 +19,16 @@ mod rig;
 mod rig_tests;
 use rig::scale_frames;
 
-/// Retail's cap for every ragdoll part: 20 Karma units a second.
 const MAX_SPEED: f32 = 20.0 * p2_physics::UNITS_PER_METER;
-/// Replaces `KFriction`. The tuned feel is 0.3 under a square-root friction combine; our pairs multiply, so
-/// sqrt(0.3).
 const CORPSE_FRICTION: f32 = 0.55;
-/// Joint cones are widened so corpses sprawl rather than fold.
 const CONE_SCALE: f32 = 1.3;
-/// Wider cones than this let limbs wrap around the body.
 const MAX_CONE: f32 = 1.55;
 /// A fixed twist held at exactly 0 fights the cone and makes limbs flip.
 const MIN_TWIST: f32 = 0.1;
-/// Picked by what a hit is, never by its damage class's name, so a mod's own damage types get the same feel.
 const AIR_THROW: Throw = Throw { per_damage: 5.0, ceiling: 700.0, lift: 0.6, tumble: true };
 const MELEE_THROW: Throw = Throw { per_damage: 10.0, ceiling: 550.0, lift: 0.25, tumble: false };
 const SHOT_THROW: Throw = Throw { per_damage: 10.0, ceiling: 600.0, lift: 0.15, tumble: false };
 const HIT_TICKS: u64 = 2;
-/// Scripts cut with 0 or 1/1000; a 0.2 stump keeps its body.
 const CUT_SCALE: f32 = 0.01;
 
 struct SeenHit {
@@ -95,7 +88,6 @@ struct Ragdoll {
     parts: Parts,
     scales: ResolvedScales,
     cut_refused: bool,
-    /// A bodiless root moves with this body, or `SetBoneScale` pins a cut corpse's drawn top half at the cut.
     root_offset: Option<(usize, Frame)>,
 }
 

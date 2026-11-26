@@ -122,8 +122,6 @@ pub struct LightMap {
 #[derive(Debug, Clone)]
 pub struct LightMapTexture {
     pub light_maps: Vec<i32>,
-    /// Texture format byte (3 = DXT1 in the install). Like `width` and `height`, only meaningful
-    /// when `data` is non-empty: unbuilt textures store uninitialised values.
     pub format: u8,
     pub width: i32,
     pub height: i32,
@@ -146,7 +144,6 @@ pub struct Poly {
     pub light_map_scale: f32,
 }
 
-/// Poly flag bits a renderer needs to skip surfaces. Standard UE2 values (unverified for POSTAL 2).
 pub mod poly_flags {
     pub const INVISIBLE: u32 = 0x0000_0001;
     pub const FAKE_BACKDROP: u32 = 0x0000_0080;
@@ -166,7 +163,6 @@ pub struct ModelPolygon {
     pub poly_flags: u32,
     pub normal: [f32; 3],
     pub positions: Vec<[f32; 3]>,
-    /// Texture coordinates in texels: divide by the material's width and height.
     pub uvs: Vec<[f32; 2]>,
 }
 
@@ -260,8 +256,6 @@ impl LightMap {
 }
 
 impl LightMapTexture {
-    /// The atlas as a texture: format and size as saved, `data` as mips 0 and 1 (DXT1 512² in every lit map).
-    /// Unlit levels store no data and meaningless format / size values: `None`.
     pub fn texture(&self) -> Option<Texture> {
         let (format, width, height) = self.header()?;
         let mips = self
@@ -294,9 +288,6 @@ impl Model {
             .collect()
     }
 
-    /// Light map atlas index and per-vertex atlas UVs (0..1) of a polygon; `None` if its node has no light map or its
-    /// section is [`poly_flags::UNLIT`].
-    /// Light map texel = (x, y, z, 1) · `world_to_light_map` (columns 0 and 1), then offset into the atlas.
     pub fn light_map_uvs(&self, polygon: &ModelPolygon) -> Option<(usize, Vec<[f32; 2]>)> {
         let node = self.nodes.get(polygon.node)?;
         if node.section.and_then(|section| self.sections.get(section)).is_some_and(|section| section.poly_flags & poly_flags::UNLIT != 0) {
@@ -376,7 +367,6 @@ impl Model {
                 return Err(invalid("BSP surface index", offset));
             }
         }
-        // Only vertices in node pools: the array can hold stale entries past them.
         let shared_sides = usize::try_from(self.num_shared_sides).unwrap_or(0);
         for node in &self.nodes {
             let pool = &self.verts[node.vert_pool..node.vert_pool + usize::from(node.num_vertices)];
@@ -411,7 +401,7 @@ fn read_node(r: &mut Reader, licensee: u16) -> Result<BspNode, Error> {
     let coplanar = optional(r)?;
     let collision_bound = optional(r)?;
     let render_bound = optional(r)?;
-    r.bytes(32)?;  // two spheres (version >= 70), unverified: exclusive sphere bounds
+    r.bytes(32)?;
     let zones = [r.u8()?, r.u8()?];
     let num_vertices = r.u8()?;
     let leaves = [r.i32()?, r.i32()?];
@@ -538,8 +528,6 @@ fn read_poly(r: &mut Reader, pkg: &Package) -> Result<Poly, Error> {
     })
 }
 
-/// Zone set: licensee >= 1 stores an `INT` byte count and that many mask bytes (256 zones);
-/// licensee 0 stores a `QWORD`.
 fn skip_zone_set(r: &mut Reader, licensee: u16) -> Result<(), Error> {
     if licensee == 0 {
         r.bytes(8)?;

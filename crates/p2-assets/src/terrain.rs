@@ -13,13 +13,9 @@ pub struct Terrain {
     pub heightmap: i32,
     pub scale: Vector,
     pub location: Vector,
-    /// World-space vertex of heightmap texel (x, y) at `y * width + x`, as saved; empty when the saved
-    /// vertices do not fit the heightmap size (rebuild them with [`Terrain::vertices_from_heights`]).
     pub vertices: Vec<[f32; 3]>,
     pub vertex_colors: Vec<[u8; 4]>,
-    /// One bit per quad (`y * width + x`): set = drawn. Empty = every quad drawn.
     pub quad_visibility: Vec<i32>,
-    /// One bit per quad: set = the quad's diagonal runs the other way.
     pub edge_turn: Vec<i32>,
     pub layers: Vec<TerrainLayer>,
     pub sector_size: usize,
@@ -31,8 +27,6 @@ pub struct Terrain {
 pub struct TerrainLayer {
     pub texture: i32,
     pub alpha_map: i32,
-    /// `TerrainMatrix` rows (`XPlane`, `YPlane`, `ZPlane`, `WPlane`): texture UV = (x, y, z, 1) · rows, first two
-    /// columns.
     pub matrix: [[f32; 4]; 4],
 }
 
@@ -64,9 +58,6 @@ impl Terrain {
         triangles
     }
 
-    /// The visible quads' triangles as Karma collides with them: [`Terrain::triangles`] reversed, so each
-    /// one's right-handed normal ((b − a) × (c − b)) points up for a positive `TerrainScale`, down when `inverted`,
-    /// the front traces block from (Karma's own rule for `inverted` unverified).
     pub fn karma_triangles(&self) -> Vec<[usize; 3]> {
         if self.inverted {
             return self.triangles();
@@ -99,7 +90,6 @@ impl Terrain {
             .collect()
     }
 
-    /// For drawing only: not retail, and not the surface anything collides with.
     pub fn subdivided(&self, n: usize) -> Self {
         let (w, h) = (self.width, self.height);
         if n < 2 || w < 2 || h < 2 || self.vertices.len() != w * h {
@@ -237,7 +227,7 @@ pub fn read_terrain(pkg: &Package, file: &[u8], export: &Export, layout: &Struct
     let vertices = array(r, vec3)?;
     r.bytes(8)?;
     skip_array(r, 24)?;
-    r.bytes(2 * 12 * 4)?; // ToWorld, ToHeightmap: 12 floats each
+    r.bytes(2 * 12 * 4)?;
     let width = dimension(r)?;
     let height = dimension(r)?;
     let vertex_colors = array(r, |r| Ok(r.array::<4>()?))?;

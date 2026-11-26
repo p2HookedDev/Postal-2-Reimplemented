@@ -87,7 +87,7 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Reads the `MusicVolume` setting; 1 if missing (unverified).
+    /// 1 if missing (unverified).
     pub fn music_volume(&self) -> f32 {
         self.host.configs.audio.music_volume
     }
@@ -194,8 +194,6 @@ impl<L: LoaderRef> Vm<L> {
         Some(names)
     }
 
-    /// The table holds the first object made at a path, without objects of a level that was left.
-    /// Only when that one is of another class are the objects scanned for a later one.
     pub(crate) fn find_object_by_path(&mut self, path: &str, class: &str) -> Option<ObjectId> {
         let same_path = |vm: &Self, o: ObjectId| vm.store.object(o).path.eq_ignore_ascii_case(path);
         let of_class = |vm: &Self, o: ObjectId| class.is_empty() || vm.store.name(vm.store.object(o).class_name).eq_ignore_ascii_case(class) || vm.store.is_a(o, class) || vm.stub_is_a(o, class);

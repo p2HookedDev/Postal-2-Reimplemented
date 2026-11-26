@@ -22,8 +22,6 @@ fn bit_set(words: &[i32], i: usize) -> bool {
     words.get(i >> 5).is_some_and(|word| word & (1 << (i & 31)) != 0)
 }
 
-/// The sum of a vertex's neighbours less their count times the vertex. Hexagonal: 6 neighbours, odd rows
-/// shifted half a spacing right.
 #[inline]
 fn ring_difference(hexagonal: bool, odd: bool, [below, here, above]: [&[f32]; 3], x: usize) -> f32 {
     let c = here[x];

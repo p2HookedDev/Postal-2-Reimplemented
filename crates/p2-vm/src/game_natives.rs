@@ -142,7 +142,6 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    /// Retail damages every actor in reach when the class `FluidPuddle` cannot be loaded.
     fn fire_hurt_radius(&mut self, emitter: ObjectId, amount: f32, radius: f32, damage_type: Value, line: [Vector; 2], default_size: [f32; 2]) -> Result<(), Error> {
         let centre = self.store.vector(emitter, Prop::Location);
         let in_reach: Vec<ObjectId> = self

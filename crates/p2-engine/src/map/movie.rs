@@ -1,5 +1,3 @@
-//! A game pause holds the movie's sound (`pause_movie_sound`) but not the picture's clock.
-
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;

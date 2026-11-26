@@ -60,13 +60,8 @@ pub(crate) use sound::MovieSound;
 
 const MAX_STEP: f32 = 0.1;
 
-/// The shortest time between two game ticks, in seconds. Frames are drawn apart from ticks and the world is
-/// blended between them, so ticking faster than this only repeats work (scripts, physics, the reads after them)
-/// that no frame shows sooner.
 const TICK_PERIOD: f32 = 1.0 / 120.0;
 
-/// Frames whose times the game's step is the mean of ([`StepClock`]): a multiple of 2, 3 and 4, so frame times
-/// that alternate in such a pattern (vsync: 3 and 4 refreshes of a 240 Hz display) give an even step.
 const STEP_FRAMES: usize = 12;
 
 /// Gives Bevy's system threads [`p2_vm::SCRIPT_STACK`] (the main thread helps run systems too, its stack is set
@@ -123,8 +118,6 @@ impl Plugin for PlayPlugin {
             )
             .add_systems(Update, photo::request_screenshot.after(hand_off).in_set(PlaySystems::Tick))
             .add_systems(Update, reveal::release_reveal.before(PlaySystems::Tick))
-            // The renderer copies a changed asset only in the frame its change event is sent, so the particle meshes
-            // must be rewritten before that or the frame shows the previous ones.
             .configure_sets(PostUpdate, PlaySystems::Present.before(AssetEventSystems).before(TransformSystems::Propagate));
     }
 }
@@ -178,9 +171,6 @@ impl Default for Play {
     }
 }
 
-/// The mean of the last [`STEP_FRAMES`] frame times (each at most [`MAX_STEP`]). A frame's picture shows a frame
-/// or more after its step was measured, so a frame's own time is wrong whenever frame times alternate (vsync at 3
-/// and 4 refreshes); the mean moves the world evenly, and game time stays within a few frames of real time.
 #[derive(Default)]
 struct StepClock {
     recent: std::collections::VecDeque<f32>,
@@ -199,7 +189,6 @@ impl StepClock {
 #[derive(Default)]
 struct LookAhead {
     in_flight: [f32; 2],
-    /// Yaw and pitch, in rotator units per mouse count.
     samples: [std::collections::VecDeque<f32>; 2],
     seen: Option<p2_math::Rotator>,
     viewer: Option<ObjectId>,
@@ -382,8 +371,6 @@ fn hand_off(mut times: ResMut<FrameTimes>, mut play: ResMut<Play>, input: Res<Pl
     let Some(world) = play.world.as_mut() else { return };
     let held = world.holding();
     if held || !world.wait(VmWait::Look) {
-        // The time behind the load screen is not game time, and what was pressed there is not play: the first tick after
-        // it is an ordinary step. A release still goes through, so a key held across the load is not left down.
         if held {
             play.waited = 0.0;
             play.backlog.mouse = [0.0; 2];
@@ -547,7 +534,6 @@ fn publish_frame_lights(play: Res<Play>, frame: ResMut<p2_render::bsp_light::Fra
 }
 
 fn publish_frame_facts(play: Res<Play>, facts: ResMut<p2_render::frame_facts::FrameFacts>, mut culls: Local<FxHashMap<ObjectId, f32>>) {
-    // A load keeps the last frame on screen, so its facts stay and only time stops.
     let Some(world) = play.world() else {
         if !facts.paused {
             let facts = facts.into_inner();

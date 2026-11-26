@@ -17,8 +17,6 @@ pub(super) fn particles_box(p: &ParticleActor) -> Option<(Vec3, Vec3)> {
 }
 
 pub(super) fn apply_zone(commands: &mut Commands, p: &mut ParticleActor, (leaves, here): (Option<&Model>, Vec3)) {
-    // The parent is at the Unreal origin, so the box swapped back is in Unreal space. Grown like the occlusion
-    // box, so a flat puddle a hair under its floor still touches a zone instead of staying hidden.
     if let (Some(model), Some((min, max))) = (leaves, p.bounds)
         && p.zone_box != Some([min, max, here])
     {

@@ -6,8 +6,7 @@ impl PlayWorld {
     }
 }
 
-/// `None` (warned once, the result kept per path) when Bevy's decoder cannot open its file:
-/// `AudioSource::decoder` unwraps the decoder, so such a sound would panic the frame it plays.
+/// `None` when Bevy cannot decode the file: `AudioSource::decoder` unwraps, so such a sound would panic when played.
 pub(in crate::play) fn loaded_sound(path: &str, sound: p2_assets::Sound, sources: &mut Assets<AudioSource>) -> Option<LoadedSound> {
     let (duration, looping) = (sound.duration().unwrap_or(0.0), sound.loops());
     let bytes: Arc<[u8]> = sound.data.into();
@@ -22,9 +21,6 @@ pub(in crate::play) fn opens(bytes: &Arc<[u8]>) -> bool {
     decodable(bytes) && rodio::Decoder::builder().with_byte_len(bytes.len() as u64).with_data(std::io::Cursor::new(Arc::clone(bytes))).build().is_ok()
 }
 
-/// Whether rodio opens `data` without panicking: an Ogg stream, or a RIFF WAVE whose `fmt ` chunk (before
-/// its `data` chunk) has format PCM (1), IEEE float (3) or extensible (0xFFFE), at least one channel and a
-/// sample rate; any other WAVE file makes rodio's decoder fail or assert.
 fn decodable(data: &[u8]) -> bool {
     if data.starts_with(b"OggS") {
         return true;

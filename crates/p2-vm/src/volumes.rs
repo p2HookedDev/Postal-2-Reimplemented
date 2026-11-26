@@ -33,9 +33,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(Some(volume))
     }
 
-    /// With `touching` only the physics volumes on that actor's touch list are looked at, in its order; without,
-    /// every physics volume of the level. `Priority` is read live: a script may change it between two calls of a
-    /// frame.
     pub(crate) fn physics_volume_at(&mut self, point: Vector, touching: Option<ObjectId>) -> Result<Option<ObjectId>, Error> {
         let Some(default) = self.default_physics_volume()? else { return Ok(None) };
         let default = (default, self.priority(default));
@@ -141,8 +138,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Level start: every colliding actor goes on the touch lists of the volumes that hold its location, and they on
-    /// its list, with no `Touch`; neither side's collision flags are asked. Volumes and the level are not linked.
     pub(crate) fn link_volumes(&mut self, actors: &[ObjectId]) {
         let frame = self.world.frame;
         let linked = |vm: &Self, actor: ObjectId| !vm.store.is_deleted(actor) && !vm.store.is_a(actor, Kind::Volume) && !vm.store.is_a(actor, Kind::LevelInfo);
@@ -318,8 +313,6 @@ impl VolumePlace {
         Self { brush, placement, checked: Some(frame), axes, model, bounds, world_bounds }
     }
 
-    /// `point` is world and already inside `world_bounds`; 1 unit around the bounds still goes to the BSP (points on
-    /// a plane count as inside).
     fn encompasses(&self, point: Vector) -> bool {
         let Placement { location, scale, pre_pivot, .. } = self.placement;
         let Some(local) = p2_collision::world_to_local(point, location, &self.axes, scale, pre_pivot) else { return false };
@@ -339,7 +332,6 @@ impl VolumePlace {
     }
 }
 
-/// Written so that a NaN coordinate is not rejected here, as it is not by the local bounds.
 fn box_holds(bounds: Option<(Vector, Vector)>, point: Vector) -> bool {
     bounds.is_none_or(|(min, max)| !(0..3).any(|i| point[i] < min[i] || point[i] > max[i]))
 }
@@ -384,9 +376,6 @@ pub fn warp_view(this_side: [Vector; 4], other_side: [Vector; 4], location: Vect
     (location, rotation)
 }
 
-/// The plane that cuts a far view (from `eye`, carried by [`warp_view`]) at the other side's portal: what lies
-/// between `eye` and its portal must not show. Normal and distance: a point is kept where `normal.dot(point) >=
-/// distance`.
 pub fn warp_clip_plane(other_side: [Vector; 4], eye: Vector) -> (Vector, f32) {
     let [origin, _, _, z] = other_side;
     let normal = if (eye - origin).dot(z) > 0.0 { -z } else { z };

@@ -79,9 +79,8 @@ pub use travel::{ETravelType, TravelUrl};
 pub use props::{ClassName, Kind, Prop, PropertyName, Slot};
 pub use profiling::{FunctionProfiling, FunctionTime};
 
-/// Stack size in bytes of every thread that runs scripts: scripts call by recursion, up to the engine's 1000
-/// nested calls. The VM's thread and the host's system threads get it; each program's main thread gets the same
-/// through its linker flag (`/STACK:67108864`), and the three must match.
+/// Stack size of every thread that runs scripts (recursion up to 1000 nested calls).
+/// Must match each program's `/STACK:67108864` linker flag.
 pub const SCRIPT_STACK: usize = 64 << 20;
 pub use memory::Mem as PropertyBlock;
 pub use object_store::ObjectStore;
@@ -143,8 +142,6 @@ pub enum Value {
     Vector(p2_math::Vector),
     Rotator(p2_math::Rotator),
     Delegate { object: Option<ObjectId>, function: NameId },
-    /// No value: a map property (never serialized, not used by script), and, inside the VM, an omitted argument, a
-    /// parameter that is not `out`, an iterator's step that leaves the loop variables.
     Map,
 }
 
@@ -472,8 +469,6 @@ impl<L: LoaderRef> Vm<L> {
 
 const MAX_CLASS_DEPTH: u32 = 256;
 
-/// `RF_LoadForEdit` without `RF_LoadForClient` / `RF_LoadForServer` (the editor's viewport `Camera`s saved in
-/// maps): the game's linker does not create it, and references to it are None.
 fn editor_only(pkg: &Package, export: usize) -> bool {
     pkg.exports.get(export).is_some_and(|e| e.object_flags & RF_LOAD_FOR_ANY != 0 && e.object_flags & RF_LOAD_FOR_GAME == 0)
 }

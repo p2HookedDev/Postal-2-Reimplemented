@@ -1,6 +1,3 @@
-// Shared by the Modern Graphics pages. Each row is one render device key, read with `get` and written with `set
-// ini:Engine.Engine.RenderDevice`. Combos and sliders store numbers, boxes True or False; an empty key reads as
-// the High preset's value. While the master is off every row is grey, and a change is undone.
 class ModernMenuPage extends ShellMenuCW;
 
 const KeyPath = "ini:Engine.Engine.RenderDevice";
@@ -40,7 +37,6 @@ function bool MasterOn()
 	return Value ~= "True" || Value == "1";
 }
 
-// The older True or False texts of a key that was a box read as the High value or 0.
 function int ReadLevel(string Key, int High)
 {
 	local string Value;

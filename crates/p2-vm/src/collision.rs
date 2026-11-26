@@ -185,8 +185,6 @@ impl<L: LoaderRef> Vm<L> {
         self.reach_of(actor, placement.and_then(|placement| self.placed_shape(actor, &placement)))
     }
 
-    /// At least `collision_reach`, without placing the triangles: the collision hash only picks cells by it, and an
-    /// actor that moves every frame would have its whole shape placed again for that alone.
     pub(crate) fn moved_reach(&mut self, actor: ObjectId) -> f32 {
         let radius = self.store.float_of(actor, Prop::CollisionRadius);
         let Some((primitive, brush, placement)) = self.primitive_placement(actor) else { return self.reach_of(actor, None) };
@@ -356,8 +354,6 @@ impl<L: LoaderRef> Vm<L> {
         self.store.is_a(actor, Kind::Projector) || self.volume_or_fluid(actor) || self.is_encroacher(actor)
     }
 
-    /// A static mesh uses its placed collision triangles' bounds (retail's placed box can be larger).
-    /// A skeletal mesh, a ragdoll too, keeps the cylinder, not its Karma bodies.
     pub(crate) fn encroach_box(&mut self, actor: ObjectId) -> (Vector, Vector) {
         if !self.store.is_a(actor, Kind::Brush)
             && let Some((min, max)) = self.placed_bounds(actor)
@@ -448,8 +444,6 @@ fn cylinder_meets_box(at: Vector, radius: f32, height: f32, center: Vector, exte
 
 const FGT_HEXAGONAL: u8 = 1;
 
-/// The actor's rotation is not used. Retail grows an empty box by the two corners,
-/// so negative half sizes (a count of 0) still give min <= max.
 fn fluid_box(location: Vector, counts: [f32; 2], spacing: f32, hexagonal: bool) -> [Vector; 2] {
     let half = |count: f32| (count.clamp(0.0, 256.0) - 1.0) * 0.5 * spacing;
     let (x, y) = (half(counts[0]), half(counts[1]) * if hexagonal { HEX_ROW_SPACING } else { 1.0 });

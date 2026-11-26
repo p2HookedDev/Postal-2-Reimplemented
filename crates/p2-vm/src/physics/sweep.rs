@@ -5,10 +5,8 @@ use crate::world::trace;
 use crate::{Error, Kind, LoaderRef, ObjectId, Prop, Vm};
 use super::{Bases, CYLINDER_PULL_BACK, MOVE_TEST_ADJUST, MoveHit, Sweep, SweepAgainst, nearly_zero};
 
-/// A pawn bumps a static mesh wall only when the hit normal is steeper than this.
 const WALL_NORMAL_Z: f32 = 0.7;
 
-/// Movers are tested only through collide-world, as retail.
 fn move_trace_flags(collide_actors: bool, collide_world: bool) -> u32 {
     let actors = if collide_actors { trace::PAWNS | trace::VOLUMES | trace::OTHERS } else { 0 };
     actors | if collide_world { trace::WORLD } else { 0 }
@@ -121,8 +119,6 @@ impl<L: LoaderRef> Vm<L> {
         (hit.time < 1.0).then_some((hit.time, hit.normal, hit.actor))
     }
 
-    /// A blocked move stops `MOVE_TEST_ADJUST` short of the hit, so a moved actor keeps a gap.
-    /// Of a bump, the hit actor is notified first; world geometry is never notified.
     pub(crate) fn move_actor(&mut self, actor: ObjectId, delta: Vector, bases: Bases) -> Result<MoveHit, Error> {
         let start = self.store.vector(actor, Prop::Location);
         if nearly_zero(delta) {

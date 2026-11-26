@@ -51,10 +51,7 @@ pub(super) fn placement_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, thi
             let (Some(this), Some(&Value::Object(Some(attachment)))) = (this, args.first()) else {
                 return Ok(Some(Value::Bool(false)));
             };
-            // The bone first: `SetBase` keeps the offset only of an actor that is not on a bone.
             if native == Native::AttachToBone {
-                // Only attaches to a bone or alias of a skeletal mesh; a loose bolt-on is destroyed a second later.
-                // A mesh whose package is not loaded has its bones unknown, not missing, so only a read mesh refuses.
                 let bone = name_arg(args, 1);
                 let wanted = vm.store.name(bone).to_ascii_lowercase();
                 let matched = vm.skeletal_mesh(this).is_some_and(|mesh| {
@@ -171,7 +168,6 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
     };
     // Collision turned off untouches before the flags change, as retail.
     let collided = (native == Native::SetCollision).then(|| vm.store.flag_of(this, Prop::bCollideActors));
-    // As retail, `SetRotation` is a zero-delta move: the actors based on it turn with it.
     let turned_from = (native == Native::SetRotation).then(|| vm.store.rotator_of(this, Prop::Rotation));
     if let Some(was) = collided {
         let now = match args.first() {
@@ -188,8 +184,6 @@ fn set_actor_properties<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Obje
     if matches!(native, Native::SetRotation | Native::SetDrawScale | Native::SetDrawScale3D) {
         vm.volume_moved(this);
     }
-    // A changed primitive (scale, mesh, rotation) of a moving actor changes its reach: re-placed too (static ones
-    // keep theirs).
     let collision = matches!(native, Native::SetCollision | Native::SetCollisionSize);
     let reshaped = matches!(native, Native::SetDrawScale | Native::SetDrawScale3D | Native::SetStaticMesh | Native::SetDrawType | Native::SetRotation | Native::LinkMesh);
     if collision || (reshaped && !vm.store.flag_of(this, Prop::bStatic)) {

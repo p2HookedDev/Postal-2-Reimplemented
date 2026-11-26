@@ -219,7 +219,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// Both retail callers pass the frame's time as the time left, so the velocity rebuild is left out.
     fn find_new_floor(&mut self, pawn: ObjectId, delta: f32, iterations: u32) -> Result<bool, Error> {
         let location = self.store.vector(pawn, Prop::Location);
         let extent = [self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionRadius), self.store.float_of(pawn, Prop::CollisionHeight)];

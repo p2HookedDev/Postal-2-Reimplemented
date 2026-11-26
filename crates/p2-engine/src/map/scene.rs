@@ -144,24 +144,26 @@ struct BspBuilt {
     polygons: usize,
 }
 
-fn spawn_bsp(
+fn spawn_bsp_and_hud(
     game: &Game,
     t: &PendingAssets,
     materials: &Arc<MaterialCache>,
     model: Model,
     sky_zone: Option<u8>,
     id: PackageId,
-) -> Result<std::thread::JoinHandle<(BspBuilt, PendingAssets)>, LoadError> {
+    hud: HudWanted,
+) -> Result<std::thread::JoinHandle<(BspBuilt, HudAssets, PendingAssets)>, LoadError> {
     let (mut game, mut t, materials) = (game.frozen_clone(), t.fork(), Arc::clone(materials));
     std::thread::Builder::new()
-        .name("map loading: BSP".into())
+        .name("map loading: BSP and HUD".into())
         .spawn(move || {
             let polygons = model.polygons();
             let groups = bsp_groups(&model, &polygons, sky_zone);
             let drawn = groups.values().map(Vec::len).sum();
             let mut texture = |game: &mut Game, t: &mut PendingAssets, package: PackageId, material: i32| materials.images(game, t, package, material);
             let parts = (drawn > 0).then(|| bsp_models(&mut game, &mut t, &mut texture, id, &model, &groups));
-            (BspBuilt { parts, drawn, polygons: polygons.len() }, t)
+            let hud = hud.read(&mut game, |image| t.add_image(image));
+            (BspBuilt { parts, drawn, polygons: polygons.len() }, hud, t)
         })
         .map_err(LoadError::Thread)
 }
@@ -201,8 +203,7 @@ impl PreparedScene {
         let map_name = map_name(package);
         let sky_info = sky_zone_info(&started.vm, map_name);
         let sky_zone = sky_info.map(|(location, _)| p2_collision::point_zone(&model, location));
-        let bsp = spawn_bsp(game, t, &materials, model.clone(), sky_zone, id)?;
-        let hud = HudAssets::read(game, &started.vm, painted, |image| t.add_image(image));
+        let bsp = spawn_bsp_and_hud(game, t, &materials, model.clone(), sky_zone, id, HudAssets::wanted(&started.vm, painted))?;
         phase("HUD");
 
         let mut placements: HashMap<((PackageId, i32), Vec<(PackageId, i32)>), Vec<MeshPlacing<Option<i32>>>> = HashMap::new();
@@ -249,7 +250,6 @@ impl PreparedScene {
         let zones = TerrainZones { model: &model, sky_zone, terrain_zones: &terrain_zones };
         let actors: usize = placements.values().map(Vec::len).sum();
         let meshes = placements.keys().map(|(mesh, _)| mesh).collect::<HashSet<_>>().len();
-        // The static meshes' colours read no terrain: the terrain's sectors join the lights once it is built.
         let lights = LightEnvironment::new(mesh_lights, zone_ambients, level_brightness).suns_of_one_zone(|at| p2_collision::point_zone(&model, at));
         let vm_animations = VmAnimations::of(&played.0, &played.1);
         let mut animations = HashMap::new();
@@ -278,7 +278,7 @@ impl PreparedScene {
         followers.extend(pawn_parts.followers);
         let animated_meshes = pawn_parts.animated;
         let (attached, drawn_pawns, drawn_attachments) = (pawn_parts.attached, pawn_parts.drawn_pawns, pawn_parts.drawn_attachments);
-        let (bsp, bsp_assets) = bsp.join().map_err(|_| LoadError::Panicked { package: package.to_owned() })?;
+        let (bsp, hud, bsp_assets) = bsp.join().map_err(|_| LoadError::Panicked { package: package.to_owned() })?;
         let BspBuilt { parts, drawn, polygons } = bsp;
         let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos } =
             parts.ok_or_else(|| LoadError::NoPolygons { name: name.clone() })?;
@@ -288,7 +288,7 @@ impl PreparedScene {
         sky_models.extend(terrain_sky);
         sky_models.extend(static_sky);
         lamp_masked_all.extend(lamp_masked.into_values());
-        phase("BSP, waited for");
+        phase("BSP and HUD, waited for");
         let switches = switched_images(game, &materials);
         keep_restyled_out_of_world_pass(&mut models, switches.iter().map(|(_, switch)| switch));
         let blocking = collisions.len();

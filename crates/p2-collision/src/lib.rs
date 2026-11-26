@@ -13,7 +13,6 @@ pub use reach::light_zones;
 pub use primitive::{Primitive, pull_back, pull_back_units, segment_cylinder, world_to_local};
 pub use tree::TriangleTree;
 pub use sweep::{box_overlaps_triangle, mesh_box_check, mesh_box_overlaps, terrain_box_check, triangle_reaches};
-/// `NF_NotCsg | NF_IsNew`: nodes with these flags do not divide solid from empty space.
 const NOT_CSG: u8 = 0x21;
 const MAX_TREE_DEPTH: usize = 2048;
 
@@ -152,8 +151,6 @@ fn terrain_ready(terrain: &Terrain) -> bool {
     terrain.vertices.len() == terrain.width * terrain.height && terrain.width >= 2 && terrain.height >= 2
 }
 
-/// `terrain.vertices` must be filled (rebuilt from the heightmap if the saved ones were stale). Of hits at the
-/// same time, the quad first in heightmap order (row, then column, then triangle) wins.
 pub fn terrain_line_check(terrain: &Terrain, start: Vector, end: Vector, sides: Sides) -> Option<Hit> {
     terrain_first_hit(terrain, start, end, [0.0; 2], TIE_SLACK, |triangle| {
         let [a, b, c] = triangle.map(|i| Vector::from(terrain.vertices[i]));
@@ -254,8 +251,6 @@ fn segment_triangle(start: Vector, end: Vector, a: Vector, b: Vector, c: Vector)
         None
     }
 }
-/// The simplified `collision_model` when the mesh has one and `UseSimpleBoxCollision` or
-/// `UseSimpleLineCollision` asks; else `CollisionTriangles` if the tree has nodes; else nothing.
 pub fn static_mesh_collision(mesh: &StaticMesh, collision_model: Option<&Model>, zero_extent: bool) -> (Vec<[[f32; 3]; 3]>, Vec<u32>) {
     let simple = if zero_extent { mesh.use_simple_line_collision } else { mesh.use_simple_box_collision };
     if let Some(model) = collision_model.filter(|_| simple) {
@@ -372,7 +367,6 @@ impl MeshSet {
         Self { tree: TriangleTree::new(&boxes) }
     }
 
-    /// The same answer as [`mesh_line_check_at`] over `meshes`, which must be the list the set was built from.
     pub fn line_check_at(&self, meshes: &[MeshCollision], start: Vector, end: Vector) -> Option<(Hit, usize, usize)> {
         let mut best = None;
         self.tree.along(start, end, 1.0, |index| earliest_in(&meshes[index], index, start, end, &mut best));
@@ -384,7 +378,6 @@ pub fn mesh_line_check<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>, 
     mesh_line_check_at(meshes, start, end).map(|(hit, ..)| hit)
 }
 
-/// Of hits at the same time, the first mesh's and in it the lowest triangle's wins.
 pub fn mesh_line_check_at<'a>(meshes: impl IntoIterator<Item = &'a MeshCollision>, start: Vector, end: Vector) -> Option<(Hit, usize, usize)> {
     let mut best = None;
     for (index, mesh) in meshes.into_iter().enumerate() {

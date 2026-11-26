@@ -1,6 +1,3 @@
-// Photo mode's two pages share this: the title, the page's own rows, a row to the other page, then the four rows
-// both keep. Its sliders write the photo keys alone: never the player's own rows, never the preset. A page sits
-// at the left edge with no backdrop, so the picture stays in view while a slider moves.
 class ModernMenuPhoto extends ModernMenuPage;
 
 var ModernPhotoMode         Photo;

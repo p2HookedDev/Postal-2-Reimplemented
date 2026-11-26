@@ -1,6 +1,3 @@
-//! Beam emitters: a particle's points are worked out once when it spawns, and later updates only age
-//! and colour it, so the bolt stays where it was spawned.
-
 use super::draw::key_span;
 use super::{Collide, Emitter, ParticleEmitter};
 use crate::Rng;
@@ -24,7 +21,6 @@ const MAX_BEAM_POINTS: usize = 1024;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct BeamPoints {
-    /// Point counts as sized at init: scripts changing them later change nothing.
     low: usize,
     high: usize,
     points: Vec<BeamPoint>,
@@ -110,7 +106,6 @@ impl ParticleEmitter {
         let (mut end, mut pin) = match beam.end_by {
             BeamEnd::Velocity => (p.velocity * p.max_lifetime, None),
             BeamEnd::Distance => {
-                // Retail normalizes the particle's own velocity here.
                 p.velocity = p.velocity.safe_normal();
                 (p.velocity * beam.distance_range.rand(rng), None)
             }

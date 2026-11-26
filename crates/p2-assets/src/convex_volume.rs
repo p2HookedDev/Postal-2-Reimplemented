@@ -9,7 +9,6 @@ pub struct ConvexVolume {
     pub edges: Vec<ConvexEdge>,
 }
 
-/// Plane as `[x, y, z, w]`, normal pointing out of the solid, and its vertices.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvexFace {
     pub plane: [f32; 4],

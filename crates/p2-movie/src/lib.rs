@@ -11,7 +11,6 @@ const ID_VQ: u16 = 0x1011;
 const ID_SOUND_MONO: u16 = 0x1020;
 const ID_SOUND_STEREO: u16 = 0x1021;
 
-/// The widest and tallest frame accepted: a bad info chunk must not abort on allocating its buffers.
 const MAX_FRAME_SIDE: u16 = 4096;
 
 #[derive(Clone, Copy)]
@@ -22,7 +21,6 @@ enum Code {
     Split,
 }
 
-/// Sample rate of `RoQ` sound chunks; the file does not store it (unverified: the rate id's tools wrote).
 pub const SAMPLE_RATE: u32 = 22_050;
 
 type Rgba = [u8; 4];
@@ -96,7 +94,6 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    /// The 8-byte chunk header: id, payload size, argument.
     fn chunk(&mut self) -> Result<Chunk, RoqError> {
         Ok(Chunk { id: self.u16()?, size: self.u32()?, arg: self.u16()? })
     }
@@ -118,7 +115,6 @@ fn read_info(mut r: Reader) -> Result<(u16, u16), RoqError> {
     Ok((width, height))
 }
 
-/// Full-range BT.601 (JPEG) YUV to RGB (unverified: the exact rounding retail's decoder uses).
 fn yuv_to_rgba(y: u8, u: u8, v: u8) -> Rgba {
     let y = f32::from(y);
     let u = f32::from(u) - 128.0;
@@ -245,8 +241,6 @@ impl Video {
         }
     }
 
-    /// Copies a `size` block from the previous frame at (x + dx, y + dy); a source outside the
-    /// frame leaves the block as it is (unverified: what retail does there).
     fn motion(&mut self, x: usize, y: usize, size: usize, (dx, dy): (isize, isize)) {
         let (Some(sx), Some(sy)) = (x.checked_add_signed(dx), y.checked_add_signed(dy)) else {
             return;
@@ -296,9 +290,8 @@ impl Video {
         Ok(())
     }
 
-    /// VQ chunk: 16x16 macroblocks in raster order, each four 8x8 blocks (TL, TR, BL, BR). Decoding stops when the
-    /// frame ends or the payload ends between macroblocks; blocks not reached keep their pixels. A payload ending
-    /// inside a macroblock is [`RoqError::Truncated`], and the frame is lost.
+    /// 16x16 macroblocks in raster order, each four 8x8 blocks (TL, TR, BL, BR).
+    /// A payload ending inside a macroblock loses the frame; one ending between macroblocks keeps the rest.
     fn decode_vq(&mut self, mut r: Reader, arg: u16) -> Result<(), RoqError> {
         // The second frame starts from a copy of the first, so "skip" there shows frame 0
         // (unverified); later, "skip" keeps the frame from two frames back, as the buffers swap.
@@ -324,9 +317,8 @@ impl Video {
     }
 }
 
-/// DPCM sound: each byte is a delta, bit 7 the sign and bits 0-6 squared the size, added to the channel's
-/// predictor and clamped to i16. Mono: the argument is the starting predictor. Stereo: the argument's high
-/// byte (as an i16's high byte) starts left, the low byte starts right, and bytes alternate left, right.
+/// Each byte is a delta: bit 7 the sign, bits 0-6 squared the size, clamped to i16.
+/// Mono starts at the argument; stereo starts left at its high byte, right at its low byte, bytes alternating.
 fn decode_sound(bytes: &[u8], arg: u16, stereo: bool, out: &mut Vec<i16>) {
     let mut predictor = if stereo {
         [i32::from((arg & 0xFF00).cast_signed()), i32::from((arg << 8).cast_signed())]

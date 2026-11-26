@@ -6,8 +6,6 @@ use crate::{Kind, LoaderRef, ObjectId, Prop, Vm};
 use super::{LevelMesh, ShapeGrid, World, WorldShape, brush_corners, face_along};
 
 impl<L: LoaderRef> Vm<L> {
-    /// Static world-geometry actors block any pawn that collides with the world, whatever their
-    /// `bBlockActors` / `bBlockPlayers`. Class-blocking volumes and cylinder actors stay with the others.
     pub(crate) fn build_world(&mut self, map: PackageId) {
         let loader = self.loader.clone();
         let loaded = loader.package(map);

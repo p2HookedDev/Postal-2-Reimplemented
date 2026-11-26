@@ -64,7 +64,6 @@ impl<L: LoaderRef> Vm<L> {
         let level = self.level.ok_or(Error::Unsupported("map without a LevelInfo".to_owned()))?;
         self.url_options = crate::TravelUrl::parse(options).options;
         crate::natives::update_time(self, level);
-        // What a map was saved with is dropped: touch lists start empty and every actor in the default volume.
         let default_volume = self.default_physics_volume()?;
         for &actor in &actors {
             self.store.set(actor, Prop::LastRenderTime, Value::Float(0.0));
@@ -72,8 +71,6 @@ impl<L: LoaderRef> Vm<L> {
             self.store.set(actor, Prop::PhysicsVolume, Value::Object(default_volume));
         }
         let mut errors = Vec::new();
-        // `LevelInfo.bStartup` is set while the map's actors begin play (pawns placed in the map spawn their
-        // controllers in `PostBeginPlay` only then).
         self.store.set(level, Prop::bStartup, Value::Bool(true));
         let game = self.spawn(game_class, None, [None, None])?;
         self.store.set(level, Prop::Game, Value::Object(game));
@@ -185,8 +182,6 @@ impl<L: LoaderRef> Vm<L> {
         }
         let Some((package, name)) = self.store.object(object).path.split_once('.') else { return Ok(None) };
         let (package, name) = (package.to_owned(), name.to_owned());
-        // Misses are cached too, since each scanned the package's exports by name: the loaded packages only change
-        // with the loader, which clears the cache.
         let class = match self.find_class(&package, &name) {
             Ok(class) => Some(class),
             Err(Error::ClassNotFound(_) | Error::PackageNotLoaded(_)) => None,

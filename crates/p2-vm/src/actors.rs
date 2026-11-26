@@ -22,8 +22,6 @@ const BEGUN_EVENTS: [Event; 3] = [Event::PostBeginPlay, Event::SetInitialState, 
 const MIN_TICK: f32 = 0.0005;
 const MAX_TICK: f32 = 0.4;
 
-/// Live non-static actors in creation order: what a level tick and the collision hash rebuild walk.
-/// `bStatic` is `const` in script, so a new actor is sorted once, on the first walk after it was made.
 #[derive(Debug, Default)]
 pub(crate) struct DynamicActors {
     ids: Vec<ObjectId>,
@@ -88,8 +86,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// `axes` in world directions. No touch events: bone attachments move only when their base is drawn,
-    /// so scripts read where they were last drawn (a `Head`'s `Location` for head shots).
     pub fn place_attachment(&mut self, actor: ObjectId, location: Vector, axes: [Vector; 3]) {
         if self.store.is_deleted(actor) || self.store.object_of(actor, Prop::Base).is_none() || !self.on_bone(actor) {
             return;
@@ -144,8 +140,6 @@ fn same_members(before: impl Iterator<Item = ObjectId> + Clone, now: &[ObjectId]
     before.clone().all(|old| now.contains(&old)) && now.iter().all(|&new| before.clone().any(|old| old == new))
 }
 
-/// What a far move tests, given `bCollideWorld`, `bCollideWhenPlacing` and `bSkipEncroachmentCheck`
-/// (the first two names unverified).
 fn far_move_tests(encroachment: Encroachment, [collide_world, collide_when_placing, skip_encroachment]: [bool; 3]) -> (bool, bool) {
     let checked = encroachment == Encroachment::Checked;
     (checked && (collide_world || collide_when_placing), checked && !skip_encroachment)

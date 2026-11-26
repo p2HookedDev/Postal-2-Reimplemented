@@ -12,7 +12,6 @@ impl World {
         StaticId(handle)
     }
 
-    /// Wakes what rested on the collider.
     pub fn remove_static(&mut self, id: StaticId) {
         let Some(reach) = self.colliders.get(id.0).map(|c| c.compute_aabb().loosened(MOVER_REACH)) else { return };
         self.level.retain(|&h| h != id.0);
@@ -124,7 +123,6 @@ impl World {
         }
     }
 
-    /// An acceleration beside the world's gravity for the coming step; a sleeping body stays asleep.
     pub fn add_acceleration(&mut self, id: BodyId, acceleration: p2_math::Vector) {
         let Some(body) = self.bodies.get_mut(id.0).filter(|body| !body.is_sleeping()) else { return };
         let force = to_rapier(acceleration) * body.mass();

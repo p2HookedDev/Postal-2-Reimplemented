@@ -30,7 +30,6 @@ pub enum InstallError {
     },
 }
 
-/// A subfolder of an install (the player picked `System` or `Maps`) resolves to its parent.
 pub fn validate(dir: &Path) -> Result<InstallInfo, InstallError> {
     match missing_file(dir) {
         None => Ok(InstallInfo::read(dir)),
@@ -100,8 +99,7 @@ fn steam_paths() -> Vec<PathBuf> {
     app.into_iter().chain(steam_folders(libraries)).collect()
 }
 
-/// Stands in for retail's Steam ownership check: Steam keeps no readable list of owned apps, so an app counts
-/// when it is installed in any library, and a DLC when POSTAL 2's manifest lists one of its depots.
+/// Stands in for retail's Steam ownership check, which has no readable equivalent: installed counts as owned.
 pub fn steam_installed_apps() -> Vec<u32> {
     let Ok(steam) = steamlocate::SteamDir::locate() else {
         return Vec::new();

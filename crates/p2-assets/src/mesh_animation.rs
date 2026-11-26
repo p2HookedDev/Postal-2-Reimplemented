@@ -34,8 +34,6 @@ pub struct AnimSequence {
     pub start_bone: i32,
     pub flags: u32,
     pub bone_indices: Vec<i32>,
-    /// Track `i` animates [`MeshAnimation::bones`]`[i]`. Some sequences store more tracks than bones; the engine
-    /// never reads the extra ones.
     pub tracks: Vec<AnalogTrack>,
     pub root_track: AnalogTrack,
 }
@@ -53,7 +51,6 @@ pub struct AnalogTrack {
     pub rotations: Vec<[f32; 4]>,
     pub positions: Vec<[f32; 3]>,
     pub times: Vec<f32>,
-    /// `times` never fall and hold no NaN, as checked when read: `sample` may bisect them.
     pub times_sorted: bool,
 }
 
@@ -71,8 +68,6 @@ impl PoseAt<'_> {
 }
 
 impl MeshAnimation {
-    /// `time` in frames wraps at `track_time`; the last key blends into the first, as retail.
-    /// Empty when `sequence` is out of range.
     pub fn pose(&self, sequence: usize, time: f32) -> Vec<LocalBone> {
         let at = self.pose_at(sequence, time);
         at.tracks.iter().map(|track| track.sample(at.track_time, at.time)).collect()
@@ -219,7 +214,6 @@ struct Sequence {
 }
 
 fn read_sequence(pkg: &Package, r: &mut Reader) -> Result<Sequence, Error> {
-    // Version >= 115: 4 bytes, 0 in 3031 sequences, a float in 0..1 in the rest (meaning unknown).
     r.u32()?;
     let name = pkg.read_name(r)?;
     let groups = array(r, |r| Ok(pkg.read_name(r)?))?;

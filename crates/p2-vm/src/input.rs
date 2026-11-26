@@ -190,8 +190,6 @@ impl<L: LoaderRef> Vm<L> {
         view_target.filter(|_| limit != 0.0).is_some_and(|target| cut_by_distance(limit, (self.store.location(actor) - self.store.location(target)).size()))
     }
 
-    /// Takes the `CullTag` names of the volume the view target is in: until the next call an actor with one of them
-    /// as its `Tag` is not drawn (it still ticks, collides and sounds). Returns that volume when it names any.
     pub fn set_cull_view(&mut self, view_target: Option<ObjectId>) -> Option<ObjectId> {
         let volume = view_target.and_then(|target| self.store.object_of(target, Prop::PhysicsVolume));
         let tags = volume.map_or_else(Vec::new, |volume| self.cull_tags_of(volume));
@@ -348,8 +346,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// Input commands first, then exec functions of: game, HUD, cheat and admin managers, the controller,
-    /// its `PlayerInput`, its pawn, the pawn's weapon and selected item. Renderer commands go unhandled.
     fn viewport_exec(&mut self, controller: ObjectId, command: &str, action: Action, delta: f32) -> Result<bool, Error> {
         if self.input_exec(controller, command, action, delta)? {
             return Ok(true);

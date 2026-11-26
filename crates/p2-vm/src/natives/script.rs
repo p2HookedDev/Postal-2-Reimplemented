@@ -67,7 +67,6 @@ pub(super) fn random_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, args: 
             Value::Rotator([pitch, yaw, if bool_arg(args, 0) { turn() } else { 0 }].into())
         }
         Native::FRand => Value::Float(vm.rng.frand()),
-        // `rand() % Max`, so never above 32767; 0 for Max <= 0.
         Native::Rand => Value::Int(if int_arg(args, 0) > 0 { vm.rng.rand() % int_arg(args, 0) } else { 0 }),
         // Size squared summed Y, X, Z, with the square root in double precision, as retail.
         Native::VRand => loop {
@@ -122,8 +121,6 @@ pub(super) fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this:
                     }
                 }
             } else if path.contains('.') {
-                // An object of a loaded package exists or not (then None, like a failed load); one in a package not
-                // in the install is assumed to exist, as the requested class.
                 vm.load_package(path.split('.').next().unwrap_or_default());
                 match vm.export_class(&path, &class_name) {
                     Some(Some(class)) => Value::Object(Some(vm.stub(&path, &class))),

@@ -9,28 +9,18 @@ use crate::enums::{EDrawType, EPhysics};
 use crate::profiling::Work;
 use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm};
 
-/// A limb's mass, in the corpses' units (a ragdoll part is about 0.07).
 const MASS: f32 = 0.15;
 const FRICTION: f32 = 0.7;
 const RESTITUTION: f32 = 0.3;
 const LINEAR_DAMPING: f32 = 0.1;
 const ANGULAR_DAMPING: f32 = 0.3;
-/// A script-written velocity (`GiveMomentum`, a kick, a shot) differs from the last one written by more than this
-/// (Unreal units per second).
 const SCRIPT_WROTE: f32 = 5.0;
-/// A script move farther than this from the body teleports the body (`CutInHalf`'s `SetLocation`).
 const STRAY: f32 = 100.0;
-/// A velocity change over a step that gravity does not explain, above this, is an impact (Unreal units per
-/// second).
 const IMPACT: f32 = 120.0;
 const HEARD: f32 = 200.0;
-/// A hit this hard reports [`SPLAT`]: 0.3 of it clears the script's 200, which leaves blood on the wall.
 const HARD_HIT: f32 = 150.0;
 const SPLAT: f32 = 700.0;
 const SPLAT_TICKS: u64 = 12;
-/// A limb lying asleep that its script still flies (a head, a bolt-on) is told so this many ticks, then left
-/// alone until it moves again: told every tick, each such limb cost a script call, a move and a touch test for
-/// nothing.
 const ASLEEP_TOLD: u8 = 8;
 
 #[derive(Default)]
@@ -93,8 +83,7 @@ impl<L: LoaderRef> Vm<L> {
         }
         let (limb, bolton_part) = (self.script.lookups.class_names.limb, self.script.lookups.class_names.bolton_part);
         for actor in flying {
-            // Dropped bolt-ons (`DropBoltons`: briefcase, purse, broom; `PeoplePart.GiveMomentum`) fly like cut limbs:
-            // a body instead of the projectile arc (our choice; retail flies them as projectiles).
+            // Dropped bolt-ons fly as bodies like cut limbs (our choice; retail flies them as projectiles).
             if self.store.flag_of(actor, Prop::bHidden) || !(self.store.is_a(actor, limb) || self.store.is_a(actor, bolton_part)) {
                 continue;
             }
@@ -117,9 +106,6 @@ impl<L: LoaderRef> Vm<L> {
         errors
     }
 
-    /// After the step. `bCollideWorld` off: the hull is its collision. An impact goes to the script as `HitWall` with
-    /// the velocity it came in at (at least 200, or 700 for a hard hit, so the script makes its sound and blood; zero
-    /// once asleep, so it settles).
     pub(crate) fn limbs_after_step(&mut self) -> Vec<(String, Error)> {
         let driven: Vec<(ObjectId, BodyId)> = self
             .karma
@@ -153,8 +139,6 @@ impl<L: LoaderRef> Vm<L> {
     }
 
     fn limb_moved(&mut self, actor: ObjectId, location: Vector, rotation: Rotator, after: Vector, asleep: bool, gravity: Vector) -> Result<(), Error> {
-        // A velocity or move the script gave since the last step (a kick's `GiveMomentum` on a settled limb) is the
-        // limb's next motion: the step's result must not overwrite it, `limbs_before_step` hands it to the body.
         if let Some(limb) = self.karma.limbs.live.get(&actor) {
             let (velocity, at) = (self.store.vector(actor, Prop::Velocity), self.store.vector(actor, Prop::Location));
             if length([0, 1, 2].map(|i| velocity[i] - limb.wrote[i]).into()) > SCRIPT_WROTE || length([0, 1, 2].map(|i| at[i] - limb.at[i]).into()) > STRAY {

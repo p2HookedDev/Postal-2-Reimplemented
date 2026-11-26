@@ -8,8 +8,6 @@ pub fn pull_back(start: Vector, end: Vector, hit: Hit, units: f32) -> Hit {
     Hit { time, location: start.lerp(end, time), ..hit }
 }
 
-/// How far (units) a primitive pulls back the hit of a box check of `length`: 0.1 of it,
-/// at least 0.1 and at most 4 for a model or 1 for a static mesh.
 pub fn pull_back_units(primitive: Primitive, length: f32) -> f32 {
     (0.1 * length).clamp(0.1, if primitive == Primitive::Brush { 4.0 } else { 1.0 })
 }
@@ -25,7 +23,6 @@ pub fn segment_cylinder(start: Vector, end: Vector, center: Vector, radius: f32,
     let a = d[0] * d[0] + d[1] * d[1];
     let b = 2.0 * (s[0] * d[0] + s[1] * d[1]);
     let c = s[0] * s[0] + s[1] * s[1] - radius * radius;
-    // A line starting inside hits only when it heads inward, so a trace out of a pawn's own centre passes through.
     if c < 1.0 && s[2].abs() < height {
         if d[0] * s[0] + d[1] * s[1] >= -0.1 {
             return None;

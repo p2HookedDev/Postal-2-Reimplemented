@@ -30,7 +30,6 @@ impl EDrawType {
 #[derive(Debug, Clone)]
 pub struct MeshActor<'a> {
     pub static_mesh: i32,
-    /// The package `static_mesh` indexes: the actor's, or its class's when a class default sets the mesh.
     pub mesh_package: &'a Package,
     pub location: Vector,
     pub rotation: Rotator,

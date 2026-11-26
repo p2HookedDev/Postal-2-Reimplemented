@@ -8,8 +8,6 @@ const SIGHT_IDLE_SECONDS: f32 = 0.2;
 const NOISE_SLOTS: [[Prop; 3]; 2] = [[Prop::noise1spot, Prop::noise1time, Prop::noise1loudness], [Prop::noise2spot, Prop::noise2time, Prop::noise2loudness]];
 const MAX_CONTROLLERS: usize = 100_000;
 
-/// A noise this close (squared distance) to one of the instigator's last two, within these seconds, is only heard
-/// again when louder than this fraction.
 const REPEAT_DISTANCE_SQUARED: f32 = 2500.0;
 const REPEAT_SECONDS: f32 = 0.2;
 const REPEAT_LOUDNESS: f32 = 0.9;
@@ -79,8 +77,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// Which eye height is used is unverified. Not modelled: adjacent zones, `bMuffledHearing`,
-    /// `bAroundCornerHearing`.
     fn can_hear(&self, listener: ObjectId, noise: Vector, loudness: f32, other: ObjectId) -> bool {
         let Some(instigator) = self.store.object_of(other, Prop::Instigator) else { return false };
         let Some(pawn) = self.store.object_of(listener, Prop::Pawn) else { return false };
@@ -170,7 +166,6 @@ impl<L: LoaderRef> Vm<L> {
         (0..3).any(|index| index != nearest && index != farthest && clear(self, points[index]))
     }
 
-    /// Standalone: drawn by the host within the last second. Servers test each player's view instead.
     pub(crate) fn player_can_see_me(&self, actor: ObjectId) -> bool {
         let now = self.level.map_or(0.0, |level| self.store.float_of(level, Prop::TimeSeconds));
         now - self.store.float_of(actor, Prop::LastRenderTime) < SEEN_SECONDS

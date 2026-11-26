@@ -1,6 +1,3 @@
-//! Emitter properties scripts change while an emitter lives, passed on to the host's simulation: in the engine
-//! the emitter objects are the simulation, but the host simulates from properties read when the emitter appeared.
-
 use p2_particles::{Emitter, EmitterProperties};
 use p2_vm::{LoaderRef, ObjectId, ParticleCommand, PropertyBlock, Vm};
 use rustc_hash::FxHashMap;

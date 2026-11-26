@@ -18,7 +18,6 @@ const SUBSTEP: f32 = 1.0 / 240.0;
 const LONGEST_STEP: f32 = 0.1;
 const KICK: f32 = 4.5;
 const MAX_ANGLE: f32 = 0.2;
-/// The momentum of a full kick (unverified against the weapons' values); a lighter hit still kicks this share.
 const FULL_MOMENTUM: f32 = 50_000.0;
 const LIGHTEST: f32 = 0.3;
 const CHAIN: usize = 4;

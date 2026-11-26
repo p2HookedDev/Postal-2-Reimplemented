@@ -33,7 +33,6 @@ impl Session {
     }
 }
 
-/// The VM's trace hits level geometry and movers, not pawns.
 pub fn place_coronas(play: Res<Play>, lights: Query<&ActorModel>, mut coronas: Query<(&CoronaLook, &mut CoronaPlace, &ChildOf)>) {
     let world = play.world();
     for (look, mut place, parent) in &mut coronas {

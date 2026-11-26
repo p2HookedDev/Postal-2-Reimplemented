@@ -1,6 +1,3 @@
-//! Modern graphics option, off by default and followed at runtime. No baked light shows: a real-time sun with
-//! shadow cascades, the map's other suns as fills and the eye's zone ambient light the world.
-
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
@@ -86,7 +83,6 @@ impl Plugin for ModernGraphicsPlugin {
             PostUpdate,
             sun_view_cascades.after(SimulationLightSystems::UpdateDirectionalLightCascades).before(SimulationLightSystems::UpdateLightFrusta),
         );
-        // Before the frame's asset events go out, so a new material reaches the GPU once, with its flag.
         app.add_systems(
             PostUpdate,
             (
@@ -124,7 +120,6 @@ pub const NO_GLOSS: u8 = 4;
 /// Above the level bits of `level_bits`; read by the materials' pipeline keys, not by the shaders.
 pub const POOL_MIRROR: u16 = 1 << 11;
 
-/// The pools' record for the screen reflections is written only while that pass runs to read it back.
 fn mirror_bit(settings: &Settings) -> u16 {
     use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
     let pass = crate::reflections::look(settings.modern_level(MODERN_REFLECTIONS), settings.modern_level(MODERN_REFLECTION_STRENGTH), 0);
@@ -177,8 +172,6 @@ impl ModernFlagged for TerrainMaterial {
     }
 }
 
-/// Animated materials change every frame, which must not rescan the whole store: only a changed setting or a
-/// store that grew this frame does, as its new ids are not known before the frame's asset events go out.
 fn follow_flag<M: ModernFlagged>(
     settings: Res<Settings>,
     events: Option<Res<Messages<AssetEvent<M>>>>,
@@ -284,7 +277,6 @@ pub fn apply(
         if contact == 0 && ao == 0 && !culled && !screen_reflections && !fire_volumes && !lamp_fog {
             camera.remove::<DepthPrepass>();
         }
-        // Above level 1 the world shaders use their own filter; Gaussian is for the actors.
         camera.insert(if sun_level == 1 { ShadowFilteringMethod::Hardware2x2 } else { ShadowFilteringMethod::Gaussian });
         let current = layers.cloned().unwrap_or_default();
         let wanted = if settings.modern_graphics() { current.clone().with(SUN_VIEW_LAYER) } else { current.clone().without(SUN_VIEW_LAYER) };
@@ -307,8 +299,6 @@ pub fn bloom(level: u8) -> ModernBloom {
     }
 }
 
-/// In Unreal units (about 2 cm each): Bevy's defaults are in metres (0.73 and 0.25), so about 32 and 12 units
-/// here (tuned by eye, unverified). Needs the depth and normal prepasses.
 fn ssao(level: u8) -> ScreenSpaceAmbientOcclusion {
     let quality_level = match level {
         1 => ScreenSpaceAmbientOcclusionQualityLevel::Low,
@@ -321,12 +311,9 @@ fn ssao(level: u8) -> ScreenSpaceAmbientOcclusion {
 #[derive(Component)]
 struct FillSun;
 
-/// Kept apart from [`PropMotion`] so its change detection fires only when the answer changes.
 #[derive(Component, PartialEq)]
 pub struct StillProp(pub bool);
 
-/// A placed mesh casts with the static world, cached, once it has stood still this long, and with the movers
-/// while it moves.
 const PROP_SETTLE_SECONDS: f32 = 2.0;
 const MAP_LOAD_PROPS: usize = 50;
 
@@ -362,7 +349,6 @@ fn watch_props(
         }
         !still.0
     });
-    // A map's props arrive together and belong in every level. One spawned in play is too small for the coarse ones.
     let map_loading = new.iter().count() > MAP_LOAD_PROPS;
     for (entity, follow, transform) in &new {
         if follow.skeletal.is_none() {
@@ -373,8 +359,6 @@ fn watch_props(
     }
 }
 
-/// Whether it has just settled for the first time: that draws it into every level, a door's later swings only the
-/// near ones.
 fn settle(transform: &Transform, motion: &mut PropMotion, still: &mut Mut<StillProp>, now: f32) -> bool {
     if transform.translation != motion.translation || transform.rotation != motion.rotation {
         motion.translation = transform.translation;
@@ -388,9 +372,6 @@ fn settle(transform: &Transform, motion: &mut PropMotion, still: &mut Mut<StillP
     false
 }
 
-/// Shaders read the colour as is, at illuminance 1; Bevy's own PBR lights take about a thousandth of it. The
-/// biases (world units, tuned by eye, unverified) serve the actors' shadow lookup; the world's filter has its
-/// own.
 fn sun_light(color: [f32; 3], shadows: bool, contact: bool) -> DirectionalLight {
     let [r, g, b] = color;
     DirectionalLight {
@@ -421,8 +402,6 @@ fn sun_place(direction: Vec3) -> Transform {
     Transform::IDENTITY.looking_to(direction, up)
 }
 
-/// A map without a sun still gets contact shadows: the key light's side stands for it, and its black light adds
-/// nothing.
 const NO_SUN_DIRECTION: Vec3 = Vec3::new(-0.458088, -0.814379, -0.356291);
 
 pub(crate) fn sun_quality(level: u8) -> (usize, usize) {
@@ -434,16 +413,11 @@ pub(crate) fn sun_quality(level: u8) -> (usize, usize) {
     }
 }
 
-/// Three, so a body lying in the middle distance still casts on fine texels; one cascade would read as a cached
-/// level.
 const MOVER_CASCADES: usize = 3;
 
-/// In Unreal units. Every mover in a cascade is queued and drawn again each frame, and past this its shadow is a
-/// few pixels wide.
 const MOVER_SHADOW_REACH: f32 = 4096.0;
 
-/// In Unreal units, by the shadow distance level 1 to 5: the movers' reach and the outermost cached level's half
-/// width.
+/// In Unreal units, by shadow distance level 1 to 5.
 const SHADOW_REACH: [f32; 5] = [2048.0, 4096.0, 8192.0, 16384.0, 32768.0];
 const FIRST_CASCADE_FAR: f32 = 400.0;
 
@@ -465,13 +439,10 @@ fn sun_cascades(distance_level: u8) -> CascadeShadowConfig {
     .build()
 }
 
-/// With the sun this stays inside Bevy's ten directional lights; the cached sun levels are not lights.
 const MAX_FILL_SUNS: usize = 4;
 
 const SAME_SUN_COS: f32 = 0.99452;
 
-/// The map's still suns grouped by direction, each group's colours summed as retail's baked light sums them. The
-/// shadowed sun's group is first when there is one, then the strongest others.
 fn sun_groups(set: SunSet) -> Vec<(Vector, [f32; 3])> {
     let strength = |light: &MeshLight| light.color(set.level_brightness).iter().sum::<f32>();
     let mut candidates: Vec<&MeshLight> = set.suns.iter().collect();
@@ -558,7 +529,6 @@ fn sun_shadows(
     }
 }
 
-/// The overlays borrow the scene camera's cascades in the render world, so only the scene camera keeps its own.
 fn sun_view_cascades(mut suns: Query<&mut Cascades, With<SunShadow>>, views: Query<(), With<SceneView>>) {
     for mut cascades in &mut suns {
         if cascades.cascades.keys().any(|&camera| !views.contains(camera)) {
@@ -567,8 +537,6 @@ fn sun_view_cascades(mut suns: Query<&mut Cascades, With<SunShadow>>, views: Que
     }
 }
 
-/// The overlay cameras (the weapon, the foot) light their actors as the scene camera does. They see the sun only
-/// while at most one sun casts, as they borrow its cascades from the scene camera.
 fn overlay_light(
     settings: Res<Settings>,
     suns: Query<&DirectionalLight>,
@@ -592,8 +560,7 @@ fn overlay_light(
 /// Retail snaps a zone's ambient at a zone crossing; ours fades, as the zone fog does.
 const ZONE_AMBIENT_BLEND_SECONDS: f32 = 0.35;
 
-/// The zone the eye is in lights every surface with its ambient, under a roof or not. In display light, as
-/// `modern.wesl` adds it; the alpha carries the probe grid's spacing, 0 without one.
+/// In display light, as `modern.wesl` adds it; the alpha carries the probe grid's spacing, 0 without one.
 pub fn view_ambient(
     time: Res<Time>,
     settings: Res<Settings>,
@@ -629,8 +596,6 @@ fn blend_light(shown: LinearRgba, target: LinearRgba, t: f32) -> LinearRgba {
     if near { target } else { blended }
 }
 
-/// The lamps' shadows of movers read the same layers and resting marks as the sun's, with the sun's shadows off
-/// too.
 fn casters_wanted(settings: &Settings) -> bool {
     settings.modern_level(MODERN_SHADOWS) > 0 || settings.modern_level(MODERN_LAMP_SHADOWS) > 0
 }

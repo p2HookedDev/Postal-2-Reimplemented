@@ -330,7 +330,6 @@ impl Game {
                 BaseTexture::Texture(export) => return walk(Some((id, usize::try_from(export - 1).ok()?)), None),
                 BaseTexture::Color => return walk(None, None),
                 BaseTexture::Cubemap(export) => return walk(None, Some((id, usize::try_from(export - 1).ok()?))),
-                // An invisible shader often has no texture at all; it still must hide the mesh's own material.
                 BaseTexture::None if state.blending == Some(Blending::Invisible) => return walk(None, None),
                 BaseTexture::None => return None,
                 BaseTexture::Import(import) => {
@@ -370,8 +369,6 @@ fn view((width, height, texels): &(u32, u32, Vec<[u8; 4]>)) -> (u32, u32, &[[u8;
     (*width, *height, texels.as_slice())
 }
 
-/// `OB_Darken`: one minus the colour in display space; multiplied with the frame buffer it darkens as the
-/// driver's `INVSRCCOLOR` does (an sRGB byte's product converts exactly). The alpha stays.
 fn invert_color(image: &mut Image) {
     if let Some(data) = image.data.as_mut() {
         for texel in data.as_chunks_mut::<4>().0 {

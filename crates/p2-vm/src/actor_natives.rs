@@ -129,7 +129,6 @@ impl ActorFx {
 
 impl<L: LoaderRef> Vm<L> {
     pub(crate) fn fluid_hit_seen(&mut self, feeder: ObjectId, args: &[Value; 6]) {
-        // A host that never drains the list (a test, the viewer) must not let it grow.
         let Some(kind) = FluidType::from_byte(self.store.byte_of(feeder, Prop::MyType)).filter(|_| self.actor_fx.fluid_hits.len() < MOST_KEPT_FLUID_HITS) else {
             return;
         };
@@ -220,8 +219,6 @@ impl<L: LoaderRef> Vm<L> {
         self.actor_fx.following.remove(&projector);
     }
 
-    /// `Movie` and `TextureMovie`'s `Movie` live in the transient package. Script cannot assign `Movie`: it is
-    /// `const`. `PlayMovieScaled` replaces `TextureMovie`.
     pub(crate) fn construct_hud_movies(&mut self, hud: ObjectId) -> Result<(), Error> {
         let movie_class = self.find_class("Engine", "Movie")?;
         let texture_class = self.find_class("Engine", "MovieTexture")?;
@@ -251,8 +248,6 @@ impl<L: LoaderRef> Vm<L> {
         let Some(this) = this else { return Ok(None) };
         let unknown = || Error::UnknownNative(format!("{native:?}"));
         let value = match native {
-            // Not modelled: a controller's pawn joining with it, and retail doing nothing while the projector has no
-            // projection yet.
             Native::AttachActor if self.store.is_a(this, Kind::Projector) => {
                 if let Some(actor) = object_arg(args, 0)
                     && !self.actor_fx.projected.contains(&(this, actor))
@@ -421,7 +416,6 @@ impl<L: LoaderRef> Vm<L> {
             return Err(Error::UnknownNative(format!("{native:?}")));
         }
         let value = match native {
-            // Defaults UseSound 0, Loop 0 (the third default is 30, unverified).
             Native::Play => {
                 let file = match args.first() {
                     Some(Value::Str(s)) => s.clone(),
@@ -459,8 +453,6 @@ impl<L: LoaderRef> Vm<L> {
             Native::IsPaused => Value::Bool(self.actor_fx.movies.get(&this).is_some_and(|m| m.paused)),
             Native::GetWidth => Value::Int(self.actor_fx.movies.get(&this).map_or(0, |m| m.width)),
             Native::GetHeight => Value::Int(self.actor_fx.movies.get(&this).map_or(0, |m| m.height)),
-            // Retail also opens the texture's `MovieFilename` here; whether that starts it is unverified,
-            // as script's `Play` follows at once.
             Native::InitializeMovie => {
                 let movie = match self.store.get(this, "Movie") {
                     Some(Value::Object(Some(movie))) => movie,
@@ -507,14 +499,12 @@ fn attach_takes(project_tag: NameId, accepts: bool, tag: NameId, has_static_mesh
     accepts && has_static_mesh && (project_tag == NameId::NONE || project_tag == tag)
 }
 
-/// Unreal units. Splats are spawned at the hit, on the receiver's surface.
 const ON_SURFACE: f32 = 8.0;
 
 fn on_receiver(location: Vector, center: Vector, extent: Vector) -> bool {
     (0..3).all(|i| (location[i] - center[i]).abs() <= extent[i] + ON_SURFACE)
 }
 
-/// Unreal units. Retail uses 5 for every scene: the view, the sky and each `DrawActor`.
 pub const NEAR_CLIPPING_PLANE: f32 = 5.0;
 
 /// `fov` is horizontal, in degrees. Not a unit vector, as in retail: it is as long as the near plane is far

@@ -395,7 +395,6 @@ impl<L: LoaderRef> Vm<L> {
             }
             entry.sleep = 0.0;
         }
-        // Stops at the fifth change of state in a frame: that state's code runs next frame.
         let mut changes = 0;
         loop {
             if changes == MAX_STATE_CHANGES {
@@ -543,7 +542,6 @@ impl<L: LoaderRef> Vm<L> {
         self.call(&function, Some(object), class, args).map(drop)
     }
 
-    /// A state without code runs its parent's. `None`: no such label; the code is `state`'s and won't run.
     fn find_label(&mut self, state: (PackageId, usize), label: NameId) -> Result<((PackageId, usize), Option<usize>), Error> {
         let mut node = Some(state);
         while let Some(current) = node {

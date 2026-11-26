@@ -9,7 +9,6 @@ pub struct Hud {
     pub(super) hud_assets: HudAssets,
     pub(super) canvas_actors: Vec<CanvasActor>,
     pub(super) failed_canvas_meshes: FxHashSet<String>,
-    /// Loading frames show it again: the engine does not clear the screen.
     pub(super) last_hud: Arc<[CanvasItem]>,
     pub(super) progress_bar_read: bool,
     pub(super) boot_cover: Option<BootCover>,
@@ -44,7 +43,6 @@ impl Hud {
     }
 }
 
-/// Seconds: how long the first map stays black once shown if its scene has not started, and the fade after.
 const COVER_HOLD: f32 = 1.0;
 const COVER_FADE: f32 = 0.5;
 
@@ -82,7 +80,7 @@ impl HudAssets {
         self.textures.extend(read.textures);
     }
 
-    pub(super) fn read(game: &mut Game, vm: &Vm<Arc<Loader>>, painted: &HashSet<String>, mut add: impl FnMut(Image) -> Handle<Image>) -> Self {
+    pub(super) fn wanted(vm: &Vm<Arc<Loader>>, painted: &HashSet<String>) -> HudWanted {
         let mut found = Vec::new();
         for hud in vm.actors().filter(|&actor| vm.store.is_a(actor, "HUD")) {
             for value in vm.store.properties(hud) {
@@ -90,22 +88,34 @@ impl HudAssets {
             }
         }
         let is_font = |id: ObjectId| vm.store.name(vm.store.object(id).class_name).eq_ignore_ascii_case("Font");
+        let unpainted = |path: &&str| !painted.contains(*path);
         let materials: HashSet<&str> = found
             .into_iter()
             .filter(|&id| vm.store.object(id).class.is_none() && !is_font(id) && !vm.store.name(vm.store.object(id).class_name).eq_ignore_ascii_case("Class"))
             .map(|id| vm.store.object(id).path.as_str())
-            .filter(|path| !painted.contains(*path))
+            .filter(unpainted)
             .collect();
-        let fonts: HashSet<&str> = vm.object_ids().filter(|&id| is_font(id)).map(|id| vm.store.object(id).path.as_str()).filter(|path| !painted.contains(*path)).collect();
-        let mut assets = Self::default();
-        for path in fonts {
-            if let Some(font) = read_hud_font(game, path, &mut add) {
-                assets.fonts.insert(path.to_owned(), font);
+        let fonts: HashSet<&str> = vm.object_ids().filter(|&id| is_font(id)).map(|id| vm.store.object(id).path.as_str()).filter(unpainted).collect();
+        HudWanted { fonts: fonts.into_iter().map(str::to_owned).collect(), materials: materials.into_iter().map(str::to_owned).collect() }
+    }
+}
+
+pub(super) struct HudWanted {
+    fonts: Vec<String>,
+    materials: Vec<String>,
+}
+
+impl HudWanted {
+    pub(super) fn read(self, game: &mut Game, mut add: impl FnMut(Image) -> Handle<Image>) -> HudAssets {
+        let mut assets = HudAssets::default();
+        for path in self.fonts {
+            if let Some(font) = read_hud_font(game, &path, &mut add) {
+                assets.fonts.insert(path, font);
             }
         }
-        for path in materials {
-            if let Some(texture) = read_hud_texture(game, path, &mut add) {
-                assets.textures.insert(path.to_owned(), texture);
+        for path in self.materials {
+            if let Some(texture) = read_hud_texture(game, &path, &mut add) {
+                assets.textures.insert(path, texture);
             }
         }
         assets

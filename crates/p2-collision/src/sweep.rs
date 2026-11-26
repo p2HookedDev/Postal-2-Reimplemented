@@ -1,6 +1,3 @@
-//! Box sweeps against triangles.
-//! A pawn's collision cylinder moves as a box of half-size (radius, radius, height).
-
 use p2_assets::Terrain;
 
 use p2_math::Vector;
@@ -21,8 +18,6 @@ fn triangle_axes(edges: [Vector; 3]) -> [Vector; 13] {
     axes
 }
 
-/// Separating-axis test. A box already overlapping the triangle hits at time 0 if it entered less
-/// than one `delta` ago (entry time above −1) and keeps going in; one leaving or deeper does not.
 fn box_triangle(start: Vector, delta: Vector, extent: Vector, tri: [[f32; 3]; 3]) -> Option<(f32, Vector)> {
     let [a, b, c] = tri.map(Vector::from);
     let edges = [b - a, c - b, a - c];

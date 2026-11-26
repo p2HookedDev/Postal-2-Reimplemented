@@ -116,9 +116,7 @@ pub(super) struct JobBuffers {
     pub(super) watched: Vec<ObjectId>,
 }
 
-/// The HUD's scripts run at most this often (seconds of game time); between runs the last HUD is shown
-/// again under the view it was drawn for. Retail runs them once a frame; above 60 game ticks a second,
-/// every second run would draw what no display shows apart.
+/// Retail runs the HUD scripts once a frame; above 60 ticks a second the extra runs show nothing new.
 pub(super) const HUD_PERIOD: f32 = 1.0 / 61.0;
 
 impl VmFrame {

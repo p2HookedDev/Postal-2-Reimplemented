@@ -1,7 +1,6 @@
-//! The engine's random numbers: C runtime `rand()` / 32767, so a value can be 1.0.
+//! C runtime `rand()` / 32767, so a value can be 1.0.
 
-/// A seedable copy of the MSVC C runtime `rand` generator (one global state in the engine; one per emitter and
-/// one per VM here, so the exact sequence of the game is not reproduced).
+/// One generator per emitter and per VM, not retail's one global state, so retail's exact sequence is not reproduced.
 #[derive(Debug, Clone)]
 pub struct Rng(u32);
 

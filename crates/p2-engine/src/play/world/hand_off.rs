@@ -117,9 +117,7 @@ impl PlayWorld {
         self.frame.pointer
     }
 
-    /// In seconds, once: later calls return 0 until the next frame (egui may run a frame's UI pass twice, which must
-    /// not advance what follows the game twice). The time particles move by: none while the game is paused, as its
-    /// own emitters stand still then.
+    /// Returns 0 after the first call in a frame: egui may run a frame's UI pass twice.
     pub fn take_step(&mut self) -> f32 {
         let step = std::mem::take(&mut self.frame.step);
         if self.frame.paused { 0.0 } else { step }

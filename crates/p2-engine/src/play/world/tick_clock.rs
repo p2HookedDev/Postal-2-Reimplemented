@@ -1,7 +1,5 @@
 use super::*;
 
-/// Tick periods the shown game time is steered to stand behind the newest tick: longer lets a tick come later
-/// without the motion stopping, but shows the world later.
 const TICK_DELAY: f64 = 1.25;
 const STEER_LIMIT: f64 = 0.05;
 const STEER_TIME: f64 = 0.25;

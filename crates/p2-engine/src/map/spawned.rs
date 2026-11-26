@@ -134,8 +134,6 @@ const NO_PROJECTORS_TAG: u32 = 1;
 const ATTACHED_TAG: u32 = 2;
 const STATIC_MESH_TAG: u32 = 4;
 const MOVER_TAG: u32 = 8;
-/// In a projector's tag: the decal follows a mover or Karma prop and draws on those only. Frame buffer blends
-/// stop at 6, so bit 7 is free.
 const MOVER_ONLY_TAG: u32 = 1 << 7;
 
 fn projector_mesh_tag((follow, bone): (Option<&FollowActor>, Option<&FollowBone>), attached: &FxHashSet<ObjectId>, movers: &FxHashSet<ObjectId>) -> u32 {
@@ -145,8 +143,6 @@ fn projector_mesh_tag((follow, bone): (Option<&FollowActor>, Option<&FollowBone>
     ATTACHED_TAG | static_mesh | mover
 }
 
-/// A decal following the mover it was cast on (our choice: retail is thought to leave it where it was cast,
-/// unverified).
 pub(super) struct MoverDecal {
     mover: ObjectId,
     on_mover: Affine3A,
@@ -181,7 +177,6 @@ impl SpawnedActor {
     fn new(actor: ObjectId, mesh: Option<MeshActor>, skeletal: Option<SkeletalActor>) -> Option<Self> {
         let (key, draw) = match (mesh, skeletal) {
             (Some(a), _) => (static_model_key(&a.static_mesh, &a.skins), SpawnedDraw::Static(a)),
-            // GPU-skinned meshes stay in their bind pose: actors of the same mesh and skins share them.
             (None, Some(a)) => (ModelKey::Skeletal { path: a.mesh.clone(), skins: a.skins.clone() }, SpawnedDraw::Skeletal(a)),
             (None, None) => return None,
         };
@@ -344,8 +339,6 @@ impl Session {
         let coronas: Vec<_> = particles.waiting_coronas.extract_if(.., |corona| textures.actor_textures.contains_key(&corona.texture)).collect();
         t.times.add("spawned: textures", started);
         let started = std::time::Instant::now();
-        // One finished model a frame: each brings its meshes, materials and images into the scene at once, and several
-        // in one frame made that frame a hitch. The others wait a frame, as their actors already do.
         let done: Vec<ModelBuild> = t.spawned.spawn_builds.extract_if(.., |build| build.task.is_finished()).take(1).collect();
         for ModelBuild { key, task } in done {
             let model = match block_on(task) {

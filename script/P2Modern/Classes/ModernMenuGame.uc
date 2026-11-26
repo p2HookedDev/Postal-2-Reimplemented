@@ -1,5 +1,3 @@
-// The host swaps this class in for `Shell.MenuGame`. With modern graphics on, Super's last row (Resume) turns
-// into "Photo Mode" and a fresh Resume goes below it; Super's Notify matches the new Resume, ours falls through.
 class ModernMenuGame extends MenuGame;
 
 var ShellMenuChoice     PhotoChoice;

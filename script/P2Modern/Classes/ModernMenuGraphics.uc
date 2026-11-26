@@ -1,5 +1,3 @@
-// The main Modern Graphics page: the master box, the preset and the three pages of rows. Choosing Low to Ultra
-// writes every level key of that preset; Custom keeps them.
 class ModernMenuGraphics extends ModernMenuPage;
 
 var UWindowCheckbox         MasterBox;

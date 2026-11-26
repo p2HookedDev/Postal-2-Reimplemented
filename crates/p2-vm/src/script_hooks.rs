@@ -2,13 +2,9 @@ use crate::bolton::BoltonHook;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScriptHook {
-    /// Ours: the hit is kept for the corpse's throw and pushes a loose bolt-on.
     TakeDamage,
-    /// Ours: bullet holes on movers and Karma props, which retail ammo leaves bare.
     ProcessTraceHit,
-    /// Ours: bolt-ons are thrown off as bodies; retail keeps them on.
     Bolton(BoltonHook),
-    /// Ours: where a stream meets static geometry, for our liquids.
     FluidHit,
     /// Ours: retail's headshot verdict, read off its out byte when the call returns.
     BodyLocation,

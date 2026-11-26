@@ -62,8 +62,6 @@ impl Emitter {
     pub fn set_properties(&mut self, index: usize, props: EmitterProperties) {
         let Some(e) = self.emitters.get_mut(index) else { return };
         let disabled = e.props.disabled;
-        // The drawn normal is a cache (`RealProjectionNormal`): a script's `ProjectionNormal` write leaves it; the VM's
-        // value, non-zero once a `SetProjectionNormal` native or `Initialize` wrote it, replaces it.
         let real_projection_normal =
             if props.real_projection_normal == Vector::ZERO { e.props.real_projection_normal } else { props.real_projection_normal };
         e.props = EmitterProperties { disabled, real_projection_normal, ..props };
@@ -76,8 +74,7 @@ impl Emitter {
         }
     }
 
-    /// Newest particle first. Dead particles stay where they died (retail draws them all), so a stopped
-    /// stream hangs until its emitter goes. Empty for a disabled emitter.
+    /// Dead particles stay where they died, as retail draws them all.
     pub fn strip(&self, index: usize) -> Vec<StripPoint> {
         let mut points = Vec::new();
         self.strip_into(index, &mut Vec::new(), &mut points);

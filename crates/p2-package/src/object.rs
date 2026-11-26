@@ -45,7 +45,6 @@ pub struct PropertyTag {
     pub name: usize,
     pub kind: u8,
     pub struct_name: Option<usize>,
-    /// Value size in bytes as saved. Unreliable for some nested values.
     pub size: usize,
     pub array_index: u32,
     pub bool_value: bool,
@@ -74,7 +73,6 @@ impl Package {
     pub fn read_native<'a>(&self, file: &'a [u8], export: &Export) -> Result<(ObjectData, Reader<'a>), Error> {
         let mut r = self.export_reader(file, export)?;
 
-        // Objects of class `Class` (class index 0) have no tagged properties here.
         let properties = if export.class_index != 0 { self.read_properties(&mut r)? } else { Vec::new() };
         Ok((ObjectData { properties, native_offset: r.pos() }, r))
     }
@@ -153,7 +151,6 @@ impl Package {
             return Ok(None);
         };
 
-        // A bool's value lives in the info byte; the engine reads no value bytes for it.
         if kind == BOOL {
             return Ok(Some(Property { name, array_index, value: TagValue::Bool(bool_value) }));
         }

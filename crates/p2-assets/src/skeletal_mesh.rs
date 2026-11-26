@@ -11,8 +11,6 @@ pub struct SkeletalMesh {
     pub origin: Vector,
     pub rot_origin: Rotator,
     pub positions: Vec<[f32; 3]>,
-    /// Bone influences of all positions, in position order; at least one each, weights sum to 1. One position's run:
-    /// [`SkeletalMesh::influences_of`].
     pub influences: Vec<Influence>,
     pub influence_starts: Vec<u32>,
     pub wedges: Vec<Wedge>,
@@ -93,8 +91,6 @@ impl LodModel {
     }
 }
 
-/// Bounding sphere (centre, radius) of a skeletal or static mesh, without reading its geometry:
-/// native data starts with the bounding box (25 bytes), then the sphere.
 pub fn read_primitive_sphere(pkg: &Package, file: &[u8], export: &Export) -> Result<[f32; 4], Error> {
     let mut r = pkg.native_reader(file, export)?;
     skip_box(&mut r)?;
@@ -118,9 +114,9 @@ pub fn read_skeletal_mesh(pkg: &Package, file: &[u8], export: &Export) -> Result
     let origin = vec3(r)?.into();
     let rot_origin = Rotator::new(r.i32()?, r.i32()?, r.i32()?);
     skip_array(r, 2)?;
-    skip_array(r, 8)?;  // Faces (empty in the install)
+    skip_array(r, 8)?;
     skip_array(r, 2)?;
-    skip_array(r, 10)?;  // Wedges (empty in the install)
+    skip_array(r, 10)?;
     skip_array(r, 8)?;
     r.bytes(24)?; // MeshScaleMax, LOD tuning (unverified)
 
@@ -245,7 +241,6 @@ fn decode_stream(stream: &[u32]) -> Option<(Vec<Wedge>, Vec<Influence>, Vec<u32>
     words.next().is_none().then_some((wedges, influences, starts))
 }
 
-/// Influence in bits 0..27: `weight << 12 | bone * 6`, weight = stored float × 65535 truncated to 16 bits.
 fn decode_influence(word: u32) -> Option<Influence> {
     let bone_offset = word & 0xFFF;
     if !bone_offset.is_multiple_of(6) {
@@ -265,7 +260,6 @@ fn normalize_weights(influences: &mut [Influence]) {
     }
 }
 
-/// On disk: 9 `WORD`s (one in-memory `WORD` is not stored).
 fn read_skel_mesh_section(r: &mut Reader) -> Result<SkelMeshSection, Error> {
     let material = r.u16()?;
     r.bytes(12)?; // MinStreamIndex, MinWedgeIndex, MaxWedgeIndex, NumStreamIndices, BoneIndex, MaxInfluences (unverified)

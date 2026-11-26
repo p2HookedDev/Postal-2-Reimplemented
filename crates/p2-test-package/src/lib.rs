@@ -1,5 +1,4 @@
-//! Writes real `.u` package bytes (version 118, licensee 2) from declarations in test code, so a test can run the
-//! normal load path without the game install. An export reference is `index + 1`, an import `-index - 1`, 0 none.
+//! An export reference is `index + 1`, an import `-index - 1`, 0 none.
 
 #![forbid(unsafe_code)]
 

@@ -15,10 +15,7 @@ const CAP: usize = 32;
 const RETIRE_LIFE: f32 = 0.01;
 const THROW_MAX: f32 = 1500.0;
 const DEATH_BACK: f32 = 120.0;
-/// A thrown bolt-on starts inside its owner's corpse; until then it touches only the level, so it is not shot
-/// out.
 const LEVEL_ONLY: f32 = 0.3;
-/// `Limb`'s default mass: a hit moves a loose bolt-on as it moves a cut limb.
 const LIMB_MASS: f32 = 90.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,7 +114,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(())
     }
 
-    /// Static-mesh ones only: a skeletal one (a cigarette) has no hull and keeps retail's way.
     fn throw_head_boltons(&mut self, pawn: ObjectId, velocity: Vector) -> Result<(), Error> {
         let (Some(head), Some([part_member, head_member])) = (self.store.object_of(pawn, "MyHead"), self.bolton_members(pawn)) else {
             return Ok(());

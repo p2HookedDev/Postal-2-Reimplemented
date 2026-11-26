@@ -1,6 +1,3 @@
-//! A retail material's class, from its names and layers, and the roughness and reflectance the modern
-//! lit shader takes from it. `Settings::material_level` scales how far a surface departs from retail.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MaterialClass {
     #[default]

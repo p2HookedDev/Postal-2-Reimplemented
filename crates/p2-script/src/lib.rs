@@ -1,6 +1,3 @@
-//! `UnrealScript` definitions in `.u` packages (version 118, licensee 2). Object references (`i32`) and
-//! names (`usize`) are relative to the package the definition was read from.
-
 #![forbid(unsafe_code)]
 
 pub mod bytecode;
@@ -187,8 +184,6 @@ pub fn class_name<'p>(pkg: &'p Package, export: &Export) -> &'p str {
     }
 }
 
-/// `Ok(None)` for any class but the `Core` definition classes, matched by name only (no other package defines
-/// classes with these names). Everything but class default properties must end exactly at the export's end.
 pub fn read_export(pkg: &Package, file: &[u8], index: usize) -> Result<Option<ScriptObject>, Error> {
     let Some(export) = pkg.exports.get(index) else {
         return Err(Error::WrongKind { export: index, expected: "export" });

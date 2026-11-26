@@ -1,7 +1,3 @@
-//! Fires and gun flashes, which the modern look lights. The game's scripts hold these lights and leave them off:
-//! a fire lights only where a flag no script sets allows it, a flash only with an option of the game's patch
-//! menu.
-
 use super::*;
 use p2_render::frame_facts::{Glow, GlowSource, ScriptLight};
 

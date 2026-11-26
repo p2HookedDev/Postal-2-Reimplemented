@@ -79,16 +79,12 @@ pub struct LoadedPackage {
     exports_by_name: ExportsByName,
 }
 
-/// A clone shares the loaded packages and copies the import cache, so it keeps every [`PackageId`] of the
-/// original.
 #[derive(Debug, Default, Clone)]
 pub struct Loader {
     files: FxHashMap<Caseless, PathBuf>,
     packages: Vec<Arc<LoadedPackage>>,
     ids: FxHashMap<Caseless, PackageId>,
     ids_by_address: FxHashMap<usize, PackageId>,
-    /// Successes only: a package's imports never change and ids only grow, while a failure may resolve after a later
-    /// load.
     resolved_imports: Vec<Box<[OnceLock<Resolved>]>>,
     frozen: bool,
 }
@@ -102,8 +98,6 @@ impl Loader {
         Self::open_with(system_dir, &[])
     }
 
-    /// [`Loader::open`] with `extra` search paths after the ini's (e.g. `Packages\*.u`, our own packages
-    /// outside the install). The install wins a name clash: a file outside it never replaces a retail package.
     pub fn open_with(system_dir: &Path, extra: &[String]) -> Result<Self, ResolveError> {
         let ini = ["Postal2.ini", "Default.ini"]
             .iter()
@@ -163,8 +157,6 @@ impl Loader {
         Ok(self.push(key, Arc::new(LoadedPackage { name, path, package, data, exports_by_name })))
     }
 
-    /// From now on only packages already loaded resolve. A clone working beside the original is frozen so that it
-    /// never gives a [`PackageId`] the original gives to another package.
     pub fn freeze(&mut self) {
         self.frozen = true;
     }

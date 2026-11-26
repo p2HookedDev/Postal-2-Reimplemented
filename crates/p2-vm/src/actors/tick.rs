@@ -157,8 +157,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(!self.is_probing(actor, EProbe::Tick as u32)?)
     }
 
-    /// Runs before the stock tick. Pawns owned by a player's controller, or with `bIgnoreTimeDilation`,
-    /// tick in real time (`delta / TimeDilation`). `None`: the controller stays in stasis, no tick.
     fn fps_pawn_tick(&mut self, pawn: ObjectId, delta: f32) -> Result<Option<f32>, Error> {
         if !self.store.is_a(pawn, Kind::FPSPawn) {
             return Ok(Some(delta));

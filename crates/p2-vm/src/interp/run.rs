@@ -33,8 +33,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(value)
     }
 
-    /// Also returns the parameters' final values. More than [`MAX_SCRIPT_DEPTH`] nested calls fail,
-    /// as in retail, instead of overflowing the stack.
     pub(crate) fn run(
         &mut self,
         function: &Arc<Function>,

@@ -22,7 +22,6 @@ impl<'a> SectorVertices<'a> {
     }
 }
 
-/// Vertex colour: display-space lighting bytes / 255 (none: 0.5), applied per pixel as `Modulate2X`.
 /// Holds all vertices, drawn or not: equal bounds per layer keep Bevy's blended sort in bias order.
 pub fn terrain_layer_mesh(
     vertices: &[[f32; 3]],

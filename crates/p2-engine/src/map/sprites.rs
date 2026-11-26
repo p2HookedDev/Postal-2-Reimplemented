@@ -1,6 +1,3 @@
-//! Retail draws a quad of the actor's `Texture` at its `Location`: no `Rotation` or `PrePivot`,
-//! white and unlit (no `ScaleGlow` or `AmbientGlow`).
-
 use super::*;
 use p2_render::sprites::SpriteLook;
 use p2_math::{Rotator, Vector};

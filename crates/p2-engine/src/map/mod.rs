@@ -57,7 +57,7 @@ mod scene;
 mod spawned;
 mod sprites;
 
-use hud::{HudAssets, LibraryReads};
+use hud::{HudAssets, HudWanted, LibraryReads};
 pub use hud::Hud;
 pub use canvas::CanvasArea;
 pub use load::{LoadMap, MapFailed, MapLoadPlugin, MapState};
@@ -121,7 +121,6 @@ impl bevy::app::Plugin for MapPresentPlugin {
                     canvas_actors::present_canvas_actors,
                     spawned::present_projections,
                     scene::present_material_switches,
-                    // Before `update_particles`, which takes the frame's step.
                     fluids::present_fluids,
                     particles::present_particles.in_set(MapSystems::Particles),
                 )
@@ -306,8 +305,6 @@ pub(crate) fn map_shown(session: Option<Res<Session>>, play: Option<Res<Play>>) 
     session.is_some_and(|session| session.loading().is_none()) && play.is_some_and(|play| play.world().is_some())
 }
 
-/// Frames the engine draws as travel begins (P2Screen.uc: three duplicates, one for a loading message, and one
-/// with the screen drawn under the progress bar).
 const TRAVEL_FRAMES: usize = 5;
 
 struct PendingLoad {
@@ -467,8 +464,6 @@ impl Session {
         *t.fluids = Fluids::default();
     }
 
-    /// Viewer-only (and the real-data tests of this crate, which cannot use `p2-viewer`): loads on this thread,
-    /// blocking. The game loads maps with [`Session::begin_load`] / [`Session::finish_load`] and never calls this.
     pub fn load_map(&mut self, package: &str, t: &mut SceneTargets) -> Result<String, LoadError> {
         self.clear(t);
         self.start_map(package, t)

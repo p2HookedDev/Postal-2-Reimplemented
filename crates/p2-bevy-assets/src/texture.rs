@@ -190,9 +190,6 @@ pub(crate) fn with_mips<const N: usize>(width: u32, height: u32, mut texels: Vec
     (data, levels)
 }
 
-/// Colour premultiplied by alpha (in gamma space), as egui blends (`One`, `OneMinusSrcAlpha`); straight alpha
-/// would add the colour of transparent texels. `additive`: the colour as is with zero alpha, which egui adds.
-/// Box-filtered mips and a trilinear sampler: a 512-pixel weapon icon drawn at ~40 pixels does not sparkle.
 pub fn texture_to_ui_image(texture: &Texture, palette: Option<&[[u8; 4]]>, additive: bool) -> Option<Image> {
     let (width, height, texels) = p2_assets::texture_rgba(texture, palette)?;
     let texels = texels

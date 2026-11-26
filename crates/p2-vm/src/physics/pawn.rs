@@ -212,7 +212,6 @@ impl<L: LoaderRef> Vm<L> {
         self.event(pawn, crate::states::Event::EndCrouch, [Value::Float(adjust)])
     }
 
-    /// The flat cylinder of a pawn crawling on the ground; a crouch is dropped first without raising the pawn.
     fn death_crawl(&mut self, pawn: ObjectId) -> Result<(), Error> {
         let crawl = (self.store.float_of(pawn, Prop::DeathCrawlRadius), self.store.float_of(pawn, Prop::DeathCrawlHeight));
         if self.store.collision_size(pawn) == crawl {

@@ -51,7 +51,6 @@ impl<L: LoaderRef> Vm<L> {
                 let seen = self.take_hit(this);
                 let (Some(world), Some(ragdoll)) = (self.karma.world.as_mut(), self.karma.ragdolls.live.get(&this)) else { return Some(Ok(None)) };
                 let target = if let Some(index) = named {
-                    // Falls back to the nearest body, or every shot and kick on a cut corpse's top half is lost.
                     index.and_then(|i| ragdoll.bodies.get(i).copied().flatten()).or_else(|| ragdoll.parts.nearest_body(at))
                 } else if ragdoll.fresh {
                     ragdoll.bodies.iter().flatten().next().copied()
@@ -77,8 +76,6 @@ impl<L: LoaderRef> Vm<L> {
             _ => None,
         };
         let (at, momentum) = (crate::natives::vec3(args.get(2)), crate::natives::vec3(args.get(3)));
-        // A host that never drains the list (a test, the viewer) must not let it grow. Every override in a damage
-        // chain enters with the same shot, which is one hit.
         let repeat = self.actor_fx.person_hits.iter().any(|hit| hit.person == victim && hit.at == at);
         if !repeat && self.store.is_a(victim, crate::Kind::Pawn) && self.actor_fx.person_hits.len() < MOST_KEPT_HITS {
             let alive = self.store.int_of(victim, Prop::Health) > 0;

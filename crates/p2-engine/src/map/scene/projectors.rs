@@ -1,7 +1,5 @@
 use super::*;
 
-/// `images` holds each texture's image, shared by every decal of that texture: all the decal images in view go
-/// into one bind group, which holds 1024 at most.
 pub(crate) fn projector_decal(
     game: &mut Game,
     t: &mut impl SceneAssets,
@@ -21,8 +19,6 @@ const FB_MODULATE: u8 = 1;
 const FB_ALPHA_BLEND: u8 = 2;
 const FB_TRANSLUCENT: u8 = 4;
 
-/// [`PROJECTOR_TAG`], targets in bits 16..21, `MaterialBlendingOp` in bits 8..16, frame buffer blend
-/// in bits 0..8, and the alpha test. With `MaterialBlendingOp` none the material's `FinalBlend` wins.
 pub(crate) fn projector_tag(projector: &ProjectorActor, final_blend: Option<FinalBlend>) -> u32 {
     let (blending, alpha_ref) = match final_blend {
         Some(inner) if projector.material_blending == ProjectorBlending::None => (inner.blending.byte(), inner.alpha_ref),
@@ -40,8 +36,6 @@ pub(crate) fn plain_projector_blend(final_blend: Option<FinalBlend>) -> u32 {
     final_blend.map_or(u32::from(FB_MODULATE), |inner| blend_bits(inner.blending.byte(), inner.alpha_ref))
 }
 
-/// The box holds retail's frustum. Orthographic: the near square (side ½·√2·√(w² + h²)) and
-/// `MaxTraceDistance`. Perspective: the far end of a frustum with apex ½·w / tan(½·FOV) behind it.
 pub(crate) fn projector_transform(projector: &ProjectorActor, texels: Vec2) -> Transform {
     let frustum = p2_vm::projector::frustum(&p2_vm::projector::ProjectorShape {
         location: projector.location,

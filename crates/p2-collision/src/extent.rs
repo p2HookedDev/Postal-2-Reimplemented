@@ -1,16 +1,11 @@
-//! Box queries against level BSP. The box is tested against the convex collision hulls stored per
-//! solid leaf, not against the leaves themselves.
-
 use p2_assets::{BspNode, Model};
 
 use p2_math::Vector;
 
 use crate::{Hit, MAX_TREE_DEPTH, child, child_outside, dot_plane, line_check};
 
-/// The engine stops reading a hull's node list after this many planes.
 const MAX_HULL_PLANES: usize = 64;
 const HULL_FLIPPED: i32 = 0x4000_0000;
-/// Box extent is scaled by this while walking the tree (a conservative margin; hull tests use the exact extent).
 const WALK_SCALE: f32 = 1.1;
 
 type Plane = [f32; 4];
@@ -38,9 +33,6 @@ pub fn box_check(model: &Model, hulls: &BspHulls, start: Vector, end: Vector, ex
     (time != 1.0).then(|| Hit { time, location: start.lerp(end, time), normal })
 }
 
-/// The hit's `location` is `point` pushed out of the nearest overlapping plane (×1.02), `normal` that plane's
-/// normal; `time` is 0. Zero extent tests the point alone (solid space, with points on a plane counted behind
-/// it).
 pub fn point_check(model: &Model, hulls: &BspHulls, point: Vector, extent: Vector) -> Option<Hit> {
     let blocked = Hit { time: 0.0, location: point, normal: Vector::ZERO };
     if model.nodes.is_empty() || extent == Vector::ZERO {
@@ -198,8 +190,6 @@ impl Overlap<'_> {
     }
 }
 
-/// In the engine's test order: hull planes, six box planes (0.1 out on −X −Y −Z +Z, 0.1 in on +X +Y), edge
-/// bevels.
 #[derive(Default)]
 pub struct BspHulls {
     planes: Vec<Plane>,
@@ -227,14 +217,11 @@ impl BspHulls {
     }
 }
 
-/// Reads `Model::leaf_hulls` from the node's `collision_bound`: node indices (bit 30 = flipped) up to −1, then
-/// the bounding box as six floats. `None` if the node has no hull or the data is out of range.
 fn hull_planes(model: &Model, node: &BspNode, planes: &mut Vec<Plane>, signs: &mut Vec<u8>) -> Option<()> {
     const EPS: f64 = 0.1;
     let first = node.collision_bound?;
     let list = model.leaf_hulls.get(first..)?;
     planes.clear();
-    // Per plane: bit 0 / 1 = normal X negative / positive, bits 2 / 3 for Y, bits 4 / 5 for Z.
     signs.clear();
     for &entry in list.iter().take_while(|&&e| e != -1).take(MAX_HULL_PLANES) {
         let index = usize::try_from(entry & !HULL_FLIPPED).ok()?;

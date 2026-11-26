@@ -109,7 +109,6 @@ impl<L: LoaderRef> Vm<L> {
         let outs = natives::iterator_outs(function.native_id);
         let walk = natives::walks_actor_list(function.native_id).map(|native| {
             let mut values = values;
-            // An omitted `Loc` is read once, here: the loop body may move the caller.
             if matches!(native, Native::RadiusActors | Native::VisibleActors)
                 && !values.get(2).is_some_and(natives::is_struct_value)
                 && let Some(target) = target

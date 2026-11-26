@@ -275,8 +275,6 @@ impl Particles {
     }
 }
 
-/// One emitter's frame. On a bone and not placed yet it is neither drawn nor stepped: where the game keeps its
-/// actor is where it was spawned, the weapon's origin by the eye, and a sprite left there fills the screen.
 fn emitter_turn(place: Option<(Vector, p2_math::Rotator)>, actor: &crate::play::ActorFrame, step: f32, shown: f32) -> Turn {
     let (location, rotation) = place.unwrap_or_default();
     // Player-owned emitters ignore `TimeDilation`. One simulation tick per game tick, as in the engine;
@@ -329,8 +327,6 @@ fn update_particles(t: &mut ParticleParams) {
     let (mut removed, mut finished) = (Vec::new(), Vec::new());
     let forces: Arc<[_]> = world.actor_forces().into();
     let in_frustum = frustum_test(&t.view.cameras, &t.view.projections, world.origin());
-    // Hung on a bone of a HUD-drawn actor (the muzzle flash): retail draws a skeletal actor's attachments
-    // in its own scene node, so `Canvas.DrawActor` draws them at its FOV after its depth clear.
     let canvas = &t.hud.canvas_actors;
     let particles = &mut *t.particles;
     let shown = 1.0 - world.shown.clock.behind();
@@ -342,8 +338,6 @@ fn update_particles(t: &mut ParticleParams) {
             log_removed(p, why);
             t.commands.entity(p.parent).despawn();
             removed.push(p.actor);
-            // Retail destroys the actor itself here: its `Destroyed` runs (a `FluidTrail` clears its feeder's
-            // `FTrail`, so the pour starts a new trail).
             if !actor.gone {
                 finished.push(p.actor);
             }

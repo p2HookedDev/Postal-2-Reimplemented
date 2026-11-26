@@ -22,9 +22,7 @@ mod lookup;
 #[cfg(test)]
 mod tests;
 
-/// Structs are positional, members in declaration order: `Vector` (X, Y, Z), `Plane` (X, Y, Z, W),
-/// `Rotator` (Pitch, Yaw, Roll), `Range` (Min, Max), `RangeVector` (X, Y, Z ranges), `Color` (B, G, R, A),
-/// `ParticleTimeScale` (`RelativeTime`, `RelativeSize`), `ParticleColorScale` (`RelativeTime`, `Color`).
+/// Structs are positional in declaration order; note `Color` is (B, G, R, A).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
     Bool(bool),

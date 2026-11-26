@@ -3,7 +3,6 @@ use crate::{Error, LoaderRef, ObjectId, Prop, Value, Vm, Kind};
 use super::{Toward, fixed_turn};
 
 impl<L: LoaderRef> Vm<L> {
-    /// Banking from velocity changes is not modelled. Human pawns use the pawn's rate, not retail's.
     pub(super) fn pawn_rotation(&mut self, pawn: ObjectId, delta: f32) {
         let controller = self.store.object_of(pawn, Prop::Controller);
         let human = controller.is_some_and(|c| self.store.is_a(c, Kind::PlayerController));

@@ -16,8 +16,6 @@ pub struct PartParams {
     pub velocity: p2_math::Vector,
 }
 
-/// How a joint limits the child's rotation relative to the parent, about the joint frame's axes: X the primary
-/// axis, Y the orthogonal one, Z their cross product.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JointLimit {
     Hinge(Option<[f32; 2]>),
@@ -55,9 +53,7 @@ const PILE_REACH: f32 = 2.0;
 /// In rad/s, as the original engine: a limb a joint limit still pulls back keeps the corpse awake.
 const SLEEP_ANGULAR_SPEED: f32 = 0.032;
 const SLEEP_TIME: f32 = 1.0;
-/// Rapier's iterative solver lets parts of very different mass drift apart.
 const MASS_RATIO: [f32; 2] = [0.8, 1.2];
-/// Rapier corrects a stiff limit in one step with no speed cap, which throws the corpse.
 const LIMIT_HZ: f32 = 15.0;
 const LIMIT_DAMPING: f32 = 5.0;
 const CONE_HOLD: f32 = 0.3;
@@ -69,8 +65,7 @@ pub(crate) struct Resting {
     steps: u32,
 }
 
-/// Rapier limits swing per axis, a box whose corners reach about 1.4 times past Karma's elliptical cone; this
-/// holds the swing inside the ellipse.
+/// Rapier limits swing per axis, a box reaching about 1.4 times past Karma's elliptical cone.
 pub(crate) struct Cone {
     parent: RigidBodyHandle,
     child: RigidBodyHandle,
@@ -89,13 +84,8 @@ fn swing_excess(d: Vector, [about_y, about_z]: [f32; 2]) -> Option<(f32, Vector)
     (reach > 1.0).then(|| (angle - angle / reach, Vector::new(0.0, -d.z, d.y) / side))
 }
 
-/// A part that turns this many times more easily than one it is jointed to breaks its joints in the solver.
-/// Measured on the midget's neck, a sphere of 1.7 units between two shapeless clavicles: it held at 50 and broke
-/// at 100.
 const INERTIA_RATIO: f32 = 25.0;
 
-/// Each jointed tree keeps its total mass, so the body's flight stays retail's. A part's inertia is raised to
-/// what its joints can hold.
 fn stabilize(parts: &[PartParams], joints: &[JointParams]) -> Vec<(f32, p2_math::Vector)> {
     let n = parts.len();
     let mut parent = vec![None; n];
@@ -288,8 +278,6 @@ impl World {
         let build = |axes: JointAxesMask| {
             GenericJointBuilder::new(axes).local_frame1(frame(joint.parent_anchor, joint.parent_axes)).local_frame2(frame(joint.child_anchor, joint.child_axes)).contacts_enabled(false)
         };
-        // A hinge's off axes are locked as hard as the anchor: soft, they let knees and elbows bend sideways. They start
-        // with no error, since the joint frames come from the death pose.
         let locked = match joint.limit {
             JointLimit::Hinge(_) => JointAxesMask::LIN_AXES | JointAxesMask::ANG_Y | JointAxesMask::ANG_Z,
             JointLimit::Cone { .. } => JointAxesMask::LIN_AXES,
@@ -321,8 +309,6 @@ impl World {
         }
     }
 
-    /// Parts two joints apart collide unless they touch at the start. The `.ka` no-collision table, which turns off
-    /// nearly every pair, is not used.
     fn filter_self_collision(&mut self, joints: &[JointParams], bodies: &[BodyId]) {
         let n = bodies.len();
         let mut jointed = vec![false; n * n];

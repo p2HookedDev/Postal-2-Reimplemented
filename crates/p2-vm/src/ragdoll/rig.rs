@@ -140,7 +140,6 @@ pub(super) fn orthonormal([x, y, _]: [Vector; 3]) -> [Vector; 3] {
     [x, y, x.cross(y)]
 }
 
-/// A bone at 0 collapses its whole chain onto its joint. Parents come before their children.
 pub(super) fn scale_frames(frames: &mut [Frame], own: &[f32], parents: &[usize]) {
     let original = frames.to_vec();
     let mut changed = vec![false; frames.len()];

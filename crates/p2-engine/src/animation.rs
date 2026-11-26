@@ -237,7 +237,6 @@ struct PoseScratch {
     generation: u64,
 }
 
-/// Inserted by a host that shows maps without playing them: with no world, each mesh loops its chosen sequence.
 #[derive(Resource, Default)]
 pub struct FreeRunPoses;
 
@@ -339,7 +338,6 @@ fn pose_channels(pose: &ActorPose) -> impl Iterator<Item = (&ChannelPose, f32, &
     pose.base.iter().map(|channel| (channel, 1.0, "")).chain(pose.blends.iter().map(|(channel, alpha, bone)| (channel, *alpha, &**bone)))
 }
 
-/// An actor that has never played an animation stands in its reference pose, as retail's does.
 fn pose_work<'a>(item: &AnimatedMesh, world: &'a PlayWorld, shown_times: &mut Vec<f32>) -> PoseWork<'a> {
     let Some(actor) = item.actor else { return PoseWork::Keep };
     if let Some(bones) = world.shown_ragdoll(actor) {
@@ -443,8 +441,6 @@ fn animate(
     times.add("animate", started);
 }
 
-/// A joint whose bone did not move keeps its transform unchanged: no change detection, so no propagation or skin
-/// upload.
 fn pose_joints(
     mut poses: ResMut<Poses>,
     mut times: ResMut<FrameTimes>,
@@ -484,9 +480,8 @@ fn joint_transform(matrix: Mat4) -> Transform {
     if transform.rotation.is_finite() { transform } else { Transform { rotation: Quat::IDENTITY, ..transform } }
 }
 
-/// Bevy's `DynamicSkinnedMeshBounds` does this for every skinned mesh every frame and writes the `Aabb` even when
-/// equal, which also makes the renderer extract the mesh again; a mesh's bounds are in its own space, so only a
-/// new pose changes them.
+/// Bevy's `DynamicSkinnedMeshBounds` rewrites every skinned `Aabb` each frame, so the renderer re-extracts the mesh;
+/// bounds are in mesh space, so here only a new pose changes them.
 fn skinned_bounds(
     poses: Res<Poses>,
     inverse_bindposes: Res<Assets<SkinnedMeshInverseBindposes>>,

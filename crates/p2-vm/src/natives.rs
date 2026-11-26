@@ -64,8 +64,6 @@ pub(crate) fn iterator_outs(native: Option<Native>) -> &'static [usize] {
     }
 }
 
-/// An actor the loop body spawns, added at the list's end, is reached (unverified for `ChildActors` and
-/// `BasedActors`).
 pub(crate) fn walks_actor_list(native: Option<Native>) -> Option<Native> {
     native.filter(|native| {
         matches!(native, Native::AllActors | Native::DynamicActors | Native::ChildActors | Native::BasedActors | Native::RadiusActors | Native::VisibleActors)
@@ -122,8 +120,6 @@ pub(crate) fn iterate<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option
         }
         Native::ChildActors => objects(&vm.store, &mut vm.script.lookups, &|object| this.is_some() && vm.store.get(object, Prop::Owner) == Some(Value::Object(this))),
         Native::BasedActors => objects(&vm.store, &mut vm.script.lookups, &|object| this.is_some() && vm.store.get(object, Prop::Base) == Some(Value::Object(this))),
-        // Centre strictly within `Radius` + the actor's own `CollisionRadius`
-        // (a match of radius 5 finds a gas puddle of radius 100 around it).
         Native::RadiusActors => {
             let centre = centre(vm);
             objects(&vm.store, &mut vm.script.lookups, &|object| {

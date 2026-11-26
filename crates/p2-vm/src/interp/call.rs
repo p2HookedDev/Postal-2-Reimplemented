@@ -23,8 +23,6 @@ impl<L: LoaderRef> Vm<L> {
         self.call_resolved(frame, &function, args, context, class)
     }
 
-    /// A stub loads its export first, as the engine has every object loaded (`MaterialSwitch.SetCurrent`); one
-    /// without an export or a script class cannot run: true (counted), and the call gives zero, like Accessed None.
     pub(super) fn call_on_stub(&mut self, frame: &Frame, callee: Callee, context: Option<ObjectId>) -> bool {
         if let (Callee::Virtual(name), Some(target)) = (callee, context)
             && self.store.object(target).class.is_none()
@@ -118,7 +116,6 @@ impl<L: LoaderRef> Vm<L> {
             });
         }
 
-        // Omitted optional arguments are `Value::Map`, so natives can apply defaults (`PlayAnim`'s rate 1).
         let mut values = self.take_args();
         let mut outs: Vec<(usize, Place)> = Vec::new();
         for (position, (arg, &param)) in args.iter().zip(&function.params).enumerate() {
@@ -160,8 +157,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(value)
     }
 
-    /// `out` arguments are written back after the call, last first. `arg(vm, frame, position, out)` gives
-    /// a value (`None`: omitted, keeps its zero value) and, for an `out` parameter, the place to write to.
     pub(super) fn call_script(
         &mut self,
         frame: &mut Frame,
@@ -220,8 +215,6 @@ impl<L: LoaderRef> Vm<L> {
                 Ok(function)
             }
             Callee::Virtual(name) | Callee::Global(name) => {
-                // Virtual calls see the target's state; `Global.` calls only its class, as do calls on a class object
-                // (`class'X'.static.F()`: `class` is the class it stands for).
                 let receiver = match (callee, context) {
                     (Callee::Virtual(_), Some(target)) if self.store.object(target).class.is_some() => Some(target),
                     _ => None,

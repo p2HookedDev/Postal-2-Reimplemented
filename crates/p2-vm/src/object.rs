@@ -53,8 +53,6 @@ impl Object {
         &self.mem
     }
 
-    /// The only way to the object's memory for a write. `stamp` is the store's current one
-    /// ([`crate::ObjectStore::stamp`]): whoever follows the object's values reads it again only after such a write.
     #[inline]
     pub(crate) fn mem_mut(&mut self, stamp: u64, kind: Stamp) -> &mut memory::Mem {
         self.written = stamp;
@@ -64,8 +62,6 @@ impl Object {
         &mut self.mem
     }
 
-    /// A write at `span`: one that leaves its words as they were moves only `written`. A span that reaches the heap
-    /// or is longer than a few words is not compared.
     pub(crate) fn write(&mut self, stamp: u64, kind: Stamp, span: Span, apply: impl FnOnce(&mut memory::Mem)) {
         let words = span.compared();
         let before = match kind {

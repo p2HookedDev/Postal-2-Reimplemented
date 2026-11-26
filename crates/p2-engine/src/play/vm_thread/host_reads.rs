@@ -71,8 +71,6 @@ impl Simulation {
 
     pub(in crate::play) fn draw_hud(&mut self, frame: &mut VmFrame, canvas: HudCanvas, step: f32) {
         self.hud_age += step;
-        // With a menu or the mouse shown the HUD's scripts answer input: they run every tick. A travel frame stays on
-        // screen through the load, so it shows the HUD last drawn, the weapon and its overlay cameras with it.
         let due = self.hud_age >= HUD_PERIOD || frame.pointer != Pointer::Captured || self.hud_canvas != canvas || self.hud_kept.is_empty();
         if due && frame.travel.is_none() {
             self.hud_age = 0.0;

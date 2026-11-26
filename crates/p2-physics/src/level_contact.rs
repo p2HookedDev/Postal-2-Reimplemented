@@ -4,7 +4,6 @@ use rapier3d::prelude::*;
 
 pub(crate) const ONE_SIDED: u128 = 1;
 
-/// Not the origin for other shapes: an actor's origin can lie outside its shape.
 fn axis(collider: &Collider) -> ([Vector; 2], Option<f32>) {
     let pose = collider.position();
     if let Some(capsule) = collider.shape().as_capsule() {

@@ -1,4 +1,3 @@
-# Code-quality thresholds.
 too-many-arguments-threshold = 7
 too-many-lines-threshold = 120
 max-fn-params-bools = 2

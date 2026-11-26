@@ -130,8 +130,6 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
                 let (version, line, position, opcode) = (self.int()?, self.int()?, self.int()?, self.c_string()?);
                 B::node(|| Expr::DebugInfo { version, line, position, opcode: latin1(opcode) })
             }
-            // A delegate call: property, name, then call parameters. The serializer reads these linearly and attaches no
-            // debug info.
             0x43 => {
                 let property = self.object()?;
                 let name = self.name()?;

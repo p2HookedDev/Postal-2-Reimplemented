@@ -1,7 +1,5 @@
 use super::*;
 
-/// The scripts rewrite the first emitter's `StartVelocityRange` every frame; it reaches the simulation's
-/// properties.
 fn pour(p: &ParticleActor) -> Option<Pour> {
     let props = p.simulation.emitters().first()?.props();
     let RangeVector { x, y, z } = props.start_velocity_range;

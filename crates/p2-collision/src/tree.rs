@@ -2,8 +2,6 @@ use p2_math::Vector;
 
 const LEAF_TRIANGLES: usize = 8;
 
-/// World units a node's box grows by for a segment: far above the rounding of a world coordinate, so a hit
-/// `segment_triangle` reports a hair off its triangle, or a hair past the segment's end, stays inside the box.
 const SEGMENT_MARGIN: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy)]
@@ -15,9 +13,6 @@ struct Node {
 }
 
 impl Node {
-    /// The line time at which a segment enters this box grown by [`SEGMENT_MARGIN`]; `None` if not by `limit`.
-    /// On an axis the segment does not move along, a start outside the slab gives equal infinities and one on
-    /// its face a NaN that `min` and `max` skip: either way an infinite bound rejects the box.
     fn entry(&self, start: Vector, inverse: [f32; 3], limit: f32) -> Option<f32> {
         let (mut enter, mut exit) = (0.0_f32, limit);
         for i in 0..3 {
@@ -74,7 +69,7 @@ impl TriangleTree {
         self.build(triangles, first + half, count - half);
     }
 
-    pub(crate) fn any(&self, min: Vector, max: Vector, mut visit: impl FnMut(usize) -> bool) -> bool {
+    pub fn any(&self, min: Vector, max: Vector, mut visit: impl FnMut(usize) -> bool) -> bool {
         let mut stack = [0u32; 64];
         let mut top = usize::from(!self.nodes.is_empty());
         while top > 0 {

@@ -1,7 +1,3 @@
-//! Bevy's check of what each shadowed sun's cascades see. Our sun's cascades hold only movers (the static world's
-//! sun shadow is our own cache) and only movers carry the sun's layers, so for our sun the walk takes the movers
-//! alone instead of every mesh in the level. Any other shadowed sun is walked as Bevy walks it.
-
 use bevy::camera::primitives::{Aabb, CascadesFrusta, Frustum};
 use bevy::camera::visibility::{
     CascadesVisibleEntities, InheritedVisibility, NoCpuCulling, NoFrustumCulling, RenderLayers, SetViewVisibility, ViewVisibility, VisibilityRange,
@@ -52,7 +48,6 @@ pub(super) fn see_sun_casters(
             for cascade in cascades.iter_mut() {
                 cascade.entities.clear();
             }
-            // Only a mover carries these layers; a sun given any other layer is walked in full.
             if ours && *layers == RenderLayers::from_layers(&[SUN_VIEW_LAYER, MOVER_LAYER]) {
                 cast_into(&mut casters.p1(), *view, view_frusta, layers, ranges, cascades);
             } else {

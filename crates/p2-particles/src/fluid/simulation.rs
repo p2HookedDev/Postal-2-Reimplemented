@@ -39,9 +39,7 @@ impl FluidSurface {
         bit_set(&self.clamped, i)
     }
 
-    /// The first tick simulates `WarmUpTime`; later steps run only while the surface was drawn within the
-    /// last second. `UpdateRate` not above 0 does nothing: those steps would never reach their end.
-    /// Unlike retail, a long frame drops the steps past the cap instead of running them all at once.
+    /// Unlike retail, a long frame drops the steps past the cap instead of running them all.
     pub fn tick(&mut self, delta: f32, drawn_lately: bool, touchers: &[FluidToucher]) {
         if self.settings.update_rate.is_nan() || self.settings.update_rate <= 0.0 {
             return;
@@ -127,8 +125,6 @@ impl FluidSurface {
         }
     }
 
-    /// Retail has no such step. Filtering only the new heights damps sharp ripples most, which hides single-vertex
-    /// wiggles.
     fn smooth(&mut self, amount: f32) {
         let s = &self.settings;
         let (ny, width) = (s.y_size, s.x_size as usize);

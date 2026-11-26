@@ -18,8 +18,6 @@ impl Sound {
         wave_duration(&self.data)
     }
 
-    /// Whether a RIFF WAVE file loops: a `smpl` chunk with at least one sample loop (`cSampleLoops`,
-    /// 28 bytes into the chunk). Retail plays such a sound looping.
     pub fn loops(&self) -> bool {
         riff_chunks(&self.data)
             .find(|(id, _)| id == b"smpl")

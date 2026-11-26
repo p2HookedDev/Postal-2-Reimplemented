@@ -8,7 +8,6 @@ use crate::object::Stamp;
 use crate::Prop;
 use crate::{ClassId, Error, HostCommand, Kind, LoaderRef, ObjectId, Value, Vm};
 
-/// Options and portal come in any order: POSTAL 2 sends `Map#Telepad?peer`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TravelUrl {
     pub map: String,
@@ -134,8 +133,6 @@ impl<L: LoaderRef> Vm<L> {
         for &actor in &actors {
             self.store.set(actor, Prop::bDeleteMe, Value::Bool(true));
         }
-        // The garbage collection after the unload clears every reference to a deleted actor (interactions, menus and
-        // class defaults that pointed into the level now hold `None`).
         let is_gone = |o: ObjectId| actors.contains(&o);
         let stamp = self.store.stamp;
         for (id, object) in self.store.objects.iter_mut().enumerate() {

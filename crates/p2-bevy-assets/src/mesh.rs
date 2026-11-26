@@ -5,8 +5,6 @@ use bevy::transform::components::Transform;
 use p2_assets::{ModelPolygon, StaticMesh, fan_triangles};
 use crate::coords::to_bevy;
 
-/// One mesh per section, so each can get its own material. Index order is kept: after the axis swap, Unreal's
-/// front faces match Bevy's (checked visually).
 pub fn static_mesh_to_meshes(mesh: &StaticMesh) -> Vec<Mesh> {
     let positions: Vec<_> = mesh.positions.iter().copied().map(to_bevy).collect();
     let normals: Vec<_> = mesh.normals.iter().copied().map(to_bevy).collect();

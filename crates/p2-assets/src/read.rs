@@ -73,8 +73,6 @@ pub(crate) fn lazy_span(r: &mut Reader) -> Result<std::ops::Range<usize>, Error>
     Ok(start..start + count)
 }
 
-/// Lazy byte array (version >= 62): `INT` file offset after the array, then compact count + bytes.
-/// The engine seeks to that offset after reading.
 pub(crate) fn lazy_bytes<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], Error> {
     let (skip, offset) = lazy_skip(r)?;
     let count = count(r)?;
@@ -83,8 +81,7 @@ pub(crate) fn lazy_bytes<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], Error> {
     Ok(data)
 }
 
-/// Jumps to a lazy array's skip offset (read at `offset`). It lies past the array, so never behind the reader: a
-/// backward jump would let a counted loop read the same bytes without end.
+/// The skip offset lies past the array: a backward jump would let a counted loop read the same bytes forever.
 fn seek_forward(r: &mut Reader, skip: usize, offset: usize) -> Result<(), Error> {
     if skip < r.pos() {
         return Err(invalid("lazy array skip offset", offset));

@@ -10,7 +10,6 @@ impl<L: LoaderRef> Vm<L> {
         this: Option<ObjectId>,
         args: &mut [Value],
     ) -> Result<Option<Value>, Error> {
-        // Omitted optional arguments arrive as `Value::Map`: the engine's defaults apply.
         let Some(this) = this else { return Ok(None) };
         Ok(Some(match native {
             Native::PlayAnim | Native::LoopAnim | Native::PlayAnimAt => {
@@ -65,7 +64,6 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 return Ok(None);
             }
-            // A no-op on purpose: retail's skeletal mesh instances do not implement it.
             Native::FreezeAnimAt => return Ok(None),
             Native::LinkSkelAnim => {
                 if let (Some(&Value::Object(Some(animation))), Some(instance)) = (args.first(), self.instance_mut(this))

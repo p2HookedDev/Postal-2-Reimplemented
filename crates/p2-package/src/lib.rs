@@ -1,5 +1,3 @@
-//! Package reader: layouts follow POSTAL 2 (package version 118, licensee 2).
-
 mod caseless;
 pub mod flags;
 mod ini;
@@ -163,8 +161,6 @@ impl Summary {
         }
         let version = r.u16()?;
         let licensee = r.u16()?;
-        // Version < 68 stores a heritage GUID table instead of GUID + generations.
-        // Not supported: every POSTAL 2 package is version 118.
         if version < 68 {
             return Err(Error::UnsupportedVersion(version));
         }

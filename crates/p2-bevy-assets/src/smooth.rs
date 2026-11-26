@@ -5,7 +5,6 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 const ROUNDING: f32 = 0.5;
 const CREASE_COS: f32 = 0.5;
-/// Share of the edge length a new point may move, so thin parts such as fingers cannot puff.
 const MOVE_CAP: f32 = 0.1;
 
 pub fn smoothed_skeletal_mesh(mesh: &SkeletalMesh) -> Option<SkeletalMesh> {
@@ -89,7 +88,6 @@ impl Subdivision<'_> {
         Some(wedge)
     }
 
-    /// Made once per pair of points, so wedges split by a UV seam share it and no crack opens.
     fn point(&mut self, a: u32, b: u32) -> u32 {
         let key = low_first(a, b);
         let entry = match self.points.entry(key) {

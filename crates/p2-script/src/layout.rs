@@ -7,7 +7,6 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use crate::flags::{CPF_NATIVE, CPF_TRANSIENT};
 use crate::{Error, PropertyKind, ScriptObject, read_child, read_export};
 
-/// Struct and array nesting limit; deeper means a reference cycle.
 const MAX_DEPTH: usize = 64;
 
 const BINARY_STRUCTS: [&str; 3] = ["Vector", "Rotator", "Color"];
@@ -107,8 +106,6 @@ impl StructLayout {
         Self { name, properties, super_field, defaults_offset, binary, first_by_name }
     }
 
-    /// First property named `name` (case-insensitive). Equal names have equal hashes, so no entry means no such
-    /// property, and an entry whose name matches is the first of that name.
     pub fn find(&self, name: &str) -> Option<&FieldLayout> {
         let first = &self.properties[*self.first_by_name.get(&name_hash(name))? as usize];
         if first.name.eq_ignore_ascii_case(name) {
@@ -122,8 +119,6 @@ fn name_hash(name: &str) -> u64 {
     name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3))
 }
 
-/// Keyed by package address: reuse only with a resolver whose packages outlive the cache, as freed addresses
-/// recur.
 #[derive(Default, Clone)]
 pub struct LayoutCache(FxHashMap<(usize, usize), Arc<StructLayout>>);
 
@@ -253,7 +248,6 @@ where
         let Some(ScriptObject::Property(property)) = read_export(inner_src.package, inner_src.data, inner_export)? else {
             return Err(Error::WrongKind { export: inner_export, expected: "property" });
         };
-        // An inner property naming itself recurses here without passing through `layout_in`.
         self.enter(inner_src, inner_export)?;
         let ty = self.ty(resolver, inner_src, property.kind);
         self.depth -= 1;

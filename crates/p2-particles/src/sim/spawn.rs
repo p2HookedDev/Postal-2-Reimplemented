@@ -138,7 +138,6 @@ impl ParticleEmitter {
         // The velocity is rotated without the `EffectAxis` pitch change, as retail (unverified).
         velocity = rotation(velocity, false);
         velocity = directed_velocity(props, velocity, location, owner, rng);
-        // Which particle of the other emitter lends its velocity (unverified: the one used for locations).
         if let Some(other) = other_particle(props.add_velocity_from_other_emitter) {
             let scaled = if strip { other.velocity } else { props.add_velocity_multiplier_range.rand(rng) * other.velocity };
             velocity += scaled;

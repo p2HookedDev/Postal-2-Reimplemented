@@ -56,8 +56,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Retail's `SetRotation` is a zero-delta move; with nothing attached it only sets the rotation.
-    /// An encroacher's encroachment check on this path is not modelled.
     pub(crate) fn turn_attached(&mut self, actor: ObjectId, old_rotation: Rotator) -> Result<(), Error> {
         if self.store.object_list(actor, Prop::Attached).is_empty() {
             return Ok(());

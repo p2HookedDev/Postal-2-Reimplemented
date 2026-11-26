@@ -4,12 +4,9 @@ use p2_render::compiling::CompilingPipelines;
 
 use super::{Play, PlayWorld};
 
-/// The renderer meets a new mesh or material a few frames after it is spawned, so one quiet frame says little.
 const CALM_FRAMES: u32 = 20;
-/// Seconds; a pipeline or texture that never finishes must not keep the load screen up.
 const HOLD_LIMIT: f32 = 10.0;
 
-/// Spawned models and textures still building, as the map last counted them.
 #[derive(Resource, Default, PartialEq)]
 pub struct SpawnsPending(pub usize);
 

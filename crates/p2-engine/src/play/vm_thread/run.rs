@@ -57,7 +57,6 @@ impl Simulation {
         for (actor, error) in errors.iter().take(3) {
             bevy::log::warn!("{actor}: {error}");
         }
-        // Each distinct line once: a script error repeated every tick would flood the log.
         for line in self.vm.diagnostics.log.drain(..) {
             if !self.logged.contains(&line) {
                 bevy::log::info!("vm: {line}");
@@ -93,8 +92,7 @@ impl Simulation {
                 _ => {}
             }
         }
-        // Actors a camera saw last frame are marked rendered, or POSTAL 2's pawns go into stasis. Photo mode's free
-        // camera marks nothing: it would wake people the player never saw.
+        // Unmarked actors put POSTAL 2's pawns into stasis; photo mode's free camera marks nothing so it wakes no one.
         let photo = photo::photo_active(&mut self.vm);
         for &actor in job.visible.iter().filter(|_| !photo) {
             if let Err(error) = self.vm.mark_rendered(actor) {

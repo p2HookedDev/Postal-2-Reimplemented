@@ -1,6 +1,3 @@
-//! Save files in `%APPDATA%\p2-reimplemented\Save`, written on the IO pool through a temp file and
-//! a rename, so a crash leaves the old save whole; reads and exit wait for queued writes.
-
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -51,8 +48,7 @@ pub fn write(slot: i32, save: Box<SaveGame>) {
     }));
 }
 
-/// The lock is held through the wait, so a save queued meanwhile starts after it; the writers never take the
-/// lock.
+/// The lock is held through the wait, so a save queued meanwhile starts after it; writers never take the lock.
 pub fn finish_writes() {
     let mut last = LAST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(last) = last.take() {

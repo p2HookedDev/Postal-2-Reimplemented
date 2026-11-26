@@ -1,6 +1,3 @@
-//! An object's properties as loaded: its class's defaults, then its saved tags over them. The two index
-//! different packages, so every value is found together with the package it indexes.
-
 use std::sync::Arc;
 
 use p2_package::Package;
@@ -24,9 +21,7 @@ pub struct ObjectProperties<'a> {
 }
 
 impl<'a> ObjectProperties<'a> {
-    /// Element `index` of property `name` (case-insensitive) from the last layer that sets it, with that layer's
-    /// package. A tagged struct (all but `Vector`, `Rotator`, `Color`) loads member by member over the value below
-    /// it: read its members with [`ObjectProperties::member`].
+    /// A tagged struct (all but `Vector`, `Rotator`, `Color`) loads member by member: read its members with [`ObjectProperties::member`].
     pub fn get(&self, name: &str, index: u32) -> Option<(&'a Package, &StoredValue)> {
         self.layers().rev().find_map(|layer| find(&layer.properties, name, index).map(|value| (layer.package, value)))
     }
@@ -144,7 +139,6 @@ impl<'a, R: Resolve + ?Sized> Objects<'a, R> {
         if let Some(layers) = self.defaults.get(&key) {
             return Ok(Arc::clone(layers));
         }
-        // The layout first: it fails on a superclass cycle before the recursion below.
         let layout = self.layouts.layout(src, export)?;
         let Some(defaults_offset) = layout.defaults_offset else {
             return Err(Error::WrongKind { export, expected: "class" });

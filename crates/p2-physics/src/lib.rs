@@ -1,6 +1,4 @@
-//! Rigid-body physics for the game's Karma actors, on Rapier. Engine-agnostic: positions are Unreal units and
-//! axes (Z up), rotations quaternions (X, Y, Z, W); the VM converts rotators and owns which actor a body belongs
-//! to.
+//! Positions in Unreal units and axes (Z up); rotations are quaternions (X, Y, Z, W).
 
 #![forbid(unsafe_code)]
 
@@ -21,9 +19,7 @@ pub use parts::{Parts, SegmentHit};
 pub use ragdoll::{JointLimit, JointParams, PartParams, RagdollParams, shapes_inertia};
 
 pub const UNITS_PER_METER: f32 = 50.0;
-/// At 30 Hz ragdoll parts sink into the ground by over half their radius on landing. Every step has this length:
-/// a step whose length changes from one to the next leaves resting bodies trembling, so a pile of corpses never
-/// falls asleep. Time not stepped yet is owed to the next call.
+/// A fixed step: a varying one leaves resting bodies trembling, so piles never sleep. At 30 Hz ragdolls sink on landing.
 const STEP: f32 = 1.0 / 60.0;
 const MAX_STEPS: u32 = 30;
 
@@ -186,17 +182,13 @@ pub struct World {
     soft_bodies: SoftBodySet,
     ccd: CCDSolver,
     hooks: Hooks,
-    /// Dormant bodies (Karma's disabled bodies: added asleep or put to sleep) are fixed until woken: by a call, or by
-    /// an awake body touching them. Rapier would wake a sleeping body as soon as its first contacts appear (a prop
-    /// resting on the floor).
+    /// Dormant bodies stay fixed until woken: Rapier alone would wake a sleeping body as soon as its first contacts appear.
     dormant: FxHashSet<RigidBodyHandle>,
     forced: Vec<RigidBodyHandle>,
     level: Vec<ColliderHandle>,
     started: Vec<Started>,
     moving: FxHashMap<RigidBodyHandle, Pose>,
     cones: Vec<ragdoll::Cone>,
-    /// Each ragdoll's parts. A ragdoll at rest goes dormant on its own: Rapier sleeps touching bodies only all at
-    /// once, so one moving corpse kept every corpse of its pile awake.
     ragdolls: Vec<ragdoll::Resting>,
     pub rest_broken: [u32; 2],
     pub wakes: u32,

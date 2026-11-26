@@ -14,7 +14,6 @@ impl<L: LoaderRef> Vm<L> {
         self.trace_world_actor(start, end, extent).map(|(_, hit)| hit)
     }
 
-    /// BSP and terrain hits report the level; a static world mesh or volume reports its own actor.
     pub(crate) fn trace_world_actor(&self, start: Vector, end: Vector, extent: Vector) -> Option<(Option<ObjectId>, Hit)> {
         let earliest = |a: &(Option<ObjectId>, Hit), b: &(Option<ObjectId>, Hit)| a.1.time.total_cmp(&b.1.time);
         let world = &self.world;
@@ -23,8 +22,6 @@ impl<L: LoaderRef> Vm<L> {
             let bsp = self.trace_bsp(start, end, extent).map(|hit| (self.level, hit));
             return bsp.into_iter().chain(self.trace_boxes(start, end, extent)).min_by(earliest);
         }
-        // Pulled back like the engine's line checks (BSP and terrain 0.5 units, static meshes `pull_back_units`): what
-        // lies at a hit (a puddle's flat sprite) stays above the surface's neighbouring triangles.
         let bsp = world.model.as_ref().and_then(|model| line_check(model, start, end)).map(|hit| pull_back(start, end, hit, 0.5));
         let terrain = world.terrains.iter().filter_map(|t| terrain_line_check(t, start, end, Sides::FrontOnly)).map(|hit| pull_back(start, end, hit, 0.5));
         let level = bsp.into_iter().chain(terrain).map(|hit| (self.level, hit));
@@ -60,8 +57,6 @@ impl<L: LoaderRef> Vm<L> {
         self.world.model.as_ref().and_then(|model| box_check(model, &self.world.hulls, start, end, extent))
     }
 
-    /// A blocking volume's inside alone does not count. Terrain has no point check here yet,
-    /// so a box sunk in terrain is not found.
     pub(crate) fn world_encroached(&self, location: Vector, extent: Vector) -> bool {
         let bsp = self.world.model.as_ref().is_some_and(|model| p2_collision::point_check(model, &self.world.hulls, location, extent).is_some());
         bsp || self.with_near_boxes(location, location, extent, |near| {

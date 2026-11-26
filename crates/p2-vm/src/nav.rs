@@ -22,10 +22,7 @@ pub(crate) const WALK_MIN_MOVE: f32 = 4.1;
 const WALK_MIN_LAST_MOVE: f32 = 8.0;
 const FLY_STEP: f32 = 200.0;
 const FLOOR_DROP: f32 = MAX_STEP_HEIGHT + 2.0;
-/// How often one reach test may pass between its air and water halves. Retail has no limit and would run out of
-/// stack long after this many, so the answers are the same wherever retail gives one.
 const HAND_OFFS: u32 = 64;
-/// A swimmer that leaves the water tries to climb out only toward a goal lower than this above it.
 const SWIM_EXIT_HEIGHT: f32 = 78.0 + MAX_STEP_HEIGHT;
 const SKIP_ANCHOR_DISTANCE: f32 = 1200.0;
 const SKIP_ANCHOR_SHARE: f32 = 0.85;
@@ -741,7 +738,6 @@ impl<L: LoaderRef> Vm<L> {
         hit
     }
 
-    /// A failed step tries a jump when the pawn can jump; otherwise a fall shortens the steps to 35 once.
     fn walk_reachable(&mut self, pawn: ObjectId, from: Vector, to: Vector, goal: Option<ObjectId>) -> bool {
         let (radius, height) = self.store.collision_size(pawn);
         let can_jump = self.store.flag_of(pawn, Prop::bCanJump);

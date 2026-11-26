@@ -1,6 +1,3 @@
-//! Tagged properties decoded by declaration: each tag is matched by name to a declared property and read by that
-//! property's type. The tag's Size is used only to skip tags the engine skips.
-
 use std::sync::Arc;
 
 use p2_package::tag::{ARRAY as TAG_ARRAY, BYTE as TAG_BYTE, STRING as TAG_STRING};
@@ -18,8 +15,6 @@ pub struct Properties {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyValue {
     pub name: Arc<str>,
-    /// Static array index. For a dynamic array saved one tag per element (the engine accepts this), the element
-    /// index, with [`PropertyValue::value`] holding the element.
     pub array_index: u32,
     pub value: StoredValue,
 }
@@ -168,8 +163,6 @@ fn read_binary(pkg: &Package, r: &mut Reader, layout: &StructLayout) -> Result<P
     Ok(Properties { values, skipped: Vec::new() })
 }
 
-/// Rejects `count` elements of `inner` when an element takes no bytes: nothing but the declaration would then
-/// limit how many values a few damaged bytes ask for.
 fn check_elements(inner: &Type, count: i64, offset: usize) -> Result<(), Error> {
     if count > 0 && reads_nothing(inner) {
         return Err(p2_package::Error::Invalid { what: "array of values that take no bytes", offset }.into());

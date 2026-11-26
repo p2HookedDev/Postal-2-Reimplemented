@@ -415,8 +415,6 @@ impl<L: LoaderRef> Vm<L> {
         self.mesh_animation_at(package, export)
     }
 
-    /// Reads ahead what is slow on first use (tens of ms on the VM's thread mid-game). For the loading thread, once
-    /// the map has begun play; caches only, nothing a script sees changes.
     pub fn prewarm(&mut self) {
         self.media.bone_data.prewarm_animations(&self.loader);
         self.karma_assets();

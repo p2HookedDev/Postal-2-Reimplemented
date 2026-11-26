@@ -1,8 +1,6 @@
-// The host swaps this class in for `Shell.MenuMain`. Retail shows the POSTAL 4 or Paradise Lost banner only in
-// a Steam build, which would also send achievements to Steam; ours shows it from what the host says Steam owns.
+// Retail shows the POSTAL 4 or Paradise Lost banner only in a Steam build; ours shows it from what the host says Steam owns.
 class ModernMenuMain extends MenuMain;
 
-// Super resets the title only when its class is exactly MenuMain.
 function CreateMenuContents()
 {
 	TitleTexture = Default.TitleTexture;

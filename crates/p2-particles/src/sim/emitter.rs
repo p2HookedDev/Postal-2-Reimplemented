@@ -32,8 +32,6 @@ impl Emitter {
         &self.owner
     }
 
-    /// Retail applies the actors touching the emitter's collision cylinder, but forces only reach
-    /// particles within the actor's `ForceRadius`, so all are passed and the radius decides.
     pub fn set_actor_forces(&mut self, forces: std::sync::Arc<[ActorForce]>) {
         self.forces = forces;
     }

@@ -1,6 +1,3 @@
-//! Script bytecode decoded into expression trees. The script size counts bytes in memory (references and names
-//! take 4 each; compact on disk), and jump and case offsets are in-memory offsets.
-
 use std::marker::PhantomData;
 
 use p2_package::{Package, Reader};
@@ -11,14 +8,9 @@ mod tokens;
 
 const END_FUNCTION_PARMS: u8 = 0x16;
 const DEBUG_INFO: u8 = 0x42;
-/// Debug info version that the engine treats as part of the preceding call.
 const DEBUG_INFO_VERSION: i32 = 100;
-/// Deepest expression nesting decoded: a nesting token is one byte, so a damaged script could recurse once per
-/// byte and overflow the stack. Well above real scripts (tens of levels for long `$` or `||` chains) and within
-/// the game's 64 MB stacks even in a debug build.
 const MAX_EXPR_DEPTH: usize = 512;
 
-/// `EX_PrimitiveCast` kinds from 0x39, in retail's table order (0x46 is unused).
 const CASTS: [&str; 33] = [
     "RotatorToVector",
     "ByteToInt",
@@ -133,9 +125,6 @@ pub enum Expr {
     DebugInfo { version: i32, line: i32, position: i32, opcode: String },
     DelegateProperty(usize),
     LetDelegate { target: Box<Self>, value: Box<Self> },
-    /// A reference an interpreter resolves once: `expr` as decoded (a variable, struct member, name constant,
-    /// non-delegate call, or dynamic or meta cast), `link` its slot in the function's link table.
-    /// Only [`decode_script_linked`] produces it.
     Linked { link: u32, expr: Box<Self> },
 }
 
@@ -284,7 +273,6 @@ impl<'a, B: Build> Decoder<'_, '_, 'a, B> {
             }
         }
         if !is_delegate && self.code < self.size {
-            // Peek: a debug info token of version 100 belongs to this call.
             let pos = self.r.pos();
             let version = if self.r.u8()? == DEBUG_INFO { self.r.i32()? } else { -1 };
             self.r.seek(pos)?;

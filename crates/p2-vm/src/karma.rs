@@ -20,8 +20,6 @@ use crate::{Error, LoaderRef, ObjectId, Value, Vm, Prop};
 
 /// The impulse is scaled to Karma units, then by 0.01: in Unreal units dv = impulse × 0.01 / mass.
 pub(crate) const IMPULSE_SCALE: f32 = 0.01;
-/// The force reaches Karma unscaled (Karma lengths are 1/50 of Unreal's), so in Unreal units
-/// the acceleration is force × 50 / mass.
 const MAX_KARMA_TICK: f32 = 0.05;
 const OLD_CORPSE_TICKS: u32 = 1000;
 const FORCE_SCALE: f32 = p2_physics::UNITS_PER_METER;
@@ -184,8 +182,6 @@ impl<L: LoaderRef> Vm<L> {
         errors
     }
 
-    /// Entering `PHYS_Karma` makes the body now, so `KAddImpulse` right after it reaches the body,
-    /// and retries an actor that had none.
     pub(crate) fn karma_physics_changed(&mut self, actor: ObjectId, old: Option<EPhysics>) {
         if old == Some(EPhysics::Karma) {
             self.remove_karma_body(actor);
@@ -210,7 +206,6 @@ impl<L: LoaderRef> Vm<L> {
         let rotation = quat_to_rotator(quat);
         self.set_vector(actor, Prop::Velocity, velocity);
         let shown = (self.store.vector(actor, Prop::Location), self.store.rotator_of(actor, Prop::Rotation));
-        // As retail's move of a Karma actor: blockers in the way are pushed and told, and a refusal leaves it in place.
         if shown != (location, rotation) && self.check_encroachment(actor, location, rotation)? {
             return Ok(());
         }
@@ -414,7 +409,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// With `bBlockKarma`, retail's Karma shapes; blocking only by our rule, the triangles pawns collide with.
     fn karma_mover_body(&mut self, mover: ObjectId) -> Option<Body> {
         let path = self.store.object(mover).path.clone();
         let shapes = if self.store.flag_of(mover, Prop::bBlockKarma) {
@@ -463,8 +457,6 @@ impl<L: LoaderRef> Vm<L> {
         })
     }
 
-    /// As retail, never by triangles and whatever the draw type: `KPhysicsProps` shapes with simple collision,
-    /// otherwise one convex hull. A brush is one hull of its corners, so a concave brush is filled in.
     fn karma_placed_shapes(&mut self, actor: ObjectId, without_props: WithoutProps) -> Option<(Vec<Shape>, Vector, [f32; 4])> {
         let placement = self.drawn_placement(actor);
         let place = |p: &[f32; 3]| placement.in_body(*p);

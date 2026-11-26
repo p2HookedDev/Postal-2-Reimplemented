@@ -67,7 +67,6 @@ impl LoadProgress {
     }
 
     pub fn set(&self, value: f32) {
-        // Bits of non-negative floats order like the floats.
         self.0.fetch_max(value.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 }

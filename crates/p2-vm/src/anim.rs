@@ -38,7 +38,6 @@ struct Sequence {
 pub struct AnimChannel {
     pub sequence: NameId,
     pub animation: usize,
-    /// Sequence fractions per second; negative means scaled by the actor's speed.
     pub rate: f32,
     pub frame: f32,
     pub last: f32,

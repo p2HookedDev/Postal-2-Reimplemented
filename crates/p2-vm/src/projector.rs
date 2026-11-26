@@ -37,7 +37,6 @@ pub struct ProjectorShape {
     pub rotating: bool,
 }
 
-/// Axes X (forward), Y, Z; `r` = 0.5 * sqrt(w^2 + h^2) for the texture's size times `DrawScale`.
 pub fn frustum(shape: &ProjectorShape) -> Frustum {
     let [x, y, z] = shape.rotation.axes();
     let side = y * -1.0;

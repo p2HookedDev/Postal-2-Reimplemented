@@ -33,9 +33,6 @@ pub fn leaves_ambient(model: &Model, leaves: &[usize], zone_ambients: &[[f32; 3]
     zones.iter().map(|&zone| zone_ambients.get(zone).copied().unwrap_or_default()).fold([0.0; 3], |a, b| [0, 1, 2].map(|i| a[i].max(b[i])))
 }
 
-/// The lights the renderer gives an actor: those reaching its sphere (with `Walls::Checked`, not cut off
-/// from `center`), suns first, the rest by (1 - d² / R²) · brightness with R the light's radius, at most `max`.
-/// A light scoring zero or less still counts, last. A spot takes a slot whatever its cone; the shading cuts it.
 pub fn relevant_lights<'a>(model: &Model, candidates: impl IntoIterator<Item = &'a MeshLight>, center: Vector, radius: f32, max: usize, walls: Walls) -> Vec<MeshLight> {
     // A prop set into a wall has its centre in solid, where every trace starts blocked, so it keeps its lights.
     // What the original game's trace answers from inside solid is (unverified).

@@ -252,7 +252,6 @@ impl Browser {
         self.clear_preview(t);
         session.clear(&mut t.scene);
         let Some(open) = &mut self.open else { return };
-        // A click's slot can be stale: a travel earlier in the frame may have opened another package.
         let Some(&index) = open.assets(kind).get(slot) else { return };
         open.selected = Some((kind, slot));
         let open = &*open;

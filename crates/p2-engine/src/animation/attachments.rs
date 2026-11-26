@@ -86,7 +86,6 @@ pub(super) fn place_attached(
     bases.clear();
     due_models.clear();
     emitters.clear();
-    // Bases that are themselves on a bone (a map pawn's head drawn as `FollowBone`), so a bolt-on hat follows it.
     bone_bodies.extend(on_bones.iter().filter_map(|follow| {
         let place = world.shown.places.bone_frame(follow.actor)?;
         let rotation = axes_matrix(place.axes, Vec3::ZERO);
@@ -94,7 +93,6 @@ pub(super) fn place_attached(
         Some((follow.actor, body))
     }));
     let bone_bodies = &*bone_bodies;
-    // Emitters on a bone have no model but are placed the same way; the first-person muzzle flash is one.
     emitters.extend(world.watched().filter_map(|actor| Some((actor, world.actor(actor)?.attachment.as_ref()?.base))));
     for (entity, follow, ..) in &models {
         if let Some(attachment) = world.actor(follow.actor).and_then(|actor| actor.attachment.as_ref()) {

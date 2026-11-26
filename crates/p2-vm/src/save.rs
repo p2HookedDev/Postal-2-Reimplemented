@@ -1,5 +1,3 @@
-//! The file is a magic, a version, then the [`SaveGame`] in `postcard`; references are indices/paths.
-
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +9,6 @@ use crate::{ClassId, Error, HostCommand, Kind, LoaderRef, NameId, ObjectId, Prop
 use p2_script::flags::CPF_TRANSIENT;
 
 const MAGIC: &[u8; 8] = b"P2RSAVE\0";
-/// The format's version (u32 little-endian after the magic): a save of another version is refused.
 const VERSION: u32 = 3;
 const TRANSIENT: &str = "Transient.";
 
@@ -108,8 +105,6 @@ impl<L: LoaderRef> Vm<L> {
         moved
     }
 
-    /// Local time, `YYYY-MM-DD : HH:MM`. The save menu asks for `Save<N>.usa`,
-    /// which is our [`save_file_name`] of slot `N`.
     pub(crate) fn file_time_text(&self, name: &str) -> String {
         let slot = name.get(..4).filter(|prefix| prefix.eq_ignore_ascii_case("save")).and_then(|_| name[4..].rsplit_once('.')).and_then(|(slot, _)| slot.parse().ok());
         let name = slot.map_or_else(|| name.to_owned(), save_file_name);
@@ -296,8 +291,6 @@ impl<L: LoaderRef> Vm<L> {
         SaveGame { map: self.map_name.clone(), options: self.url_options.clone(), names, externals, objects }
     }
 
-    /// Objects whose class is missing or whose memory size differs (other script packages),
-    /// or whose array lengths pass their data (a damaged file), are skipped and logged.
     pub fn restore(&mut self, map: p2_package::PackageId, save: &SaveGame) -> Result<(), Error> {
         let map_actors = self.load_level(map)?;
         let level = self.level.ok_or(Error::Unsupported("map without a LevelInfo".to_owned()))?;
@@ -353,7 +346,6 @@ impl<L: LoaderRef> Vm<L> {
             });
             *self.store.objects[id.0 as usize].mem_mut(self.store.stamp, Stamp::Drawn) = mem;
             self.reset_transient_properties(id, class);
-            // The engine's constructor ran before the load and no save touches what it set: transient members.
             if self.store.is_a(id, Kind::SceneManager) {
                 self.construct_scene_manager(id);
             }

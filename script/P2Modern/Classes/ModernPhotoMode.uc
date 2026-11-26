@@ -1,6 +1,3 @@
-// Photo mode: the game pauses and the view moves to a free camera near the player. The player, his controller's
-// rotation and his saved settings are never changed; leaving puts the view back as it was. While the photo menu
-// is shown the mouse works the menu and the movement keys still fly; H hides it for the mouse.
 class ModernPhotoMode extends Interaction;
 
 const KeyPath = "ini:Engine.Engine.RenderDevice";
@@ -14,7 +11,6 @@ const MaxPitch = 16000;
 const TiltMost = 45.0;
 const TiltPerSecond = 45.0;
 const HeightStep = 50.0;
-// Orbiting from closer than this to the player's middle would spin the camera on the spot.
 const OrbitLeast = 64.0;
 const FocusReach = 20000.0;
 // The engine's focus distance is NearestFocus x 2^(level / 4) units.
@@ -22,7 +18,6 @@ const NearestFocus = 32.0;
 const FocusTop = 36;
 const BlurOnFocus = 5;
 const GridAlpha = 110;
-// Canvas styles by number, as retail's classes outside Actor write them: normal and alpha blended.
 const StyleNormal = 1;
 const StyleAlpha = 5;
 const ShotDelayFrames = 2;
@@ -109,7 +104,6 @@ function int Nearest(float F)
 	return int(F + 0.5);
 }
 
-// Everything but the pause: the in-game menu asks this while the game is paused by the menu itself.
 function bool CanOpen()
 {
 	local PlayerController PC;
@@ -208,7 +202,6 @@ function bool Open()
 	bOpen = true;
 	bVisible = true;
 	bRequiresTick = true;
-	// First in line for keys, so Escape closes photo mode before a menu can see it.
 	SetFocus();
 	ShowPhotoMenu();
 	return true;
@@ -246,8 +239,6 @@ function Close()
 		PC.SetPause(false);
 }
 
-// The photo rows start from the picture the player plays with and the rest from neutral; the photo keys are
-// saved, so this runs on every open.
 function ResetPicture()
 {
 	local int i;
@@ -586,8 +577,6 @@ function DrawGrid(Canvas Canvas, float Top)
 	}
 }
 
-// The bars are in every frame, the picture's too; the grid and the help line never are.
-// With the menu hidden, one line of keys at the bottom right, in the retail menus' font and colours.
 function PostRender(Canvas Canvas)
 {
 	local ShellRootWindow Root;

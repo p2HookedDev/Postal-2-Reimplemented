@@ -1,7 +1,3 @@
-//! How a corpse takes a hit (our choice, not retail's): a script's impulse moves the whole corpse as one rigid
-//! body (with spin), a damage type with a [`Throw`] pushes the corpse along the shot up to a ceiling speed, and
-//! the part the shot entered gets a damage-sized kick that folds the corpse around it. Units are Unreal units.
-
 use rapier3d::prelude::*;
 
 use crate::{BodyId, World, to_rapier};

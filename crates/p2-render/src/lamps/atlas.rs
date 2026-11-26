@@ -124,14 +124,12 @@ pub(crate) fn terrain_triangles(terrain: &Terrain) -> impl Iterator<Item = [[f32
     })
 }
 
-fn near_sphere(triangle: &[[f32; 3]; 3], center: [f32; 3], radius: f32) -> bool {
-    let mut gap = 0.0;
-    for axis in 0..3 {
-        let low = triangle.iter().map(|point| point[axis]).fold(f32::MAX, f32::min);
-        let high = triangle.iter().map(|point| point[axis]).fold(f32::MIN, f32::max);
-        let outside = (low - center[axis]).max(center[axis] - high).max(0.0);
-        gap += outside * outside;
-    }
+fn point_bounds<const N: usize>(points: impl IntoIterator<Item = [f32; N]>) -> ([f32; 3], [f32; 3]) {
+    points.into_iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(low, high), point| ([0, 1, 2].map(|a| low[a].min(point[a])), [0, 1, 2].map(|a| high[a].max(point[a]))))
+}
+
+fn box_near_sphere((low, high): ([f32; 3], [f32; 3]), center: [f32; 3], radius: f32) -> bool {
+    let gap: f32 = (0..3).map(|axis| (low[axis] - center[axis]).max(center[axis] - high[axis]).max(0.0).powi(2)).sum();
     gap <= radius * radius
 }
 
@@ -193,16 +191,27 @@ fn draw_index(tiles: &[Option<Tile>]) -> Vec<Option<usize>> {
 pub(super) fn lamp_bake(triangles: &[[[f32; 3]; 3]], masked: &[MaskedCaster], lamps: &[([f32; 3], f32)]) -> LampBake {
     let radii: Vec<f32> = lamps.iter().map(|&(_, radius)| radius).collect();
     let tiles = pack(&radii);
+    let tree = p2_collision::TriangleTree::new(triangles);
+    let caster_bounds: Vec<_> = masked.iter().map(|caster| point_bounds(caster.triangles.iter().flatten().copied())).collect();
     let near = super::on_threads(lamps.len(), |lamp| {
         let (position, radius) = lamps[lamp];
         tiles[lamp]?;
-        let near = triangles.iter().enumerate().filter(|(_, triangle)| near_sphere(triangle, position, radius));
-        let own: Vec<u32> = near.flat_map(|(index, _)| [0, 1, 2].map(|corner| index as u32 * 3 + corner)).collect();
+        let mut found = Vec::new();
+        tree.any(position.map(|c| c - radius).into(), position.map(|c| c + radius).into(), |index| {
+            if box_near_sphere(point_bounds(triangles[index]), position, radius) {
+                found.push(index as u32);
+            }
+            false
+        });
+        found.sort_unstable();
+        let own: Vec<u32> = found.into_iter().flat_map(|index| [0, 1, 2].map(|corner| index * 3 + corner)).collect();
         let groups: Vec<(usize, Vec<[f32; 6]>)> = masked
             .iter()
+            .zip(&caster_bounds)
             .enumerate()
-            .map(|(group, caster)| {
-                let near = caster.triangles.iter().filter(|triangle| near_sphere(&triangle.map(|[x, y, z, ..]| [x, y, z]), position, radius));
+            .filter(|(_, (_, reach))| box_near_sphere(**reach, position, radius))
+            .map(|(group, (caster, _))| {
+                let near = caster.triangles.iter().filter(|triangle| box_near_sphere(point_bounds(triangle.iter().copied()), position, radius));
                 (group, near.flat_map(|triangle| triangle.map(|[x, y, z, u, v]| [x, y, z, u, v, caster.cutoff])).collect::<Vec<_>>())
             })
             .filter(|(_, vertices)| !vertices.is_empty())

@@ -20,8 +20,6 @@ const CHAR_HEIGHT: f32 = 16.0;
 pub enum CanvasItem {
     Tile { material: Arc<str>, position: [f32; 2], size: [f32; 2], uv: [f32; 4], color: [u8; 4], style: u8 },
     Text { text: String, position: [f32; 2], scale: [f32; 2], color: [u8; 4], font: Option<Arc<str>> },
-    /// `DrawActor` (first-person weapons): `fov` 0 is the view's. Placed as it was at the call (`scale`: `DrawScale`
-    /// × `DrawScale3D`): `MapScreen` draws one marker actor at every point of its trail, moving it between the calls.
     Actor { actor: ObjectId, clear_z: bool, fov: f32, location: Vector, rotation: Rotator, scale: Vector },
 }
 
@@ -143,14 +141,12 @@ impl Canvas {
             _ => 1,
         };
         match native {
-            // `StrLen` (wrapped) and `TextSize` (clipped) give the same size.
             Native::StrLen | Native::TextSize => {
                 let [width, height] = self.canvas_font(store, canvas).size(&string(args));
                 for (slot, value) in args.iter_mut().skip(1).zip([width, height]) {
                     *slot = Value::Float(value);
                 }
             }
-            // At the whole-pixel position; `bCenter` is ignored and the position does not move.
             // Retail cuts a glyph at the clip edge; we draw it whole, as dropping it hid text in tight menus.
             Native::DrawTextClipped => {
                 let text = string(args);

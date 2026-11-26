@@ -33,8 +33,6 @@ impl Ini {
         self.section(section).iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str())
     }
 
-    /// [`Ini::parse`] of a file's bytes: UTF-16 after its byte order mark (the install's `Subtitles.ini` is
-    /// big-endian), else UTF-8, with or without its mark.
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let utf16 = |unit: fn([u8; 2]) -> u16| {
             let units: Vec<u16> = bytes[2..].as_chunks::<2>().0.iter().map(|pair| unit(*pair)).collect();

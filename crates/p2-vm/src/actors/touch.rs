@@ -141,7 +141,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(!self.store.is_deleted(actor) && self.touches(actor, other))
     }
 
-    /// Overlap test as the hash query would find them (the query's own filter is unverified).
     pub(super) fn overlapping(&mut self, actor: ObjectId) -> Vec<ObjectId> {
         let at = self.store.vector(actor, Prop::Location);
         let nearby = self.colliders_near([at[0], at[1]], [at[0], at[1]], self.store.float_of(actor, Prop::CollisionRadius));

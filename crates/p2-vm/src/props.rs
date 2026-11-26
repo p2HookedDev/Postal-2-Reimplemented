@@ -90,8 +90,7 @@ properties!(
     MyType, bOnFire, QuantityPerHit,
 );
 
-/// Every property the host reads to draw an actor: its frame, its look and a restyle. A write that changes one
-/// moves the object's `drawn` stamp, and in debug builds the host's reads fail on any other property.
+/// A write that changes one moves the object's `drawn` stamp; in debug builds the host's reads of any other property fail.
 pub(crate) const DRAWN: &[Prop] = &[
     Prop::Location, Prop::Rotation, Prop::DrawScale, Prop::DrawScale3D, Prop::PrePivot, Prop::Velocity, Prop::Owner,
     Prop::Controller, Prop::bIsPlayer, Prop::TimeDilation, Prop::bDeleteMe, Prop::bHidden, Prop::bOwnerNoSee,
@@ -224,8 +223,6 @@ impl PropertyName for Prop {
     }
 }
 
-/// Valid for the class it was resolved in and its subclasses only: in another class the slot is some other
-/// property, or none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot(pub(crate) usize);
 

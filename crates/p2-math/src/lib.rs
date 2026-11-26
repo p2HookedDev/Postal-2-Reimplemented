@@ -8,7 +8,6 @@ pub use rng::Rng;
 /// Retail converts some radians to rotation units with 65535 units per turn, not 65536.
 pub const RETAIL_UNITS_PER_TURN: f32 = 65535.0;
 pub const QUARTER_TURN: i32 = 16384;
-/// Row spacing of a hexagonal grid (√3 / 2 as retail rounds it).
 pub const HEX_ROW_SPACING: f32 = 0.866_025;
 
 #[inline]
@@ -90,8 +89,6 @@ pub fn color_byte(unit: f32) -> u8 {
     (unit.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-/// An angle of a rotator in radians, taken within one turn as the engine's sine table reads it (`& 0xffff`): huge
-/// accumulated angles keep their precision.
 #[inline]
 pub fn turn(units: i32) -> f32 {
     radians(units & 0xffff)
@@ -168,8 +165,7 @@ impl Vector {
         self - normal * (2.0 * self.dot(normal))
     }
 
-    /// Pitch and yaw along the vector (roll 0), `atan2 * 65535 / 2π` in double, truncated and not wrapped,
-    /// so a yaw runs from -32767 to 32767.
+    /// `atan2 * 65535 / 2π` in double, truncated and not wrapped, as retail: yaw runs -32767 to 32767.
     #[inline]
     pub fn rotation(self) -> Rotator {
         let Self { x, y, z } = self;

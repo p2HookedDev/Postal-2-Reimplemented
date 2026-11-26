@@ -1,6 +1,3 @@
-//! Always-on diagnostics: every log event appended to `diagnostics.txt` beside the executable, and the F10 egui
-//! overlay. Release builds have no console, so this is the file a player sends.
-
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;

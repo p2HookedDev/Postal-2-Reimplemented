@@ -96,8 +96,6 @@ impl Simulation {
                 let model = self.canvas_model(actor);
                 frame.canvas_models.push((actor, model));
             }
-            // Posed as drawn (retail poses a mesh when it renders it): one no camera saw last frame (the foot before a
-            // kick) was not posed above.
             if let std::collections::hash_map::Entry::Vacant(entry) = frame.poses.entry(actor) {
                 entry.insert(self.actor_pose(actor));
                 self.posed.insert(actor);
@@ -174,8 +172,6 @@ impl Simulation {
         track(&mut self.corona_lights, new, |actor| crate::actors::is_corona(vm, actor), destroyed);
         Self::pass_switches(vm, &mut self.switches, new, frame);
         fluid_touchers(vm, &self.fluid_surfaces, &mut frame.fluid_touchers);
-        // Retail's corona line, traced by the VM's level check so static meshes count as in retail.
-        // Outside the view or in an unseen zone it fades as if blocked, with no trace.
         if let Some(view) = self.view {
             let (eye, forward) = (view.location, view.rotation.vector());
             let fov = self.player.and_then(|player| match self.vm.store.get(player, Prop::FovAngle) {

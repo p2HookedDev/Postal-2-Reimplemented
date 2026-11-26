@@ -34,8 +34,6 @@ pub struct TexelMap<'a, T> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DecoMaps<'a> {
     pub density: Option<TexelMap<'a, u8>>,
-    /// `ScaleMap` and `ColorMap` texels as stored by RGBA8 textures (B, G, R, A); the engine reads no other
-    /// format ([`crate::texture_bgra`]).
     pub scale: Option<TexelMap<'a, [u8; 4]>>,
     pub color: Option<TexelMap<'a, [u8; 4]>>,
 }
@@ -159,8 +157,6 @@ struct Placing<'a> {
     vertices: &'a [[f32; 3]],
     maps: &'a DecoMaps<'a>,
     rng: SRand,
-    /// Stand-in for the engine's random (default seed 1). Its generator is shared with the rest of the
-    /// game and never reseeded here, so `RandomYaw` angles cannot be reproduced.
     crt: Rng,
 }
 

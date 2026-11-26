@@ -1,5 +1,3 @@
-//! A mover with a static mesh pushes through obstacles; `EncroachingOn` decides what stops it.
-
 use p2_collision::mesh_box_overlaps;
 
 use p2_math::{Rotator, Vector};
@@ -14,7 +12,6 @@ const KEY_COUNT: usize = 8;
 const ROTATION_PUSH: f32 = 1.5;
 
 impl<L: LoaderRef> Vm<L> {
-    /// `KeyNum` is read once per frame. A refused move ([`Vm::move_encroacher`]) leaves `PhysAlpha` alone.
     pub(crate) fn mover_physics(&mut self, mover: ObjectId, delta: f32) -> Result<(), Error> {
         if self.store.physics_of(mover) != Some(EPhysics::MovingBrush) {
             return Ok(());

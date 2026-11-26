@@ -5,12 +5,9 @@ use crate::{Error, LoaderRef, ObjectId, PropertyName, Value, Vm};
 
 pub(crate) const MAX_STEP_HEIGHT: f32 = 35.0;
 pub(crate) const MIN_FLOOR_Z: f32 = 0.7;
-/// The floor distance (`physWalking`'s floor check, after its primitive's pull-back) a walking pawn keeps:
-/// moved down when above the band, up to its middle (2.15) when below.
 const MIN_FLOOR_DIST: f32 = 1.9;
 const MAX_FLOOR_DIST: f32 = 2.4;
 const FLOOR_CHECK: f32 = MAX_STEP_HEIGHT + 2.0;
-/// A move sweeps this many units past its end and stops this much short of a hit.
 pub(crate) const MOVE_TEST_ADJUST: f32 = 2.0;
 const MAX_STEP_SIDE_Z: f32 = 0.08;
 const MAX_SUBSTEP: f32 = 0.05;
@@ -26,7 +23,6 @@ const AIR_BURST_SPEED: f32 = 10.0;
 pub(crate) const MIN_LANDING_TIME: f32 = 0.1;
 pub(crate) const MIN_LANDING_SECONDS: f32 = 0.003;
 const FIND_BASE_DEPTH: f32 = 8.0;
-/// A `PhysicsVolume.GroundFriction` of this value leaves the pawn's own `WalkFriction` in charge.
 const DEFAULT_GROUND_FRICTION: f32 = 8.0;
 pub(crate) const DEFAULT_GRAVITY: Vector = Vector::new(0.0, 0.0, -1500.0);
 const DEFAULT_TERMINAL_VELOCITY: f32 = 2500.0;

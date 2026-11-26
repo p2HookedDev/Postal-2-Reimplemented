@@ -9,7 +9,6 @@ pub(crate) fn photo_active<L: LoaderRef>(vm: &mut Vm<L>) -> bool {
     vm.get_command(MODERN_PHOTO_ACTIVE).is_ok_and(|value| ini_truthy(&value))
 }
 
-/// The key is saved with the settings, so a crash while photo mode was open would leave it on.
 pub(crate) fn clear_photo_active<L: LoaderRef>(vm: &mut Vm<L>) {
     if photo_active(vm) {
         vm.set_command(&format!("{MODERN_PHOTO_ACTIVE} 0"));

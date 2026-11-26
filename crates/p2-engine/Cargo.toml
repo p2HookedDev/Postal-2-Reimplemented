@@ -7,8 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Developer builds only: Bevy's GPU pass timers (a few command buffers and about 0.1 ms a frame) and their lines in
-# diagnostics.txt. The game's `profile` feature turns it on.
+# Developer builds only: GPU pass timers, about 0.1 ms a frame.
 gpu-timers = []
 
 [dependencies]

@@ -4,7 +4,6 @@ const DEFAULT_WAVE_AMP: u8 = 0x80;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WaterDrop {
-    /// `WDrop`, plus the internal kinds 0x40 and 0x41 (whirlies with a negative speed).
     pub kind: u8,
     pub depth: u8,
     pub x: u8,

@@ -111,9 +111,6 @@ pub(crate) fn skin_paths(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vec<Option
     vm.store.objects_of(actor, Prop::Skins).map(|skin| skin.map(|skin| vm.store.object(skin).path.clone())).collect()
 }
 
-/// Key of what `actor`'s model is built from. Retail draws whatever the actor holds each frame, so scripts change
-/// looks live (`P2Pawn.SwapToBurnVictim`); the host rebuilds a model when its key changes ([`look_key`]).
-/// `AmbientGlow` is left out: it changes the light, not the model.
 pub fn actor_look(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u64 {
     let skins = vm.store.objects_of(actor, Prop::Skins);
     let draw_type = vm.store.byte_of(actor, Prop::DrawType);
@@ -121,8 +118,6 @@ pub fn actor_look(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> u64 {
     look_key([vm.store.object_of(actor, Prop::Mesh), vm.store.object_of(actor, Prop::StaticMesh)].into_iter().chain(skins), draw_type, unlit)
 }
 
-/// Applied to the transform as it changes: scripts grow puddles and streams every frame, so not part of
-/// [`actor_look`].
 pub fn actor_scale(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Vector {
     let draw_scale = match vm.store.get(actor, Prop::DrawScale) {
         Some(Value::Float(scale)) => scale,
@@ -251,8 +246,6 @@ pub struct SpriteActor {
     pub hidden: bool,
 }
 
-/// Hidden ones that can move are kept (scripts may show them later); static hidden ones (lights, navigation
-/// points: editor-only sprites retail hides in game through `bHidden`) are not.
 pub fn sprite_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<SpriteActor> {
     if vm.draw_type_of(actor) != Some(EDrawType::Sprite) || vm.store.is_deleted(actor) || (vm.store.flag_of(actor, Prop::bHidden) && vm.store.flag_of(actor, Prop::bStatic)) {
         return None;

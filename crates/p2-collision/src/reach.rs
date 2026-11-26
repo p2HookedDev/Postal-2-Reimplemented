@@ -1,6 +1,3 @@
-//! The zones a light could light. Walls are not looked at: rays against them never find every gap, and a zone
-//! left out is a room left dark.
-
 use p2_assets::{Model, poly_flags};
 use p2_math::Vector;
 

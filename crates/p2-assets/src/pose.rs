@@ -86,14 +86,10 @@ pub fn subtree(parents: &[usize], start: Option<usize>) -> Vec<bool> {
     inside
 }
 
-/// A channel's blend weight: `BlendAlpha`, ramped from 0 while `AnimFrame` is below the channel's
-/// `BlendInTime` (a frame still tweening in, below 0, weighs 0).
 pub fn channel_weight(alpha: f32, frame: f32, blend_in_time: f32) -> f32 {
     if blend_in_time > 0.0 && frame < blend_in_time { alpha * frame.max(0.0) / blend_in_time } else { alpha }
 }
 
-/// A channel above 0 over the base channel: local-space blending, `bGlobalPose` ignored as retail.
-/// Orientations blend the short way.
 pub fn blend_local(base: &mut [LocalBone], over: &[LocalBone], alpha: f32, bones: &[bool]) {
     let alpha = alpha.clamp(0.0, 1.0);
     for ((base, over), _) in base.iter_mut().zip(over).zip(bones).filter(|(_, inside)| **inside) {
@@ -122,8 +118,6 @@ pub fn tween_pose(from: &[LocalBone], pose: &mut [LocalBone], weight: f32) {
     }
 }
 
-/// world = R(`rotation`) · R(`rot_origin`) · (scale ⊙ (v − `origin`)) + `location` + `pre_pivot`,
-/// with `scale` = `DrawScale3D` × `DrawScale` and `mesh_scale` the mesh's `Scale`.
 pub fn mesh_to_world(
     location: Vector,
     rotation: Rotator,

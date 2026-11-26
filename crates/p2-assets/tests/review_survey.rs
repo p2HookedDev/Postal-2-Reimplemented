@@ -1,6 +1,3 @@
-//! Hand-run counts over the install, with `P2_GAME_DIR` set:
-//! `cargo test -p p2-assets --test review_survey -- --ignored --nocapture --test-threads=1`.
-
 #![expect(clippy::print_stdout, reason = "a survey prints its counts")]
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};

@@ -54,8 +54,6 @@ impl<L: LoaderRef> Vm<L> {
         instigator: Option<ObjectId>,
         mut placement: [Option<Value>; 2],
     ) -> Result<Option<ObjectId>, Error> {
-        // Before the actor is constructed, `FindSpot` may move it, else the spawn fails with no object made.
-        // A spawn without a location (the host's own) has none to fit.
         if let Some(value) = &placement[0] {
             let default_float = |vm: &Self, name: Prop| match vm.store.default_value(class, name) {
                 Some(Value::Float(value)) => value,
@@ -84,7 +82,6 @@ impl<L: LoaderRef> Vm<L> {
                 self.store.set(actor, property, value);
             }
         }
-        // Whether the hash add below comes before or after `GainedChild` is unverified.
         self.set_owner(actor, owner)?;
         self.store.set(actor, Prop::Instigator, Value::Object(instigator));
         self.relocate(actor);

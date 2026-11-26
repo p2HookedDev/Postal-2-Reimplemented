@@ -142,7 +142,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok((live_pawns, matched))
     }
 
-    /// A zoomed player (`FovAngle` other than `DefaultFOV`, names unverified) looks any distance.
     pub(crate) fn pick_target(&mut self, this: ObjectId, args: &mut [Value]) -> Option<ObjectId> {
         let best_aim = args.first().map_or(0.0, float);
         let (fire_dir, start) = (vec3(args.get(2)), vec3(args.get(3)));
@@ -156,8 +155,6 @@ impl<L: LoaderRef> Vm<L> {
         let zoomed = self.store.is_a(this, Kind::PlayerController) && self.store.float_of(this, Prop::FovAngle) != self.store.float_of(this, Prop::DefaultFOV);
         let team_game = self.level.and_then(|l| self.store.object_of(l, Prop::Game)).is_some_and(|g| self.store.flag_of(g, Prop::bTeamGame));
         let team = |vm: &Self, c: ObjectId| vm.store.object_of(c, Prop::PlayerReplicationInfo).map(|pri| vm.store.object_of(pri, Prop::Team));
-        // The engine traces each candidate in turn; tracing best aim first and stopping at the first visible one gives
-        // the same result without tracing every pawn ahead for each of a shotgun's 12 pellets.
         let mut strong: Vec<(ObjectId, f32, f32)> = Vec::new();
         let mut weak: Vec<(ObjectId, f32)> = Vec::new();
         let mut next = self.level.and_then(|l| self.store.object_of(l, Prop::ControllerList));

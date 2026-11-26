@@ -38,9 +38,6 @@ pub struct Function {
     pub(crate) fast: Option<crate::native_id::Native>,
     pub(crate) native_id: Option<crate::native_id::Native>,
     pub(crate) hook: Option<crate::script_hooks::ScriptHook>,
-    /// What each `Expr::Linked` reference of `statements` resolved to, filled on its first run ([`UNLINKED`] until
-    /// then): a local's slot, a member index, a `NameId`, or a packed `member_link`, `site_key` or `cast_link`. Links
-    /// name this VM's classes and function table: a `Function` belongs to the VM that decoded it.
     pub(crate) links: Box<[AtomicU64]>,
     pub(crate) index: u32,
     pub(crate) labels: FxHashMap<NameId, u32>,
@@ -183,7 +180,6 @@ impl Place {
 
 enum Target {
     Place(Place),
-    /// A variable of None ("Accessed None") or out of bounds: reads give zero, writes are dropped.
     Nowhere,
     Constant(Value),
 }
@@ -199,8 +195,7 @@ fn block<'m>(mut mem: &'m Mem, place: &Place) -> Option<&'m Mem> {
     Some(mem)
 }
 
-/// `None`: out of bounds, the write is dropped. Only `A[i] = x` grows the last dynamic array.
-/// `A[i].m = x` out of range is logged and lost: `DoorMover.FitTheEffect` relies on it.
+/// Only `A[i] = x` grows the last dynamic array; `A[i].m = x` out of range is lost, which `DoorMover.FitTheEffect` relies on.
 fn block_mut<'m>(memory: &MemLayouts, mut mem: &'m mut Mem, place: &Place) -> Option<&'m mut Mem> {
     let last = place.depth as usize;
     for (n, hop) in place.hops[..last].iter().enumerate() {
@@ -301,7 +296,6 @@ fn is_zero(value: &Value) -> bool {
     }
 }
 
-/// The typeless zero `Value::Int(0)` from an "Accessed None" equals the zero of the other side's type.
 fn same_value(left: &Value, right: &Value) -> bool {
     let typeless = Value::Int(0);
     left == right || (*left == typeless && is_zero(right)) || (*right == typeless && is_zero(left))

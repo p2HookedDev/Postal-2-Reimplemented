@@ -19,7 +19,6 @@ pub enum LightType {
 }
 
 impl LightType {
-    /// A byte past the script's list gives no light.
     pub fn from_byte(byte: u8) -> Self {
         match byte {
             1 => Self::Steady,
@@ -63,7 +62,6 @@ pub enum LightEffect {
 }
 
 impl LightEffect {
-    /// A byte past the script's list is no effect.
     pub fn from_byte(byte: u8) -> Self {
         match byte {
             1 => Self::TorchWaver,
@@ -171,8 +169,6 @@ fn pulse_angle(time: f32, divisor: i32, phase: u8) -> i32 {
     truncate(time * 35.0 * 65536.0 / divisor as f32 + (i32::from(phase) << 8) as f32)
 }
 
-/// Only the colour scales, never the radius. Flicker `rand` is one draw per set-up; strobe is 0 while
-/// retail's shared toggle is set. Texture palette light types are not modelled: left steady.
 pub fn light_type_scale(light_type: LightType, period: u8, phase: u8, time: f32, rand: f32, strobe: bool) -> f32 {
     let pulse = |amplitude: f32, base: f32| {
         let s = f64::from(sin_tab(pulse_angle(time, i32::from(period.max(1)), phase)));
@@ -209,8 +205,6 @@ impl Default for LightClock {
 }
 
 impl LightClock {
-    /// `light` at `time` with its [`light_type_scale`] in [`MeshLight::intensity`]. Retail sets a light up for each
-    /// thing it lights each frame (a flicker light draws a new random number each time); here once per frame.
     pub fn animate(&mut self, light: MeshLight, time: f32) -> MeshLight {
         let rand = if light.light_type == LightType::Flicker { self.rng.frand() } else { 0.0 };
         if light.light_type == LightType::Strobe && self.strobe_time != time {
@@ -352,8 +346,7 @@ pub enum HardwareKind {
     Directional,
 }
 
-/// A light as the D3D driver sets it up at `Modulate2X`: engine colour scaled ½ (point), 0.1 (spot) or
-/// 0.875 (directional); point attenuation 1 / (a₀ + a₁·d) fitted to the engine's falloff.
+/// As the D3D driver sets it up at `Modulate2X`: colour scaled ½ (point), 0.1 (spot) or 0.875 (directional).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HardwareLight {
     pub kind: HardwareKind,
@@ -435,8 +428,6 @@ impl HardwareLight {
     }
 }
 
-/// Whether the engine recomputes the saved colours before drawing: a light whose "missing or dynamic"
-/// state equals its `applied` flag. `lights` matches `instance.lights`; `None` = light actor gone.
 pub fn needs_relight(instance: &StaticMeshInstance, lights: &[Option<MeshLight>]) -> bool {
     instance.lights.iter().zip(lights).any(|(info, light)| light.is_none_or(|l| l.dynamic) == info.applied)
 }
@@ -476,8 +467,6 @@ pub fn static_mesh_lighting(
     colors
 }
 
-/// Zone ambient plus `AmbientGlow` / 255 on each channel. Glow 255 pulses (0.25 + 0.2 · sin(8t));
-/// this gives its mean.
 pub fn actor_ambient(zone: [f32; 3], glow: u8) -> [f32; 3] {
     let glow = if glow == 255 { 0.25 } else { f32::from(glow) / 255.0 };
     zone.map(|c| c + glow)

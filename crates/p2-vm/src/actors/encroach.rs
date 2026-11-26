@@ -4,8 +4,6 @@ use crate::{Error, Kind, ObjectId, LoaderRef, Prop, Value, Vm};
 use super::{Encroachment, cylinders_meet, encroachment_tested, far_move_tests};
 
 impl<L: LoaderRef> Vm<L> {
-    /// With the touch notify on. Only the query and overlap test run at `at`: events see `actor` where it stands,
-    /// as in retail, which places it afterwards. An encroacher's push is zero here, moving nothing.
     pub(super) fn actor_encroachment(&mut self, actor: ObjectId, at: Vector) -> Result<bool, Error> {
         let encroacher = self.is_encroacher(actor);
         let tested = encroachment_tested([
@@ -100,8 +98,6 @@ impl<L: LoaderRef> Vm<L> {
         )
     }
 
-    /// `Encroachment::Ignored` is retail's `bIgnoreEncroachment`. No kill here: `EncroachedBy` and `EncroachingOn`
-    /// belong to script (`Pawn`: the telefrag, and `bWarping` refusing it).
     pub(crate) fn far_move_actor(&mut self, actor: ObjectId, location: Vector, encroachment: Encroachment) -> Result<bool, Error> {
         if self.store.flag_of(actor, Prop::bStatic) || !self.store.flag_of(actor, Prop::bMovable) {
             return Ok(false);
@@ -124,8 +120,6 @@ impl<L: LoaderRef> Vm<L> {
         Ok(true)
     }
 
-    /// `bJustTeleported` makes a warp zone's `ActorEntered` skip the actor, so one warped into the other side's zone
-    /// is not sent back. `Attached` actors move on their own, result ignored; not turned.
     pub fn place_far_moved(&mut self, actor: ObjectId, location: Vector, encroachment: Encroachment) -> Result<(), Error> {
         self.store.set(actor, Prop::bJustTeleported, Value::Bool(true));
         let from = self.store.vector(actor, Prop::Location);

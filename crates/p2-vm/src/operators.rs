@@ -166,7 +166,6 @@ fn assignment(native: Native, args: &mut [Value]) -> Option<Value> {
     let byte = |v: &Value| int(v) as u8;
     let (v, r) = (|v: &Value| vec3(Some(v)), |v: &Value| rot3(Some(v)));
     let result = match native {
-        // Bytes wrap like C `BYTE`s; `/=` by 0 gives 0.
         Native::AddEqual_ByteByte => Value::Byte(byte(left).wrapping_add(byte(right))),
         Native::SubtractEqual_ByteByte => Value::Byte(byte(left).wrapping_sub(byte(right))),
         Native::MultiplyEqual_ByteByte => Value::Byte(byte(left).wrapping_mul(byte(right))),

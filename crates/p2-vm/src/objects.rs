@@ -55,8 +55,6 @@ impl<L: LoaderRef> Vm<L> {
         id
     }
 
-    /// Copies a template, as retail makes an instanced subobject; `template` itself for a stub,
-    /// which has no class to make one of.
     pub(crate) fn duplicate_object(&mut self, template: ObjectId) -> ObjectId {
         let Some(class) = self.store.object(template).class else { return template };
         let copy = self.new_object(class, None);
@@ -91,9 +89,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// The key of the object at `path` of class `class_name` in the object table: its lower-case path, unless another
-    /// object of a different class already holds that path and the package has exports of both classes under it
-    /// (`ED_Weapons.ED_MP5_NEW` is a `SkeletalMesh` and a `MeshAnimation`); then the class is part of the key.
     pub(crate) fn object_key(&self, path: &str, class_name: &str) -> String {
         let key = path.to_ascii_lowercase();
         let Some(&existing) = self.store.object_ids.get(&key) else { return key };
@@ -145,8 +140,6 @@ impl<L: LoaderRef> Vm<L> {
         }
     }
 
-    /// Assets stay stubs until a script uses them. A failed load leaves the stub (calls return zero, property reads
-    /// read zero).
     pub(crate) fn load_stub(&mut self, object: ObjectId) {
         if self.store.object(object).class.is_none()
             && let Some((package, export)) = self.export_of(object)
