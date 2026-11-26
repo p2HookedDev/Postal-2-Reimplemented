@@ -8,10 +8,10 @@ use bevy::mesh::Mesh;
 use bevy::time::{Real, Time};
 use p2_host::frame_times::{MESH_WRITERS, MESH_WRITES};
 
-use crate::actor_light::ActorLitMaterial;
-use crate::blended::TerrainLayerMaterial;
-use crate::mesh_light::MeshLitMaterial;
-use crate::terrain_material::TerrainMaterial;
+use crate::lighting::actor_light::ActorLitMaterial;
+use crate::world::blended::TerrainLayerMaterial;
+use crate::world::mesh_light::MeshLitMaterial;
+use crate::world::terrain_material::TerrainMaterial;
 
 pub struct AssetChurnPlugin;
 

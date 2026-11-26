@@ -14,9 +14,9 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::transform::components::Transform;
 use bevy::window::{PrimaryWindow, Window};
 use p2_bevy_assets::to_bevy;
-use p2_host::display::Settings;
-use p2_render::debug_view::DebugView;
-use p2_render::view::{SceneView, ShownScene};
+use p2_host::settings::Settings;
+use p2_render::post::debug_view::DebugView;
+use p2_render::world::view::{SceneView, ShownScene};
 
 use super::stage_timing::settings_line;
 use super::{DiagnosticsLog, Overlay, file_path, state_kind};

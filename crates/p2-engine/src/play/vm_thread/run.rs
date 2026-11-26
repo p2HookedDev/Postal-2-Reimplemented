@@ -124,7 +124,7 @@ impl Simulation {
         }
         self.recent_read = recent;
         frame.times.push(("vm read poses", started.elapsed()));
-        self.vm.set_video_modes(p2_host::display::video_modes());
+        self.vm.set_video_modes(p2_host::window::video_modes());
         if let Some([x, y]) = job.cursor {
             self.vm.set_mouse_position(x, y);
         }

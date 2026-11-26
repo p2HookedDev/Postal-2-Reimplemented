@@ -10,7 +10,7 @@ repository.workspace = true
 # Developer builds only: Tracy profiler spans.
 tracy = ["bevy/trace_tracy"]
 # Developer builds only: time per Bevy system in diagnostics.txt.
-profile = ["bevy/trace", "p2-engine/gpu-timers"]
+profile = ["bevy/trace", "p2-engine/profile"]
 
 [dependencies]
 anyhow.workspace = true

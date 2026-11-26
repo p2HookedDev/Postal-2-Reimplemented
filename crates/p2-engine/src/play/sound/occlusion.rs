@@ -3,7 +3,7 @@
 
 use bevy::ecs::prelude::{Component, Resource};
 use p2_math::Vector;
-use p2_render::level_collision::StaticCollision;
+use p2_render::world::level_collision::StaticCollision;
 use p2_vm::ESoundOcclusion;
 
 const HIDDEN_SHARE: f32 = 0.35;

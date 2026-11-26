@@ -38,10 +38,10 @@ use crate::actors::{
     BoneAttachment, EmitterActor, MeshActor, ProjectorActor, SkeletalActor, actor_look, actor_scale, bone_attachment, emitter_actor,
     emitter_properties, emitters_disabled, location_rotation, mesh_actor, object_path, projector_actor, skeletal_actor, skin_paths,
 };
-use p2_render::components::FollowBone;
-use p2_render::canvas::{Overlay, OverlayTitle};
-use p2_render::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
-use p2_render::view::{MoversSeen, ShadowOnly};
+use p2_render::world::components::FollowBone;
+use p2_render::hud::canvas::{Overlay, OverlayTitle};
+use p2_render::world::components::{ActorModel, CanvasDrawn, FollowActor, OverlayLook, SceneView};
+use p2_render::world::view::{MoversSeen, ShadowOnly};
 use p2_host::frame_times::{FrameTimes, VmProfile, end_frame};
 
 pub(crate) mod photo;
@@ -514,8 +514,8 @@ fn follow_actors(
     times.add("follow actors", started);
 }
 
-fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&p2_render::actor_light::ActorLit, &mut p2_render::actor_light::ActorFrame)>) {
-    use p2_render::actor_light::{ActorFrame, ActorPlace};
+fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&p2_render::lighting::actor_light::ActorLit, &mut p2_render::lighting::actor_light::ActorFrame)>) {
+    use p2_render::lighting::actor_light::{ActorFrame, ActorPlace};
     let world = play.world();
     for (lit, mut frame) in &mut lit {
         let actor = world.and_then(|world| world.actor(lit.actor));
@@ -527,11 +527,11 @@ fn publish_actor_frames(play: Res<Play>, mut lit: Query<(&p2_render::actor_light
     }
 }
 
-fn publish_frame_lights(play: Res<Play>, frame: ResMut<p2_render::bsp_light::FrameLights>) {
-    p2_render::bsp_light::FrameLights::publish(frame, play.world().map_or(&[][..], |world| world.dynamic_lights()));
+fn publish_frame_lights(play: Res<Play>, frame: ResMut<p2_render::lighting::bsp_light::FrameLights>) {
+    p2_render::lighting::bsp_light::FrameLights::publish(frame, play.world().map_or(&[][..], |world| world.dynamic_lights()));
 }
 
-fn publish_frame_facts(play: Res<Play>, facts: ResMut<p2_render::frame_facts::FrameFacts>, mut culls: Local<FxHashMap<ObjectId, f32>>) {
+fn publish_frame_facts(play: Res<Play>, facts: ResMut<p2_render::world::frame_facts::FrameFacts>, mut culls: Local<FxHashMap<ObjectId, f32>>) {
     let Some(world) = play.world() else {
         if !facts.paused {
             let facts = facts.into_inner();
@@ -566,9 +566,9 @@ fn publish_frame_facts(play: Res<Play>, facts: ResMut<p2_render::frame_facts::Fr
     facts.volume_fog = world.volume_fog();
 }
 
-fn publish_zone_fogs(mut play: ResMut<Play>, mut fogs: MessageWriter<p2_render::scene::ZoneFogs>) {
+fn publish_zone_fogs(mut play: ResMut<Play>, mut fogs: MessageWriter<p2_render::world::scene::ZoneFogs>) {
     if let Some(changed) = play.world_mut().and_then(PlayWorld::take_zone_fogs) {
-        fogs.write(p2_render::scene::ZoneFogs(changed));
+        fogs.write(p2_render::world::scene::ZoneFogs(changed));
     }
 }
 

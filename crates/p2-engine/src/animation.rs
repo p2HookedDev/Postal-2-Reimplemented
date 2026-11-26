@@ -1,4 +1,4 @@
-use p2_render::components::FollowBone;
+use p2_render::world::components::FollowBone;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -22,8 +22,8 @@ use p2_bevy_assets::{bone_matrices, scaled_bone_matrices_into, unreal_mesh_matri
 use p2_vm::ObjectId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use p2_render::view::FollowActor;
-use p2_render::scene::SkinJoint;
+use p2_render::world::view::FollowActor;
+use p2_render::world::scene::SkinJoint;
 use p2_host::frame_times::FrameTimes;
 use crate::play::{ActorPose, ChannelPose, Play, PlayWorld};
 use attachments::{follow_bones, place_attached};

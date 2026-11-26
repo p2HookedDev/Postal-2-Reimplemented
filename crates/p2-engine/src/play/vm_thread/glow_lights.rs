@@ -1,5 +1,5 @@
 use super::*;
-use p2_render::frame_facts::{Glow, GlowSource, ScriptLight};
+use p2_render::world::frame_facts::{Glow, GlowSource, ScriptLight};
 
 pub(in crate::play) fn glows(vm: &Vm<Arc<Loader>>, actor: ObjectId) -> bool {
     [Kind::FireEmitter, Kind::XMuzzleFlashEmitter, Kind::MuzzleFlashAttachment].into_iter().any(|kind| vm.store.is_a(actor, kind))

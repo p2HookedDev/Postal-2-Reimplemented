@@ -7,7 +7,7 @@ use p2_package::TagValue;
 
 use super::*;
 use super::projectors::{ALPHA_TEST_TAG, PROJECTOR_TAG, TAGGED_TAG};
-use p2_render::actor_light::mesh_sphere;
+use p2_render::lighting::actor_light::mesh_sphere;
 
 fn mesh_placement(loader: &Loader, actor: &MeshActor) -> ((PackageId, i32), MeshPlacement) {
     let mesh = (loader.id_of(actor.mesh_package).unwrap(), actor.static_mesh);

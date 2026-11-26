@@ -5,9 +5,9 @@ use p2_math::{Rotator, Vector};
 use p2_render_cpu::{MeshLight, MeshPlacement, hsv_color};
 use rustc_hash::FxHashMap;
 
-use p2_render::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
-use p2_render::particle_frame::LiquidRole;
-use p2_render::scene::ZoneFog;
+use p2_render::lighting::actor_light::{ActorLighting, DEFAULT_MAX_LIGHTS};
+use p2_render::effects::particle_frame::LiquidRole;
+use p2_render::world::scene::ZoneFog;
 use p2_particles::{EmitterKind, EmitterProperties, EmitterSettings, PropertyValue};
 use p2_vm::{ERenderStyle, Kind, LoaderRef, ObjectId, Prop, Value, Vm};
 

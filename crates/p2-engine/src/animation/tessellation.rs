@@ -4,8 +4,8 @@ use bevy::ecs::prelude::{Local, Res, ResMut};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::mesh::Mesh;
-use p2_host::display::{MODERN_TESSELLATION, Settings};
-use p2_render::level::skeletal_draw_meshes;
+use p2_host::settings::{MODERN_TESSELLATION, Settings};
+use p2_render::world::level::skeletal_draw_meshes;
 
 use super::Animated;
 

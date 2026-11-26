@@ -31,26 +31,26 @@ use bevy::transform::components::Transform;
 use p2_math::Vector;
 use p2_render_cpu::MeshLight;
 
-use crate::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow, UNSEEN_LAYER};
-use p2_host::display::{
+use crate::world::components::{CASTER_LAYER, CanvasDrawn, FollowActor, FollowBone, MOVER_LAYER, OVERLAY_LAYERS, RESTING_PROP_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView, SunShadow, UNSEEN_LAYER};
+use p2_host::settings::{
     MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_LAMP_SHADOWS, MODERN_LAMP_SIZE, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
     MODERN_SHARPEN, MODERN_SPECULAR, MODERN_TEMPORAL_AA, Settings,
 };
-use crate::material_class::level_bits;
-use crate::level_collision::LevelCollision;
-use crate::view::{NoSunCast, OverlayCamera};
-use crate::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step};
-use crate::blended::{OpaqueDecals, TerrainLayerMaterial};
-use crate::lightmapped::{BakedLight, LightmappedMaterial};
-use crate::map_lights::{MapLights, follow_map_lights};
-use crate::modern_bloom::ModernBloom;
+use crate::world::material_class::level_bits;
+use crate::world::level_collision::LevelCollision;
+use crate::world::view::{NoSunCast, OverlayCamera};
+use crate::lighting::actor_light::{ActorLitMaterial, HardwareLighting, SunSet, settle_step};
+use crate::world::blended::{OpaqueDecals, TerrainLayerMaterial};
+use crate::world::lightmapped::{BakedLight, LightmappedMaterial};
+use crate::lighting::map_lights::{MapLights, follow_map_lights};
+use crate::post::modern_bloom::ModernBloom;
 use bevy::render::render_resource::BlendState;
-use crate::mesh_light::{DynamicLit, MeshLitMaterial};
-use crate::particle_material::ParticleMaterial;
-use crate::sun_cache::{SunCachePlugin, SunCacheStale, follow_sun};
-use crate::terrain_material::TerrainMaterial;
-use crate::world_pass::WorldCasts;
-use crate::view::ShownScene;
+use crate::world::mesh_light::{DynamicLit, MeshLitMaterial};
+use crate::effects::particle_material::ParticleMaterial;
+use crate::shadows::sun_cache::{SunCachePlugin, SunCacheStale, follow_sun};
+use crate::world::terrain_material::TerrainMaterial;
+use crate::world::world_pass::WorldCasts;
+use crate::world::view::ShownScene;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ModernGraphicsSystems {
@@ -61,19 +61,19 @@ pub struct ModernGraphicsPlugin;
 
 impl Plugin for ModernGraphicsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<crate::debug_view::DebugView>();
-        app.add_plugins(crate::lamps::LampsPlugin);
-        app.add_plugins(crate::probes::ProbesPlugin);
+        app.init_resource::<crate::post::debug_view::DebugView>();
+        app.add_plugins(crate::lighting::lamps::LampsPlugin);
+        app.add_plugins(crate::lighting::probes::ProbesPlugin);
         app.add_plugins(SunCachePlugin);
         // With the overlay light below: an overlay that sees a shadowed sun needs its cascades shared, or Bevy panics.
-        app.add_plugins(crate::overlay_sun::OverlaySunPlugin);
-        app.add_systems(Update, crate::lamps::set_load_light_levels.run_if(resource_exists_and_changed::<Settings>));
+        app.add_plugins(crate::hud::overlay_sun::OverlaySunPlugin);
+        app.add_systems(Update, crate::lighting::lamps::set_load_light_levels.run_if(resource_exists_and_changed::<Settings>));
         app.add_systems(
             Update,
             (
                 apply.run_if(resource_changed::<Settings>),
                 (follow_map_lights, sun_shadows, follow_sun).chain(),
-                view_ambient.after(crate::probes::follow_probes),
+                view_ambient.after(crate::lighting::probes::follow_probes),
                 (watch_props, sun_casters).chain(),
                 overlay_light.after(apply).after(sun_shadows).after(view_ambient),
             )
@@ -121,8 +121,8 @@ pub const NO_GLOSS: u8 = 4;
 pub const POOL_MIRROR: u16 = 1 << 11;
 
 fn mirror_bit(settings: &Settings) -> u16 {
-    use p2_host::display::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
-    let pass = crate::reflections::look(settings.modern_level(MODERN_REFLECTIONS), settings.modern_level(MODERN_REFLECTION_STRENGTH), 0);
+    use p2_host::settings::{MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
+    let pass = crate::post::reflections::look(settings.modern_level(MODERN_REFLECTIONS), settings.modern_level(MODERN_REFLECTION_STRENGTH), 0);
     if pass.is_some() { POOL_MIRROR } else { 0 }
 }
 
@@ -130,8 +130,8 @@ pub(crate) fn pool_mirror_on(flag: u32) -> bool {
     flag & u32::from(POOL_MIRROR) != 0
 }
 
-pub(crate) fn light_source(flag: u32) -> crate::shaders::LightSource {
-    if flag & u32::from(MODERN_ON) != 0 { crate::shaders::LightSource::Modern } else { crate::shaders::LightSource::Retail }
+pub(crate) fn light_source(flag: u32) -> crate::gpu::shaders::LightSource {
+    if flag & u32::from(MODERN_ON) != 0 { crate::gpu::shaders::LightSource::Modern } else { crate::gpu::shaders::LightSource::Retail }
 }
 
 pub fn modern_flag(settings: &Settings) -> u8 {
@@ -178,7 +178,7 @@ impl ModernFlagged for TerrainMaterial {
 
 fn follow_flag<M: ModernFlagged>(
     settings: Res<Settings>,
-    debug_view: Res<crate::debug_view::DebugView>,
+    debug_view: Res<crate::post::debug_view::DebugView>,
     events: Option<Res<Messages<AssetEvent<M>>>>,
     mut cursor: Local<MessageCursor<AssetEvent<M>>>,
     mut known: Local<usize>,
@@ -261,7 +261,7 @@ pub fn apply(
         } else {
             camera.remove::<ContactShadows>();
         }
-        let screen_reflections = settings.modern_level(p2_host::display::MODERN_REFLECTIONS) > 0 || settings.modern_level(p2_host::display::MODERN_BOUNCE_LIGHT) > 0;
+        let screen_reflections = settings.modern_level(p2_host::settings::MODERN_REFLECTIONS) > 0 || settings.modern_level(p2_host::settings::MODERN_BOUNCE_LIGHT) > 0;
         if screen_reflections {
             camera.insert((DepthPrepass, NormalPrepass));
         }
@@ -272,8 +272,8 @@ pub fn apply(
         } else {
             camera.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
         }
-        let fire_volumes = settings.modern_level(p2_host::display::MODERN_FIRE_VOLUMES) > 0;
-        let lamp_fog = settings.modern_level(p2_host::display::MODERN_VOLUMETRIC_FOG) > 0;
+        let fire_volumes = settings.modern_level(p2_host::settings::MODERN_FIRE_VOLUMES) > 0;
+        let lamp_fog = settings.modern_level(p2_host::settings::MODERN_VOLUMETRIC_FOG) > 0;
         if fire_volumes || lamp_fog {
             camera.insert(DepthPrepass);
         }
@@ -567,7 +567,7 @@ pub fn view_ambient(
     settings: Res<Settings>,
     shown: Option<Res<ShownScene>>,
     level: Res<LevelCollision>,
-    probes: Option<Res<crate::probes::ProbeAtlas>>,
+    probes: Option<Res<crate::lighting::probes::ProbeAtlas>>,
     mut cameras: Query<(&SceneView, &mut AmbientLight)>,
 ) {
     let environment = shown.as_deref().and_then(|shown| Some((shown, shown.lighting.as_deref()?))).filter(|_| settings.modern_graphics());

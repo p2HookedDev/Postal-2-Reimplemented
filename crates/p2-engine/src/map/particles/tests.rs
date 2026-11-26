@@ -159,9 +159,9 @@ fn sprite_emitter_app() -> bevy::app::App {
     let look = EmitterLook { parent, order: 0, image: Handle::default(), props: props.clone(), name: String::new(), fogless: false };
     let simulation = Emitter::new(EmitterSettings::default(), vec![props], 1);
     app.insert_resource(Particles { actors: vec![particle_actor(actor, parent, simulation, vec![draw])], born: vec![look], ..Particles::default() });
-    p2_render::particle_draw::init_drawing_resources(&mut app);
-    app.insert_resource(p2_render::frame_facts::FrameFacts { in_play: true, ..Default::default() });
-    app.add_systems(Update, (present_particles, p2_render::particle_draw::draw_particles).chain());
+    p2_render::effects::particle_draw::init_drawing_resources(&mut app);
+    app.insert_resource(p2_render::world::frame_facts::FrameFacts { in_play: true, ..Default::default() });
+    app.add_systems(Update, (present_particles, p2_render::effects::particle_draw::draw_particles).chain());
     app
 }
 
@@ -177,7 +177,7 @@ fn a_fixed_emitters_sprite_records_keep_their_words() {
     let mut key = rustc_hash::FxHasher::default();
     for _ in 0..5 {
         step_frame(&mut app);
-        let records = &app.world().resource::<p2_render::particle_draw::ParticleDraws>().records;
+        let records = &app.world().resource::<p2_render::effects::particle_draw::ParticleDraws>().records;
         assert_eq!(records.len(), 5, "a header and four sprites");
         records.hash(&mut key);
     }
@@ -185,10 +185,10 @@ fn a_fixed_emitters_sprite_records_keep_their_words() {
 }
 
 fn lit_sprite_emitter_app() -> bevy::app::App {
-    use p2_render::actor_light::LightEnvironment;
+    use p2_render::lighting::actor_light::LightEnvironment;
     use p2_render_cpu::MeshLight;
     let mut app = sprite_emitter_app();
-    app.insert_resource(p2_host::display::Settings::read(|query| if query == p2_host::display::MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
+    app.insert_resource(p2_host::settings::Settings::read(|query| if query == p2_host::settings::MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
     let lighting = LightEnvironment {
         lights: FxHashMap::default(),
         zone_ambients: vec![[0.1, 0.2, 0.3]],
@@ -198,9 +198,9 @@ fn lit_sprite_emitter_app() -> bevy::app::App {
         zone_suns: Vec::new(),
         terrain: Vec::new(),
     };
-    app.insert_resource(p2_render::view::ShownScene { lighting: Some(Arc::new(lighting)), ..Default::default() });
+    app.insert_resource(p2_render::world::view::ShownScene { lighting: Some(Arc::new(lighting)), ..Default::default() });
     let glow = MeshLight { location: [0.0, 0.0, 40.0].into(), radius: 3.0, brightness: 255.0, saturation: 255, dynamic: true, ..MeshLight::default() };
-    let publish = move |frame: ResMut<p2_render::bsp_light::FrameLights>| p2_render::bsp_light::FrameLights::publish(frame, &[glow]);
+    let publish = move |frame: ResMut<p2_render::lighting::bsp_light::FrameLights>| p2_render::lighting::bsp_light::FrameLights::publish(frame, &[glow]);
     bevy::ecs::system::RunSystemOnce::run_system_once(app.world_mut(), publish).expect("lights published");
     app
 }
@@ -212,7 +212,7 @@ fn a_fixed_emitters_lit_sprite_records_keep_their_words() {
     let mut key = rustc_hash::FxHasher::default();
     for _ in 0..5 {
         step_frame(&mut app);
-        let records = &app.world().resource::<p2_render::particle_draw::ParticleDraws>().records;
+        let records = &app.world().resource::<p2_render::effects::particle_draw::ParticleDraws>().records;
         assert_eq!(records.len(), 5, "a header and four sprites");
         assert_ne!(records[0][0..3], [0; 3], "lit");
         assert_ne!(records[0][4..7], [0; 3], "a script light's share");

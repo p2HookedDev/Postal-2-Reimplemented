@@ -143,7 +143,7 @@ fn options(extra: &[&str], entry: &[&str]) -> CompileOptions {
 
 #[test]
 fn the_suns_soft_edge_keeps_its_accepted_width() {
-    assert!(include_str!("../src/sun_shadow.wesl").contains("const SOFT_EDGE_UNITS: f32 = 1.5;"));
+    assert!(include_str!("../../../assets/shaders/sun_shadow.wesl").contains("const SOFT_EDGE_UNITS: f32 = 1.5;"));
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn engine_shaders_compose_and_validate() {
         eprintln!("skipped: bevy_pbr-{BEVY} not in the cargo registry");
         return;
     };
-    let sources = Sources { registry, ours: Path::new(env!("CARGO_MANIFEST_DIR")).join("src") };
+    let sources = Sources { registry, ours: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders") };
     let feature_sets: [&[&str]; 9] = [
         &[],
         &["BINDLESS"],

@@ -9,7 +9,7 @@ use bevy::light::{DirectionalLight, NotShadowCaster, SpotLight};
 use bevy::mesh::Mesh3d;
 use bevy::transform::components::GlobalTransform;
 
-use crate::components::{FollowActor, FollowBone, MOVER_LAYER, SUN_VIEW_LAYER, SunShadow};
+use crate::world::components::{FollowActor, FollowBone, MOVER_LAYER, SUN_VIEW_LAYER, SunShadow};
 
 type Caster = (
     Entity,
@@ -94,7 +94,7 @@ fn cast_into<F: QueryFilter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{CASTER_LAYER, STATIC_CASTER_LAYER};
+    use crate::world::components::{CASTER_LAYER, STATIC_CASTER_LAYER};
     use bevy::camera::{PerspectiveProjection, Projection};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::world::World;

@@ -18,13 +18,13 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::math::Vec4;
-use p2_render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
-use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
+use p2_render::lighting::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
+use p2_render::world::mesh_light::{DynamicLit, MeshLitMaterial};
 use bevy::light::AmbientLight;
-use p2_render::view::{CASTER_LAYER, MOVER_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView};
-use p2_render::sun_cache::{CachedSunLevel, SunCachePlugin, SunCacheStale};
+use p2_render::world::view::{CASTER_LAYER, MOVER_LAYER, STATIC_CASTER_LAYER, SUN_VIEW_LAYER, SceneView};
+use p2_render::shadows::sun_cache::{CachedSunLevel, SunCachePlugin, SunCacheStale};
 use p2_render::modern::StillProp;
-use p2_render::world_pass::{WorldCamera, WorldPassPlugin};
+use p2_render::world::world_pass::{WorldCamera, WorldPassPlugin};
 
 const SUN_LESS: f32 = 0.3;
 const SUN_TERM: f32 = 0.2;
@@ -53,7 +53,7 @@ fn ground_with_flag(flag: f32, ground_kind: Ground) -> (u8, u8) {
     let seen = RenderLayers::from_layers(&[0, SUN_VIEW_LAYER]);
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins((p2_render::mesh_light::MeshLightPlugin, p2_render::actor_light::ActorLightPlugin));
+    app.add_plugins((p2_render::world::mesh_light::MeshLightPlugin, p2_render::lighting::actor_light::ActorLightPlugin));
     app.finish();
     app.cleanup();
     let world = app.world_mut();
@@ -203,7 +203,7 @@ fn a_cached_sun_level_keeps_its_shadow_until_it_redraws() {
     let seen = RenderLayers::from_layers(&[0, SUN_VIEW_LAYER]);
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins((p2_render::mesh_light::MeshLightPlugin, p2_render::actor_light::ActorLightPlugin, SunCachePlugin, WorldPassPlugin));
+    app.add_plugins((p2_render::world::mesh_light::MeshLightPlugin, p2_render::lighting::actor_light::ActorLightPlugin, SunCachePlugin, WorldPassPlugin));
     app.finish();
     app.cleanup();
     let world = app.world_mut();

@@ -76,7 +76,7 @@ impl Simulation {
         frame.volume_fog = self.volume_fog();
     }
 
-    fn volume_fog(&self) -> Option<p2_render::scene::ZoneFog> {
+    fn volume_fog(&self) -> Option<p2_render::world::scene::ZoneFog> {
         let vm = &self.vm;
         let target = self.view?.actor?;
         let volume = vm.store.object_of(target, if vm.store.is_a(target, Kind::Pawn) { Prop::HeadVolume } else { Prop::PhysicsVolume })?;
@@ -243,11 +243,11 @@ impl Simulation {
     fn read_settings(&mut self, frame: &mut VmFrame) {
         let changed = self.vm.take_changed_settings();
         if let Some(settings) = &changed {
-            p2_host::display::save_settings(settings);
+            p2_host::settings::save_settings(settings);
         }
         if changed.is_some() || !std::mem::replace(&mut self.settings_sent, true) {
             let vm = &mut self.vm;
-            frame.settings = Some(p2_host::display::Settings::read(|query| vm.get_command(query).unwrap_or_default()));
+            frame.settings = Some(p2_host::settings::Settings::read(|query| vm.get_command(query).unwrap_or_default()));
         }
     }
 }

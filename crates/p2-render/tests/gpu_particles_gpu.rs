@@ -21,17 +21,17 @@ use bevy::render::RenderApp;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-use p2_host::display::{MODERN_GPU_PARTICLES, MODERN_GRAPHICS, Settings};
+use p2_host::settings::{MODERN_GPU_PARTICLES, MODERN_GRAPHICS, Settings};
 use p2_collision::{BspHulls, MeshCollision, MeshSet};
 use p2_math::{Rotator, Vector};
 use p2_particles::{DrawStyle, EmitterProperties, SpriteParticle};
 use p2_render::MainPassExtraSystems;
-use p2_render::frame_facts::FrameFacts;
-use p2_render::debris::DebrisPlugin;
-use p2_render::gpu_particles::GpuParticlesPlugin;
-use p2_render::level_collision::{LevelAlbedos, LevelCollision, StaticCollision};
-use p2_render::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook};
-use p2_render::view::SceneView;
+use p2_render::world::frame_facts::FrameFacts;
+use p2_render::effects::debris::DebrisPlugin;
+use p2_render::effects::gpu_particles::GpuParticlesPlugin;
+use p2_render::world::level_collision::{LevelAlbedos, LevelCollision, StaticCollision};
+use p2_render::effects::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook};
+use p2_render::world::view::SceneView;
 
 const SIZE: u32 = 128;
 

@@ -19,9 +19,9 @@ use bevy::prelude::Transform;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::window::{PrimaryWindow, Window, WindowResolution};
-use p2_host::display::{GAMMA, MODERN_GRAPHICS, Settings};
-use p2_render::view::{OVERLAY_LAYERS, SceneView, SunShadow};
-use p2_render::gamma::GammaPlugin;
+use p2_host::settings::{GAMMA, MODERN_GRAPHICS, Settings};
+use p2_render::world::view::{OVERLAY_LAYERS, SceneView, SunShadow};
+use p2_render::post::gamma::GammaPlugin;
 
 const SIZE: u32 = 64;
 
@@ -70,7 +70,7 @@ fn settings(modern: &'static str) -> Settings {
 fn shown_after(modern: &'static str, bloom_level: u8, modern_on_at: Option<u32>, sun: Sun) -> Shown {
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins((GammaPlugin, p2_render::modern_bloom::ModernBloomPlugin));
+    app.add_plugins((GammaPlugin, p2_render::post::modern_bloom::ModernBloomPlugin));
     app.insert_resource(settings(modern));
     app.finish();
     app.cleanup();

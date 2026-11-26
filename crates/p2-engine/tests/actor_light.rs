@@ -9,15 +9,15 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::prelude::{IntoScheduleConfigs, Local, ResMut};
 use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
-use p2_render::actor_light::{ActorLightCache, ActorLit, ActorLitMaterial, Shading};
+use p2_render::lighting::actor_light::{ActorLightCache, ActorLit, ActorLitMaterial, Shading};
 use p2_engine::map::{MapSystems, SceneTargets, Session};
-use p2_render::view::{MeshView, SKY_LAYER};
+use p2_render::world::view::{MainView, SKY_LAYER};
 use p2_engine::play::PlaySystems;
 
 fn played(root: &Path, map: &str) -> App {
     let mut app = common::played_app();
     let map = Path::new("Maps").join(format!("{map}.fuk")).display().to_string();
-    app.init_resource::<MeshView>().insert_resource(Session::new(root.to_path_buf())).add_systems(
+    app.init_resource::<MainView>().insert_resource(Session::new(root.to_path_buf())).add_systems(
         PostUpdate,
         (move |mut session: ResMut<Session>, mut t: SceneTargets, mut loaded: Local<bool>| {
             t.play.set_canvas_size([1024.0, 768.0]);

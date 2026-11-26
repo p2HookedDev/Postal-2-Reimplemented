@@ -1,5 +1,6 @@
 mod common;
 
+use bevy::app::PluginGroup;
 use common::game_dir;
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
@@ -16,9 +17,9 @@ use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use p2_engine::animation::Animated;
 use p2_engine::map::{Fluids, Hud, Particles, Projectors, SceneTargets, Session, SpawnedActors};
-use p2_render::level::MaterialSwitches;
+use p2_render::world::level::MaterialSwitches;
 use p2_render::P2RenderPlugins;
-use p2_render::view::MeshViewSystems;
+use p2_render::world::view::MainViewSystems;
 use p2_host::frame_times::FrameTimes;
 use p2_engine::FrameOrderPlugin;
 use p2_engine::play::Play;
@@ -41,7 +42,7 @@ fn monday_scene_build_cost() {
         .init_asset::<StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
-        .add_plugins((P2RenderPlugins, FrameOrderPlugin))
+        .add_plugins((P2RenderPlugins.build().disable::<p2_render::post::gamma::GammaPlugin>().disable::<p2_render::modern::ModernGraphicsPlugin>().disable::<p2_render::effects::wounds::WoundsPlugin>(), FrameOrderPlugin))
         .init_resource::<Animated>()
         .init_resource::<Play>()
         .init_resource::<FrameTimes>()
@@ -71,7 +72,7 @@ fn monday_scene_build_cost() {
                 holder.finish = Some(finish);
             }
         })
-        .before(MeshViewSystems::Apply));
+        .before(MainViewSystems::Apply));
     loop {
         let started = Instant::now();
         app.update();

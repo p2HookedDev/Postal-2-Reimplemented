@@ -1,7 +1,7 @@
 use super::*;
 use super::drawn_pose::told_bone;
 use bevy::camera::visibility::RenderLayers;
-use p2_render::components::{CanvasDrawn, UNSEEN_LAYER};
+use p2_render::world::components::{CanvasDrawn, UNSEEN_LAYER};
 use crate::play::{BoneFrame, axes_matrix};
 
 pub fn follow_transform(follow: &FollowBone, body: Mat4, bone: Mat4) -> Transform {

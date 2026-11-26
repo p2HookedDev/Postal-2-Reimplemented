@@ -1,0 +1,716 @@
+import package::p2_render::modern_base::{LUMINANCE, LampLight, fresnel_five, ggx, modern_bits, to_eye};
+import package::p2_render::sun_shadow::{SHADOW_BIAS, SHADOW_NORMAL_OFFSET, SOFT_EDGE_UNITS, SUN_FACING_FADE, ShadowLookup, disk_turn, held_lookup, vogel_tap};
+import package::p2_render::probes::read_probes;
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    mesh_view_bindings::view,
+    pbr_bindings,
+};
+@if(BINDLESS)
+import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d};
+@if(BINDLESS)
+import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
+@if(DEPTH_PREPASS)
+import bevy_pbr::render::mesh_view_bindings::depth_prepass_texture;
+
+@if(LAMP_MASK_PASS)
+@group(1) @binding(3) var pass_book: texture_2d<f32>;
+@if(LAMP_MASK_PASS)
+@group(1) @binding(4) var pass_atlas: texture_2d<f32>;
+@if(LAMP_MASK_PASS)
+@group(1) @binding(5) var pass_atlas_sampler: sampler;
+
+fn no_lamps() -> LampLight {
+    return LampLight(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec4(-1.0, 0.0, 0.0, 0.0), 1.0, vec3(0.0));
+}
+
+// The atlas side in units, and the guard band around a face in texels. Matches `lamps/atlas.rs`.
+const ATLAS_UNITS: f32 = 128.0;
+const ATLAS_GUARD: f32 = 3.0;
+const ATLAS_UNMAPPED: u32 = 7u;
+const LAMP_CORE_SQUARED: f32 = 0.09;
+const LAMP_ENERGY: f32 = 1.4485;
+const LAMP_FADE_FROM: f32 = 21.0;
+const LAMP_FADE_TO: f32 = 30.0;
+const LAMP_SMALLEST: f32 = 0.01;
+const LAMP_SOURCE_SHARE: f32 = 0.08;
+// The lamp size level sits above the modern flag's effect bits. Matches `material_class.rs`.
+const LAMP_SIZE_SHIFT: u32 = 7u;
+const LAMP_SIZE_TOP: f32 = 10.0;
+const BOOK_SIZE_TEXEL: u32 = 6u;
+// Set above the tile in a lamp's colour texel when its size texel holds a size of its own. Matches `lamps.rs`.
+const BOOK_SIZED: u32 = 1048576u;
+// The lamp book rides in the material's anisotropy texture: header, seven texels a lamp, a texel a cell, then lamp lists four a texel. Matches `lamps/cells.rs`.
+const BOOK_WIDTH: u32 = 2048u;
+const BOOK_HEADER: u32 = 3u;
+const BOOK_RECORD: u32 = 7u;
+// The rows the book ends with, counted back from its end: the movers' tile grid, their tiles' row, the capsules'
+// fine and coarse rows. Matches `lamps/cells.rs`.
+const TILE_GRID_FROM_END: u32 = 20u;
+// The decal tile lists (`decal_bins.wesl`) take the rows before the movers' ones.
+const DECAL_BINS_FROM_END: u32 = 277u;
+const TILES_FROM_END: u32 = 3u;
+const CAPSULES_FROM_END: u32 = 2u;
+// A detail face's corner is counted in these texels. Matches `lamps/faces.rs`.
+const DETAIL_UNIT: f32 = 64.0;
+// A texel holds a distance in a 16 bit float: its steps are this share of the distance at most.
+const DEPTH_STEP: f32 = 0.001;
+
+struct Book {
+    pages: u32,
+    atlas: u32,
+    atlas_sampling: u32,
+    size: vec2<u32>,
+    side: f32,
+    height: f32,
+}
+
+fn book_of(in: VertexOutput) -> Book {
+@if(BINDLESS) {
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    let pages = material_indices[slot].anisotropy_texture;
+    let atlas = material_indices[slot].occlusion_texture;
+    return Book(pages, atlas, material_indices[slot].occlusion_sampler, textureDimensions(bindless_textures_2d[pages]), f32(textureDimensions(bindless_textures_2d[atlas]).x), f32(textureDimensions(bindless_textures_2d[atlas]).y));
+}
+@elif(PBR_ANISOTROPY_TEXTURE_SUPPORTED) {
+    return Book(0u, 0u, 0u, textureDimensions(pbr_bindings::anisotropy_texture), f32(textureDimensions(pbr_bindings::occlusion_texture).x), f32(textureDimensions(pbr_bindings::occlusion_texture).y));
+}
+@else {
+    return Book(0u, 0u, 0u, vec2(0u, 1u), f32(textureDimensions(pbr_bindings::occlusion_texture).x), f32(textureDimensions(pbr_bindings::occlusion_texture).y));
+}
+}
+
+fn book_texel(book: Book, index: u32) -> vec4<f32> {
+    let at = vec2(index % BOOK_WIDTH, index / BOOK_WIDTH);
+@if(LAMP_MASK_PASS) {
+    return textureLoad(pass_book, at, 0);
+}
+@elif(BINDLESS) {
+    return textureLoad(bindless_textures_2d[book.pages], at, 0);
+}
+@elif(PBR_ANISOTROPY_TEXTURE_SUPPORTED) {
+    return textureLoad(pbr_bindings::anisotropy_texture, at, 0);
+}
+@else {
+    return vec4(0.0);
+}
+}
+
+fn lamp_list(book: Book, position: vec3<f32>) -> vec2<u32> {
+    if book.size.x != BOOK_WIDTH {
+        return vec2(0u);
+    }
+    let grid = book_texel(book, 0u);
+    let sides = book_texel(book, 1u);
+    let cell = floor((position - grid.xyz) / grid.w);
+    if any(cell < vec3(0.0)) || any(cell >= sides.xyz) {
+        return vec2(0u);
+    }
+    let at = vec3<u32>(cell);
+    let size = vec3<u32>(sides.xyz);
+    return vec2<u32>(book_texel(book, u32(sides.w) + (at.z * size.y + at.y) * size.x + at.x).xy);
+}
+
+const LAMP_GLOSS_FROM: f32 = 0.03;
+
+fn atlas_quad(book: Book, side: f32, corner: vec2<f32>) -> vec4<f32> {
+    let at = (corner + 1.0) / vec2(side, book.height);
+@if(LAMP_MASK_PASS) {
+    return textureGather(0, pass_atlas, pass_atlas_sampler, at);
+}
+@elif(BINDLESS) {
+    return textureGather(0, bindless_textures_2d[book.atlas], bindless_samplers_filtering[book.atlas_sampling], at);
+}
+@else {
+    return textureGather(0, pbr_bindings::occlusion_texture, pbr_bindings::occlusion_sampler, at);
+}
+}
+
+const LAMP_EDGE_LEAST_TEXELS: f32 = 1.0;
+const LAMP_EDGE_MOST_TEXELS: f32 = 2.0;
+const HELD_LAMP_EDGE_TEXELS: f32 = 2.0;
+const HELD_LAMP_TAPS: i32 = 16;
+
+fn face_view(v: vec3<f32>, face: u32) -> vec3<f32> {
+    switch face {
+        case 0u { return vec3(-v.z, v.y, v.x); }
+        case 1u { return vec3(v.z, v.y, -v.x); }
+        case 2u { return vec3(v.x, -v.z, v.y); }
+        case 3u { return vec3(v.x, v.z, -v.y); }
+        case 4u { return v; }
+        default { return vec3(-v.x, v.y, -v.z); }
+    }
+}
+
+fn atlas_blended(book: Book, side: f32, low: vec2<f32>, size: f32, at: vec2<f32>, depth: f32) -> vec2<f32> {
+    let spot = clamp(at, low + 1.0, low + size - 1.0) - 0.5;
+    let base = floor(spot);
+    let blend = spot - base;
+    let lit = step(vec4(depth), atlas_quad(book, side, base));
+    return vec2(mix(mix(lit.w, lit.z, blend.x), mix(lit.x, lit.y, blend.x), blend.y), lit.x + lit.y + lit.z + lit.w);
+}
+
+fn receiver_depth(seen: vec3<f32>, normal: vec3<f32>, reach: f32, plane: f32, by: vec2<f32>, span: f32, texel_world: f32, margin: f32, radius: f32) -> f32 {
+    let ray = vec3(seen.x + by.x * seen.z / span, seen.y - by.y * seen.z / span, seen.z);
+    let slope = dot(normal, ray);
+    var along = reach;
+    if abs(slope) > 1e-6 {
+        along = plane / slope * length(ray);
+    }
+    let most = texel_world * length(by);
+    return (clamp(along, reach - most, reach + most) - margin) / radius;
+}
+
+fn cube_face(from_lamp: vec3<f32>) -> u32 {
+    let m = abs(from_lamp);
+    if m.x >= m.y && m.x >= m.z {
+        return select(1u, 0u, from_lamp.x > 0.0);
+    }
+    if m.y >= m.z {
+        return select(3u, 2u, from_lamp.y > 0.0);
+    }
+    return select(5u, 4u, from_lamp.z > 0.0);
+}
+
+fn face_shadow(book: Book, low: vec2<f32>, size: f32, face: u32, from_lamp: vec3<f32>, normal: vec3<f32>, radius: f32, texel_world: f32, margin: f32, side: f32, lookup: ShadowLookup) -> f32 {
+    return square_shadow(book, low, size, 0.5 * size - ATLAS_GUARD, face_view(from_lamp, face), face_view(normal, face), radius, texel_world, margin, side, lookup);
+}
+
+fn square_shadow(book: Book, low: vec2<f32>, size: f32, span: f32, seen: vec3<f32>, tilted: vec3<f32>, radius: f32, texel_world: f32, margin: f32, side: f32, lookup: ShadowLookup) -> f32 {
+    let at = low + 0.5 * size + vec2(seen.x, -seen.y) / max(seen.z, 1e-4) * span;
+    let half = 0.5 * clamp(SOFT_EDGE_UNITS / texel_world, LAMP_EDGE_LEAST_TEXELS, LAMP_EDGE_MOST_TEXELS);
+    let reach = length(seen);
+    let plane = dot(tilted, seen);
+    if held_lookup(lookup) {
+        let wide = max(half, HELD_LAMP_EDGE_TEXELS);
+        let turn = disk_turn(lookup.seed);
+        var shown = 0.0;
+        for (var tap = 0; tap < HELD_LAMP_TAPS; tap++) {
+            let by = vogel_tap(tap, HELD_LAMP_TAPS, turn) * wide;
+            shown += atlas_blended(book, side, low, size, at + by, receiver_depth(seen, tilted, reach, plane, by, span, texel_world, margin, radius)).x;
+        }
+        return shown / f32(HELD_LAMP_TAPS);
+    }
+    var lit = vec2(0.0);
+    for (var corner = 0; corner < 4; corner++) {
+        if corner == 2 && (lit.y < 0.5 || lit.y > 7.5) {
+            return lit.x * 0.5;
+        }
+        let by = vec2(select(-half, half, corner == 1 || corner == 2), select(-half, half, corner % 2 == 1));
+        lit += atlas_blended(book, side, low, size, at + by, receiver_depth(seen, tilted, reach, plane, by, span, texel_world, margin, radius));
+    }
+    return lit.x * 0.25;
+}
+
+fn tile_shadow(book: Book, corner: vec2<f32>, size: f32, face: u32, plain: bool, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
+    let texel_world = 2.0 * distance_to / size;
+    let from_lamp = position + normal * (texel_world * SHADOW_NORMAL_OFFSET * lookup.offset) - lamp_position;
+    let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt) * lookup.offset + distance_to * DEPTH_STEP;
+    if !plain {
+        return face_shadow(book, corner, size, face, from_lamp, normal, lamp_radius, texel_world, margin, side, lookup);
+    }
+    let own = cube_face(from_lamp);
+    return face_shadow(book, corner + vec2(f32(own % 3u), f32(own / 3u)) * size, size, own, from_lamp, normal, lamp_radius, texel_world, margin, side, lookup);
+}
+
+fn detail_face(book: Book, record: u32, face: u32) -> vec3<f32> {
+    let packed = u32(book_texel(book, record + 3u + face / 4u)[face % 4u]);
+    if packed == 0u {
+        return vec3(0.0);
+    }
+    let at = packed - 1u;
+    return vec3(vec2(f32(at & 255u), f32((at >> 8u) & 255u)) * DETAIL_UNIT, DETAIL_UNIT * f32(1u << (at >> 16u)));
+}
+
+// Each mover tile is two texels: axis and half-angle tangent, then corner, side and fade. Matches `lamps/movers.rs`.
+const TILE_GRID_SIDE: u32 = 128u;
+const TILE_NAMES_FROM: u32 = 8193u;
+const TEST_ALL: f32 = -1.0;
+// How much wider than its tangent a tile reaches. Matches `lamps/tile_grid.rs`.
+const REACH_WIDENING: f32 = 1.4143;
+
+fn tile_column(book: Book, position: vec3<f32>) -> vec2<f32> {
+    let row = (book.size.y - TILE_GRID_FROM_END) * BOOK_WIDTH;
+    let grid = book_texel(book, row);
+    let column = floor((position.xz - grid.xy) / max(grid.z, 1.0));
+    if grid.w <= 0.0 || any(column < vec2(0.0)) || any(column >= vec2(f32(TILE_GRID_SIDE))) {
+        return vec2(0.0, TEST_ALL);
+    }
+    let at = u32(column.y) * TILE_GRID_SIDE + u32(column.x);
+    let pair = book_texel(book, row + 1u + at / 2u);
+    return select(pair.xy, pair.zw, at % 2u == 1u);
+}
+
+fn tile_name(book: Book, slot: u32) -> u32 {
+    return u32(book_texel(book, (book.size.y - TILE_GRID_FROM_END) * BOOK_WIDTH + TILE_NAMES_FROM + slot / 4u)[slot % 4u]);
+}
+
+fn mover_tile_shadow(book: Book, at: u32, lit: f32, from_lamp: vec3<f32>, normal: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
+    let aim = book_texel(book, at);
+    let axis = aim.xyz;
+    let along = dot(from_lamp, axis);
+    let reach = along * aim.w * REACH_WIDENING;
+    if along <= 0.0 || dot(from_lamp, from_lamp) - along * along > reach * reach {
+        return lit;
+    }
+    let square = book_texel(book, at + 1u);
+    if square.w <= 0.0 {
+        return lit;
+    }
+    let helper = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
+    let right = normalize(cross(helper, axis));
+    let up = cross(axis, right);
+    let size = square.z;
+    let texel_world = 2.0 * aim.w * distance_to / size;
+    let moved = from_lamp + normal * (texel_world * SHADOW_NORMAL_OFFSET * lookup.offset);
+    let seen = vec3(dot(moved, right), dot(moved, up), dot(moved, axis));
+    let span = (0.5 * size - ATLAS_GUARD) / aim.w;
+    if seen.z <= 0.0 || any(abs(seen.xy) * span > vec2(seen.z * (0.5 * size - 1.0))) {
+        return lit;
+    }
+    let tilted = vec3(dot(normal, right), dot(normal, up), dot(normal, axis));
+    let margin = texel_world * SHADOW_BIAS * (1.0 + 0.5 * tilt) * lookup.offset + distance_to * DEPTH_STEP;
+    let shade = square_shadow(book, square.xy, size, span, seen, tilted, lamp_radius, texel_world, margin, side, lookup);
+    return min(lit, mix(1.0, shade, saturate(square.w)));
+}
+
+fn mover_shadow(book: Book, held: vec4<f32>, column: vec2<f32>, position: vec3<f32>, normal: vec3<f32>, lamp_position: vec3<f32>, lamp_radius: f32, distance_to: f32, tilt: f32, side: f32, lookup: ShadowLookup) -> f32 {
+    let start = u32(held.x);
+    let end = start + u32(held.y);
+    let row = (book.size.y - TILES_FROM_END) * BOOK_WIDTH;
+    let from_lamp = position - lamp_position;
+    var lit = 1.0;
+    if column.y == TEST_ALL {
+        for (var tile = start; tile < end && lit > 0.0; tile++) {
+            lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
+        }
+        return lit;
+    }
+    let first = u32(column.x);
+    let last = first + u32(column.y);
+    var low = first;
+    var high = last;
+    while low < high {
+        let middle = (low + high) / 2u;
+        if tile_name(book, middle) < start {
+            low = middle + 1u;
+        } else {
+            high = middle;
+        }
+    }
+    for (var slot = low; slot < last && lit > 0.0; slot++) {
+        let tile = tile_name(book, slot);
+        if tile >= end {
+            break;
+        }
+        lit = mover_tile_shadow(book, row + tile * 2u, lit, from_lamp, normal, lamp_radius, distance_to, tilt, side, lookup);
+    }
+    return lit;
+}
+
+struct LampAt {
+    record: u32,
+    position: vec3<f32>,
+    radius: f32,
+    x2: f32,
+    distance_to: f32,
+    to_lamp: vec3<f32>,
+    facing: f32,
+    cone: f32,
+    look: vec4<f32>,
+    shown: vec3<f32>,
+    share: f32,
+}
+
+fn lamp_at(book: Book, list: vec2<u32>, i: u32, position: vec3<f32>, normal: vec3<f32>, eye_at: vec3<f32>, slack: f32) -> LampAt {
+    var at = LampAt(0u, vec3(0.0), 0.0, 1.0, 0.0, vec3(0.0), 0.0, 0.0, vec4(0.0), vec3(0.0), 0.0);
+    let lamp = u32(book_texel(book, list.x + i / 4u)[i % 4u]);
+    at.record = BOOK_HEADER + lamp * BOOK_RECORD;
+    let place = book_texel(book, at.record);
+    at.position = place.xyz;
+    let to_light = at.position - position;
+    let d2 = dot(to_light, to_light);
+    at.radius = abs(place.w);
+    let inverse_range = 1.0 / (at.radius * at.radius);
+    at.x2 = d2 * inverse_range;
+    if at.x2 >= 1.0 {
+        return at;
+    }
+    at.distance_to = sqrt(max(d2, 1e-4));
+    at.to_lamp = to_light / at.distance_to;
+    at.facing = dot(normal, at.to_lamp);
+    if at.facing <= -slack {
+        return at;
+    }
+    let fade = 1.0 - smoothstep(LAMP_FADE_FROM, LAMP_FADE_TO, length(at.position - eye_at) * sqrt(inverse_range));
+    if fade <= 0.0 {
+        return at;
+    }
+    var cone = 1.0;
+    if place.w < 0.0 {
+        let spot = book_texel(book, at.record + 2u);
+        let along = vec3(spot.xy, sqrt(max(0.0, 1.0 - dot(spot.xy, spot.xy))) * sign(spot.z));
+        let share = saturate(dot(-along, at.to_lamp) * abs(spot.z) + spot.w);
+        cone = share * share;
+    }
+    at.cone = cone * fade;
+    at.look = book_texel(book, at.record + 1u);
+    at.shown = lamp_shown(at.look.rgb, at.x2, at.cone);
+    at.share = dot(at.shown, LUMINANCE) * (at.facing + slack);
+    return at;
+}
+
+const COLUMN_UNREAD: vec2<f32> = vec2(0.0, -2.0);
+
+fn shadow_tilt(ground: vec3<f32>, to_lamp: vec3<f32>) -> f32 {
+    let faces = dot(ground, to_lamp);
+    return min(sqrt(saturate(1.0 - faces * faces)) / max(faces, 0.1), 4.0);
+}
+
+fn plain_tile(packed: u32, unit: f32) -> vec3<f32> {
+    let level = (packed >> 16u) & 15u;
+    if level == ATLAS_UNMAPPED {
+        return vec3(0.0);
+    }
+    return vec3(vec2(f32(packed & 255u), f32((packed >> 8u) & 255u)) * unit, unit * f32(1u << level));
+}
+
+fn lamp_shadows(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, side: f32, unit: f32, column: ptr<function, vec2<f32>>, movers_near: bool, lookup: ShadowLookup) -> vec2<f32> {
+    let tilt = shadow_tilt(ground, lamp.to_lamp);
+    let face = cube_face(position - lamp.position);
+    let detail = detail_face(book, lamp.record, face);
+    let plain = plain_tile(u32(lamp.look.w), unit);
+    var walled = 1.0;
+    if detail.z > 0.0 {
+        walled = tile_shadow(book, detail.xy, detail.z, face, false, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
+    } else if plain.z > 0.0 {
+        walled = tile_shadow(book, plain.xy, plain.z, face, true, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
+    }
+    var movers = 1.0;
+    if walled > 0.0 && movers_near {
+        movers = lamp_movers(book, lamp, position, ground, tilt, side, column, lookup);
+    }
+    return vec2(walled, movers);
+}
+
+fn lamp_movers(book: Book, lamp: LampAt, position: vec3<f32>, ground: vec3<f32>, tilt: f32, side: f32, column: ptr<function, vec2<f32>>, lookup: ShadowLookup) -> f32 {
+    let held = book_texel(book, lamp.record + 5u);
+    if held.y <= 0.0 {
+        return 1.0;
+    }
+    if (*column).y == COLUMN_UNREAD.y {
+        *column = tile_column(book, position);
+    }
+    return mover_shadow(book, held, *column, position, ground, lamp.position, lamp.radius, lamp.distance_to, tilt, side, lookup);
+}
+
+// A header row (1 and the view matrix), then from `SCREEN_SUN_FROM` a texel per `SCREEN_SUN_PIXELS` pixel rows. Matches `lamps/shadow_mask.rs`.
+const SCREEN_SUN_FROM: u32 = 1u;
+const SCREEN_SUN_PIXELS: u32 = 4u;
+
+@if(BINDLESS && DEPTH_PREPASS)
+fn screen_written(screen: u32, pixel: vec2<u32>) -> bool {
+    let size = textureDimensions(bindless_textures_2d[screen]);
+    let rows = textureDimensions(depth_prepass_texture).y;
+    if size.y != SCREEN_SUN_FROM + (rows + SCREEN_SUN_PIXELS - 1u) / SCREEN_SUN_PIXELS || any(pixel >= vec2(size.x, rows)) {
+        return false;
+    }
+    return textureLoad(bindless_textures_2d[screen], vec2(0u, 0u), 0).x == 1.0
+        && all(textureLoad(bindless_textures_2d[screen], vec2(1u, 0u), 0) == view.clip_from_world[0])
+        && all(textureLoad(bindless_textures_2d[screen], vec2(2u, 0u), 0) == view.clip_from_world[3]);
+}
+
+@if(SCREEN_SUN)
+fn screen_sun(in: VertexOutput, frag: vec2<f32>) -> vec3<f32> {
+    let screen = material_indices[mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu].normal_map_texture;
+    let pixel = vec2<u32>(frag);
+    if !screen_written(screen, pixel) {
+        return vec3(1.0);
+    }
+    let row = SCREEN_SUN_FROM + pixel.y / SCREEN_SUN_PIXELS;
+    let held = u32(textureLoad(bindless_textures_2d[screen], vec2(pixel.x, row), 0)[pixel.y % SCREEN_SUN_PIXELS]);
+    return vec3<f32>(vec3(held, held >> 8u, held >> 16u) & vec3(255u)) / 255.0;
+}
+
+// Visibility rides in the material's specular texture, a lamp a channel, a guard texel each side. Matches `lamps/visibility.rs`.
+@if(CACHED_LAMPS)
+const CACHED_PATCH: f32 = 16.0;
+@if(CACHED_LAMPS)
+const CACHED_BLOCK: f32 = 18.0;
+@if(CACHED_LAMPS)
+const CACHED_GROUP: u32 = 4u;
+@if(CACHED_LAMPS)
+const VISIBLE_LEAST: f32 = 0.004;
+// The sky texture holds one block a patch, this many a row in patch order. Matches `lamps/sky.rs`.
+@if(CACHED_LAMPS)
+const SKY_BLOCKS_A_ROW: u32 = 227u;
+
+@if(CACHED_LAMPS)
+struct CachedPatch {
+    found: bool,
+    number: u32,
+    within: vec2<f32>,
+    starts: vec4<f32>,
+    two_sided: bool,
+}
+
+@if(CACHED_LAMPS)
+fn cached_patch(in: VertexOutput, book: Book) -> CachedPatch {
+    var spot = CachedPatch(false, 0u, vec2(0.0), vec4(0.0), false);
+@if(VERTEX_COLORS) {
+    if book.size.x != BOOK_WIDTH || in.color.w <= 0.5 {
+        return spot;
+    }
+    spot.starts = book_texel(book, 2u);
+    let surface = book_texel(book, u32(spot.starts.x) + u32(round(in.color.x)));
+    let grid = in.color.yz;
+    let corner = max(floor(grid / CACHED_PATCH), vec2(0.0));
+    spot.found = true;
+    spot.number = u32(surface.x) + u32(corner.x) + u32(corner.y) * u32(surface.y);
+    spot.within = clamp(grid - corner * CACHED_PATCH, vec2(0.0), vec2(CACHED_PATCH));
+    spot.two_sided = surface.z > 0.5;
+}
+    return spot;
+}
+
+@if(CACHED_LAMPS)
+var<private> fragment_patch: CachedPatch;
+
+@if(CACHED_LAMPS)
+fn find_patch(in: VertexOutput) -> CachedPatch {
+    fragment_patch = cached_patch(in, book_of(in));
+    return fragment_patch;
+}
+
+@if(CACHED_LAMPS)
+fn cached_sky(in: VertexOutput, spot: CachedPatch) -> f32 {
+@if(BINDLESS) {
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    let image = material_indices[slot].specular_tint_texture;
+    let size = vec2<f32>(textureDimensions(bindless_textures_2d[image]));
+    if size.x <= 1.0 || !spot.found || spot.two_sided {
+        return -1.0;
+    }
+    let block = vec2<f32>(vec2(spot.number % SKY_BLOCKS_A_ROW, spot.number / SKY_BLOCKS_A_ROW)) * CACHED_BLOCK;
+    return textureSampleLevel(bindless_textures_2d[image], bindless_samplers_filtering[material_indices[slot].specular_tint_sampler], (block + 1.0 + spot.within) / size, 0.0).x;
+}
+@else {
+    return -1.0;
+}
+}
+
+@if(CACHED_LAMPS)
+struct CachedLamps {
+    found: bool,
+    list: vec2<u32>,
+    image: u32,
+    sampling: u32,
+    at: vec2<f32>,
+    stride: f32,
+}
+
+@if(CACHED_LAMPS)
+fn cached_lamps(in: VertexOutput, book: Book, spot: CachedPatch) -> CachedLamps {
+    var cached = CachedLamps(false, vec2(0u), 0u, 0u, vec2(0.0), 0.0);
+@if(BINDLESS) {
+    if !spot.found || spot.starts.z != 1.0 {
+        return cached;
+    }
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    cached.image = material_indices[slot].specular_texture;
+    cached.sampling = material_indices[slot].specular_sampler;
+    let size = vec2<f32>(textureDimensions(bindless_textures_2d[cached.image]));
+    if size.x <= 1.0 {
+        return cached;
+    }
+    let patch_texel = book_texel(book, u32(spot.starts.y) + spot.number);
+    let groups = u32(patch_texel.z);
+    var count = 0u;
+    if groups > 0u {
+        let empty = select(vec4(0u), vec4(1u), book_texel(book, u32(patch_texel.w) + groups - 1u) < vec4(0.0));
+        count = CACHED_GROUP * groups - empty.x - empty.y - empty.z - empty.w;
+    }
+    cached.found = true;
+    cached.list = vec2(u32(patch_texel.w), count);
+    cached.at = (patch_texel.xy + 1.0 + spot.within) / size;
+    cached.stride = CACHED_BLOCK / size.x;
+}
+    return cached;
+}
+
+@if(CACHED_LAMPS)
+fn cached_visibility(cached: CachedLamps, four: u32) -> vec4<f32> {
+@if(BINDLESS) {
+    return textureSampleLevel(bindless_textures_2d[cached.image], bindless_samplers_filtering[cached.sampling], cached.at + vec2(f32(four) * cached.stride, 0.0), 0.0);
+}
+@else {
+    return vec4(1.0);
+}
+}
+
+fn lamp_light(in: VertexOutput, position: vec3<f32>, normal: vec3<f32>, ground: vec3<f32>, gloss: bool, surface: vec3<f32>, flag: f32, lookup: ShadowLookup) -> LampLight {
+    var sum = no_lamps();
+    if surface.z > 0.5 {
+        return sum;
+    }
+    let book = book_of(in);
+    let sized = min(f32((modern_bits(flag) >> LAMP_SIZE_SHIFT) & 15u) / LAMP_SIZE_TOP, 1.0);
+    let side = book.side;
+    let unit = side / ATLAS_UNITS;
+    let rough = surface.x;
+    let eye = to_eye(position);
+@if(CACHED_LAMPS)
+    let cached = cached_lamps(in, book, fragment_patch);
+@if(CACHED_LAMPS)
+    let from_cache = cached.found;
+@else
+    let from_cache = false;
+    var list = vec2(0u);
+@if(CACHED_LAMPS) {
+    list = cached.list;
+}
+    if !from_cache {
+        list = lamp_list(book, position);
+    }
+    var unshaded = vec3(0.0);
+    var given = vec3(0.0);
+    var reaching = vec3(0.0);
+    var column = COLUMN_UNREAD;
+    var movers_near = true;
+    if list.y > 2u && unit >= 1.0 && book.size.y >= 8u {
+        column = tile_column(book, position);
+        movers_near = column.y != 0.0;
+    }
+@if(CACHED_LAMPS)
+    var four = vec4(1.0);
+    for (var i = 0u; i < list.y; i++) {
+        var visible = 1.0;
+@if(CACHED_LAMPS) {
+        if from_cache {
+            if i % CACHED_GROUP == 0u {
+                four = cached_visibility(cached, i / CACHED_GROUP);
+            }
+            visible = four[i % CACHED_GROUP];
+            if visible < VISIBLE_LEAST {
+                continue;
+            }
+        }
+}
+        let lamp = lamp_at(book, list, i, position, normal, view.world_position.xyz, 0.0);
+        if lamp.share < LAMP_SMALLEST {
+            continue;
+        }
+        var shadow = saturate(lamp.facing / SUN_FACING_FADE);
+        var walled = shadow;
+        if unit >= 1.0 {
+            var through = vec2(visible, 1.0);
+            if from_cache {
+@if(CACHED_LAMPS) {
+                if movers_near {
+                    through.y = lamp_movers(book, lamp, position, ground, shadow_tilt(ground, lamp.to_lamp), side, &column, lookup);
+                }
+}
+            } else {
+                through = lamp_shadows(book, lamp, position, ground, side, unit, &column, movers_near, lookup);
+            }
+            shadow *= through.x;
+            walled = shadow;
+            shadow = min(shadow, through.y);
+        }
+        let lamp_gives = lamp.shown * (lamp.facing * walled);
+        unshaded += lamp_gives;
+        sum.unshadowed += select(vec3(0.0), lamp_gives, unit < 1.0);
+        given += lamp_gives * lamp_gives;
+        reaching += lamp_gives * lamp_gives * (shadow / max(walled, 1e-4));
+        if shadow <= 0.0 {
+            continue;
+        }
+        var source = lamp.radius * LAMP_SOURCE_SHARE;
+        if sized > 0.0 && (u32(lamp.look.w) & BOOK_SIZED) != 0u {
+            source = mix(source, book_texel(book, lamp.record + BOOK_SIZE_TEXEL).x, sized);
+        }
+        let a = saturate(rough * rough + source / (2.0 * lamp.distance_to));
+        add_lamp(&sum, lamp.shown, lamp.look.rgb, lamp.x2, lamp.cone, shadow, lamp.facing, lamp.to_lamp, normal, eye, gloss && lamp.share >= LAMP_GLOSS_FROM, a);
+    }
+    // A mover's shadow takes its lamp's share of the linear light and no more: summed in display light, one lamp of
+    // four alike in shadow would take 44 % of the light for its 25 %.
+    sum.diffuse = unshaded * sqrt(reaching / max(given, vec3(1e-8)));
+    sum.grounded = grounded(book, position, normal);
+    read_probes(in, position, normal, &sum, lookup.offset);
+    return sum;
+}
+
+// A column of the grid is this many to a side; a capsule darkens out to this many of its radii, and never by
+// more than the most. Matches `lamps/grounding.rs`.
+const GROUND_SIDE: u32 = 32u;
+const GROUND_REACH: f32 = 3.0;
+const GROUND_MOST: f32 = 0.6;
+const GROUND_HANDOVER: f32 = 2.0;
+
+fn grounded(book: Book, position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    if book.size.x != BOOK_WIDTH {
+        return 1.0;
+    }
+    let row = (book.size.y - CAPSULES_FROM_END) * BOOK_WIDTH;
+    let fine = grid_open(book, row, book_texel(book, row), position, normal);
+    if fine.y >= GROUND_HANDOVER {
+        return fine.x;
+    }
+    let coarse_grid = book_texel(book, row + BOOK_WIDTH);
+    let rim = 0.5 * f32(GROUND_SIDE) * coarse_grid.z;
+    let fade = 1.0 - smoothstep(rim - 3.0 * coarse_grid.z, rim - coarse_grid.z, distance(position.xz, view.world_position.xz));
+    var far = 1.0;
+    if fade > 0.0 {
+        let coarse = grid_open(book, row + BOOK_WIDTH, coarse_grid, position, normal);
+        far = select(1.0, mix(1.0, coarse.x, fade), coarse.y >= 0.0);
+    }
+    if fine.y < 0.0 {
+        return far;
+    }
+    return mix(far, fine.x, fine.y / GROUND_HANDOVER);
+}
+
+fn grid_open(book: Book, row: u32, grid: vec4<f32>, position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    let inside = (position.xz - grid.xy) / max(grid.z, 1.0);
+    let column = floor(inside);
+    if any(column < vec2(0.0)) || any(column >= vec2(f32(GROUND_SIDE))) {
+        return vec2(1.0, -1.0);
+    }
+    let edge = min(min(inside.x, inside.y), f32(GROUND_SIDE) - max(inside.x, inside.y));
+    if grid.w <= 0.0 {
+        return vec2(1.0, edge);
+    }
+    let near = book_texel(book, row + 1u + u32(column.y) * GROUND_SIDE + u32(column.x));
+    var open = 1.0;
+    for (var slot = 0u; slot < 4u; slot++) {
+        let held = u32(near[slot]);
+        if held == 0u {
+            break;
+        }
+        let at = row + 1u + GROUND_SIDE * GROUND_SIDE + (held - 1u) * 2u;
+        let low = book_texel(book, at);
+        let along = book_texel(book, at + 1u).xyz - low.xyz;
+        let to = low.xyz + along * saturate(dot(position - low.xyz, along) / max(dot(along, along), 1e-4)) - position;
+        let far = max(length(to), low.w);
+        let wide = low.w / far;
+        open *= 1.0 - wide * wide * saturate(dot(normal, to) / far) * saturate(GROUND_REACH - far / low.w);
+    }
+    return vec2(max(open, 1.0 - GROUND_MOST), edge);
+}
+
+fn lamp_shown(color: vec3<f32>, x2: f32, cone: f32) -> vec3<f32> {
+    let x = sqrt(x2);
+    return sqrt(color) * ((1.0 - x2 * (3.0 - 2.0 * x)) * cone);
+}
+
+fn add_lamp(sum: ptr<function, LampLight>, shown: vec3<f32>, color: vec3<f32>, x2: f32, cone: f32, shadow: f32, facing: f32, to_lamp: vec3<f32>, normal: vec3<f32>, eye: vec3<f32>, gloss: bool, a: f32) {
+    (*sum).diffuse += shown * (shadow * facing);
+    if gloss {
+        let window = saturate(1.0 - x2 * x2);
+        let attenuation = LAMP_ENERGY * LAMP_CORE_SQUARED / max(x2, LAMP_CORE_SQUARED) * window * window * cone;
+        let highlight = color * (attenuation * shadow) * ggx(normal, to_lamp, eye, facing, a, vec3(1.0));
+        let halfway = to_lamp + eye;
+        (*sum).specular += highlight;
+        (*sum).specular_edge += highlight * fresnel_five(saturate(dot(eye, halfway * inverseSqrt(max(dot(halfway, halfway), 1e-12)))));
+    }
+}

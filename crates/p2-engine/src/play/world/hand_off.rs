@@ -25,7 +25,7 @@ impl PlayWorld {
         &self.frame.dynamic_lights
     }
 
-    pub fn glows(&self) -> &[p2_render::frame_facts::GlowSource] {
+    pub fn glows(&self) -> &[p2_render::world::frame_facts::GlowSource] {
         &self.frame.glows
     }
 
@@ -97,15 +97,15 @@ impl PlayWorld {
         self.frame.quit
     }
 
-    pub fn volume_fog(&self) -> Option<p2_render::scene::ZoneFog> {
+    pub fn volume_fog(&self) -> Option<p2_render::world::scene::ZoneFog> {
         self.frame.volume_fog
     }
 
-    pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<p2_render::scene::ZoneFog>>> {
+    pub fn take_zone_fogs(&mut self) -> Option<Vec<Option<p2_render::world::scene::ZoneFog>>> {
         self.frame.zone_fogs.take()
     }
 
-    pub fn take_display(&mut self) -> (Option<p2_vm::WindowRequest>, Option<p2_host::display::Settings>) {
+    pub fn take_display(&mut self) -> (Option<p2_vm::WindowRequest>, Option<p2_host::settings::Settings>) {
         (self.frame.window.take(), self.frame.settings.take())
     }
 

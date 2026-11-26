@@ -1,6 +1,6 @@
 use super::*;
 use bevy::audio::AddAudioSource;
-use p2_render::level_collision::{LevelCollision, StaticCollision};
+use p2_render::world::level_collision::{LevelCollision, StaticCollision};
 use p2_vm::ESoundOcclusion;
 
 mod occlusion;

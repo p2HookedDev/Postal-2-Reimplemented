@@ -87,7 +87,7 @@ fn drawn_over(style: p2_particles::DrawStyle, texel: [u8; 4], background: f32) -
     use bevy::render::gpu_readback::{Readback, ReadbackComplete};
     use bevy::render::render_resource::{Extent3d, TextureDimension};
     use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-    use p2_render::particle_material::{ParticleMaterial, ParticlePlugin};
+    use p2_render::effects::particle_material::{ParticleMaterial, ParticlePlugin};
 
     let mut app = App::new();
     common::headless_renderer(&mut app);

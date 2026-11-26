@@ -35,14 +35,14 @@ use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use p2_host::display::{
+use p2_host::settings::{
     MODERN_ANTI_ALIASING, MODERN_AO, MODERN_BLOOM, MODERN_CONTACT_SHADOWS, MODERN_INDIRECT, MODERN_LAMP_SHADOWS, MODERN_RELIEF, MODERN_SHADOW_DISTANCE, MODERN_SHADOWS,
     MODERN_SHARPEN, MODERN_SPECULAR, Settings,
 };
 use crate::map::{Particles, Session};
 use p2_host::frame_times::{FrameTimes, VmProfile};
-use p2_render::components::{FollowActor, FollowBone};
-use p2_render::view::SceneView;
+use p2_render::world::components::{FollowActor, FollowBone};
+use p2_render::world::view::SceneView;
 use crate::play::Play;
 
 mod dump;
@@ -50,7 +50,7 @@ mod system_spans;
 mod stage_timing;
 
 use dump::Dump;
-use p2_render::debug_view::DebugView;
+use p2_render::post::debug_view::DebugView;
 use system_spans::{SpanTiming, SystemSpans, WGPU};
 use stage_timing::a_second_passed;
 pub use stage_timing::{FrameWindow, StageTimingPlugin, log_frame_times};
@@ -148,6 +148,24 @@ pub fn install_panic_hook() {
 
 fn shown((line, count): &(String, u32)) -> String {
     if *count > 1 { format!("{line} (x{count})") } else { line.clone() }
+}
+
+pub const OVERLAY_KEY: KeyCode = KeyCode::F10;
+
+pub fn log_plugin() -> bevy::log::LogPlugin {
+    let log = bevy::log::LogPlugin { custom_layer: capture_layer, fmt_layer: console_layer, ..Default::default() };
+    // wgpu's scopes are spans at its info level, which the default filter keeps out; wgpu_core logs nothing there.
+    #[cfg(feature = "profile")]
+    let log = bevy::log::LogPlugin { filter: format!("{}wgpu_core=info", bevy::log::DEFAULT_FILTER), ..log };
+    log
+}
+
+pub struct P2DiagnosticsPlugins;
+
+impl bevy::app::PluginGroup for P2DiagnosticsPlugins {
+    fn build(self) -> bevy::app::PluginGroupBuilder {
+        bevy::app::PluginGroupBuilder::start::<Self>().add(DiagnosticsPlugin).add(StageTimingPlugin).add(p2_render::asset_churn::AssetChurnPlugin)
+    }
 }
 
 pub fn capture_layer(app: &mut App) -> Option<BoxedLayer> {
@@ -301,7 +319,7 @@ fn overlay(
     cameras: Query<&Transform, With<SceneView>>,
     (mut dump, debug_view): (ResMut<Dump>, Option<ResMut<DebugView>>),
 ) -> Result {
-    if keys.just_pressed(KeyCode::F10) && dump.run.is_none() {
+    if keys.just_pressed(OVERLAY_KEY) && dump.run.is_none() {
         overlay.open = !overlay.open;
     }
     dump.requested |= keys.just_pressed(KeyCode::F11);

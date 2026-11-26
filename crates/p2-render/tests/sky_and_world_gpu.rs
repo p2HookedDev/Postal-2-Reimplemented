@@ -19,10 +19,10 @@ use bevy::prelude::Transform;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy::window::{PrimaryWindow, Window, WindowResolution};
-use p2_host::display::{GAMMA, MODERN_GRAPHICS, Settings};
-use p2_render::view::{OVERLAY_LAYERS, SKY_LAYER, SUN_VIEW_LAYER, SceneView};
-use p2_render::gamma::GammaPlugin;
-use p2_render::mesh_light::{DynamicLit, MeshLightPlugin, MeshLitMaterial};
+use p2_host::settings::{GAMMA, MODERN_GRAPHICS, Settings};
+use p2_render::world::view::{OVERLAY_LAYERS, SKY_LAYER, SUN_VIEW_LAYER, SceneView};
+use p2_render::post::gamma::GammaPlugin;
+use p2_render::world::mesh_light::{DynamicLit, MeshLightPlugin, MeshLitMaterial};
 
 const SIZE: u32 = 64;
 

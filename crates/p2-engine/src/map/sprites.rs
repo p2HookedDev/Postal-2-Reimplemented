@@ -1,5 +1,5 @@
 use super::*;
-use p2_render::sprites::SpriteLook;
+use p2_render::effects::sprites::SpriteLook;
 use p2_math::{Rotator, Vector};
 
 impl Session {

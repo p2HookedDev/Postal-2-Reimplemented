@@ -7,8 +7,8 @@ use super::*;
 use super::fluids::camera_view;
 use super::spawned::{ModelBuild, ModelKey, SpawnModel, actor_image, static_model_key};
 use crate::emitter_changes::apply_command;
-use p2_render::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, Liquid, LiquidRole, MeshEmitterLook, OCCLUSION_MARGIN, Pour};
-use p2_render::level_collision::StaticCollision;
+use p2_render::effects::particle_frame::{Blast, DrawnActor, DrawnEmitter, DrawnParticles, EmitterLook, EmitterShape, Liquid, LiquidRole, MeshEmitterLook, OCCLUSION_MARGIN, Pour};
+use p2_render::world::level_collision::StaticCollision;
 mod mesh_particles;
 mod sprites;
 mod bounds;
@@ -99,7 +99,7 @@ pub struct Particles {
     pub(super) blasts: Vec<Blast>,
 }
 
-const SHOT: (f32, f32) = p2_render::particle_frame::SHOT_PUSH;
+const SHOT: (f32, f32) = p2_render::effects::particle_frame::SHOT_PUSH;
 const SWING: (f32, f32) = (80.0, 600.0);
 const IMPACTS: [(&str, (f32, f32)); 10] = [
     ("SmokeHitPuffMelee", SWING),

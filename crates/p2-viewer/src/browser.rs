@@ -27,8 +27,8 @@ use p2_bevy_assets::library::Library;
 use p2_engine::map::{
     CanvasArea, MapSystems, SceneTargets, Session, animate_mesh_with, travel_package,
 };
-use p2_render::level::{SectionChunks, material_images, sections_of_static_mesh, skeletal_mesh_sections};
-use p2_render::scene::{ModelView, Scene, SectionView};
+use p2_render::world::level::{SectionChunks, material_images, sections_of_static_mesh, skeletal_mesh_sections};
+use p2_render::world::scene::{ModelView, Scene, SectionView};
 use p2_engine::play::PlayWorld;
 
 fn loop_browsed_meshes(time: Res<Time>, animated: Res<Animated>, mut meshes: ResMut<Assets<Mesh>>) {
@@ -157,7 +157,7 @@ enum Action {
 struct Targets<'w, 's> {
     contexts: EguiContexts<'w, 's>,
     scene: SceneTargets<'w, 's>,
-    view: ResMut<'w, p2_render::view::MeshView>,
+    view: ResMut<'w, p2_render::world::view::MainView>,
     area: ResMut<'w, CanvasArea>,
     input: ResMut<'w, ViewerInput>,
 }
@@ -297,7 +297,7 @@ impl Browser {
         if let Some(preview) = self.preview.take() {
             t.contexts.remove_image(preview.image.id());
         }
-        t.scene.scenes.write(p2_render::scene::SceneChange::Clear);
+        t.scene.scenes.write(p2_render::world::scene::SceneChange::Clear);
     }
 }
 
@@ -409,10 +409,10 @@ fn bounds(points: impl Iterator<Item = Vec3>) -> (Vec3, Vec3) {
 
 fn show_model(t: &mut SceneTargets, sections: Vec<SectionView>, placement: Transform, min: Vec3, max: Vec3) -> usize {
     let textured = sections.iter().filter(|s| s.texture.is_some()).count();
-    t.scenes.write(p2_render::scene::SceneChange::Show(Box::new(Scene {
+    t.commands.insert_resource(crate::controls::OrbitRadius(((max - min).length() / 2.0).max(1.0)));
+    t.scenes.write(p2_render::world::scene::SceneChange::Show(Box::new(Scene {
         models: vec![ModelView { sections, instances: vec![placement], zone: None, casts: true }],
         center: (min + max) / 2.0,
-        radius: ((max - min).length() / 2.0).max(1.0),
         sky: None,
         start: None,
         collision: None,

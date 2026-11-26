@@ -1,5 +1,6 @@
 mod common;
 
+use bevy::app::PluginGroup;
 use std::sync::{Arc, Mutex};
 
 use bevy::app::App;
@@ -17,7 +18,7 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::occlusion_culling::OcclusionCulling;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-use p2_render::particle_material::{ParticleMaterial, ParticlePlugin};
+use p2_render::effects::particle_material::{ParticleMaterial, ParticlePlugin};
 
 const SIZE: u32 = 64;
 
@@ -26,11 +27,11 @@ fn app() -> (App, Arc<Mutex<Vec<Vec<u8>>>>, bevy::asset::Handle<Image>) {
     common::headless_renderer(&mut app);
     app.add_plugins((
         ParticlePlugin,
-        p2_render::translucent_order::TranslucentOrderPlugin,
-        p2_render::blended::BlendedPlugin,
-        p2_render::lightmapped::LightmappedPlugin,
-        p2_render::actor_light::ActorLightPlugin,
-        p2_render::mesh_light::MeshLightPlugin,
+        p2_render::world::translucent_order::TranslucentOrderPlugin,
+        p2_render::world::blended::BlendedPlugin,
+        p2_render::world::lightmapped::LightmappedPlugin,
+        p2_render::lighting::actor_light::ActorLightPlugin,
+        p2_render::world::mesh_light::MeshLightPlugin,
     ));
     app.finish();
     app.cleanup();
@@ -124,7 +125,7 @@ mod monday {
     use bevy::time::TimeUpdateStrategy;
     use p2_engine::animation::AnimationPlugin;
     use p2_engine::map::{MapPresentPlugin, MapSystems, SceneTargets, Session, SpawnedActors};
-    use p2_render::view::{MeshView, SceneView};
+    use p2_render::world::view::{MainView, SceneView};
     use p2_engine::play::{Play, PlayPlugin, PlaySystems, PlayerInput};
 
     pub const W: u32 = 640;
@@ -139,11 +140,11 @@ mod monday {
         run_with(occlusion, warmup, count, |_| (Vec::new(), [turn, 0.0]))
     }
 
-    fn host<M>(size: UVec2, settings: p2_host::display::Settings, look: impl bevy::app::Plugins<M>) -> Option<(App, bevy::asset::Handle<Image>)> {
+    fn host<M>(size: UVec2, settings: p2_host::settings::Settings, look: impl bevy::app::Plugins<M>) -> Option<(App, bevy::asset::Handle<Image>)> {
         let root = common::game_dir()?;
         let mut app = App::new();
         common::headless_renderer(&mut app);
-        app.add_plugins((p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, MapPresentPlugin, p2_render::wounds::WoundsPlugin, bevy::render::diagnostic::RenderDiagnosticsPlugin))
+        app.add_plugins((p2_render::P2RenderPlugins.build().disable::<p2_render::post::gamma::GammaPlugin>().disable::<p2_render::modern::ModernGraphicsPlugin>(), PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, MapPresentPlugin, bevy::render::diagnostic::RenderDiagnosticsPlugin))
         .add_plugins(look)
         .insert_resource(settings)
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
@@ -157,7 +158,7 @@ mod monday {
         .before(MapSystems::Present))
         .add_systems(
             PostUpdate,
-            (move |mut session: ResMut<Session>, mut t: SceneTargets, mut view: ResMut<MeshView>, mut loaded: Local<bool>| {
+            (move |mut session: ResMut<Session>, mut t: SceneTargets, mut view: ResMut<MainView>, mut loaded: Local<bool>| {
                 view.viewport = Some((UVec2::ZERO, size));
                 t.play.set_canvas_size(size.as_vec2().to_array());
                 if !std::mem::replace(&mut *loaded, true) {
@@ -190,9 +191,9 @@ mod monday {
     }
 
     pub fn run_with(occlusion: bool, warmup: usize, count: usize, input: impl Fn(usize) -> (Vec<&'static str>, [f32; 2])) -> Option<Run> {
-        let (mut app, target) = host(UVec2::new(W, H), p2_host::display::Settings::default(), ())?;
+        let (mut app, target) = host(UVec2::new(W, H), p2_host::settings::Settings::default(), ())?;
         let world = app.world_mut();
-        world.resource_mut::<MeshView>().occlusion_culling = occlusion;
+        world.resource_mut::<MainView>().occlusion_culling = occlusion;
         let frames = Arc::new(Mutex::new(Vec::new()));
         let store = frames.clone();
         world.spawn(Readback::texture(target.clone())).observe(move |event: On<ReadbackComplete>| {
@@ -249,14 +250,14 @@ mod monday {
         spent
     }
 
-    fn player_settings(changes: &[(&str, &str)]) -> Option<p2_host::display::Settings> {
+    fn player_settings(changes: &[(&str, &str)]) -> Option<p2_host::settings::Settings> {
         let path = Path::new(&std::env::var_os("APPDATA")?).join("p2-reimplemented").join("Settings.ini");
         let text = std::fs::read_to_string(path).ok()?;
         let value = |key: &str| {
             let changed = changes.iter().find(|(name, _)| *name == key).map(|&(_, value)| value.to_owned());
             changed.or_else(|| text.lines().filter_map(|line| line.split_once('=')).find(|(name, _)| name.trim().eq_ignore_ascii_case(key)).map(|(_, value)| value.trim().to_owned()))
         };
-        Some(p2_host::display::Settings::read(|query| query.rsplit(' ').next().and_then(value).unwrap_or_default()))
+        Some(p2_host::settings::Settings::read(|query| query.rsplit(' ').next().and_then(value).unwrap_or_default()))
     }
 
     pub fn opaque_cost_by_row() -> Option<()> {
@@ -288,7 +289,7 @@ mod monday {
             ("ModernDecalAging", "False"),
         ];
         let (mut app, target) = host(UVec2::new(2560, 1440), player_settings(&[])?, p2_render::modern::ModernGraphicsPlugin)?;
-        app.world_mut().resource_mut::<MeshView>().occlusion_culling = true;
+        app.world_mut().resource_mut::<MainView>().occlusion_culling = true;
         first_frame(&mut app, &target);
         let cost = |app: &mut App, changes: &[(&str, &str)], settle: usize, frames: usize| {
             app.insert_resource(player_settings(changes).expect("the settings file"));
@@ -311,11 +312,11 @@ mod monday {
 
     pub fn blood_picture(size: UVec2, close: bool) -> Option<Vec<u8>> {
         use p2_math::{Rotator, Vector};
-        use p2_render::frame_facts::FrameFacts;
-        use p2_render::level_collision::LevelCollision;
+        use p2_render::world::frame_facts::FrameFacts;
+        use p2_render::world::level_collision::LevelCollision;
         use p2_vm::Value;
         let (mut app, target) = host(size, player_settings(&[])?, p2_render::modern::ModernGraphicsPlugin)?;
-        app.world_mut().resource_mut::<MeshView>().occlusion_culling = true;
+        app.world_mut().resource_mut::<MainView>().occlusion_culling = true;
         let latest = Arc::new(Mutex::new(Vec::new()));
         let store = latest.clone();
         app.world_mut().spawn(Readback::texture(target.clone())).observe(move |event: On<ReadbackComplete>| {
@@ -380,11 +381,11 @@ mod monday {
     fn fight_scene(size: UVec2, pile: bool) -> Option<(App, f64, bevy::asset::Handle<Image>)> {
         use bevy::ecs::query::With;
         use p2_math::{Rotator, Vector};
-        use p2_render::frame_facts::FrameFacts;
-        use p2_render::level_collision::LevelCollision;
+        use p2_render::world::frame_facts::FrameFacts;
+        use p2_render::world::level_collision::LevelCollision;
         use p2_vm::Value;
         let (mut app, target) = host(size, player_settings(&[])?, p2_render::modern::ModernGraphicsPlugin)?;
-        app.world_mut().resource_mut::<MeshView>().occlusion_culling = true;
+        app.world_mut().resource_mut::<MainView>().occlusion_culling = true;
         first_frame(&mut app, &target);
         for frame in 0..660 {
             app.world_mut().resource_mut::<PlayerInput>().mouse = if frame >= if pile { 560 } else { 630 } { [0.0, -2.0] } else { [0.0; 2] };
@@ -456,7 +457,7 @@ mod monday {
         let start = std::time::Instant::now();
         let costs = pass_costs(app, 90, 60);
         let frame = start.elapsed().as_secs_f64() * 1000.0 / 150.0;
-        let tiles = app.world().get_resource::<p2_render::lamps::MoverTiles>().map(p2_render::lamps::MoverTiles::counts);
+        let tiles = app.world().get_resource::<p2_render::lighting::lamps::MoverTiles>().map(p2_render::lighting::lamps::MoverTiles::counts);
         let opaque = costs.get("main_opaque_pass_3d").copied().unwrap_or(0.0);
         eprintln!("COST frame {frame:.2}, opaque {opaque:.2}, ssao {:.2}, shadow mask {:.2}; mover tiles and the most on a lamp {tiles:?}", costs.get("ssao").copied().unwrap_or(0.0), costs.get("lamp_shadow_mask").copied().unwrap_or(0.0));
         opaque
@@ -727,7 +728,7 @@ fn particles_take_the_scene_fog() {
 fn blended_layer_under_a_transparent_decal(blended: bool) -> ([u8; 3], [u8; 3]) {
     use bevy::light::ClusteredDecal;
     use bevy::material::AlphaMode;
-    use p2_render::blended::{BlendedMaterial, OpaqueDecals};
+    use p2_render::world::blended::{BlendedMaterial, OpaqueDecals};
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -796,9 +797,9 @@ fn blended_layers_have_no_decal_squares() {
 
 fn projected_floor(vertex_lit: bool, floor: u8, texel: [u8; 3]) -> [u8; 3] {
     use bevy::light::ClusteredDecal;
-    use p2_render::blended::{BlendedMaterial, OpaqueDecals};
-    use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
-    use p2_render::shader_layers::Layers;
+    use p2_render::world::blended::{BlendedMaterial, OpaqueDecals};
+    use p2_render::world::mesh_light::{DynamicLit, MeshLitMaterial};
+    use p2_render::world::shader_layers::Layers;
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -1069,7 +1070,7 @@ fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {
         let min = bounds.iter().map(|b| bevy::math::Vec3::from(b.min())).reduce(bevy::math::Vec3::min).expect("bounds");
         let max = bounds.iter().map(|b| bevy::math::Vec3::from(b.max())).reduce(bevy::math::Vec3::max).expect("bounds");
         for mesh in &mut meshes {
-            p2_render::particle_draw::bounds::pad_bounds(mesh, min, max);
+            p2_render::effects::particle_draw::bounds::pad_bounds(mesh, min, max);
         }
     }
     let actor = world.spawn_empty().id();
@@ -1078,7 +1079,7 @@ fn overlapping_emitters_centre(actor_order: bool) -> [u8; 2] {
         let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
         let mut drawn = world.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default(), NoFrustumCulling));
         if actor_order {
-            drawn.insert(p2_render::translucent_order::TranslucentDraw::Part { actor, order: index as u32 });
+            drawn.insert(p2_render::world::translucent_order::TranslucentDraw::Part { actor, order: index as u32 });
         }
     }
     let pixel = || frames.lock().expect("lock").last().map(|f| [0, 1, 2].map(|c| f[((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize + c]));
@@ -1274,7 +1275,7 @@ fn decals_stay_while_the_camera_turns() {
 }
 
 fn skinned_lit_quad(toward: Option<bool>) -> [u8; 3] {
-    use p2_render::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
+    use p2_render::lighting::actor_light::{ActorLitMaterial, HardwareLightUniform, HardwareLighting, SkinnedLighting};
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -1331,7 +1332,7 @@ fn skinned_actors_lit_like_the_driver() {
 }
 
 fn bsp_lit_quad(light_z: Option<f32>) -> [u8; 3] {
-    use p2_render::lightmapped::{BakedLight, LightmappedMaterial};
+    use p2_render::world::lightmapped::{BakedLight, LightmappedMaterial};
     dynamic_lit_quad(light_z, quad(100.0, -20.0), |world, mesh| {
         let material = world.resource_mut::<Assets<LightmappedMaterial>>().add(LightmappedMaterial { base: StandardMaterial::default(), extension: BakedLight::default() });
         world.spawn((mesh, MeshMaterial3d(material), Transform::default()));
@@ -1339,7 +1340,7 @@ fn bsp_lit_quad(light_z: Option<f32>) -> [u8; 3] {
 }
 
 fn dynamic_lit_quad(light_z: Option<f32>, mesh: Mesh, surface: impl FnOnce(&mut bevy::ecs::world::World, Mesh3d)) -> [u8; 3] {
-    use p2_render::bsp_light::DynamicLight;
+    use p2_render::lighting::bsp_light::DynamicLight;
     let (mut app, frames, target) = app();
     let world = app.world_mut();
     world.spawn((
@@ -1396,7 +1397,7 @@ fn bsp_lit_by_dynamic_lights_like_retail() {
 #[test]
 #[ignore = "needs a GPU"]
 fn vertex_lit_meshes_take_dynamic_lights() {
-    use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
+    use p2_render::world::mesh_light::{DynamicLit, MeshLitMaterial};
     let lit_quad = |light_z| {
         let mut mesh = quad(100.0, -20.0);
         let baked = 0.5f32.powf(2.2);
@@ -1418,8 +1419,8 @@ fn vertex_lit_meshes_take_dynamic_lights() {
 #[test]
 #[ignore = "needs a GPU"]
 fn shader_layers_like_the_driver() {
-    use p2_render::mesh_light::{DynamicLit, MeshLitMaterial};
-    use p2_render::shader_layers::Layers;
+    use p2_render::world::mesh_light::{DynamicLit, MeshLitMaterial};
+    use p2_render::world::shader_layers::Layers;
     use p2_bevy_assets::library::{SpecularCoords, SpecularMode, SpecularParams};
     let texel = |world: &mut bevy::ecs::world::World, rgba: [u8; 4]| {
         let size = Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };

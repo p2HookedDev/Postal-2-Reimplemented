@@ -16,9 +16,9 @@ use controls::ViewerControlsPlugin;
 use game_dir::GameDirPlugin;
 use p2_engine::P2EnginePlugins;
 use p2_engine::diagnostics::{DiagnosticsPlugin, capture_layer, install_panic_hook};
-use p2_host::display::DisplayPlugin;
+use p2_host::settings::DisplayPlugin;
 use p2_host::game_dir_form::GameDirForm;
-use p2_render::gamma::GammaPlugin;
+use p2_render::post::gamma::GammaPlugin;
 use p2_render::modern::ModernGraphicsPlugin;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]

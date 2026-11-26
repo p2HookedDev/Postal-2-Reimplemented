@@ -95,7 +95,7 @@ fn report_lost_vm(play: Res<Play>, session: Res<Session>, mut next: ResMut<NextS
 fn drop_failed_map(mut failed: MessageReader<MapFailed>, mut session: ResMut<Session>, mut t: SceneTargets) {
     if failed.read().last().is_some() {
         session.clear(&mut t);
-        t.scenes.write(p2_render::scene::SceneChange::Clear);
+        t.scenes.write(p2_render::world::scene::SceneChange::Clear);
     }
 }
 
@@ -132,7 +132,7 @@ pub(super) fn configs(game: &Game) -> Vec<(&'static str, Ini)> {
     let read = |names: &[&str]| {
         names.iter().find_map(|name| std::fs::read(game.system.join(name)).ok()).map(|bytes| Ini::from_bytes(&bytes))
     };
-    [("System", read(&["Postal2.ini", "Default.ini"])), ("User", read(&["User.ini", "DefUser.ini"])), ("Selectors", read(&["Selectors.ini"])), ("Subtitles", read(&["Subtitles.ini"])), ("Settings", Some(p2_host::display::load_settings()))]
+    [("System", read(&["Postal2.ini", "Default.ini"])), ("User", read(&["User.ini", "DefUser.ini"])), ("Selectors", read(&["Selectors.ini"])), ("Subtitles", read(&["Subtitles.ini"])), ("Settings", Some(p2_host::settings::load_settings()))]
         .into_iter()
         .filter_map(|(name, ini)| Some((name, ini?)))
         .collect()
@@ -146,6 +146,7 @@ mod tests {
     use bevy::state::prelude::State;
 
     fn host() -> App {
+        use bevy::app::PluginGroup;
         let root = std::env::temp_dir().join("p2-engine-no-such-install");
         let mut app = App::new();
         app.add_plugins((
@@ -153,7 +154,7 @@ mod tests {
             bevy::asset::AssetPlugin::default(),
             bevy::transform::TransformPlugin,
             bevy::state::app::StatesPlugin,
-            p2_render::P2RenderPlugins,
+            p2_render::P2RenderPlugins.build().disable::<p2_render::post::gamma::GammaPlugin>().disable::<p2_render::modern::ModernGraphicsPlugin>().disable::<p2_render::effects::wounds::WoundsPlugin>(),
             crate::play::PlayPlugin,
             crate::animation::AnimationPlugin,
             MapLoadPlugin,
@@ -177,9 +178,9 @@ mod tests {
     fn a_map_that_cannot_be_opened_fails_is_dropped_and_no_map_is_loading() {
         let mut app = host();
         app.world_mut().write_message(LoadMap { package: map_package("Nope"), url: None });
-        let level = app.world().resource::<p2_render::particle_frame::DrawnParticles>().level;
+        let level = app.world().resource::<p2_render::effects::particle_frame::DrawnParticles>().level;
         app.world_mut().run_schedule(EguiPrimaryContextPass);
-        assert_ne!(app.world().resource::<p2_render::particle_frame::DrawnParticles>().level, level);
+        assert_ne!(app.world().resource::<p2_render::effects::particle_frame::DrawnParticles>().level, level);
         let failures: Vec<String> = app.world_mut().resource_mut::<Messages<MapFailed>>().drain().map(|failed| failed.0).collect();
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("Nope"), "{failures:?}");
@@ -191,7 +192,7 @@ mod tests {
     #[test]
     fn without_an_area_the_canvas_is_left_alone() {
         let mut app = host();
-        app.init_resource::<CanvasArea>().init_resource::<bevy_egui::EguiUserTextures>().add_systems(EguiPrimaryContextPass, canvas::paint_map_canvas);
+        app.init_resource::<CanvasArea>().init_resource::<bevy_egui::EguiUserTextures>().add_systems(EguiPrimaryContextPass, hud::canvas::paint_map_canvas);
         let canvas = app.world().resource::<Play>().canvas();
         app.world_mut().run_schedule(EguiPrimaryContextPass);
         assert_eq!(app.world().resource::<Play>().canvas(), canvas);

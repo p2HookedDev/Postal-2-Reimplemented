@@ -1,5 +1,6 @@
 mod common;
 
+use bevy::app::PluginGroup;
 use common::game_dir;
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashSet};
@@ -21,7 +22,7 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::transform::components::Transform;
 use p2_engine::animation::AnimationPlugin;
 use p2_engine::map::{MapPresentPlugin, MapSystems, SceneTargets, Session, SpawnedActors};
-use p2_render::view::{CanvasDrawn, FollowActor, MeshView, SceneView};
+use p2_render::world::view::{CanvasDrawn, FollowActor, MainView, SceneView};
 use p2_host::frame_times::FrameTimes;
 use p2_engine::play::{Play, PlayPlugin, PlaySystems, PlayerInput};
 use p2_vm::ObjectId;
@@ -53,13 +54,14 @@ fn input_at(frame: u32) -> (Vec<&'static str>, [f32; 2]) {
 
 fn monday(root: &Path, threaded: bool, script: fn(u32) -> (Vec<&'static str>, [f32; 2])) -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, p2_render::P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, MapPresentPlugin, p2_render::wounds::WoundsPlugin))
+    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, MapPresentPlugin))
+        .add_plugins(p2_render::P2RenderPlugins.build().disable::<p2_render::post::gamma::GammaPlugin>().disable::<p2_render::modern::ModernGraphicsPlugin>())
         .init_asset::<Mesh>()
         .init_asset::<Image>()
         .init_asset::<StandardMaterial>()
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AudioSource>()
-        .init_resource::<MeshView>()
+        .init_resource::<MainView>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
         .insert_resource(Session::new(root.to_path_buf()))
         .insert_resource(Holder { frame: 0, url: None, loading: false })

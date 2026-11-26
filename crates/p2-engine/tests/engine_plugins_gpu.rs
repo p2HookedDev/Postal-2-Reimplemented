@@ -9,8 +9,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use bevy_egui::EguiPlugin;
 use p2_engine::P2EnginePlugins;
-use p2_host::display::DisplayPlugin;
-use p2_render::gamma::GammaPlugin;
+use p2_host::settings::DisplayPlugin;
+use p2_render::post::gamma::GammaPlugin;
 use p2_render::modern::ModernGraphicsPlugin;
 
 fn run_frames(engine: PluginGroupBuilder) {

@@ -16,8 +16,8 @@ use bevy::prelude::Transform;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
-use p2_render::lightmapped::{BakedLight, LightmappedMaterial};
-use p2_render::world_pass::{WorldCamera, WorldDraws, WorldPassPlugin, WorldSeenZones, WorldSection, chunks_of};
+use p2_render::world::lightmapped::{BakedLight, LightmappedMaterial};
+use p2_render::world::world_pass::{WorldCamera, WorldDraws, WorldPassPlugin, WorldSeenZones, WorldSection, chunks_of};
 
 const SIZE: u32 = 64;
 const CLEAR: u8 = 43;
@@ -30,7 +30,7 @@ struct Scene {
 fn scene(depth_prepass: bool) -> Scene {
     let mut app = App::new();
     common::headless_renderer(&mut app);
-    app.add_plugins((p2_render::lightmapped::LightmappedPlugin, WorldPassPlugin));
+    app.add_plugins((p2_render::world::lightmapped::LightmappedPlugin, WorldPassPlugin));
     app.finish();
     app.cleanup();
     let world = app.world_mut();
@@ -58,7 +58,7 @@ fn scene(depth_prepass: bool) -> Scene {
     Scene { app, frames }
 }
 
-fn add_quad(scene: &mut Scene, half: f32) -> (Handle<Mesh>, Arc<[p2_render::world_pass::Chunk]>) {
+fn add_quad(scene: &mut Scene, half: f32) -> (Handle<Mesh>, Arc<[p2_render::world::world_pass::Chunk]>) {
     let mut mesh = common::quad(half, 0.0, [1.0; 4]);
     let chunks = chunks_of(&mut mesh).expect("a triangle list");
     (scene.app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh), chunks)

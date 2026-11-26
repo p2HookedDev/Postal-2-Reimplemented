@@ -4,12 +4,12 @@ use bevy::ecs::world::World;
 use bevy::pbr::StandardMaterial;
 
 use super::*;
-use crate::view::SKY_LAYER;
+use crate::world::view::SKY_LAYER;
 use p2_render_cpu::LightEffect;
-use p2_host::display::{MODERN_GRAPHICS, MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
-use crate::actor_light::LightEnvironment;
-use crate::blended::TerrainLayer;
-use crate::terrain_material::TerrainLayers;
+use p2_host::settings::{MODERN_GRAPHICS, MODERN_REFLECTION_STRENGTH, MODERN_REFLECTIONS};
+use crate::lighting::actor_light::LightEnvironment;
+use crate::world::blended::TerrainLayer;
+use crate::world::terrain_material::TerrainLayers;
 
 #[test]
 fn every_material_kind_follows_the_setting() {
@@ -35,7 +35,7 @@ fn every_material_kind_follows_the_setting() {
     world.init_resource::<Messages<AssetEvent<ActorLitMaterial>>>();
     world.init_resource::<Messages<AssetEvent<TerrainMaterial>>>();
     world.init_resource::<Messages<AssetEvent<TerrainLayerMaterial>>>();
-    world.init_resource::<crate::debug_view::DebugView>();
+    world.init_resource::<crate::post::debug_view::DebugView>();
     let mut flags = |on: bool| {
         let value = if on { "True" } else { "False" };
         world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { value.to_owned() } else { String::new() }));
@@ -65,19 +65,19 @@ fn every_material_gets_the_flag_once() {
     world.insert_resource(materials);
     world.init_resource::<Messages<AssetEvent<LightmappedMaterial>>>();
     world.insert_resource(Settings::read(|query| if query == MODERN_GRAPHICS { "True".to_owned() } else { String::new() }));
-    world.init_resource::<crate::debug_view::DebugView>();
+    world.init_resource::<crate::post::debug_view::DebugView>();
     world.run_system_once(follow_flag::<LightmappedMaterial>).unwrap();
     let bits = modern_flag(world.resource::<Settings>());
     let level = world.resource::<Settings>().material_level();
     assert!(bits & MODERN_ON != 0);
     let materials = world.resource::<Assets<LightmappedMaterial>>();
     assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| material.flag() & 7 == u16::from(bits))));
-    assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| crate::material_class::levels_of(material.flag()).0 == level)));
+    assert!(ids.iter().all(|id| materials.get(id).is_some_and(|material| crate::world::material_class::levels_of(material.flag()).0 == level)));
 }
 
 #[test]
 fn the_pool_mirror_bit_follows_the_reflection_pass_into_every_key() {
-    use crate::shaders::SkyKey;
+    use crate::gpu::shaders::SkyKey;
     assert_eq!(level_bits(15, 15) & (POOL_MIRROR | 7), 0);
     let settings = |level: &str, strength: &str| {
         Settings::read(|query| match query {

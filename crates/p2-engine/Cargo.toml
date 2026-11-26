@@ -9,6 +9,8 @@ repository.workspace = true
 [features]
 # Developer builds only: GPU pass timers, about 0.1 ms a frame.
 gpu-timers = []
+# Developer builds only: the timers, wgpu's spans in the log and the VM profiled by class from the start.
+profile = ["gpu-timers"]
 
 [dependencies]
 p2-math.workspace = true

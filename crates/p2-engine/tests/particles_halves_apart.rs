@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-const DRAWING: [&str; 5] = ["../../p2-render/src/particle_frame.rs", "../../p2-render/src/particle_draw.rs", "../../p2-render/src/particle_draw", "../../p2-render/src/fire_volume.rs", "../../p2-render/src/reflections.rs"];
+const DRAWING: [&str; 5] = ["../../p2-render/src/effects/particle_frame.rs", "../../p2-render/src/effects/particle_draw.rs", "../../p2-render/src/effects/particle_draw", "../../p2-render/src/effects/fire_volume.rs", "../../p2-render/src/post/reflections.rs"];
 const SIMULATION: [&str; 2] = ["map/particles.rs", "map/particles"];
 const SIMULATION_NAMES: [&str; 1] = ["crate::map"];
 const DRAWING_NAMES: [&str; 6] = ["ParticleMaterial", "ShaderBuffer", "RECORD_WORDS", "sprite_light", "lamp_sum", "DynamicLightList"];

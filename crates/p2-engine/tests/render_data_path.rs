@@ -26,9 +26,9 @@ use bevy::transform::components::{GlobalTransform, Transform, TransformTreeChang
 use p2_assets::{AnalogTrack, AnimSequence, Bone, Influence, MeshAnimation, NamedBone, SkelMeshSection, SkeletalMesh, Wedge};
 use p2_bevy_assets::{bone_matrices, skeletal_mesh_to_meshes, skin_bind, unreal_to_bevy};
 use p2_engine::animation::{Animated, AnimatedMesh, AnimationPlugin};
-use p2_render::view::{ActorLook, ActorMaterialCache, ActorMaterials, ActorModel, FollowActor, spawn_actor_sections};
-use p2_render::mesh_light::MeshLitMaterial;
-use p2_render::scene::{SectionView, Skin, SkinJoint};
+use p2_render::world::view::{ActorLook, ActorMaterialCache, ActorMaterials, ActorModel, FollowActor, spawn_actor_sections};
+use p2_render::world::mesh_light::MeshLitMaterial;
+use p2_render::world::scene::{SectionView, Skin, SkinJoint};
 use p2_host::frame_times::FrameTimes;
 use p2_vm::ObjectId;
 
@@ -236,7 +236,7 @@ fn world(layout: Layout, shape: Shape, gpu: bool) -> App {
             app.init_resource::<OldPoses>().add_systems(Update, (walk, old_animate, old_pose_joints).chain());
         }
         Layout::New => {
-            app.init_resource::<p2_engine::play::Play>().init_resource::<p2_engine::animation::FreeRunPoses>().add_plugins((AnimationPlugin, p2_engine::FrameOrderPlugin)).add_systems(Update, walk.before(p2_render::view::MeshViewSystems::Camera));
+            app.init_resource::<p2_engine::play::Play>().init_resource::<p2_engine::animation::FreeRunPoses>().add_plugins((AnimationPlugin, p2_engine::FrameOrderPlugin)).add_systems(Update, walk.before(p2_render::world::view::MainViewSystems::Camera));
         }
     }
     let world = app.world_mut();

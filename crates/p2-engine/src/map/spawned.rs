@@ -530,7 +530,7 @@ fn update_projections(session: &mut Session, t: &mut ProjectionParams) {
                     projector.material_blending
                 );
                 let decal = ClusteredDecal { base_color_texture: Some(image), tag, ..Default::default() };
-                let entity = t.commands.spawn((MapScoped, decal, transform, p2_render::wounds::DecalAge::new(tag, projector.life, &projector.texture))).id();
+                let entity = t.commands.spawn((MapScoped, decal, transform, p2_render::effects::wounds::DecalAge::new(tag, projector.life, &projector.texture))).id();
                 if let Some(old) = projectors.dynamic_decals.insert(actor, entity) {
                     t.commands.entity(old).despawn();
                 }

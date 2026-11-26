@@ -2,8 +2,8 @@ use bevy::ecs::prelude::{MessageWriter, ResMut};
 use p2_vm::{LoaderRef, ObjectId, Prop, Vm, ini_truthy};
 
 use super::{Play, PlayWorld};
-use p2_host::display::{MODERN_PHOTO_ACTIVE, MODERN_PHOTO_HIDE_PLAYER};
-use p2_render::photo::ScreenshotRequest;
+use p2_host::settings::{MODERN_PHOTO_ACTIVE, MODERN_PHOTO_HIDE_PLAYER};
+use p2_render::post::photo::ScreenshotRequest;
 
 pub(crate) fn photo_active<L: LoaderRef>(vm: &mut Vm<L>) -> bool {
     vm.get_command(MODERN_PHOTO_ACTIVE).is_ok_and(|value| ini_truthy(&value))

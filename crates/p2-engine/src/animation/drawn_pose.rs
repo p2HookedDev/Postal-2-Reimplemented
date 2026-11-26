@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use super::foot_placement::Feet;
 use super::hit_reaction::Flinches;
 use super::{AnimatedMesh, Poses};
-use p2_render::components::FollowActor;
+use p2_render::world::components::FollowActor;
 use crate::play::PlayWorld;
 
 pub(super) struct Layer<T> {

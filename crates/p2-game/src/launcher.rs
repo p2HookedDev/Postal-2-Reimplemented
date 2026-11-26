@@ -1,17 +1,20 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use bevy::app::{App, AppExit, Plugin};
 use bevy::ecs::error::Result;
-use bevy::ecs::prelude::{Commands, MessageWriter, ResMut, Resource, Single};
+use bevy::ecs::prelude::{Commands, MessageReader, MessageWriter, ResMut, Resource};
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::log::warn;
+use bevy::math::UVec2;
 use bevy::state::prelude::{AppExtStates, NextState, OnEnter, States, in_state};
-use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use p2_host::game_dir::{known_game_dir, save_game_dir};
 use p2_host::game_dir_form::GameDirForm;
 use p2_host::install;
-use p2_engine::map::{Hud, LoadMap, Particles, Session, SpawnedActors};
+use p2_engine::map::{CanvasArea, Hud, LoadMap, MapFailed, MapSystems, Particles, Session, SpawnedActors, map_package, start_map};
+use p2_package::Ini;
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
@@ -35,9 +38,47 @@ impl Plugin for LauncherPlugin {
         app.init_state::<GameState>()
             .insert_resource(form)
             .insert_resource(Launcher { installs, failure: None })
-            .add_systems(OnEnter(GameState::Launcher), (release_cursor, drop_session))
-            .add_systems(EguiPrimaryContextPass, launcher.run_if(in_state(GameState::Launcher)));
+            .add_systems(OnEnter(GameState::Launcher), drop_session)
+            .add_systems(EguiPrimaryContextPass, launcher.run_if(in_state(GameState::Launcher)))
+            .add_systems(EguiPrimaryContextPass, place_map.after(MapSystems::Load).before(MapSystems::Paint).run_if(resource_exists::<Session>));
     }
+}
+
+pub(crate) fn system_ini(root: &Path) -> anyhow::Result<Ini> {
+    let ini = root.join("System").join("Postal2.ini");
+    Ini::read(&ini).with_context(|| ini.display().to_string())
+}
+
+fn new_game(root: &Path) -> anyhow::Result<(String, Session)> {
+    let system = system_ini(root)?;
+    let map = match start_map(std::env::args().skip(1), root) {
+        Some(name) => name,
+        None => system.get("URL", "LocalMap").context("no [URL] LocalMap in Postal2.ini")?.to_owned(),
+    };
+    Ok((map_package(&map), Session::new(root.to_path_buf())))
+}
+
+fn place_map(
+    mut contexts: EguiContexts,
+    mut view: ResMut<p2_render::world::view::MainView>,
+    mut area: ResMut<CanvasArea>,
+    mut launcher: ResMut<Launcher>,
+    mut next: ResMut<NextState<GameState>>,
+    mut failed: MessageReader<MapFailed>,
+) -> Result {
+    let ctx = contexts.ctx_mut()?;
+    let rect = ctx.viewport_rect();
+    let scale = ctx.pixels_per_point();
+    let size = UVec2::new((rect.width() * scale) as u32, (rect.height() * scale) as u32);
+    view.viewport = (size.x > 0 && size.y > 0).then_some((UVec2::ZERO, size));
+    area.0 = Some(rect);
+    if let Some(MapFailed(failure)) = failed.read().last() {
+        launcher.failure = Some(failure.clone());
+        view.viewport = None;
+        area.0 = None;
+        next.set(GameState::Launcher);
+    }
+    Ok(())
 }
 
 fn default_install(saved: Option<PathBuf>, found: &[PathBuf]) -> Option<PathBuf> {
@@ -47,11 +88,6 @@ fn default_install(saved: Option<PathBuf>, found: &[PathBuf]) -> Option<PathBuf>
 /// Removed at the state change: map systems later in the failing frame still read the session.
 fn drop_session(mut commands: Commands) {
     commands.remove_resource::<Session>();
-}
-
-fn release_cursor(mut cursor: Single<&mut CursorOptions>) {
-    cursor.visible = true;
-    cursor.grab_mode = CursorGrabMode::None;
 }
 
 fn launcher(
@@ -105,7 +141,7 @@ fn launcher(
         exit.write(AppExit::Success);
     }
     if play && let Some(info) = form.info.clone() {
-        match crate::new_game(&info.dir) {
+        match new_game(&info.dir) {
             Ok((package, session)) => {
                 if let Err(e) = save_game_dir(&info.dir) {
                     warn!("could not remember the game folder: {e}");

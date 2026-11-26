@@ -1,6 +1,6 @@
 use bevy::ecs::prelude::{Res, ResMut, Resource};
 use bevy::time::{Real, Time};
-use p2_render::compiling::CompilingPipelines;
+use p2_render::gpu::compiling::CompilingPipelines;
 
 use super::{Play, PlayWorld};
 

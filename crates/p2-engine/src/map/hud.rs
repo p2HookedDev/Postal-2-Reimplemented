@@ -1,5 +1,9 @@
 use super::*;
-use p2_render::canvas::{CanvasFont, CanvasImage, CanvasSource};
+
+pub(super) mod canvas;
+pub(super) mod canvas_actors;
+pub(super) mod loading;
+use p2_render::hud::canvas::{CanvasFont, CanvasImage, CanvasSource};
 
 const FIRST_READS: [std::time::Duration; 2] = [std::time::Duration::from_millis(1), std::time::Duration::from_millis(8)];
 
@@ -19,8 +23,8 @@ pub struct Hud {
 impl Hud {
     pub(super) fn leave_map(&mut self, map: Option<&str>, commands: &mut Commands) {
         if let Some(map) = map {
-            self.hud_assets.fonts.retain(|path, _| !p2_render::canvas::in_package(path, map));
-            self.hud_assets.textures.retain(|path, _| !p2_render::canvas::in_package(path, map));
+            self.hud_assets.fonts.retain(|path, _| !p2_render::hud::canvas::in_package(path, map));
+            self.hud_assets.textures.retain(|path, _| !p2_render::hud::canvas::in_package(path, map));
         }
         self.movies.stop(commands);
         self.canvas_actors.clear();

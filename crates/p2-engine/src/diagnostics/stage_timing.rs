@@ -242,7 +242,7 @@ fn log_scene_counts(
     time: Res<Time<Real>>,
     (meshes, culled): (Query<(&ViewVisibility, Has<FollowActor>, Has<FollowBone>), With<Mesh3d>>, Query<&InheritedVisibility, Without<NoCpuCulling>>),
     (cameras, windows): (Query<&Camera>, Query<&Window>),
-    tiles: Option<Res<p2_render::lamps::MoverTiles>>,
+    tiles: Option<Res<p2_render::lighting::lamps::MoverTiles>>,
     mut since: Local<f32>,
 ) {
     if let Some(settings) = settings.as_ref().filter(|settings| settings.is_changed()) {
@@ -295,7 +295,7 @@ fn log_gpu_timing(store: Option<Res<DiagnosticsStore>>, time: Res<Time<Real>>, m
     let mut rank = 0;
     list.retain(|(_, name)| {
         rank += 1;
-        rank <= 14 || name == p2_render::lamps::LAMP_SHADOW_SPAN
+        rank <= 14 || name == p2_render::lighting::lamps::LAMP_SHADOW_SPAN
     });
     let list: Vec<String> = list.iter().map(|(ms, name)| format!("{name} {ms:.2}")).collect();
     bevy::log::info!("gpu ms per frame by pass, nested passes overlap: {}", list.join(", "));
@@ -308,7 +308,7 @@ impl Plugin for StageTimingPlugin {
         use bevy::light::SimulationLightSystems as Light;
         use bevy::transform::TransformSystems;
         use crate::play::PlaySystems;
-        use p2_render::view::SceneViewSystems;
+        use p2_render::world::view::SceneViewSystems;
         use bevy::render::RenderSystems as Stage;
         let clocks = StageClocks::default();
         let render_clock = RenderStageClock(clocks.render.clone());
@@ -318,7 +318,11 @@ impl Plugin for StageTimingPlugin {
         app.insert_resource(clocks);
         #[cfg(feature = "gpu-timers")]
         app.add_plugins(RenderDiagnosticsPlugin).add_systems(Update, log_gpu_timing);
-        app.add_systems(Update, (log_stage_timing, log_scene_counts));
+        app.add_systems(Update, (log_stage_timing, log_scene_counts, log_frame_times));
+        #[cfg(feature = "profile")]
+        {
+            app.world_mut().get_resource_or_init::<FrameTimes>().vm_profile = VmProfile::TickByClass;
+        }
         app.add_systems(First, update_mark::<1>);
         app.add_systems(Last, update_mark::<0>);
         app.add_systems(

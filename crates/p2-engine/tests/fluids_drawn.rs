@@ -12,15 +12,15 @@ use bevy::mesh::{Mesh, Mesh3d, VertexAttributeValues};
 use bevy::pbr::MeshMaterial3d;
 use bevy::transform::components::{GlobalTransform, Transform};
 use p2_engine::map::{MapSystems, SceneTargets, Session};
-use p2_render::particle_material::ParticleMaterial;
-use p2_render::view::SceneView;
+use p2_render::effects::particle_material::ParticleMaterial;
+use p2_render::world::view::SceneView;
 use p2_engine::play::{PlaySystems, PlayerInput};
 
 fn played(root: &Path) -> App {
     let mut app = common::played_app();
     app.insert_resource(Session::new(root.to_path_buf())).add_systems(
         PostUpdate,
-        (|mut session: ResMut<Session>, mut t: SceneTargets, mut view: ResMut<p2_render::view::MeshView>, mut loaded: Local<bool>| {
+        (|mut session: ResMut<Session>, mut t: SceneTargets, mut view: ResMut<p2_render::world::view::MainView>, mut loaded: Local<bool>| {
             view.viewport = Some((UVec2::ZERO, UVec2::new(1024, 768)));
             t.play.set_canvas_size([1024.0, 768.0]);
             if !std::mem::replace(&mut *loaded, true) {

@@ -1,13 +1,13 @@
 use crate::actors::ProjectorBlending;
 use super::*;
 use p2_bevy_assets::library::LoadError;
-use p2_render::level::{
+use p2_render::world::level::{
     MaterialSwitches, switch_materials,
     BspParts, MaterialCache, MeshPlacing, Placement, StaticLevel, StaticParts, SwitchImage, TerrainParts, TerrainZones, antiportal_actors, bake_lamps, bsp_models,
     bsp_groups, mark_restyled, resolve_mesh_paths, static_collision, static_models, switched_images, terrain_models,
 };
-use p2_render::lamps::LoadBake;
-use p2_render::level_collision::LevelAlbedos;
+use p2_render::lighting::lamps::LoadBake;
+use p2_render::world::level_collision::LevelAlbedos;
 use p2_assets::FinalBlend;
 use p2_math::{Rotator, Vector};
 mod mesh_sections;
@@ -112,7 +112,7 @@ impl Session {
         self.add_sprites(sprites, -center, spawn);
         self.add_coronas(coronas, -center, spawn);
         self.add_fluids(fluids, -center, t);
-        t.scenes.write(p2_render::scene::SceneChange::Show(Box::new(scene)));
+        t.scenes.write(p2_render::world::scene::SceneChange::Show(Box::new(scene)));
         Ok(status)
     }
 
@@ -182,7 +182,7 @@ impl PreparedScene {
     ) -> Result<Self, LoadError> {
         let (game, t) = (&mut built, &mut assets);
         let (clock, mut lap, mut times) = (std::time::Instant::now(), std::time::Instant::now(), Vec::new());
-        let bakes = p2_render::lamps::bakes_at_load();
+        let bakes = p2_render::lighting::lamps::bakes_at_load();
         let weight = |name: &str| SCENE_PHASES.iter().find(|(phase, _)| *phase == name).map_or(0.0, |&(phase, ms)| if phase == BAKE_PHASE && !bakes { 0.0 } else { ms });
         let total: f32 = SCENE_PHASES.iter().map(|(name, _)| weight(name)).sum();
         let mut done = 0.0;
@@ -310,7 +310,6 @@ impl PreparedScene {
         let mut scene = Scene {
             models,
             center,
-            radius: ((max - min).length() / 2.0).max(1.0),
             sky,
             start: start.map(|(location, rotation)| (Vec3::from(to_bevy(location)), rotation.yaw)),
             collision: Some(static_collision(

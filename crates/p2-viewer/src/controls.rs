@@ -10,8 +10,8 @@ use bevy::math::{EulerRot, Quat, Vec3};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 use p2_bevy_assets::to_bevy;
-use p2_render::level_collision::LevelCollision;
-use p2_render::view::{MeshViewSystems, SceneView, ShownScene};
+use p2_render::world::level_collision::LevelCollision;
+use p2_render::world::view::{MainViewSystems, SceneView, ShownScene};
 use p2_math::Vector;
 
 use crate::walk::{Body, EYE_HEIGHT, step};
@@ -28,12 +28,20 @@ const MAX_WALK_DELTA: f32 = 0.1;
 
 pub struct ViewerControlsPlugin;
 
+#[derive(Resource, Default)]
+pub struct OrbitRadius(pub f32);
+
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct ViewerControlSystems;
+
 impl Plugin for ViewerControlsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ViewerInput>()
             .init_resource::<Walking>()
             .init_resource::<Rig>()
-            .add_systems(Update, (headlight, control.in_set(MeshViewSystems::Control)));
+            .init_resource::<OrbitRadius>()
+            .configure_sets(Update, ViewerControlSystems.after(MainViewSystems::Apply).before(MainViewSystems::Camera))
+            .add_systems(Update, (headlight, control.in_set(ViewerControlSystems)));
     }
 }
 
@@ -82,6 +90,7 @@ fn control(
     scroll: Res<AccumulatedMouseScroll>,
     time: Res<Time>,
     shown: Res<ShownScene>,
+    orbit: Res<OrbitRadius>,
     collision: Res<LevelCollision>,
     mut walking: ResMut<Walking>,
     mut rig: ResMut<Rig>,
@@ -89,9 +98,13 @@ fn control(
 ) {
     if shown.is_changed() {
         *walking = Walking::default();
-        let start = shown.start_view().unwrap_or_else(|| orbit_start(shown.radius));
+        let radius = collision.model().filter(|model| !model.points.is_empty()).map_or(orbit.0, |model| {
+            let (lo, hi) = model.points.iter().map(|&point| Vec3::from(point)).fold((Vec3::MAX, Vec3::MIN), |(lo, hi), point| (lo.min(point), hi.max(point)));
+            ((hi - lo).length() / 2.0).max(1.0)
+        });
+        let start = shown.start_view().unwrap_or_else(|| orbit_start(radius));
         let (yaw, pitch, _) = start.rotation.to_euler(EulerRot::YXZ);
-        let speed = if shown.start.is_some() { MAP_SPEED } else { (shown.radius / 8.0).max(MIN_MESH_SPEED) };
+        let speed = if shown.start.is_some() { MAP_SPEED } else { (radius / 8.0).max(MIN_MESH_SPEED) };
         *rig = Rig { orbit: collision.0.is_none(), yaw, pitch, distance: start.position.length(), position: start.position, speed };
     }
     let lines = match scroll.unit {

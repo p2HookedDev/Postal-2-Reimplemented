@@ -78,7 +78,7 @@ impl Movies {
         play: &mut Play,
         commands: &mut Commands,
         assets: &mut AssetStores,
-        painter: &mut p2_render::canvas::CanvasPainter,
+        painter: &mut p2_render::hud::canvas::CanvasPainter,
     ) {
         let now = Instant::now();
         let delta = self.last.map_or(0.0, |last| now.duration_since(last).as_secs_f32());

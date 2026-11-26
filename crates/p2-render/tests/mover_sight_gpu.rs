@@ -19,8 +19,8 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use p2_math::Vector;
-use p2_render::components::FollowActor;
-use p2_render::view::{MoverSightPlugin, MoversSeen};
+use p2_render::world::components::FollowActor;
+use p2_render::world::view::{MoverSightPlugin, MoversSeen};
 
 const SIZE: u32 = 64;
 

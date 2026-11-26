@@ -1,11 +1,25 @@
+use bevy::app::{App, Plugin, Update};
 use bevy::ecs::prelude::{MessageReader, Res, ResMut, Single};
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseButton, MouseButtonInput, MouseWheel};
 use bevy::input::{ButtonInput, ButtonState};
+use bevy::state::prelude::in_state;
 use bevy::window::Window;
-use p2_engine::play::PlayerInput;
+use p2_engine::diagnostics::OVERLAY_KEY;
+use p2_engine::play::{PlayerInput, PlaySystems};
 
-pub fn read_player_input(
+use crate::launcher::GameState;
+
+pub struct PlayerInputPlugin;
+
+impl Plugin for PlayerInputPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, read_player_input.in_set(PlaySystems::Input).run_if(in_state(GameState::Playing)));
+    }
+}
+
+fn read_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
@@ -23,7 +37,7 @@ pub fn read_player_input(
         if pressed && let Some(text) = &key.text {
             input.typed.push_str(text);
         }
-        let Some(name) = engine_key(key.key_code).filter(|_| window.focused && key.key_code != KeyCode::F10) else { continue };
+        let Some(name) = engine_key(key.key_code).filter(|_| window.focused && key.key_code != OVERLAY_KEY) else { continue };
         if pressed || !keys.get_pressed().any(|&other| engine_key(other) == Some(name)) {
             input.key_events.push((name, pressed));
         }
@@ -40,7 +54,7 @@ pub fn read_player_input(
     input.cursor = window.cursor_position().map(|position| position.to_array());
     input.playing = true;
     input.held.clear();
-    input.held.extend(keys.get_pressed().filter(|&&key| key != KeyCode::F10).filter_map(|&key| engine_key(key)));
+    input.held.extend(keys.get_pressed().filter(|&&key| key != OVERLAY_KEY).filter_map(|&key| engine_key(key)));
     input.held.extend(buttons.get_pressed().filter_map(|&button| mouse_key(button)));
     input.mouse = if window.focused { [motion.delta.x, -motion.delta.y] } else { [0.0, 0.0] };
 }

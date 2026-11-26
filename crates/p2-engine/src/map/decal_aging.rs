@@ -6,14 +6,14 @@ use bevy::image::Image;
 use bevy::math::Vec2;
 
 use p2_assets::FinalBlend;
-use p2_host::display::{MODERN_LIQUIDS, MODERN_WOUNDS, Settings};
+use p2_host::settings::{MODERN_LIQUIDS, MODERN_WOUNDS, Settings};
 use crate::play::Play;
-use p2_render::liquids::LiquidTextures;
-use p2_render::wounds::{WoundSplats, WoundsSystems, present_wounds};
+use p2_render::effects::liquids::LiquidTextures;
+use p2_render::effects::wounds::{WoundSplats, WoundsSystems, present_wounds};
 
 use super::MapSystems;
 use super::scene::plain_projector_blend;
-use p2_render::level::projector_image;
+use p2_render::world::level::projector_image;
 
 pub(super) struct DecalAgingPlugin;
 

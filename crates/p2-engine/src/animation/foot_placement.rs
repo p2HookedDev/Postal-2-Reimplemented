@@ -14,8 +14,8 @@ use rustc_hash::FxHashSet;
 
 use super::drawn_pose::{Layer, apply_layers, base_pose, mesh_place, posed_origin, turn_about};
 use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate};
-use p2_host::display::{MODERN_FOOT_PLACEMENT, modern_on, modern_turned_off};
-use p2_render::level_collision::{LevelCollision, StaticCollision};
+use p2_host::settings::{MODERN_FOOT_PLACEMENT, modern_on, modern_turned_off};
+use p2_render::world::level_collision::{LevelCollision, StaticCollision};
 use crate::play::Play;
 
 const STEP: f32 = 24.0;

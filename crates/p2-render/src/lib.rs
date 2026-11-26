@@ -1,63 +1,12 @@
-pub mod components;
-pub mod level;
-pub mod level_collision;
-pub mod actor_light;
+pub mod world;
+pub mod lighting;
+pub mod shadows;
+pub mod effects;
+pub mod post;
+pub mod hud;
+pub mod gpu;
 pub mod asset_churn;
-pub mod blended;
-pub mod canvas;
-pub mod compiling;
-pub mod debug_view;
-pub mod bsp_light;
-pub mod gamma;
-pub mod lamps;
-pub(crate) mod lamp_fog;
-pub mod lightmapped;
-pub mod map_lights;
-pub mod mesh_light;
 pub mod modern;
-pub mod modern_bloom;
-pub mod material_class;
-pub(crate) mod lamp_size;
-pub(crate) mod overlay_route;
-pub(crate) mod overlay_sun;
-pub mod particle_draw;
-pub mod particle_frame;
-pub(crate) mod particle_throw;
-pub mod particle_material;
-pub mod probes;
-pub(crate) mod preprocess_reuse;
-pub(crate) mod sampler_refresh;
-pub mod shader_layers;
-pub(crate) mod tone;
-pub mod sun_cache;
-pub mod sun_levels;
-pub mod translucent_order;
-pub mod world_pass;
-pub(crate) mod shaders;
-pub(crate) mod slot_buffer;
-pub(crate) mod terrain_light;
-pub mod terrain_material;
-pub mod wet;
-pub mod wounds;
-pub mod modern_view;
-pub(crate) mod reflections;
-pub(crate) mod screen_pass;
-pub(crate) mod stage_encoder;
-pub(crate) mod bounce;
-pub mod coronas;
-pub mod debris;
-pub mod fire_volume;
-pub mod gpu_particles;
-pub mod liquids;
-pub mod fluids;
-pub(crate) mod temporal_aa;
-pub(crate) mod fade_in;
-pub mod frame_facts;
-pub(crate) mod glow_lights;
-pub mod photo;
-pub mod scene;
-pub mod sprites;
-pub mod view;
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MainPassExtraSystems {
@@ -75,7 +24,13 @@ pub struct P2RenderPlugins;
 
 impl bevy::app::PluginGroup for P2RenderPlugins {
     fn build(self) -> bevy::app::PluginGroupBuilder {
-        bevy::app::PluginGroupBuilder::start::<Self>().add(RetailRenderPlugin).add(RetailLightPlugin).add(view::MeshViewPlugin)
+        bevy::app::PluginGroupBuilder::start::<Self>()
+            .add(RetailRenderPlugin)
+            .add(RetailLightPlugin)
+            .add(world::view::MainViewPlugin)
+            .add(post::gamma::GammaPlugin)
+            .add(modern::ModernGraphicsPlugin)
+            .add(effects::wounds::WoundsPlugin)
     }
 }
 
@@ -83,26 +38,44 @@ pub struct RetailRenderPlugin;
 
 impl bevy::app::Plugin for RetailRenderPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.init_resource::<frame_facts::FrameFacts>();
+        use bevy::app::{PostUpdate, Update};
+        use bevy::ecs::schedule::IntoScheduleConfigs;
+        use world::view::MainViewSystems;
+        app.init_resource::<world::frame_facts::FrameFacts>();
+        app.configure_sets(Update, modern::ModernGraphicsSystems::Apply.after(MainViewSystems::Camera))
+            .configure_sets(Update, RenderFollowSystems.after(MainViewSystems::Apply))
+            .configure_sets(PostUpdate, effects::fire_volume::FireVolumeSystems.after(effects::particle_draw::ParticleDrawSystems));
+        if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            use bevy::core_pipeline::core_3d::{main_opaque_pass_3d, main_transparent_pass_3d};
+            use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
+            render_app.configure_sets(
+                Core3d,
+                (MainPassExtraSystems::Bounce, MainPassExtraSystems::FireVolume, MainPassExtraSystems::LampFog, MainPassExtraSystems::GpuParticles, MainPassExtraSystems::Liquids)
+                    .chain()
+                    .in_set(Core3dSystems::MainPass)
+                    .after(main_opaque_pass_3d)
+                    .before(main_transparent_pass_3d),
+            );
+        }
         app.add_plugins((
-            modern_view::ModernViewPlugin,
-            reflections::ReflectionsPlugin,
-            lamp_fog::LampFogPlugin,
-            (bounce::BounceLightPlugin, modern_bloom::ModernBloomPlugin),
-            fire_volume::FireVolumePlugin,
-            temporal_aa::TemporalAaPlugin,
-            particle_material::ParticlePlugin,
-            particle_draw::ParticleDrawPlugin,
-            blended::BlendedPlugin,
-            translucent_order::TranslucentOrderPlugin,
-            lightmapped::LightmappedPlugin,
-            actor_light::ActorLightPlugin,
-            mesh_light::MeshLightPlugin,
-            world_pass::WorldPassPlugin,
-            sampler_refresh::SamplerRefreshPlugin,
+            world::modern_view::ModernViewPlugin,
+            post::reflections::ReflectionsPlugin,
+            lighting::lamp_fog::LampFogPlugin,
+            (lighting::bounce::BounceLightPlugin, post::modern_bloom::ModernBloomPlugin),
+            effects::fire_volume::FireVolumePlugin,
+            post::temporal_aa::TemporalAaPlugin,
+            effects::particle_material::ParticlePlugin,
+            effects::particle_draw::ParticleDrawPlugin,
+            world::blended::BlendedPlugin,
+            world::translucent_order::TranslucentOrderPlugin,
+            world::lightmapped::LightmappedPlugin,
+            lighting::actor_light::ActorLightPlugin,
+            world::mesh_light::MeshLightPlugin,
+            world::world_pass::WorldPassPlugin,
+            gpu::sampler_refresh::SamplerRefreshPlugin,
         ));
-        app.add_plugins((sprites::SpritePlugin, coronas::CoronaPlugin, fluids::FluidPlugin, gpu_particles::GpuParticlesPlugin, debris::DebrisPlugin, liquids::LiquidsPlugin));
-        app.add_plugins((fade_in::FadeInPlugin, photo::PhotoPlugin, wet::WetPlugin, compiling::CompilingPipelinesPlugin, preprocess_reuse::PreprocessReusePlugin));
+        app.add_plugins((effects::sprites::SpritePlugin, lighting::coronas::CoronaPlugin, effects::fluids::FluidPlugin, effects::gpu_particles::GpuParticlesPlugin, effects::debris::DebrisPlugin, effects::liquids::LiquidsPlugin));
+        app.add_plugins((post::fade_in::FadeInPlugin, post::photo::PhotoPlugin, effects::wet::WetPlugin, gpu::compiling::CompilingPipelinesPlugin, gpu::preprocess_reuse::PreprocessReusePlugin));
     }
 }
 
@@ -113,11 +86,11 @@ impl bevy::app::Plugin for RetailLightPlugin {
         use bevy::ecs::schedule::IntoScheduleConfigs;
         // Our point and spot lights never cast Bevy shadow maps: the smallest cube map frees Bevy's 24 MB default.
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1 });
-        app.init_resource::<glow_lights::GlowLights>().init_resource::<bsp_light::FrameLights>().add_systems(
+        app.init_resource::<lighting::glow_lights::GlowLights>().init_resource::<lighting::bsp_light::FrameLights>().add_systems(
             bevy::app::Update,
-            (glow_lights::light_glows, actor_light::light_actors, terrain_light::light_terrain, bsp_light::dynamic_lights)
+            (lighting::glow_lights::light_glows, lighting::actor_light::light_actors, lighting::terrain_light::light_terrain, lighting::bsp_light::dynamic_lights)
                 .chain()
-                .in_set(view::SceneViewSystems::Light),
+                .in_set(world::view::SceneViewSystems::Light),
         );
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::actors::CORONA_SIZE;
-use p2_render::coronas::{CoronaLook, CoronaPlace};
+use p2_render::lighting::coronas::{CoronaLook, CoronaPlace};
 
 impl Session {
     pub(super) fn add_coronas(&mut self, coronas: Vec<CoronaActor>, origin: Vec3, t: &mut SpawnTargets) {

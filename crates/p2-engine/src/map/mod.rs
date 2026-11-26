@@ -22,7 +22,7 @@ use p2_package::{Ini, LoadedPackage, Loader, Package, PackageId};
 use p2_particles::{Emitter, SpriteParticle};
 use p2_vm::{CanvasItem, Kind, ObjectId, ParticleCommand, ProjectorEvent, Vm};
 
-use p2_render::actor_light::{
+use p2_render::lighting::actor_light::{
     ActorLighting, ActorLit, DEFAULT_MAX_LIGHTS, LightEnvironment, MeshLighting, keep_sections_for_relighting, relit_sections,
 };
 use crate::actors::{
@@ -30,27 +30,24 @@ use crate::actors::{
     projector_actor, skeletal_actor, sprite_actor, zone_ambient, zone_fog,
 };
 use crate::animation::{Animated, AnimatedMesh};
-use p2_render::components::FollowBone;
-use p2_render::components::{LeftCanvasActor, MapScoped};
+use p2_render::world::components::FollowBone;
+use p2_render::world::components::{LeftCanvasActor, MapScoped};
 use p2_bevy_assets::library::{Game, Library, LoadError, LoadProgress, export_reference};
-use loading::read_progress_bar;
-use p2_render::view::{ActorLook, ActorMaterials, ActorModel, CanvasDrawn, FollowActor, MeshView, MapModel, OverlaySlot, SceneView, OVERLAY_LAYERS, spawn_actor_sections};
-use p2_render::scene::{MaterialImages, MovingModel, Scene, SectionView, Sky, LayeredByZone, ZoneCulled};
-use p2_render::level::{ActorTexture, MaterialSwitches, PendingAssets, SceneAssets, SectionChunks, material_images, projector_image, sections_of_static_mesh, skeletal_sections};
+use hud::loading::read_progress_bar;
+use p2_render::world::view::{ActorLook, ActorMaterials, ActorModel, CanvasDrawn, FollowActor, MainView, MapModel, OverlaySlot, SceneView, OVERLAY_LAYERS, spawn_actor_sections};
+use p2_render::world::scene::{MaterialImages, MovingModel, Scene, SectionView, Sky, LayeredByZone, ZoneCulled};
+use p2_render::world::level::{ActorTexture, MaterialSwitches, PendingAssets, SceneAssets, SectionChunks, material_images, projector_image, sections_of_static_mesh, skeletal_sections};
 use p2_host::frame_times::FrameTimes;
 use crate::play::{Play, PlayWorld};
-use p2_render::level_collision::LevelCollision;
-use p2_render::canvas::CanvasStores;
+use p2_render::world::level_collision::LevelCollision;
+use p2_render::hud::canvas::CanvasStores;
 
-mod canvas;
-mod canvas_actors;
 mod coronas;
 mod decal_aging;
 mod fluids;
 pub(crate) mod liquid_flow;
 mod hud;
 mod load;
-mod loading;
 mod movie;
 mod particles;
 mod scene;
@@ -59,14 +56,14 @@ mod sprites;
 
 use hud::{HudAssets, HudWanted, LibraryReads};
 pub use hud::Hud;
-pub use canvas::CanvasArea;
+pub use hud::canvas::CanvasArea;
 pub use load::{LoadMap, MapFailed, MapLoadPlugin, MapState};
 use load::{configs, play_loader, spawn_play_loader};
 use movie::Movies;
 pub use particles::{ParticleReport, Particles};
 pub use spawned::SpawnedActors;
 use spawned::SpawnTargets;
-use canvas_actors::HudParams;
+use hud::canvas_actors::HudParams;
 pub use fluids::Fluids;
 pub use scene::animate_mesh_with;
 use scene::{projector_tag, projector_transform, scene_preparer};
@@ -86,9 +83,9 @@ pub enum MapSystems {
 impl bevy::app::Plugin for MapPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
-        app.add_plugins(MapPresentPlugin).init_resource::<CanvasArea>().add_systems(bevy::app::Startup, canvas::spawn_hud_camera).add_systems(
+        app.add_plugins(MapPresentPlugin).init_resource::<CanvasArea>().add_systems(bevy::app::Startup, hud::canvas::spawn_hud_camera).add_systems(
             bevy_egui::EguiPrimaryContextPass,
-            canvas::paint_map_canvas
+            hud::canvas::paint_map_canvas
                 .in_set(MapSystems::Paint)
                 .after(MapSystems::Load)
                 .run_if(bevy::ecs::schedule::common_conditions::resource_exists::<Session>),
@@ -114,11 +111,11 @@ impl bevy::app::Plugin for MapPresentPlugin {
             .add_systems(
                 bevy::app::PostUpdate,
                 (
-                    canvas_actors::drop_left_canvas_actors_when_presented,
+                    hud::canvas_actors::drop_left_canvas_actors_when_presented,
                     // Spawned and restyled actors first: a HUD-drawn model whose `Skins` changed (the kick's foot getting
                     // bloody) is made again before the HUD's models are shown, not missing for a frame.
                     spawned::present_spawned,
-                    canvas_actors::present_canvas_actors,
+                    hud::canvas_actors::present_canvas_actors,
                     spawned::present_projections,
                     scene::present_material_switches,
                     fluids::present_fluids,
@@ -135,7 +132,7 @@ impl bevy::app::Plugin for MapPresentPlugin {
 pub struct SceneTargets<'w, 's> {
     pub assets: AssetStores<'w>,
     pub(crate) models: ActorModels<'w, 's>,
-    pub scenes: bevy::ecs::prelude::MessageWriter<'w, p2_render::scene::SceneChange>,
+    pub scenes: bevy::ecs::prelude::MessageWriter<'w, p2_render::world::scene::SceneChange>,
     pub animated: ResMut<'w, Animated>,
     pub times: ResMut<'w, FrameTimes>,
     pub play: ResMut<'w, Play>,
@@ -144,10 +141,10 @@ pub struct SceneTargets<'w, 's> {
     pub(crate) switches: ResMut<'w, MaterialSwitches>,
     pub(crate) projectors: ResMut<'w, Projectors>,
     pub(crate) particles: ResMut<'w, Particles>,
-    pub(crate) particle_frame: ResMut<'w, p2_render::particle_frame::DrawnParticles>,
+    pub(crate) particle_frame: ResMut<'w, p2_render::effects::particle_frame::DrawnParticles>,
     pub(crate) spawned: ResMut<'w, SpawnedActors>,
     pub(crate) hud: ResMut<'w, Hud>,
-    pub(crate) painter: ResMut<'w, p2_render::canvas::CanvasPainter>,
+    pub(crate) painter: ResMut<'w, p2_render::hud::canvas::CanvasPainter>,
 }
 
 impl<'w, 's> SceneTargets<'w, 's> {
@@ -175,7 +172,7 @@ pub struct AssetStores<'w> {
     pub sprite_buffers: Option<ResMut<'w, Assets<bevy::render::storage::ShaderBuffer>>>,
     pub audio: Option<ResMut<'w, Assets<bevy::audio::AudioSource>>>,
     pub bindposes: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
-    pub wet: ResMut<'w, p2_render::wet::WetTextures>,
+    pub wet: ResMut<'w, p2_render::effects::wet::WetTextures>,
 }
 
 impl SceneAssets for AssetStores<'_> {

@@ -1,8 +1,8 @@
 use super::*;
 use p2_math::Vector;
 use p2_particles::{FluidOscillator, FluidSettings, FluidSurface, View};
-use p2_render::fluids::FluidDrawn;
-use p2_render::scene::MaterialImages;
+use p2_render::effects::fluids::FluidDrawn;
+use p2_render::world::scene::MaterialImages;
 
 pub(super) fn camera_view(camera: &Transform, origin: Vec3) -> View {
     let unreal = |v: Vec3| Vector::from(to_bevy(v.to_array()));

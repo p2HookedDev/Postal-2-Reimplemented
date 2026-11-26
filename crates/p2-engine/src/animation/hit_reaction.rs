@@ -9,7 +9,7 @@ use p2_vm::{ObjectId, PersonHit};
 use super::drawn_pose::{Layer, apply_layers, base_pose, mesh_place, posed_origin, turn_about};
 use super::foot_placement::{Feet, SIDES, place_feet};
 use super::{Animated, AnimatedMesh, AnimationSystems, Poses, animate};
-use p2_host::display::{MODERN_HIT_REACTIONS, Settings, modern_on, modern_turned_off};
+use p2_host::settings::{MODERN_HIT_REACTIONS, Settings, modern_on, modern_turned_off};
 use crate::play::{Play, PlayWorld};
 
 const STIFFNESS: f32 = 256.0;

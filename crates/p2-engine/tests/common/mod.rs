@@ -1,5 +1,6 @@
 #![allow(dead_code, reason = "each test binary uses a part of this module")]
 
+use bevy::app::PluginGroup;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -32,7 +33,8 @@ pub fn game_dir() -> Option<PathBuf> {
 
 pub fn played_app() -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, P2RenderPlugins, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, p2_engine::map::MapPresentPlugin, p2_render::wounds::WoundsPlugin))
+    app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin, PlayPlugin, AnimationPlugin, p2_engine::FrameOrderPlugin, p2_engine::map::MapPresentPlugin))
+        .add_plugins(P2RenderPlugins.build().disable::<p2_render::post::gamma::GammaPlugin>().disable::<p2_render::modern::ModernGraphicsPlugin>())
         .init_asset::<Mesh>()
         .init_asset::<Image>()
         .init_asset::<StandardMaterial>()
