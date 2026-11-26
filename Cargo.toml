@@ -25,6 +25,9 @@ p2-physics = { path = "crates/p2-physics" }
 p2-math = { path = "crates/p2-math" }
 p2-movie = { path = "crates/p2-movie" }
 p2-test-package = { path = "crates/p2-test-package" }
+p2-dylib-core = { path = "crates/p2-dylib-core" }
+p2-dylib-render = { path = "crates/p2-dylib-render" }
+p2-dylib-engine = { path = "crates/p2-dylib-engine" }
 anyhow = "1"
 rapier3d = { version = "0.36", features = ["parallel"] }
 rayon = "1"
@@ -113,6 +116,13 @@ opt-level = 3
 [profile.dev.package.p2-host]
 opt-level = 3
 [profile.dev.package.p2-render]
+opt-level = 3
+# Below opt-level 2 a DLL exports every generic instance, toward Windows' 65535 limit.
+[profile.dev.package.p2-bevy-assets]
+opt-level = 3
+[profile.dev.package.p2-render-cpu]
+opt-level = 3
+[profile.dev.package.p2-movie]
 opt-level = 3
 
 [profile.release]

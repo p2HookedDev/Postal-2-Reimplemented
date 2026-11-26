@@ -4122,6 +4122,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "p2-dylib-core"
+version = "0.3.0"
+dependencies = [
+ "bevy",
+ "p2-movie",
+ "p2-particles",
+ "p2-render-cpu",
+ "p2-vm",
+]
+
+[[package]]
+name = "p2-dylib-engine"
+version = "0.3.0"
+dependencies = [
+ "p2-dylib-render",
+ "p2-engine",
+]
+
+[[package]]
+name = "p2-dylib-render"
+version = "0.3.0"
+dependencies = [
+ "p2-bevy-assets",
+ "p2-dylib-core",
+ "p2-host",
+ "p2-render",
+]
+
+[[package]]
 name = "p2-engine"
 version = "0.3.0"
 dependencies = [
@@ -4152,6 +4181,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "bevy_egui",
+ "p2-dylib-engine",
  "p2-engine",
  "p2-host",
  "p2-package",

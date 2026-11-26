@@ -21,21 +21,27 @@ jobs:
 
       - name: Build
         run: cargo build --release --workspace
-        env:
-          RUSTFLAGS: -Ctarget-feature=+crt-static
 
       - name: Package
         shell: pwsh
         run: |
-          $exe = "target/release/p2-game.exe"
-          # Bevy and Rust's std are DLLs the exe imports by hashed name; the C runtime ships beside them.
-          $imports = [regex]::Matches([IO.File]::ReadAllText((Resolve-Path $exe), [Text.Encoding]::Latin1), "(bevy_dylib|std)-[0-9a-f]+\.dll") | ForEach-Object Value | Sort-Object -Unique
+          $exe = "target/release/Postal2Reimplemented.exe"
+          # Every DLL the exe imports, directly or through another DLL, plus the C runtime.
           $sysroot = (rustc --print sysroot).Trim()
-          $dlls = foreach ($name in $imports) {
-            $path = @("target/release/deps/$name", "$sysroot/lib/rustlib/x86_64-pc-windows-msvc/lib/$name") | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $path) { throw "the exe imports $name, which is not built" }
-            $path
+          $dlls = @{}
+          $pending = [Collections.Generic.Queue[string]]::new()
+          $pending.Enqueue($exe)
+          while ($pending.Count) {
+            $text = [IO.File]::ReadAllText((Resolve-Path $pending.Dequeue()), [Text.Encoding]::Latin1)
+            foreach ($name in [regex]::Matches($text, "(bevy_dylib|std)-[0-9a-f]+\.dll|p2_dylib_[a-z]+\.dll") | ForEach-Object Value | Sort-Object -Unique) {
+              if ($dlls.ContainsKey($name)) { continue }
+              $path = @("target/release/$name", "target/release/deps/$name", "$sysroot/lib/rustlib/x86_64-pc-windows-msvc/lib/$name") | Where-Object { Test-Path $_ } | Select-Object -First 1
+              if (-not $path) { throw "the build imports $name, which is not built" }
+              $dlls[$name] = $path
+              $pending.Enqueue($path)
+            }
           }
+          $dlls = @($dlls.Values)
           New-Item -ItemType Directory -Force dist/P2Reimplemented/Packages | Out-Null
           Copy-Item script/P2Modern/P2Modern.u dist/P2Reimplemented/Packages/
           New-Item -ItemType Directory -Force dist/P2Reimplemented/assets | Out-Null

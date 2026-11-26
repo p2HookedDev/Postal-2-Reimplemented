@@ -1,0 +1,23 @@
+[package]
+name = "p2-dylib-core"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["dylib"]
+test = false
+doctest = false
+
+[dependencies]
+# Crates that Bevy and our core both use (thiserror, log, ...) must come from bevy_dylib, not a second copy.
+bevy.workspace = true
+p2-movie.workspace = true
+p2-particles.workspace = true
+p2-render-cpu.workspace = true
+p2-vm.workspace = true
+
+[lints]
+workspace = true

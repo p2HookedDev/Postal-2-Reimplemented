@@ -13,6 +13,8 @@ use bevy_egui::EguiPlugin;
 use p2_engine::P2EnginePlugins;
 use p2_engine::diagnostics::{P2DiagnosticsPlugins, install_panic_hook, log_plugin};
 use p2_engine::map::MapLoadPlugin;
+// Links our crates from their DLLs instead of into the exe.
+use p2_dylib_engine as _;
 
 fn main() {
     install_panic_hook();

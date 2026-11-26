@@ -1,0 +1,21 @@
+[package]
+name = "p2-dylib-render"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["dylib"]
+test = false
+doctest = false
+
+[dependencies]
+p2-dylib-core.workspace = true
+p2-bevy-assets.workspace = true
+p2-host.workspace = true
+p2-render.workspace = true
+
+[lints]
+workspace = true
