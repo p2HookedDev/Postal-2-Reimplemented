@@ -42,7 +42,7 @@ pub fn static_collision(
 
 pub fn bake_lamps(scene: &mut Scene) {
     if let (Some(collision), Some(environment)) = (&scene.collision, &scene.lighting) {
-        scene.light_bakes = crate::lamps::bake_for_load(environment, collision, -scene.center);
+        scene.light_bakes = crate::lamps::bake_for_load(environment, collision, &scene.shadow_surfaces, -scene.center);
     }
 }
 

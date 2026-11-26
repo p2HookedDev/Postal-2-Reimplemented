@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn a_tile_square_changes_size_and_gives_the_old_one_back() {
-        let mut book = FaceBook::new(8192);
+        let mut book = FaceBook::new([8192; 2]);
         let first = resize(&mut book, None, 2);
         assert_eq!(first.map(|square| square.level), Some(2));
         let smaller = resize(&mut book, first, 1);

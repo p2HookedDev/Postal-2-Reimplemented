@@ -273,6 +273,7 @@ fn a_shown_scene_is_spawned_and_a_clear_removes_it() {
         light_bakes: None,
         antiportals: Vec::new(),
         light_maps: Vec::new(),
+        shadow_surfaces: Default::default(),
     };
     let counts = |app: &mut App| {
         let world = app.world_mut();

@@ -38,6 +38,7 @@ use crate::overlay_route::slot_of_layers;
 
 mod view_model;
 pub use view_model::view_model_lighting;
+pub(crate) use view_model::reaches_sky;
 use view_model::{WeaponReach, ease_reach, weapon_points, weapon_reach};
 
 pub const DEFAULT_MAX_LIGHTS: u8 = 4;
@@ -223,7 +224,7 @@ pub struct HardwareLighting {
 
 impl From<&HardwareLighting> for SkyKey {
     fn from(extension: &HardwareLighting) -> Self {
-        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32) }
+        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32), light: crate::modern::light_source(extension.layers.detail.z as u32) }
     }
 }
 

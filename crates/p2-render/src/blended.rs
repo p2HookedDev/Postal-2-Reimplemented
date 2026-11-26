@@ -99,7 +99,7 @@ impl From<&TerrainLayer> for ShaderLayers {
 
 impl From<&TerrainLayer> for SkyKey {
     fn from(extension: &TerrainLayer) -> Self {
-        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32) }
+        Self { sky: extension.sky, mirror: crate::modern::pool_mirror_on(extension.layers.detail.z as u32), light: crate::modern::light_source(extension.layers.detail.z as u32) }
     }
 }
 

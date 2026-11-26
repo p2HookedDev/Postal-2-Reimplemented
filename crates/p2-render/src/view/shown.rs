@@ -21,4 +21,5 @@ pub struct ShownScene {
     pub light_maps: Vec<Option<Handle<Image>>>,
     pub sky_zone: Option<u8>,
     pub sky_place: Option<(Vec3, bevy::math::Quat)>,
+    pub shadow_surfaces: Arc<[crate::lamps::grid::ShadowSurface]>,
 }

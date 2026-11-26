@@ -104,20 +104,21 @@ impl MeshBatch {
     }
 }
 
-/// `texel_scale` turns the polygons' texel UVs into texture UVs: 1 / (width, height) of the texture. Light map
-/// atlas UVs are stored as `UV_1` when every polygon has them. Unlike static meshes, BSP vertex order must be
-/// reversed after the axis swap to face front (checked visually: `Church.fuk` buildings and ground).
-pub fn model_polygons_to_mesh<'a>(
-    polygons: impl IntoIterator<Item = (&'a ModelPolygon, Option<&'a [[f32; 2]]>)>,
+/// Unlike static meshes, BSP vertex order is reversed after the axis swap to face front.
+pub fn model_polygons_to_mesh<'a, T>(
+    polygons: impl IntoIterator<Item = (&'a ModelPolygon, Option<&'a [[f32; 2]]>, T)>,
     texel_scale: [f32; 2],
+    color: impl Fn(&T, [f32; 3]) -> [f32; 4],
 ) -> Mesh {
-    let (mut positions, mut normals, mut uvs, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut positions, mut normals, mut uvs, mut colors, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut light_map_uvs = Some(Vec::new());
-    for (polygon, light_map) in polygons {
+    for (polygon, light_map, tag) in polygons {
         let first = positions.len() as u32;
         let normal = to_bevy(polygon.normal);
         for (&position, &[u, v]) in polygon.positions.iter().zip(&polygon.uvs) {
-            positions.push(to_bevy(position));
+            let position = to_bevy(position);
+            positions.push(position);
+            colors.push(color(&tag, position));
             normals.push(normal);
             uvs.push([u * texel_scale[0], v * texel_scale[1]]);
         }
@@ -131,6 +132,7 @@ pub fn model_polygons_to_mesh<'a>(
     out.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     out.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     out.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    out.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     if let Some(light_map_uvs) = light_map_uvs.filter(|uvs| !uvs.is_empty()) {
         out.insert_attribute(Mesh::ATTRIBUTE_UV_1, light_map_uvs);
     }

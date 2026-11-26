@@ -1,5 +1,6 @@
 use bevy::app::{App, Plugin};
 use bevy::asset::{AssetApp, Assets, Handle, uuid_handle};
+use bevy::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::pbr::{Material, MaterialPlugin, MeshPipelineKey};
 use bevy::render::RenderApp;
 use bevy::render::render_resource::RenderPipelineDescriptor;
@@ -138,6 +139,13 @@ pub(crate) fn shader_const(source: &str, name: &str) -> f64 {
 pub struct SkyKey {
     pub sky: bool,
     pub mirror: bool,
+    pub light: LightSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LightSource {
+    Retail,
+    Modern,
 }
 
 pub(crate) fn mark_sky(descriptor: &mut RenderPipelineDescriptor, key: SkyKey) {
@@ -211,16 +219,28 @@ pub(crate) fn test_depth_early(descriptor: &mut RenderPipelineDescriptor, mesh_k
     }
 }
 
-/// Only the world camera has both prepasses; with them and no MSAA the lamps' screen pass casts per pixel,
-/// so its lit surfaces carry no shadow code of their own.
-pub(crate) fn mark_screen_shadows_only(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
+/// Only the world camera has both prepasses; with them and no MSAA the screen pass casts the sun per pixel, so
+/// those surfaces carry no sun shadow code of their own.
+pub(crate) fn mark_screen_sun(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey, key: SkyKey) {
     let screen = mesh_key.contains(MeshPipelineKey::NORMAL_PREPASS) && mesh_key.msaa_samples() == 1;
     if screen
         && over_prepass(descriptor, mesh_key, key)
         && let Some(fragment) = descriptor.fragment.as_mut()
         && fragment.shader_defs.contains(&ShaderDefVal::from("BINDLESS"))
     {
-        fragment.shader_defs.push("SCREEN_SHADOWS_ONLY".into());
+        fragment.shader_defs.push("SCREEN_SUN".into());
+    }
+}
+
+/// The cached lamp visibility is found through the vertex colour's chart and read from the bindless arrays.
+pub(crate) fn mark_cached_lamps(descriptor: &mut RenderPipelineDescriptor, layout: &MeshVertexBufferLayoutRef) {
+    let main = !descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
+    if main
+        && layout.0.contains(Mesh::ATTRIBUTE_COLOR)
+        && let Some(fragment) = descriptor.fragment.as_mut()
+        && fragment.shader_defs.contains(&ShaderDefVal::from("BINDLESS"))
+    {
+        fragment.shader_defs.push("CACHED_LAMPS".into());
     }
 }
 
@@ -252,11 +272,11 @@ mod tests {
             mark_pool_mirror(&mut descriptor, mesh_key, key);
             descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("POOL_MIRROR"))
         };
-        let world = SkyKey { sky: false, mirror: true };
+        let world = SkyKey { sky: false, mirror: true, light: LightSource::Retail };
         assert!(marked(MeshPipelineKey::BLEND_OPAQUE, world));
         assert!(marked(MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::MAY_DISCARD, world));
-        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: false, mirror: false }));
-        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: true, mirror: true }));
+        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: false, mirror: false, light: LightSource::Retail }));
+        assert!(!marked(MeshPipelineKey::BLEND_OPAQUE, SkyKey { sky: true, mirror: true, light: LightSource::Retail }));
         for blend in [
             MeshPipelineKey::BLEND_ALPHA,
             MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA,
@@ -288,19 +308,19 @@ mod tests {
             test_depth_early(&mut descriptor, mesh_key, key);
             descriptor.depth_stencil.and_then(|depth| depth.depth_write_enabled) == Some(true)
         };
-        let world = SkyKey { sky: false, mirror: false };
+        let world = SkyKey { sky: false, mirror: false, light: LightSource::Retail };
         let prepass = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_OPAQUE;
         assert!(!writes(prepass | MeshPipelineKey::MAY_DISCARD, world, &[]));
         assert!(!writes(prepass | MeshPipelineKey::VISIBILITY_RANGE_DITHER, world, &[]));
         assert!(writes(prepass, world, &[]));
         assert!(writes(MeshPipelineKey::BLEND_OPAQUE | MeshPipelineKey::MAY_DISCARD, world, &[]));
         assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, world, &["PREPASS_PIPELINE"]));
-        assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, SkyKey { sky: true, mirror: false }, &[]));
+        assert!(writes(prepass | MeshPipelineKey::MAY_DISCARD, SkyKey { sky: true, mirror: false, light: LightSource::Retail }, &[]));
         assert!(writes(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE | MeshPipelineKey::MAY_DISCARD, world, &[]));
     }
 
     #[test]
-    fn only_the_world_cameras_opaque_and_masked_surfaces_read_the_screen_shadows_alone() {
+    fn only_the_world_cameras_opaque_and_masked_surfaces_read_the_screen_sun() {
         use bevy::render::render_resource::VertexState;
         let marked = |mesh_key: MeshPipelineKey, key: SkyKey, vertex: &[&'static str], fragment: &[&'static str]| {
             let mut descriptor = RenderPipelineDescriptor {
@@ -308,19 +328,42 @@ mod tests {
                 fragment: Some(FragmentState { shader_defs: fragment.iter().map(|&def| ShaderDefVal::from(def)).collect(), ..Default::default() }),
                 ..Default::default()
             };
-            mark_screen_shadows_only(&mut descriptor, mesh_key, key);
-            descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("SCREEN_SHADOWS_ONLY"))
+            mark_screen_sun(&mut descriptor, mesh_key, key);
+            descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("SCREEN_SUN"))
         };
-        let world = SkyKey { sky: false, mirror: false };
+        let world = SkyKey { sky: false, mirror: false, light: LightSource::Retail };
         let both = MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::BLEND_OPAQUE;
         let bindless: &[&str] = &["BINDLESS"];
         assert!(marked(both, world, &[], bindless));
         assert!(marked(both | MeshPipelineKey::MAY_DISCARD, world, &[], bindless));
         assert!(!marked(both, world, &[], &[]));
         assert!(!marked(both, world, &["PREPASS_PIPELINE"], bindless));
-        assert!(!marked(both, SkyKey { sky: true, mirror: false }, &[], bindless));
+        assert!(!marked(both, SkyKey { sky: true, mirror: false, light: LightSource::Retail }, &[], bindless));
         assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::BLEND_OPAQUE, world, &[], bindless));
         assert!(!marked(both | MeshPipelineKey::from_msaa_samples(4), world, &[], bindless));
         assert!(!marked(MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::BLEND_ALPHA, world, &[], bindless));
+    }
+
+    #[test]
+    fn only_a_bindless_main_pipeline_over_coloured_vertices_reads_the_cached_lamps() {
+        use bevy::mesh::{MeshAttributeCompressionFlags, MeshVertexAttributeId, MeshVertexBufferLayout, VertexBufferLayout};
+        use bevy::render::render_resource::VertexState;
+        use std::sync::Arc;
+        let marked = |attributes: Vec<MeshVertexAttributeId>, vertex: &[&'static str], fragment: &[&'static str]| {
+            let layout = MeshVertexBufferLayoutRef(Arc::new(MeshVertexBufferLayout::new(attributes, VertexBufferLayout::default(), MeshAttributeCompressionFlags::empty())));
+            let mut descriptor = RenderPipelineDescriptor {
+                vertex: VertexState { shader_defs: vertex.iter().map(|&def| ShaderDefVal::from(def)).collect(), ..Default::default() },
+                fragment: Some(FragmentState { shader_defs: fragment.iter().map(|&def| ShaderDefVal::from(def)).collect(), ..Default::default() }),
+                ..Default::default()
+            };
+            mark_cached_lamps(&mut descriptor, &layout);
+            descriptor.fragment.expect("a fragment stage").shader_defs.contains(&ShaderDefVal::from("CACHED_LAMPS"))
+        };
+        let coloured = || vec![Mesh::ATTRIBUTE_POSITION.id, Mesh::ATTRIBUTE_COLOR.id];
+        let bindless: &[&str] = &["BINDLESS"];
+        assert!(marked(coloured(), &[], bindless));
+        assert!(!marked(vec![Mesh::ATTRIBUTE_POSITION.id], &[], bindless));
+        assert!(!marked(coloured(), &["PREPASS_PIPELINE"], bindless));
+        assert!(!marked(coloured(), &[], &[]));
     }
 }

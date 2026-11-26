@@ -111,6 +111,8 @@ pub struct RetailLightPlugin;
 impl bevy::app::Plugin for RetailLightPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
+        // Our point and spot lights never cast Bevy shadow maps: the smallest cube map frees Bevy's 24 MB default.
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 1 });
         app.init_resource::<glow_lights::GlowLights>().init_resource::<bsp_light::FrameLights>().add_systems(
             bevy::app::Update,
             (glow_lights::light_glows, actor_light::light_actors, terrain_light::light_terrain, bsp_light::dynamic_lights)

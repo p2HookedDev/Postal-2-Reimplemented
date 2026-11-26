@@ -280,7 +280,7 @@ impl PreparedScene {
         let (attached, drawn_pawns, drawn_attachments) = (pawn_parts.attached, pawn_parts.drawn_pawns, pawn_parts.drawn_attachments);
         let (bsp, hud, bsp_assets) = bsp.join().map_err(|_| LoadError::Panicked { package: package.to_owned() })?;
         let BspBuilt { parts, drawn, polygons } = bsp;
-        let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos } =
+        let BspParts { mut models, mut sky_models, textured, lit, min, max, atlases, masked_casters: mut lamp_masked_all, material_albedos, shadow_surfaces } =
             parts.ok_or_else(|| LoadError::NoPolygons { name: name.clone() })?;
         t.merge(bsp_assets);
         models.extend(terrain_drawn);
@@ -328,6 +328,7 @@ impl PreparedScene {
             light_bakes: None,
             antiportals,
             light_maps: atlases,
+            shadow_surfaces,
         };
         phase("rest");
         bake_lamps(&mut scene);

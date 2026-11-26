@@ -1,6 +1,6 @@
-//! Lamp and sun shadows for each world camera pixel, cast after the depth prepass and sun cascades into an
-//! image the lit materials hold in their normal map slot, so a surface runs shadow code only for lamps it lacks.
-//! Run inside the lit surfaces' shader, the shadows held up the rest of its work in a fight.
+//! Sun shadows for each world camera pixel, cast after the depth prepass and sun cascades into an image the lit
+//! materials hold in their normal map slot, so those surfaces run no sun shadow code of their own. Lamp shadows
+//! each surface looks up itself.
 
 use bevy::app::{App, PostUpdate};
 use bevy::asset::{Assets, Handle, RenderAssetUsages, uuid_handle};
@@ -31,7 +31,7 @@ use bevy::shader::Shader;
 use p2_host::display::{MODERN_SHADOW_FILTER, Settings};
 
 use super::atlas::write_rows;
-use super::{AtlasSizeSystems, LampAtlas, MaterialAtlas, MaterialSlot, follow_atlas};
+use super::{AtlasSizeSystems, MaterialAtlas, MaterialSlot, follow_atlas};
 use crate::shaders::{add_shaders, shader_file};
 use crate::stage_encoder::{BeforeMain, BeforeMainPasses, StageEncoder};
 use crate::sun_levels::SunLevelAtlas;
@@ -39,14 +39,13 @@ use crate::world_pass::WorldCamera;
 
 const MASK_SHADER: Handle<Shader> = uuid_handle!("f3a4516c-ba33-4e97-9d69-3ce25bfa5f3f");
 const GROUP_SIDE: u32 = 8;
-// The sun's rows start this many rows past the pixels' (the header between), a row for this many pixel rows, one
-// in each channel. Matches `lamp_shadow.wesl`.
+// The sun's rows start after the header row, a row for this many pixel rows, one in each channel. Matches
+// `lamp_shadow.wesl`.
 const SUN_ROWS_FROM: u32 = 1;
 const SUN_PIXELS: u32 = 4;
 
-/// A texel a pixel of the world camera's target, a header row after them and the sun's rows (`mask_height`), made
-/// anew when the target changes size; none without a normal prepass, or with MSAA, where every surface casts its
-/// own.
+/// As wide as the world camera's target: a header row, then the sun's rows (`mask_height`), made anew when the
+/// target changes size; none without a normal prepass, or with MSAA, where every surface casts its own.
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub(super) struct ShadowMask {
@@ -102,7 +101,7 @@ impl MaskKey {
 #[derive(Default)]
 struct MaskGroups {
     sun: Option<(([TextureViewId; 2], [BufferId; 2], Option<BufferId>), BindGroup)>,
-    textures: Option<([TextureViewId; 6], BindGroup)>,
+    textures: Option<([TextureViewId; 4], BindGroup)>,
 }
 
 pub(super) fn build(app: &mut App) {
@@ -146,7 +145,7 @@ fn mask_image(size: UVec2) -> Image {
 }
 
 fn mask_height(rows: u32) -> u32 {
-    rows + SUN_ROWS_FROM + rows.div_ceil(SUN_PIXELS)
+    SUN_ROWS_FROM + rows.div_ceil(SUN_PIXELS)
 }
 
 fn init_mask_pipeline(mut commands: Commands) {
@@ -157,9 +156,6 @@ fn init_mask_pipeline(mut commands: Commands) {
             (
                 (0, binding_types::texture_2d(TextureSampleType::Depth)),
                 (1, binding_types::texture_2d(TextureSampleType::Float { filterable: false })),
-                (3, binding_types::texture_2d(TextureSampleType::Float { filterable: false })),
-                (4, binding_types::texture_2d(TextureSampleType::Float { filterable: true })),
-                (5, binding_types::sampler(SamplerBindingType::Filtering)),
                 (6, binding_types::texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly)),
                 (8, binding_types::texture_2d(TextureSampleType::Float { filterable: true })),
                 (9, binding_types::sampler(SamplerBindingType::Filtering)),
@@ -230,11 +226,10 @@ fn queue_mask_pipeline(
     }
 }
 
-/// Before any pass of the frame: in a frame the pass does not run in, actors and blended surfaces cast their own
-/// shadows and the world's surfaces light their lamps and the sun unshadowed.
+/// Before any pass of the frame: in a frame the pass does not run in, the world's surfaces light the sun unshadowed.
 fn unmark_mask(mask: Res<ShadowMask>, images: Res<RenderAssets<GpuImage>>, queue: Res<RenderQueue>) {
     let Some(image) = mask.image.as_ref().and_then(|image| images.get(image)) else { return };
-    write_rows(&queue, image, mask.size.y, &[[0.0; 4]]);
+    write_rows(&queue, image, 0, &[[0.0; 4]]);
 }
 
 fn ready_pipeline<'a>(pipeline: &MaskPipeline, cache: &'a PipelineCache, key: MaskKey) -> Option<&'a ComputePipeline> {
@@ -251,7 +246,7 @@ fn cast_shadows(
     cache: Res<PipelineCache>,
     pipeline: Res<MaskPipeline>,
     (view_uniforms, light_meta, shadow_samplers, contact_buffer): (Res<ViewUniforms>, Res<LightMeta>, Res<ShadowSamplers>, Res<ContactShadowsBuffer>),
-    (atlas, sun_levels, fallback): (Res<LampAtlas>, Res<SunLevelAtlas>, Res<FallbackImage>),
+    (sun_levels, fallback): (Res<SunLevelAtlas>, Res<FallbackImage>),
     mask: Res<ShadowMask>,
     images: Res<RenderAssets<GpuImage>>,
     mut groups: Local<MaskGroups>,
@@ -277,8 +272,6 @@ fn cast_shadows(
     if multisampled || target.texture_descriptor.size.width != size.width || target.texture_descriptor.size.height != mask_height(size.height) {
         return;
     }
-    let book = atlas.book.as_ref().and_then(|book| images.get(book)).unwrap_or(&fallback.d2);
-    let shadows = atlas.wanted().and_then(|image| images.get(&image)).unwrap_or(&fallback.d2);
     let levels = sun_levels.image.as_ref().and_then(|image| images.get(image)).unwrap_or(&fallback.d2);
     let cascades = &shadow_bindings.directional_light_depth_texture_view;
     let sun_ids = ([depth.id(), cascades.id()], [uniforms.id(), lights_buffer.id()], contact.as_ref().map(|(_, buffer)| buffer.id()));
@@ -301,7 +294,7 @@ fn cast_shadows(
         };
         groups.sun = Some((sun_ids, made));
     }
-    let texture_ids = [depth.id(), normals.id(), book.texture_view.id(), shadows.texture_view.id(), target.texture_view.id(), levels.texture_view.id()];
+    let texture_ids = [depth.id(), normals.id(), target.texture_view.id(), levels.texture_view.id()];
     if groups.textures.as_ref().is_none_or(|(held, _)| *held != texture_ids) {
         let made = ctx.render_device().create_bind_group(
             "lamp shadow mask",
@@ -309,9 +302,6 @@ fn cast_shadows(
             &BindGroupEntries::with_indices((
                 (0, depth),
                 (1, normals),
-                (3, &book.texture_view),
-                (4, &shadows.texture_view),
-                (5, &shadows.sampler),
                 (6, &target.texture_view),
                 (8, &levels.texture_view),
                 (9, &levels.sampler),
@@ -345,25 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn a_texel_holds_its_lamps_in_three_bytes_a_channel() {
-        let lit = include_str!("../lamp_shadow.wesl");
-        let (lamps, slots, check) = (shader_const(lit, "SCREEN_LIST_LAMPS"), shader_const(lit, "SCREEN_SLOTS"), shader_const(lit, "SCREEN_CHECK_BYTE"));
-        assert!(8.0 + lamps <= 24.0, "the list check's byte and a bit a lamp fit one channel");
-        assert_eq!(check, 2.0 * slots, "the check byte follows the slots' bytes");
-        assert!(check < 9.0, "three channels of three bytes");
-    }
-
-    #[test]
-    fn the_mask_holds_every_lamp_a_relief_normal_may_face() {
-        assert!(shader_const(include_str!("../lamp_mask.wesl"), "FACING_SLACK") >= shader_const(include_str!("../relief.wesl"), "RELIEF_MAX_TILT"));
-    }
-
-    #[test]
-    fn the_mask_holds_a_header_row_and_the_suns_rows_after_the_pixels_and_takes_the_pass_writes() {
+    fn the_mask_holds_a_header_row_and_the_suns_rows_and_takes_the_pass_writes() {
         let image = mask_image(UVec2::new(2560, 1440));
-        assert_eq!((image.texture_descriptor.size.width, image.texture_descriptor.size.height), (2560, 1440 + 1 + 360));
+        assert_eq!((image.texture_descriptor.size.width, image.texture_descriptor.size.height), (2560, 1 + 360));
         assert!(image.texture_descriptor.usage.contains(TextureUsages::STORAGE_BINDING));
-        assert_eq!(mask_height(5), 5 + 1 + 2);
+        assert_eq!(mask_height(5), 1 + 2);
     }
 
     #[test]

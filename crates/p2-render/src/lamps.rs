@@ -7,13 +7,16 @@ mod cells;
 mod decal_bins;
 mod faces;
 mod grounding;
+pub mod grid;
 mod mover_pass;
 mod mover_pick;
 mod movers;
 mod shadow_mask;
+mod sky;
 mod tile_grid;
+pub mod visibility;
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy::app::{App, Plugin, PostUpdate, Update};
@@ -24,7 +27,7 @@ use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::ecs::prelude::{Commands, Component, Entity, Local, Query, Res, ResMut, Resource, With};
 use bevy::ecs::schedule::{IntoScheduleConfigs, SystemSet};
-use bevy::image::Image;
+use bevy::image::{Image, ImageSampler};
 use bevy::math::Vec3;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
@@ -42,7 +45,7 @@ use p2_host::display::{MODERN_LAMP_SHADOWS, Settings};
 use crate::level_collision::{LevelCollision, StaticCollision};
 use crate::view::SeenWithin;
 use crate::scene::ZoneCulled;
-use crate::actor_light::{HardwareLighting, LightEnvironment};
+use crate::actor_light::{HardwareLighting, LightEnvironment, reaches_sky};
 use crate::blended::{OpaqueDecals, TerrainLayer};
 use crate::bsp_light::{gpu_light, place};
 use crate::lightmapped::BakedLight;
@@ -52,11 +55,14 @@ use crate::shaders::{add_shaders, shader_file};
 use crate::terrain_material::TerrainLayers;
 use crate::view::ShownScene;
 use atlas::{ATLAS_SHADER, ATLAS_UNITS, BookRecords, LampBake, PlainTilesDrawn, UNMAPPED, bytes_of, draw_lamp_atlas, lamp_bake, new_atlas, world_masked, world_triangles};
-use cells::{BOOK_WIDTH, CellLamp, DECAL_BINS_FROM_END, RECORD_TEXELS, book_texels, lamp_cells};
+use cells::{BOOK_WIDTH, CellLamp, DECAL_BINS_FROM_END, PatchBox, RECORD_TEXELS, book_texels, lamp_cells};
 use faces::{Eye, FaceBook, FaceLamp, FaceSlot};
 use mover_pass::{MOVER_CASTER_SHADER, draw_mover_tiles};
 use mover_pick::pick_mover_tiles;
 pub use movers::MoverTiles;
+use grid::ShadowSurface;
+use sky::{SkyBake, bake_sky};
+use visibility::{PatchJob, VISIBILITY_SHADER, VisibilityPlan, cache_lamp_visibility, cut, pack_blocks, patch_box, patch_jobs};
 
 pub const LAMP_SHADOW_SPAN: &str = "lamp_shadows";
 
@@ -194,6 +200,7 @@ pub struct LampAtlas {
     image: Option<Handle<Image>>,
     bake: Option<Arc<LampBake>>,
     side: u32,
+    height: u32,
     book: Option<Handle<Image>>,
     faces: Vec<FaceSlot>,
 }
@@ -216,6 +223,22 @@ struct LampJobResult {
     bake: Option<LampBake>,
     book: Vec<[f32; 4]>,
     listed: String,
+    visibility: Option<VisibilityPlan>,
+    patches: Vec<(u32, [u32; 2])>,
+}
+
+/// The surface patches' cached lamp visibility; no image when the map has none to cache or it would pass the cap.
+#[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(RenderApp)]
+pub struct LampVisibility {
+    pub image: Option<Handle<Image>>,
+    pub jobs: Arc<[PatchJob]>,
+}
+
+/// How much sky each texel of the patches' blocks sees; no image until its trace is done.
+#[derive(Resource, Default)]
+pub struct LampSky {
+    pub image: Option<Handle<Image>>,
 }
 
 #[derive(Default)]
@@ -223,30 +246,48 @@ struct LampJob {
     key: Option<(usize, usize, u32)>,
     task: Option<Task<LampJobResult>>,
     ready: Option<LampJobResult>,
+    /// On its own thread, not the async pool: it runs during play and holds its thread for the whole trace.
+    sky: Option<(std::thread::JoinHandle<SkyBake>, Arc<AtomicBool>)>,
 }
 
-fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], origin: Vec3, side: u32) -> LampJobResult {
+/// `surfaces` are in world space; the job works in the scene's, `origin` away. Without shadow tiles there is
+/// nothing to cache, so no surface is cut.
+fn lamp_job(environment: &LightEnvironment, collision: &StaticCollision, triangles: &[[[f32; 3]; 3]], surfaces: &[ShadowSurface], origin: Vec3, side: u32) -> LampJobResult {
     let lamps = map_lamps(environment);
     let spheres: Vec<_> = lamps.iter().map(|light| (scene_place(light, origin).0.to_array(), light.world_radius())).collect();
     let bake = (side > 0).then(|| lamp_bake(triangles, &world_masked(collision, origin), &spheres));
     let records: Vec<_> = lamps.iter().enumerate().map(|(index, light)| lamp_record(light, environment.level_brightness, origin, bake.as_ref().map_or(UNMAPPED, |bake| bake.tile_bits(index)))).collect();
+    let surfaces: Vec<_> = surfaces.iter().filter(|_| bake.is_some()).map(|surface| ShadowSurface { origin: (Vec3::from(surface.origin) + origin).to_array(), ..surface.clone() }).collect();
+    let (firsts, patches) = cut(&surfaces);
     let cells = {
         let drawn: Vec<_> = bake.as_ref().map_or_else(|| vec![None; lamps.len()], |bake| bake.drawn(side / ATLAS_UNITS).collect());
         let cell_lamps: Vec<_> = records.iter().zip(drawn).map(|(record, drawn)| CellLamp::of(record, drawn.map(|(face, _)| face), drawn.map_or(&[], |(_, casters)| casters))).collect();
-        lamp_cells(bake.as_ref().map_or(&[], |bake| &bake.vertices), &cell_lamps, if side > 0 { SHADOWED_CELL } else { UNSHADOWED_CELL })
+        let boxes: Vec<PatchBox> = patches.iter().map(|&(surface, corner)| patch_box(&surfaces[surface as usize], corner)).collect();
+        lamp_cells(bake.as_ref().map_or(&[], |bake| &bake.vertices), &cell_lamps, &boxes, if side > 0 { SHADOWED_CELL } else { UNSHADOWED_CELL })
     };
+    let groups: Vec<u32> = (0..patches.len()).map(|patch| cells.patch_of(patch).len().div_ceil(4) as u32).collect();
+    let packed = pack_blocks(&groups);
     let lit = cells.starts.windows(2).filter(|pair| pair[1] > pair[0]).count().max(1);
+    let atlas_height = bake.as_ref().map_or(0, |bake| bake.atlas_height(side));
     let listed = format!(
-        "cells of {} units, {:.1} lamps a lit cell, {} of the {} lamp and cell pairs in reach kept",
+        "cells of {} units, {:.1} lamps a lit cell, {} of the {} lamp and cell pairs in reach kept; {} patches, {} visibility blocks, {}; shadow atlas {:.1} MB",
         cells.cell,
         cells.lamps.len() as f32 / lit as f32,
         cells.lamps.len(),
-        cells.in_reach
+        cells.in_reach,
+        patches.len(),
+        groups.iter().sum::<u32>(),
+        packed.as_ref().map_or_else(|| "no visibility cache".to_owned(), |([width, height], _)| format!("{:.1} MB", f64::from(width * height * 4) / f64::from(1 << 20))),
+        f64::from(side * atlas_height) * 2.0 / f64::from(1 << 20)
     );
-    let book = book_texels(&cells, &records);
+    let book = book_texels(&cells, &records, &firsts, packed.as_ref().map_or(&[][..], |(_, places)| places.as_slice()));
+    let visibility = packed.map(|(size, _)| {
+        let patches_start = book[2][1] as usize;
+        VisibilityPlan { size, jobs: patch_jobs(&surfaces, &patches, &book[patches_start..patches_start + patches.len()]) }
+    });
     let zones = on_threads(lamps.len(), |lamp| p2_collision::light_zones(&collision.model, lamps[lamp].location, lamps[lamp].world_radius()));
     let lamps = lamps.into_iter().zip(zones).zip(cells.reach).map(|((light, zones), reach)| (light, zones, reach)).collect();
-    LampJobResult { lamps, bake, book, listed }
+    LampJobResult { lamps, bake, book, listed, visibility, patches }
 }
 
 /// Float texels in a slot Bevy binds as filterable: every desktop GPU filters them. Rows after the texels hold
@@ -296,7 +337,7 @@ pub fn bakes_at_load() -> bool {
     LOAD_LEVELS.load(Ordering::Relaxed) & LOAD_MODERN != 0
 }
 
-pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCollision, origin: Vec3) -> Option<Arc<LightBakes>> {
+pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCollision, surfaces: &[ShadowSurface], origin: Vec3) -> Option<Arc<LightBakes>> {
     if !bakes_at_load() {
         return None;
     }
@@ -305,7 +346,7 @@ pub(crate) fn bake_for_load(environment: &LightEnvironment, collision: &StaticCo
     let world = world_triangles(collision, origin);
     let (lamps, probes) = std::thread::scope(|scope| {
         let probes = scope.spawn(|| crate::probes::prebake(environment, collision, &world, origin, (levels >> 8 & 255) as u8));
-        (lamp_job(environment, collision, &world.triangles, origin, side), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+        (lamp_job(environment, collision, &world.triangles, surfaces, origin, side), probes.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
     });
     Some(Arc::new(LightBakes { lamps: Prebaked::new(side, lamps), probes }))
 }
@@ -336,6 +377,8 @@ fn follow_lamps(
     level: Option<Res<LevelCollision>>,
     mut atlas: ResMut<LampAtlas>,
     mut book: ResMut<LampBook>,
+    mut visibility: ResMut<LampVisibility>,
+    mut sky: ResMut<LampSky>,
     mut job: Local<LampJob>,
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
@@ -350,31 +393,52 @@ fn follow_lamps(
         job.key = key;
         job.task = None;
         job.ready = None;
+        if let Some((_, cancel)) = job.sky.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        *sky = LampSky::default();
         atlas.bake = None;
         atlas.book = None;
         atlas.faces.clear();
         book.image = None;
+        *visibility = LampVisibility::default();
         let side = key.map_or(0, |(_, _, side)| side);
-        if atlas.side != side {
-            atlas.side = side;
-            atlas.image = (side > 0).then(|| new_atlas(&mut images, [side, side], TextureFormat::R16Float));
-        }
+        atlas.side = side;
+        atlas.height = 0;
+        atlas.image = None;
         for entity in &lamps {
             commands.entity(entity).despawn();
         }
         if let (Some(environment), Some(collision), Some(shown)) = (environment.clone(), collision, shown.as_deref()) {
-            let origin = shown.origin;
+            let (origin, surfaces) = (shown.origin, shown.shadow_surfaces.clone());
             job.ready = shown.light_bakes.as_ref().and_then(|bakes| bakes.lamps.take(&side));
             if job.ready.is_none() {
-                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, origin, side) }));
+                job.task = Some(AsyncComputeTaskPool::get().spawn(async move { lamp_job(&environment, &collision, &if side > 0 { world_triangles(&collision, origin).triangles } else { Vec::new() }, &surfaces, origin, side) }));
             }
         }
+    }
+    if let Some(SkyBake { size: [width, height], texels }) = job.sky.take_if(|(thread, _)| thread.is_finished()).and_then(|(thread, _)| thread.join().ok()) {
+        let mut image = Image::new(Extent3d { width, height, depth_or_array_layers: 1 }, TextureDimension::D2, texels, TextureFormat::R8Unorm, RenderAssetUsages::RENDER_WORLD);
+        image.sampler = ImageSampler::linear();
+        sky.image = Some(images.add(image));
     }
     if job.ready.is_none() && !job.task.as_ref().is_some_and(Task::is_finished) {
         return;
     }
     let (Some(environment), Some(shown), Some(model)) = (environment, shown.as_deref(), level.as_ref().and_then(|level| level.model())) else { return };
-    let Some(LampJobResult { lamps: map, bake, book: texels, listed }) = job.ready.take().or_else(|| job.task.take().map(block_on)) else { return };
+    let Some(LampJobResult { lamps: map, bake, book: texels, listed, visibility: plan, patches }) = job.ready.take().or_else(|| job.task.take().map(block_on)) else { return };
+    if let Some(collision) = level.as_ref().and_then(|level| level.0.clone()).filter(|_| !patches.is_empty()) {
+        // The shown charts sit in world space on Bevy's axes; swapping the axes back gives the collision's frame.
+        let surfaces = shown.shadow_surfaces.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        // Once cancelled, every point left reads as solid, so the rest of the trace is skipped.
+        let solid = {
+            let (collision, cancel) = (collision.clone(), cancel.clone());
+            move |at: Vec3| cancel.load(Ordering::Relaxed) || p2_collision::point_solid(&collision.model, p2_bevy_assets::to_bevy(at).into())
+        };
+        let open = move |from: Vec3, way: Vec3| reaches_sky(&collision, p2_bevy_assets::to_bevy(from).into(), p2_bevy_assets::to_bevy(way).into());
+        job.sky = std::thread::Builder::new().name("sky bake".into()).spawn(move || bake_sky(&surfaces, &patches, open, solid)).ok().map(|thread| (thread, cancel));
+    }
     for (index, (light, zones, reach)) in map.iter().enumerate() {
         spawn_lamp(&mut commands, index, light, *reach, &environment, shown.origin, lamp_zone(light, model, zones));
     }
@@ -386,6 +450,16 @@ fn follow_lamps(
     book.image = Some(images.add(book_image(&texels)));
     atlas.book.clone_from(&book.image);
     book.lamps = map.len();
+    if let Some(VisibilityPlan { size: [width, height], jobs }) = plan {
+        let mut image = Image::new_uninit(Extent3d { width, height, depth_or_array_layers: 1 }, TextureDimension::D2, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+        image.texture_descriptor.usage = TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+        image.sampler = ImageSampler::linear();
+        *visibility = LampVisibility { image: Some(images.add(image)), jobs: jobs.into() };
+    }
+    // Made with its bake, so the materials bind both in one frame and the height is known.
+    let (side, height) = (atlas.side, bake.as_ref().map_or(0, |bake| bake.atlas_height(atlas.side)));
+    atlas.height = height;
+    atlas.image = (height > 0).then(|| new_atlas(&mut images, [side, height], TextureFormat::R16Float));
     atlas.bake = bake.map(|mut bake| {
         bake.keep_record_rows(&texels);
         Arc::new(bake)
@@ -409,6 +483,10 @@ pub(crate) enum MaterialSlot {
     /// Bevy reads it only for normal mapping, compiled out without vertex tangents: a mesh that gains tangents would
     /// bend its normals by this image.
     NormalMap,
+    /// Bevy reads it only to scale `material.reflectance` in its PBR input, which our lit shaders never read.
+    Specular,
+    /// Bevy reads it only to tint specular in its PBR input, which our lit shaders never read.
+    SpecularTint,
 }
 
 impl MaterialSlot {
@@ -419,6 +497,8 @@ impl MaterialSlot {
             Self::Anisotropy => &material.anisotropy_texture,
             Self::DepthMap => &material.depth_map,
             Self::NormalMap => &material.normal_map_texture,
+            Self::Specular => &material.specular_texture,
+            Self::SpecularTint => &material.specular_tint_texture,
         }
     }
 
@@ -429,6 +509,8 @@ impl MaterialSlot {
             Self::Anisotropy => &mut material.anisotropy_texture,
             Self::DepthMap => &mut material.depth_map,
             Self::NormalMap => &mut material.normal_map_texture,
+            Self::Specular => &mut material.specular_texture,
+            Self::SpecularTint => &mut material.specular_tint_texture,
         }
     }
 }
@@ -453,6 +535,22 @@ impl MaterialAtlas for LampBook {
 
     fn wanted(&self) -> Option<Handle<Image>> {
         self.image.clone().filter(|_| self.lamps > 0)
+    }
+}
+
+impl MaterialAtlas for LampVisibility {
+    const SLOT: MaterialSlot = MaterialSlot::Specular;
+
+    fn wanted(&self) -> Option<Handle<Image>> {
+        self.image.clone()
+    }
+}
+
+impl MaterialAtlas for LampSky {
+    const SLOT: MaterialSlot = MaterialSlot::SpecularTint;
+
+    fn wanted(&self) -> Option<Handle<Image>> {
+        self.image.clone()
     }
 }
 
@@ -524,7 +622,7 @@ fn pick_faces(
     };
     let key = Arc::as_ptr(&bake).addr();
     if squares.book.is_none() || squares.bake != key {
-        *squares = DetailSquares { bake: key, made: squares.made + 1, book: Some(FaceBook::new(atlas.side)) };
+        *squares = DetailSquares { bake: key, made: squares.made + 1, book: Some(FaceBook::new([atlas.side, atlas.height])) };
     }
     *frames += 1;
     if *frames < FACE_PICK_FRAMES {
@@ -579,26 +677,31 @@ impl Plugin for LampsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LampAtlas>();
         app.init_resource::<LampBook>();
+        app.init_resource::<LampVisibility>();
+        app.init_resource::<LampSky>();
         app.init_resource::<DetailSquares>();
         app.init_resource::<MoverTiles>();
         app.add_systems(Update, (follow_lamps, pick_faces).chain().in_set(super::RenderFollowSystems));
         app.add_systems(PostUpdate, pick_mover_tiles.after(TransformSystems::Propagate).after(VisibilitySystems::CalculateBounds));
         follow_atlas::<LampAtlas>(app);
         follow_atlas::<LampBook>(app);
-        app.add_plugins((ExtractResourcePlugin::<LampAtlas>::default(), ExtractResourcePlugin::<MoverTiles>::default()));
+        // Only the BSP reads the cached visibility and sky; blended surfaces light through Bevy, which reads the specular slots.
+        app.add_systems(PostUpdate, (follow_atlas_binding::<LampVisibility, BakedLight>, follow_atlas_binding::<LampSky, BakedLight>).after(AtlasSizeSystems).before(AssetEventSystems));
+        app.add_plugins((ExtractResourcePlugin::<LampAtlas>::default(), ExtractResourcePlugin::<MoverTiles>::default(), ExtractResourcePlugin::<LampVisibility>::default()));
         if app.get_sub_app(RenderApp).is_none() {
             return;
         }
         add_shaders(app, [
             (ATLAS_SHADER, shader_file("lamp_atlas.wesl")),
             (MOVER_CASTER_SHADER, shader_file("mover_caster.wesl")),
+            (VISIBILITY_SHADER, shader_file("lamp_visibility.wesl")),
         ]);
         decal_bins::build(app);
         shadow_mask::build(app);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.init_resource::<PlainTilesDrawn>();
             render.init_resource::<BookRecords>();
-            render.add_systems(Render, (draw_lamp_atlas, draw_mover_tiles).chain().in_set(RenderSystems::PrepareResources));
+            render.add_systems(Render, (draw_lamp_atlas, cache_lamp_visibility, draw_mover_tiles).chain().in_set(RenderSystems::PrepareResources));
         }
     }
 

@@ -29,7 +29,7 @@ const LAMP_CLEARANCE: f32 = 16.0;
 /// Matches `lamp_shadow.wesl`.
 const LAMP_SOURCE_SHARE: f32 = 0.08;
 
-fn reaches_sky(level: &StaticCollision, from: Vector, way: Vector) -> bool {
+pub(crate) fn reaches_sky(level: &StaticCollision, from: Vector, way: Vector) -> bool {
     let to = from + way * SUN_TRACE;
     let model = &level.model;
     let (reach, sky) = p2_collision::line_check_node(model, from, to).map_or((1.0, true), |(hit, node)| {

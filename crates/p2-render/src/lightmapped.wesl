@@ -46,7 +46,10 @@ fn light_pass(light_id: u32, position: vec3<f32>, normal: vec3<f32>) -> vec3<f32
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
 @if(VISIBILITY_RANGE_DITHER)
     visibility_range_dither(vertex_output.position, vertex_output.visibility_range_dither);
-    var pbr_input = pbr_input_from_standard_material(vertex_output, is_front);
+    var plain = vertex_output;
+@if(VERTEX_COLORS)
+    plain.color = vec4(1.0);
+    var pbr_input = pbr_input_from_standard_material(plain, is_front);
     let base_alpha = pbr_input.material.base_color.a;
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material.flags,
@@ -54,11 +57,11 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
         pbr_input.material.base_color
     );
     let ranges = cluster_ranges(pbr_input);
-    let decals = decal_list(vertex_output, pbr_input, ranges, true);
+    let decals = decal_list(plain, pbr_input, ranges, true);
 
     var out: FragmentOutput;
     let color = pbr_input.material.base_color;
-    let layers = material_layers(vertex_output);
+    let layers = material_layers(plain);
     let normal = normalize(pbr_input.world_normal);
     let sun = sun_index();
     let modern = is_modern(layers.detail.z) && sun_found(sun);
@@ -66,11 +69,11 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     // Modern glass drops the pool, so the game's blood splats are pasted on it after the light instead.
     let glass = modern && is_see_through(pbr_input.material.flags);
     let pooled = !darken && !glass;
-    let pool = pool_at(pbr_input, decals, normal, select(TARGET_BSP, NO_PROJECTORS, glass), base_tone(vertex_output, pbr_input, color.rgb));
+    let pool = pool_at(pbr_input, decals, normal, select(TARGET_BSP, NO_PROJECTORS, glass), base_tone(plain, pbr_input, color.rgb));
     var surface: vec3<f32>;
     var alpha = color.a;
     if modern {
-        let bumped = base_relief(vertex_output, pbr_input, normal, layers.detail.z);
+        let bumped = base_relief(plain, pbr_input, normal, layers.detail.z);
         let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool, world_lookup());
         let shaded = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), vec3(0.0));
         surface = shaded.rgb;
@@ -78,7 +81,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     } else {
         surface = lit_color(layers, select(wet_color(color.rgb, pool), color.rgb, darken), view.exposure * pbr_input.lightmap_light);
     }
-    let layered = apply_layers(vertex_output, vec4(surface, alpha), base_alpha, pbr_input, layers);
+    let layered = apply_layers(plain, vec4(surface, alpha), base_alpha, pbr_input, layers);
     var lit = layered.rgb;
 
     var passes = vec3(0.0);

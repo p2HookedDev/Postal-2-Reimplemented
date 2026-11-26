@@ -1,6 +1,7 @@
 //! The static world's shadow of every lamp, drawn once a map into one atlas of six square tiles a lamp.
-//! Tiles pack in units of the atlas side over [`ATLAS_UNITS`] in its upper three quarters; the last quarter
-//! holds the detail faces ([`super::faces`]), each drawn in the frame it gets its square.
+//! Tiles pack in units of the atlas side over [`ATLAS_UNITS`] in at most its upper three quarters; the detail
+//! faces ([`super::faces`]) take a band under the rows the tiles use, each drawn in the frame it gets its square.
+//! The atlas is only as tall as that band's end.
 
 use std::num::NonZero;
 use std::ops::Range;
@@ -29,7 +30,7 @@ use rustc_hash::FxHashSet;
 
 use super::{LAMP_SHADOW_SPAN, LampAtlas};
 use super::cells::{BOOK_WIDTH, HEADER_TEXELS, RECORD_TEXELS};
-use super::faces::{DETAIL_UNIT, FaceSlot};
+use super::faces::{DETAIL_UNIT, FaceSlot, atlas_height};
 use super::mover_pass::{NEAREST, pipeline, view_rows};
 use crate::stage_encoder::{Prepared, StageEncoder};
 use crate::level_collision::{GREY_ALBEDO, MaskedCaster, StaticCollision};
@@ -160,7 +161,7 @@ pub(super) struct LampBake {
     masked_indices: Vec<u32>,
     masked_ranges: Vec<MaskedRange>,
     masked_images: Vec<Handle<Image>>,
-    records: Vec<[f32; 4]>,
+    pub(super) records: Vec<[f32; 4]>,
 }
 
 impl LampBake {
@@ -171,6 +172,11 @@ impl LampBake {
 
     pub(super) fn tile_bits(&self, lamp: usize) -> u32 {
         self.tiles.get(lamp).copied().flatten().map_or(UNMAPPED, Tile::packed)
+    }
+
+    pub(super) fn atlas_height(&self, side: u32) -> u32 {
+        let rows = self.tiles.iter().flatten().map(|tile| tile.y + (2 << tile.level)).max().unwrap_or(0);
+        atlas_height(side, rows * (side / ATLAS_UNITS))
     }
 
     pub(super) fn plain_face(&self, lamp: usize, unit: u32) -> Option<u32> {
@@ -704,6 +710,15 @@ mod tests {
         let sizes = |side: u32| [100.0, 500.0, 5000.0].map(|radius| Tile { x: 0, y: 0, level: wanted_level(radius) }.size(side / ATLAS_UNITS));
         assert_eq!(sizes(4096), [64, 128, 256]);
         assert_eq!(sizes(8192), [128, 256, 512]);
+    }
+
+    #[test]
+    fn the_atlas_ends_under_the_tiles_it_holds() {
+        let near = [[10.0, 0.0, 0.0], [10.0, 5.0, 0.0], [10.0, 0.0, 5.0]];
+        assert_eq!(lamp_bake(&[near], &[], &[([0.0; 3], 5000.0)]).atlas_height(16384), 2048 + 4096);
+        assert_eq!(lamp_bake(&[near], &[], &[([0.0; 3], 100.0); 2]).atlas_height(16384), 1024 + 4096);
+        assert_eq!(lamp_bake(&[near], &[], &[]).atlas_height(4096), 1024);
+        assert_eq!(lamp_bake(&[near], &[], &vec![([0.0; 3], 5000.0); 504]).atlas_height(8192), 8192);
     }
 
     #[test]

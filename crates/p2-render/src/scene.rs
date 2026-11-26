@@ -71,6 +71,7 @@ pub struct Scene {
     pub light_bakes: Option<Arc<crate::lamps::LightBakes>>,
     pub antiportals: Vec<AntiportalActor>,
     pub light_maps: Vec<Option<Handle<Image>>>,
+    pub shadow_surfaces: Arc<[crate::lamps::grid::ShadowSurface]>,
 }
 
 /// Placed from the `SkyZoneInfo`'s location, turned by its rotation and then the view's;

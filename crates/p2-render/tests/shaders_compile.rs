@@ -6,7 +6,7 @@ use wesl::{CompileOptions, Feature};
 
 const BEVY: &str = "0.20.0";
 
-const ENTRIES: [(&str, &[&str]); 54] = [
+const ENTRIES: [(&str, &[&str]); 57] = [
     ("particle", &["P2_PARTICLE_LEVELS", "SKY_VIEW"]),
     ("actor_light", &["SKY_VIEW"]),
     ("sun_levels", &[]),
@@ -38,6 +38,8 @@ const ENTRIES: [(&str, &[&str]); 54] = [
     ("blended", &["PREMULTIPLY_ALPHA", "BLEND_PREMULTIPLIED_ALPHA"]),
     ("lightmapped", &["PREMULTIPLY_ALPHA", "BLEND_MULTIPLY"]),
     ("lightmapped", &["P2_SEE_THROUGH"]),
+    ("lightmapped", &["CACHED_LAMPS"]),
+    ("lightmapped", &["LIGHTMAP", "VERTEX_COLORS", "CACHED_LAMPS"]),
     ("mesh_light", &["P2_SEE_THROUGH"]),
     ("particle", &["TAGGED_COLOR", "P2_PARTICLE_LEVELS"]),
     ("debris", &[]),
@@ -59,6 +61,7 @@ const ENTRIES: [(&str, &[&str]); 54] = [
     ("lamp_mask", &["LAMP_MASK_PASS", "DEPTH_PREPASS", "SHADOW_FILTER_METHOD_GAUSSIAN", "SHADOW_SOFT"]),
     ("lamp_mask", &["LAMP_MASK_PASS", "DEPTH_PREPASS", "SHADOW_FILTER_METHOD_GAUSSIAN", "SHADOW_SOFTER"]),
     ("lamp_mask", &["LAMP_MASK_PASS", "DEPTH_PREPASS", "SHADOW_FILTER_METHOD_GAUSSIAN", "SHADOW_CONTACT_HARDENING", "CONTACT_SHADOWS"]),
+    ("lamp_visibility", &["LAMP_MASK_PASS", "SHADOW_FILTER_METHOD_HARDWARE_2X2"]),
     ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS"]),
     ("reflections_prepass", &["PREPASS_FRAGMENT", "NORMAL_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS", "ACTOR_SHADING"]),
 ];
@@ -127,6 +130,7 @@ fn options(extra: &[&str], entry: &[&str]) -> CompileOptions {
         "CLUSTERED_FORWARD_DEBUG_Z_SLICES",
         "SIXTEEN_BYTE_ALIGNMENT",
         "DISTANCE_FOG",
+        "PBR_SPECULAR_TEXTURES_SUPPORTED",
     ];
     for name in base.iter().chain(extra).chain(entry) {
         options.features.flags.insert((*name).to_string(), Feature::Enable);
@@ -153,7 +157,7 @@ fn engine_shaders_compose_and_validate() {
         &["BINDLESS", "LIGHTMAP", "MULTIPLE_LIGHTMAPS_IN_ARRAY"],
         &["DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS"],
         &["BINDLESS", "DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS"],
-        &["BINDLESS", "DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS", "SCREEN_SHADOWS_ONLY"],
+        &["BINDLESS", "DEPTH_PREPASS", "NORMAL_PREPASS", "SCREEN_SPACE_AMBIENT_OCCLUSION", "CONTACT_SHADOWS", "SCREEN_SUN"],
         &["CLUSTERED_DECALS_ARE_USABLE"],
         &["CLUSTERED_DECALS_ARE_USABLE", "HALF_FLOATS"],
     ];

@@ -424,6 +424,7 @@ fn show_model(t: &mut SceneTargets, sections: Vec<SectionView>, placement: Trans
         light_bakes: None,
         antiportals: Vec::new(),
         light_maps: Vec::new(),
+        shadow_surfaces: Default::default(),
     })));
     textured
 }

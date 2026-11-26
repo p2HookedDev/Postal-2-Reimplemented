@@ -10,8 +10,12 @@ import package::p2_render::modern_base::{LUMINANCE, LampLight, modern_bits};
 import package::p2_render::sun_shadow::{ShadowLookup, sun_faced, sun_seen_from, sun_visibility};
 import package::p2_render::sun_levels::LevelSource;
 import package::p2_render::lamp_shadow::lamp_light;
-@if(SCREEN_SHADOWS_ONLY)
+@if(SCREEN_SUN)
 import package::p2_render::lamp_shadow::screen_sun;
+@if(CACHED_LAMPS)
+import package::p2_render::lamp_shadow::{cached_sky, find_patch};
+@if(CACHED_LAMPS)
+import package::p2_render::sun_shadow::ROOFED_SKY;
 import package::p2_render::projector::{Pool, no_pool, wet_color, wet_normal};
 @if(BINDLESS)
 import bevy_pbr::render::{pbr_bindings::material_indices, mesh_bindings::mesh};
@@ -64,10 +68,16 @@ fn pooled_surface(surface: vec3<f32>, pool: Pool) -> vec3<f32> {
 
 fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool, lookup: ShadowLookup) -> ModernLight {
     let position = pbr_input.world_position.xyz;
-@if(SCREEN_SHADOWS_ONLY)
-    let seen = sun_faced(sun, normal, screen_sun(in, pbr_input.frag_coord.xy));
+@if(SCREEN_SUN)
+    var seen = sun_faced(sun, normal, screen_sun(in, pbr_input.frag_coord.xy));
 @else
-    let seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy, lookup);
+    var seen = sun_seen_from(material_levels(in), sun, pbr_input.world_position, normal, pbr_input.frag_coord.xy, lookup);
+@if(CACHED_LAMPS) {
+    let sky = cached_sky(in, find_patch(in));
+    if sky >= 0.0 {
+        seen.z = mix(ROOFED_SKY, 1.0, sky);
+    }
+}
     var standing = pool;
     if darken {
         standing = no_pool(normal);

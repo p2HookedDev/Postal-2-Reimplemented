@@ -131,6 +131,10 @@ pub(crate) fn pool_mirror_on(flag: u32) -> bool {
     flag & u32::from(POOL_MIRROR) != 0
 }
 
+pub(crate) fn light_source(flag: u32) -> crate::shaders::LightSource {
+    if flag & u32::from(MODERN_ON) != 0 { crate::shaders::LightSource::Modern } else { crate::shaders::LightSource::Retail }
+}
+
 pub fn modern_flag(settings: &Settings) -> u8 {
     if !settings.modern_graphics() {
         return 0;

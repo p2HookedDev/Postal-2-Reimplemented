@@ -5,6 +5,7 @@
 use bevy::math::Vec3;
 
 use super::atlas::{FACE_AXES, GUARD_TEXELS, NEAR};
+use super::grid::Sides;
 
 const MOST_CELLS: u64 = 1 << 22;
 /// The shader takes a cell's place apart from 10 bits an axis.
@@ -59,6 +60,51 @@ impl<'a> CellLamp<'a> {
     }
 }
 
+/// A surface patch's box in the lamps' frame, grown by a guard texel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PatchBox {
+    pub low: [f32; 3],
+    pub high: [f32; 3],
+    pub normal: [f32; 3],
+    pub sides: Sides,
+}
+
+impl PatchBox {
+    /// A one-sided patch whose whole box lies behind the lamp's side of its plane, `low` and `high` taken from the lamp.
+    fn faces_away(&self, low: [f32; 3], high: [f32; 3]) -> bool {
+        self.sides == Sides::One && (0..3).map(|axis| (self.normal[axis] * low[axis]).min(self.normal[axis] * high[axis])).sum::<f32>() >= 0.0
+    }
+}
+
+struct Buckets {
+    starts: Vec<u32>,
+    items: Vec<u32>,
+}
+
+impl Buckets {
+    /// `pairs` are (bucket, item); each bucket keeps its items in the order given.
+    fn of_pairs(buckets: usize, pairs: &[(u32, u32)]) -> Self {
+        let mut starts = vec![0u32; buckets + 1];
+        for &(bucket, _) in pairs {
+            starts[bucket as usize + 1] += 1;
+        }
+        for bucket in 0..buckets {
+            starts[bucket + 1] += starts[bucket];
+        }
+        let mut filled = starts.clone();
+        let mut items = vec![0u32; pairs.len()];
+        for &(bucket, item) in pairs {
+            items[filled[bucket as usize] as usize] = item;
+            filled[bucket as usize] += 1;
+        }
+        Self { starts, items }
+    }
+
+    fn of(&self, bucket: usize) -> &[u32] {
+        &self.items[self.starts[bucket] as usize..self.starts[bucket + 1] as usize]
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct LampCells {
     pub origin: [f32; 3],
@@ -68,11 +114,17 @@ pub(super) struct LampCells {
     pub lamps: Vec<u32>,
     pub in_reach: u64,
     pub reach: Vec<[f32; 6]>,
+    pub patch_starts: Vec<u32>,
+    pub patch_lamps: Vec<u32>,
 }
 
 impl LampCells {
     pub(super) fn of(&self, cell: usize) -> &[u32] {
         &self.lamps[self.starts[cell] as usize..self.starts[cell + 1] as usize]
+    }
+
+    pub(super) fn patch_of(&self, patch: usize) -> &[u32] {
+        &self.patch_lamps[self.patch_starts[patch] as usize..self.patch_starts[patch + 1] as usize]
     }
 
     fn index(&self, [x, y, z]: [u32; 3]) -> usize {
@@ -265,9 +317,13 @@ enum Reach {
     Lit(f32),
 }
 
-fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) -> Reach {
+fn cell_box(corner: [f32; 3], side: f32) -> ([f32; 3], [f32; 3]) {
     let low = corner.map(|at| at - CELL_SLACK);
-    let high = low.map(|at| at + side + 2.0 * CELL_SLACK);
+    (low, low.map(|at| at + side + 2.0 * CELL_SLACK))
+}
+
+/// `low` and `high` are taken from the lamp.
+fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, low: [f32; 3], high: [f32; 3]) -> Reach {
     let nearest = |grown: f32| (0..3).map(|axis| (low[axis] - grown).max(-high[axis] - grown).max(0.0)).map(|gap| gap * gap).sum::<f32>().sqrt();
     if nearest(0.0) >= lamp.radius {
         return Reach::Out;
@@ -287,8 +343,9 @@ fn box_reach(lamp: &CellLamp, cube: Option<&Cube>, corner: [f32; 3], side: f32) 
 }
 
 /// The cells of `grid` a lamp lights with the most light it gives each, and how many lie within its radius. Cells
-/// are tried eight at a time as one box first: a box the lamp leaves dark holds no lit cell.
-fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(u32, f32)>, u64, [f32; 6]) {
+/// are tried eight at a time as one box first: a box the lamp leaves dark holds no lit cell. Then the patches
+/// it lights, of those in its lit cells.
+fn lit_cells(grid: &LampCells, buckets: &Buckets, patches: &[PatchBox], lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(u32, f32)>, u64, [f32; 6], Vec<u32>) {
     let cube = lamp.face.map(|face| Cube::drawn(face as usize, lamp, vertices));
     let blocks = |axis: usize| {
         let cell = |at: f32| (((at - grid.origin[axis]) / grid.cell).floor().max(0.0) as u32).min(grid.dims[axis] - 1);
@@ -300,7 +357,8 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(
         for y in blocks(1) {
             for x in blocks(0) {
                 let block = [2 * x, 2 * y, 2 * z];
-                let whole = box_reach(lamp, cube.as_ref(), corner(block), 2.0 * grid.cell);
+                let (low, high) = cell_box(corner(block), 2.0 * grid.cell);
+                let whole = box_reach(lamp, cube.as_ref(), low, high);
                 if matches!(whole, Reach::Out) {
                     continue;
                 }
@@ -309,7 +367,8 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(
                     if (0..3).any(|axis| cell[axis] >= grid.dims[axis]) {
                         continue;
                     }
-                    let reach = box_reach(lamp, cube.as_ref().filter(|_| matches!(whole, Reach::Lit(_))), corner(cell), grid.cell);
+                    let (low, high) = cell_box(corner(cell), grid.cell);
+                    let reach = box_reach(lamp, cube.as_ref().filter(|_| matches!(whole, Reach::Lit(_))), low, high);
                     if matches!(reach, Reach::Out) {
                         continue;
                     }
@@ -321,15 +380,47 @@ fn lit_cells(grid: &LampCells, lamp: &CellLamp, vertices: &[[f32; 3]]) -> (Vec<(
             }
         }
     }
-    (lit, in_reach, cube.as_ref().map_or([1.0; 6], Cube::reach).map(|share| share * lamp.radius))
+    let mut near: Vec<u32> = lit.iter().flat_map(|&(cell, _)| buckets.of(cell as usize)).copied().collect();
+    near.sort_unstable();
+    near.dedup();
+    near.retain(|&patch| {
+        let patch = &patches[patch as usize];
+        let (low, high) = (std::array::from_fn(|axis| patch.low[axis] - lamp.position[axis]), std::array::from_fn(|axis| patch.high[axis] - lamp.position[axis]));
+        !patch.faces_away(low, high) && matches!(box_reach(lamp, cube.as_ref(), low, high), Reach::Lit(_))
+    });
+    (lit, in_reach, cube.as_ref().map_or([1.0; 6], Cube::reach).map(|share| share * lamp.radius), near)
 }
 
-pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cell: f32) -> LampCells {
+fn patch_buckets(grid: &LampCells, patches: &[PatchBox]) -> Buckets {
+    let mut pairs = Vec::new();
+    'patches: for (index, patch) in patches.iter().enumerate() {
+        let mut span = [(0, 0); 3];
+        for (axis, span) in span.iter_mut().enumerate() {
+            let cell = |at: f32| ((at - grid.origin[axis]) / grid.cell).floor();
+            let (low, high) = (cell(patch.low[axis]), cell(patch.high[axis]));
+            if high < 0.0 || low >= grid.dims[axis] as f32 {
+                continue 'patches;
+            }
+            *span = (low.max(0.0) as u32, (high as u32).min(grid.dims[axis] - 1));
+        }
+        for z in span[2].0..=span[2].1 {
+            for y in span[1].0..=span[1].1 {
+                for x in span[0].0..=span[0].1 {
+                    pairs.push((grid.index([x, y, z]) as u32, index as u32));
+                }
+            }
+        }
+    }
+    Buckets::of_pairs(grid.dims.iter().product::<u32>() as usize, &pairs)
+}
+
+pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], patches: &[PatchBox], smallest_cell: f32) -> LampCells {
     if lamps.is_empty() {
-        return LampCells::default();
+        return LampCells { patch_starts: vec![0; patches.len() + 1], ..LampCells::default() };
     }
     let mut grid = grid(lamps, smallest_cell);
-    let lit = super::on_threads(lamps.len(), |lamp| lit_cells(&grid, &lamps[lamp], vertices));
+    let buckets = patch_buckets(&grid, patches);
+    let lit = super::on_threads(lamps.len(), |lamp| lit_cells(&grid, &buckets, patches, &lamps[lamp], vertices));
     let cells = grid.dims.iter().product::<u32>() as usize;
     let mut starts = vec![0u32; cells + 1];
     for &(cell, _) in lit.iter().flat_map(|(cells, ..)| cells) {
@@ -346,20 +437,23 @@ pub(super) fn lamp_cells(vertices: &[[f32; 3]], lamps: &[CellLamp], smallest_cel
             filled[cell as usize] += 1;
         }
     }
-    // The screen pass holds only a list's first lamps: the strongest in the cell come first.
     for cell in 0..cells {
         listed[starts[cell] as usize..starts[cell + 1] as usize].sort_by(|a, b| b.1.total_cmp(&a.1));
     }
-    grid.in_reach = lit.iter().map(|(_, in_reach, _)| in_reach).sum();
-    grid.reach = lit.iter().map(|&(_, _, reach)| reach).collect();
+    grid.in_reach = lit.iter().map(|(_, in_reach, ..)| in_reach).sum();
+    grid.reach = lit.iter().map(|&(_, _, reach, _)| reach).collect();
     grid.starts = starts;
     grid.lamps = listed.into_iter().map(|(lamp, _)| lamp).collect();
+    let pairs: Vec<(u32, u32)> = lit.iter().enumerate().flat_map(|(lamp, (.., lit_patches))| lit_patches.iter().map(move |&patch| (patch, lamp as u32))).collect();
+    let Buckets { starts, items } = Buckets::of_pairs(patches.len(), &pairs);
+    grid.patch_starts = starts;
+    grid.patch_lamps = items;
     grid
 }
 
 /// Texels of a lamp's record in the book. `lamp_shadow.wesl` holds the same number.
 pub(super) const RECORD_TEXELS: usize = 7;
-pub(super) const HEADER_TEXELS: usize = 2;
+pub(super) const HEADER_TEXELS: usize = 3;
 /// The book's width in texels. `lamp_shadow.wesl` holds the same number.
 pub(super) const BOOK_WIDTH: usize = 2048;
 /// The rows the book ends with, counted back from its end: the movers' tile grid starts this far back, then their
@@ -374,14 +468,29 @@ pub(super) const DECAL_BINS_FROM_END: u32 = TILE_GRID_FROM_END + DECAL_BIN_ROWS;
 /// taller than the 8192 texels every GPU takes.
 const MOST_BOOK_TEXELS: usize = (1 << 24) - DECAL_BINS_FROM_END as usize * BOOK_WIDTH;
 
-/// What `lamp_shadow.wesl` reads, four floats a texel: a header, every lamp's record, a texel a cell (list start
-/// and count) and the lists, four lamps a texel. Lists past the largest book are dropped, farthest cells first.
-pub(super) fn book_texels(cells: &LampCells, records: &[[[f32; 4]; RECORD_TEXELS]]) -> Vec<[f32; 4]> {
-    let cells_start = HEADER_TEXELS + records.len() * RECORD_TEXELS;
+/// What `lamp_shadow.wesl` reads, four floats a texel: a header, every lamp's record, a texel a surface (first
+/// patch and patches across), a texel a patch (visibility block, lamp groups and list start) and the patches'
+/// lists, four lamps a texel with -1 for none, then a texel a cell (list start and count) and the cells' lists.
+/// Lists past the largest book are dropped, farthest cells first. Header texel 2 holds where the surfaces and
+/// patches start and, once their visibility is drawn, 1.
+pub(super) fn book_texels(cells: &LampCells, records: &[[[f32; 4]; RECORD_TEXELS]], surfaces: &[[u32; 3]], blocks: &[[u32; 2]]) -> Vec<[f32; 4]> {
+    let surfaces_start = HEADER_TEXELS + records.len() * RECORD_TEXELS;
+    let patches_start = surfaces_start + surfaces.len();
+    let patch_count = cells.patch_starts.len().saturating_sub(1);
     let cell_count = cells.starts.len().saturating_sub(1);
     let [x, y, z] = cells.origin;
-    let mut texels = vec![[x, y, z, cells.cell], [cells.dims[0] as f32, cells.dims[1] as f32, cells.dims[2] as f32, cells_start as f32]];
+    let mut texels = vec![[x, y, z, cells.cell], [cells.dims[0] as f32, cells.dims[1] as f32, cells.dims[2] as f32, 0.0], [surfaces_start as f32, patches_start as f32, 0.0, 0.0]];
     texels.extend(records.iter().flatten());
+    texels.extend(surfaces.iter().map(|&[first, across, two_sided]| [first as f32, across as f32, two_sided as f32, 0.0]));
+    texels.resize(patches_start + patch_count, [0.0; 4]);
+    for patch in 0..patch_count {
+        let lamps = cells.patch_of(patch);
+        let [x, y] = blocks.get(patch).copied().unwrap_or_default();
+        texels[patches_start + patch] = [x as f32, y as f32, lamps.len().div_ceil(4) as f32, texels.len() as f32];
+        texels.extend(lamps.chunks(4).map(|four| std::array::from_fn(|at| four.get(at).map_or(-1.0, |&lamp| lamp as f32))));
+    }
+    let cells_start = texels.len();
+    texels[1][3] = cells_start as f32;
     texels.resize(cells_start + cell_count, [0.0; 4]);
     for cell in 0..cell_count {
         let lamps = cells.of(cell);
@@ -422,7 +531,7 @@ mod tests {
 
     fn cells_of(vertices: &[[f32; 3]], face: Option<u32>) -> LampCells {
         let casters: Vec<u32> = (0..vertices.len() as u32).collect();
-        lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 1000.0, face, casters: &casters, strength: 1.0, spot: None }], 128.0)
+        lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 1000.0, face, casters: &casters, strength: 1.0, spot: None }], &[], 128.0)
     }
 
     fn cell_at(cells: &LampCells, point: [f32; 3]) -> usize {
@@ -441,7 +550,7 @@ mod tests {
     #[test]
     fn a_cell_lists_its_strongest_lamp_first() {
         let lamp = |x: f32, strength: f32| CellLamp { position: [x, 0.0, 0.0], radius: 1000.0, face: None, casters: &[], strength, spot: None };
-        let cells = lamp_cells(&[], &[lamp(0.0, 0.5), lamp(0.0, 2.0), lamp(800.0, 1.0)], 128.0);
+        let cells = lamp_cells(&[], &[lamp(0.0, 0.5), lamp(0.0, 2.0), lamp(800.0, 1.0)], &[], 128.0);
         assert_eq!(cells.of(cell_at(&cells, [10.0, 10.0, 10.0])), [1, 0, 2]);
         assert_eq!(cells.of(cell_at(&cells, [790.0, 10.0, 10.0])), [2, 1, 0]);
     }
@@ -473,14 +582,15 @@ mod tests {
         let vertices = wall(300.0);
         let casters: Vec<u32> = (0..vertices.len() as u32).collect();
         let lamp = CellLamp { position: [37.0, -11.0, 5.0], radius: 1000.0, face: Some(64), casters: &casters, strength: 1.0, spot: None };
-        let cells = lamp_cells(&vertices, std::slice::from_ref(&lamp), 128.0);
+        let cells = lamp_cells(&vertices, std::slice::from_ref(&lamp), &[], 128.0);
         let cube = Cube::drawn(64, &lamp, &vertices);
         let mut alone = Vec::new();
         for z in 0..cells.dims[2] {
             for y in 0..cells.dims[1] {
                 for x in 0..cells.dims[0] {
                     let corner = std::array::from_fn(|axis| cells.origin[axis] + [x, y, z][axis] as f32 * cells.cell - lamp.position[axis]);
-                    if matches!(box_reach(&lamp, Some(&cube), corner, cells.cell), Reach::Lit(_)) {
+                    let (low, high) = cell_box(corner, cells.cell);
+                    if matches!(box_reach(&lamp, Some(&cube), low, high), Reach::Lit(_)) {
                         alone.push(cells.index([x, y, z]));
                     }
                 }
@@ -520,7 +630,7 @@ mod tests {
         let narrow = spot_record(Vec3::new(-0.7, 0.1, 0.7).normalize(), 0.875, 1.0);
         for (record, most_listed) in [(point_lamp, 1.0), (down, 0.45), (narrow, 0.2)] {
             let lamp = CellLamp::of(&record, None, &[]);
-            let cells = lamp_cells(&[], std::slice::from_ref(&lamp), 128.0);
+            let cells = lamp_cells(&[], std::slice::from_ref(&lamp), &[], 128.0);
             let (mut listed, mut dropped) = (0, 0);
             for index in 0..cells.starts.len() - 1 {
                 let at = [index as u32 % cells.dims[0], index as u32 / cells.dims[0] % cells.dims[1], index as u32 / (cells.dims[0] * cells.dims[1])];
@@ -576,13 +686,66 @@ mod tests {
 
     #[test]
     fn the_book_points_each_lit_cell_at_its_lamps_four_a_texel() {
-        let cells = LampCells { origin: [1.0, 2.0, 3.0], cell: 128.0, dims: [2, 1, 1], starts: vec![0, 0, 5], lamps: vec![0, 1, 1, 0, 1], in_reach: 5, reach: Vec::new() };
-        let texels = book_texels(&cells, &[[[7.0; 4]; RECORD_TEXELS], [[9.0; 4]; RECORD_TEXELS]]);
+        let cells = LampCells { origin: [1.0, 2.0, 3.0], cell: 128.0, dims: [2, 1, 1], starts: vec![0, 0, 5], lamps: vec![0, 1, 1, 0, 1], in_reach: 5, reach: Vec::new(), ..LampCells::default() };
+        let texels = book_texels(&cells, &[[[7.0; 4]; RECORD_TEXELS], [[9.0; 4]; RECORD_TEXELS]], &[], &[]);
         let cells_start = HEADER_TEXELS + 2 * RECORD_TEXELS;
         assert_eq!(texels[..2], [[1.0, 2.0, 3.0, 128.0], [2.0, 1.0, 1.0, cells_start as f32]]);
         assert_eq!(texels[HEADER_TEXELS + RECORD_TEXELS], [9.0; 4]);
         assert_eq!(texels[cells_start], [0.0; 4]);
         assert_eq!(texels[cells_start + 1], [(cells_start + 2) as f32, 5.0, 0.0, 0.0]);
         assert_eq!(texels[cells_start + 2..], [[0.0, 1.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn the_book_lists_each_patch_lamps_four_a_texel_before_the_cells() {
+        let cells = LampCells { dims: [1, 1, 1], starts: vec![0, 0], patch_starts: vec![0, 0, 5], patch_lamps: vec![0, 1, 2, 3, 4], ..LampCells::default() };
+        let texels = book_texels(&cells, &[[[7.0; 4]; RECORD_TEXELS]], &[[0, 2, 0]], &[[0, 0], [36, 18]]);
+        let surfaces_start = HEADER_TEXELS + RECORD_TEXELS;
+        let patches_start = surfaces_start + 1;
+        let lists = patches_start + 2;
+        assert_eq!(texels[2], [surfaces_start as f32, patches_start as f32, 0.0, 0.0]);
+        assert_eq!(texels[surfaces_start], [0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(texels[patches_start..lists], [[0.0, 0.0, 0.0, lists as f32], [36.0, 18.0, 2.0, lists as f32]]);
+        assert_eq!(texels[lists..lists + 2], [[0.0, 1.0, 2.0, 3.0], [4.0, -1.0, -1.0, -1.0]]);
+        assert_eq!(texels[1][3], (lists + 2) as f32);
+        assert_eq!(texels.len(), lists + 3);
+    }
+
+    fn patch(center: [f32; 3], normal: [f32; 3], sides: Sides) -> PatchBox {
+        let half = [16.0, 144.0, 144.0];
+        PatchBox { low: std::array::from_fn(|axis| center[axis] - half[axis]), high: std::array::from_fn(|axis| center[axis] + half[axis]), normal, sides }
+    }
+
+    fn lit_patches(vertices: &[[f32; 3]], patches: &[PatchBox]) -> Vec<usize> {
+        let casters: Vec<u32> = (0..vertices.len() as u32).collect();
+        let cells = lamp_cells(vertices, &[CellLamp { position: [0.0; 3], radius: 2000.0, face: Some(64), casters: &casters, strength: 1.0, spot: None }], patches, 128.0);
+        assert_eq!(cells.patch_starts.len(), patches.len() + 1);
+        (0..patches.len()).filter(|&patch| cells.patch_of(patch) == [0]).collect()
+    }
+
+    const TOWARD: [f32; 3] = [-1.0, 0.0, 0.0];
+    const AWAY: [f32; 3] = [1.0, 0.0, 0.0];
+
+    #[test]
+    fn a_patch_in_the_open_is_lit_unless_its_one_side_faces_away() {
+        let at = [300.0, 0.0, 0.0];
+        let patches = [patch(at, TOWARD, Sides::One), patch(at, AWAY, Sides::One), patch(at, AWAY, Sides::Two), patch([2500.0, 0.0, 0.0], TOWARD, Sides::One)];
+        assert_eq!(lit_patches(&[], &patches), [0, 2]);
+    }
+
+    #[test]
+    fn a_wall_keeps_the_lamp_off_the_patches_behind_it() {
+        let patches = [patch([200.0, 0.0, 0.0], TOWARD, Sides::One), patch([300.0, 0.0, 0.0], TOWARD, Sides::One), patch([600.0, 0.0, 0.0], TOWARD, Sides::One)];
+        assert_eq!(lit_patches(&wall(300.0), &patches), [0, 1]);
+    }
+
+    #[test]
+    fn a_doorway_lets_the_lamp_onto_the_patches_it_shines_on_through_it() {
+        let mut vertices = Vec::new();
+        for (y0, y1, z0, z1) in [(-4000.0, -100.0, -4000.0, 4000.0), (100.0, 4000.0, -4000.0, 4000.0), (-100.0, 100.0, 100.0, 4000.0), (-100.0, 100.0, -4000.0, -100.0)] {
+            vertices.extend([[300.0, y0, z0], [300.0, y1, z0], [300.0, y1, z1], [300.0, y0, z0], [300.0, y1, z1], [300.0, y0, z1]]);
+        }
+        let patches = [patch([800.0, 0.0, 0.0], TOWARD, Sides::One), patch([800.0, 700.0, 0.0], TOWARD, Sides::One)];
+        assert_eq!(lit_patches(&vertices, &patches), [0]);
     }
 }

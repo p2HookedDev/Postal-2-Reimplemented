@@ -1,6 +1,7 @@
-//! Detail faces: a lamp cube face whose plain tile would show its texels gets its own square in the atlas's
-//! last quarter, sized so a texel is no larger on screen than the shadow's soft edge. Squares are powers of two,
-//! split from and merged back into the largest; an unwanted face keeps its square until another needs it.
+//! Detail faces: a lamp cube face whose plain tile would show its texels gets its own square in a band a quarter
+//! of the atlas side under the lamps' tiles, sized so a texel is no larger on screen than the shadow's soft edge.
+//! Squares are powers of two, split from and merged back into the largest; an unwanted face keeps its square until
+//! another needs it.
 
 use bevy::math::Vec3;
 use rustc_hash::FxHashMap;
@@ -44,13 +45,23 @@ struct Region {
     top: usize,
 }
 
+fn root_units(atlas_side: u32) -> u32 {
+    (atlas_side / DETAIL_UNIT / ROOTS_ACROSS).max(1)
+}
+
+/// The atlas height that holds `tile_texels` rows of lamp tiles and the detail band under them. The band starts on
+/// a whole root square, since squares split and merge on corners aligned to their size.
+pub(super) fn atlas_height(atlas_side: u32, tile_texels: u32) -> u32 {
+    let root = root_units(atlas_side) * DETAIL_UNIT;
+    tile_texels.next_multiple_of(root) + ROOTS_DOWN * root
+}
+
 impl Region {
-    fn new(atlas_side: u32) -> Self {
-        let units = atlas_side / DETAIL_UNIT;
-        let root = (units / ROOTS_ACROSS).max(1);
+    fn new([atlas_side, atlas_height]: [u32; 2]) -> Self {
+        let root = root_units(atlas_side);
         let top = (root.trailing_zeros() as usize).min(LEVELS - 1);
         let mut free: [Vec<(u16, u16)>; LEVELS] = Default::default();
-        let first_row = units * 3 / 4;
+        let first_row = atlas_height / DETAIL_UNIT - ROOTS_DOWN * root;
         free[top] = (0..ROOTS_DOWN).flat_map(|y| (0..ROOTS_ACROSS).map(move |x| ((x * root) as u16, (first_row + y * root) as u16))).collect();
         Self { free, top }
     }
@@ -171,8 +182,8 @@ pub(super) struct FaceBook {
 }
 
 impl FaceBook {
-    pub(super) fn new(atlas_side: u32) -> Self {
-        Self { region: Region::new(atlas_side), held: Vec::new(), places: FxHashMap::default(), picks: 0, ahead: Vec::new() }
+    pub(super) fn new(atlas_size: [u32; 2]) -> Self {
+        Self { region: Region::new(atlas_size), held: Vec::new(), places: FxHashMap::default(), picks: 0, ahead: Vec::new() }
     }
 
     pub(super) fn slots(&self) -> Vec<FaceSlot> {
@@ -341,7 +352,7 @@ mod tests {
 
     #[test]
     fn squares_split_from_the_largest_and_merge_back_into_it() {
-        let mut region = Region::new(SIDE);
+        let mut region = Region::new([SIDE; 2]);
         assert_eq!((region.top, region.free[3].len()), (3, 64));
         let taken: Vec<_> = (0..4).filter_map(|_| region.take(2)).collect();
         assert_eq!((taken.len(), region.free[3].len(), region.free[2].len()), (4, 63, 0));
@@ -354,16 +365,27 @@ mod tests {
 
     #[test]
     fn squares_lie_in_the_atlas_last_quarter() {
-        let mut region = Region::new(SIDE);
+        let mut region = Region::new([SIDE; 2]);
         while let Some((x, y)) = region.take(0) {
             assert!(u32::from(x) < SIDE / DETAIL_UNIT && (SIDE / DETAIL_UNIT * 3 / 4..SIDE / DETAIL_UNIT).contains(&u32::from(y)));
         }
     }
 
     #[test]
+    fn a_short_atlas_keeps_the_squares_under_its_tiles() {
+        let height = atlas_height(SIDE, 1000);
+        assert_eq!(height, 1024 + SIDE / 4);
+        assert_eq!(atlas_height(SIDE, SIDE * 3 / 4), SIDE);
+        let mut region = Region::new([SIDE, height]);
+        while let Some((x, y)) = region.take(0) {
+            assert!(u32::from(x) < SIDE / DETAIL_UNIT && (1024 / DETAIL_UNIT..height / DETAIL_UNIT).contains(&u32::from(y)));
+        }
+    }
+
+    #[test]
     fn a_face_that_lights_only_what_is_close_to_the_lamp_gets_no_square() {
         let under_a_ceiling = FaceLamp { reach: [1600.0, 1600.0, 16.0, 1600.0, 1600.0, 1600.0], ..lamp(7, Vec3::ZERO) };
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.pick(&eye(Vec3::new(300.0, -200.0, 0.0)), [under_a_ceiling].into_iter(), u32::MAX);
         let faces: Vec<u8> = book.slots().iter().map(|slot| slot.face).collect();
         assert!(faces.contains(&3) && !faces.contains(&2), "{faces:?}");
@@ -371,14 +393,14 @@ mod tests {
 
     #[test]
     fn a_lamp_whose_plain_tile_is_fine_enough_gets_no_square() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.pick(&eye(Vec3::ZERO), [FaceLamp { plain_face: 512, ..lamp(0, Vec3::new(200.0, 0.0, 0.0)) }].into_iter(), u32::MAX);
         assert!(book.slots().is_empty());
     }
 
     #[test]
     fn a_near_lamp_gets_finer_faces_than_a_far_one() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.pick(&eye(Vec3::ZERO), [lamp(0, Vec3::new(200.0, 0.0, 0.0)), lamp(1, Vec3::new(20000.0, 0.0, 0.0))].into_iter(), u32::MAX);
         let finest = |lamp: u32| book.slots().iter().filter(|slot| slot.lamp == lamp).map(|slot| slot.level).max();
         assert_eq!(finest(0), Some(3));
@@ -388,14 +410,14 @@ mod tests {
     #[test]
     fn a_spot_wants_no_face_its_cone_misses() {
         let down = FaceLamp { spot: Some((Vec3::NEG_Y, 0.9)), ..lamp(0, Vec3::ZERO) };
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.pick(&eye(Vec3::new(0.0, -100.0, 0.0)), [down].into_iter(), u32::MAX);
         assert_eq!(book.slots().iter().map(|slot| slot.face).collect::<Vec<_>>(), [3]);
     }
 
     #[test]
     fn no_two_faces_share_texels_and_a_pick_spends_no_more_than_its_budget() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         let lamps = || (0..40).map(|number| lamp(number, Vec3::new(number as f32 * 150.0, 0.0, 0.0)));
         book.pick(&eye(Vec3::ZERO), lamps(), 1 << 20);
         let first: u32 = book.slots().iter().map(|slot| slot.side() * slot.side()).sum();
@@ -411,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_face_out_of_use_keeps_its_square_until_another_needs_it() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.pick(&eye(Vec3::ZERO), [lamp(0, Vec3::new(200.0, 0.0, 0.0))].into_iter(), u32::MAX);
         let before = book.slots();
         book.pick(&eye(Vec3::ZERO), std::iter::empty(), u32::MAX);
@@ -425,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_crowded_view_gives_the_nearest_faces_the_largest_squares_and_the_rest_smaller_ones() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         let crowd = || (0..100).map(|number| lamp(number, Vec3::new(100.0 + number as f32 * 10.0, 0.0, 0.0)));
         for _ in 0..4 {
             book.pick(&eye(Vec3::ZERO), crowd(), u32::MAX);
@@ -437,7 +459,7 @@ mod tests {
 
     #[test]
     fn a_face_that_fell_behind_hands_its_large_square_to_a_nearer_one() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         let crowd = || (0..100).map(|number| lamp(number, Vec3::new(100.0 + number as f32 * 10.0, 0.0, 0.0)));
         for _ in 0..4 {
             book.pick(&eye(Vec3::ZERO), crowd(), u32::MAX);
@@ -457,7 +479,7 @@ mod tests {
 
     #[test]
     fn a_seen_face_takes_a_square_from_a_face_ahead_before_one_longer_unwanted() {
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.picks = 2;
         let mut number = 100;
         while let Some((x, y)) = book.region.take(3) {
@@ -476,7 +498,7 @@ mod tests {
         let agrees = |book: &FaceBook| {
             book.places.len() == book.held.len() && book.held.iter().enumerate().all(|(at, held)| book.places.get(&(held.slot.lamp, held.slot.face)) == Some(&at))
         };
-        let mut book = FaceBook::new(SIDE);
+        let mut book = FaceBook::new([SIDE; 2]);
         book.pick(&eye(Vec3::ZERO), [lamp(0, Vec3::new(200.0, 0.0, 0.0))].into_iter(), u32::MAX);
         assert!(agrees(&book) && !book.held.is_empty());
         for number in 1..=12 {

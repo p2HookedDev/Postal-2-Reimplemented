@@ -377,13 +377,13 @@ fn apply_change(
         commands.entity(entity).despawn();
     }
     let SceneChange::Show(scene) = change else { return };
-    let Scene { models, center, radius, sky, start, collision, fogs, decals, actors, attachments, lighting, light_bakes, antiportals, light_maps } = *scene;
+    let Scene { models, center, radius, sky, start, collision, fogs, decals, actors, attachments, lighting, light_bakes, antiportals, light_maps, shadow_surfaces } = *scene;
     let sky_zone = sky.as_ref().map(|sky| sky.zone);
     let (sky, sky_models) = sky.map_or((None, Vec::new()), |sky| (Some((sky.position - center, sky.rotation)), sky.models));
     let portals = collision.as_ref().map(|collision| Arc::new(ZonePortals::new(&collision.model, antiportals)));
     let start = start.map(|(position, yaw)| (position - center, yaw));
     *level = LevelCollision(collision.map(Arc::new));
-    *shown = ShownScene { fogs, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone, sky_place: sky };
+    *shown = ShownScene { fogs, origin: -center, portals, lighting, light_bakes, radius, start, light_maps, sky_zone, sky_place: sky, shadow_surfaces };
     for mut view in &mut views {
         *view = shown.start_view().unwrap_or_default();
     }
