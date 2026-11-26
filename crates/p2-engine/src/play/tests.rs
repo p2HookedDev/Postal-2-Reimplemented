@@ -5,7 +5,7 @@ use bevy::ecs::prelude::{MessageReader, World};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 
 use super::*;
-use super::sound::{distance_gain, sound_listener};
+use super::sound::distance_gain;
 
 #[test]
 fn gain_is_full_inside_the_radius_then_inverse() {
@@ -18,13 +18,6 @@ fn gain_is_full_inside_the_radius_then_inverse() {
 fn ambient_gain_takes_the_sound_volume_setting_too() {
     assert!((ambient_gain(1.0, 1.0, 0.1) - 0.1).abs() < 1e-6);
     assert_eq!(ambient_gain(1.0, 2.0, 1.0), 1.0);
-}
-
-#[test]
-fn the_left_channel_ear_sits_on_the_cameras_right() {
-    let ears = sound_listener();
-    assert_eq!(ears.left_ear_offset, Vec3::X * 2.0);
-    assert_eq!(ears.right_ear_offset, Vec3::X * -2.0);
 }
 
 #[test]

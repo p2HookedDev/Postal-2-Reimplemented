@@ -62,7 +62,7 @@ use p2_package::{Loader, Package, PackageId};
 use rustc_hash::{FxHashMap, FxHashSet};
 pub use actor_natives::{ActorFx, BoneControl, BoneDirection, FluidHit, FluidPling, MovieState, NEAR_CLIPPING_PLANE, PersonHit};
 pub use canvas::{CanvasItem, call_slots};
-pub use enums::{ERenderStyle, FluidType};
+pub use enums::{ERenderStyle, ESoundOcclusion, FluidType};
 pub use input::PlayerView;
 pub use config::{RENDER_DEVICE, VIEWPORT_MANAGER, WindowRequest, ini_truthy};
 use p2_script::{Layouts, StructLayout, Type};
@@ -309,6 +309,7 @@ pub enum MusicCommand {
         volume: f32,
         radius: f32,
         pitch: f32,
+        legacy: bool,
     },
     Stop { handle: i32, fade_out: f32 },
     StopAll { fade_out: f32 },
@@ -324,6 +325,8 @@ pub struct PlayedSound {
     pub pitch: f32,
     pub attenuate: bool,
     pub no_override: bool,
+    pub allow_pause: bool,
+    pub occlusion: ESoundOcclusion,
     pub flashbang: Option<f32>,
 }
 

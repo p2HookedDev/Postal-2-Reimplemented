@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 use bevy::app::{App, AppExit, First, Last, Plugin, PostUpdate, Startup, Update};
 use bevy::asset::{AssetEventSystems, Assets, Handle};
 use bevy::audio::{
-    AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink, SpatialListener,
-    SpatialScale, Volume,
+    AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, Volume,
 };
 use bevy::camera::Camera;
 use bevy::camera::visibility::{ViewVisibility, Visibility, VisibleEntities};
@@ -55,7 +54,7 @@ use p2_vm::Pointer;
 pub use reveal::SpawnsPending;
 pub use vm_thread::*;
 pub use world::*;
-use sound::{ambient_gain, pitch_factor};
+use sound::{AUDIO_MAX_RADIUS_MULTIPLIER, ambient_gain, pitch_factor};
 pub(crate) use sound::MovieSound;
 
 const MAX_STEP: f32 = 0.1;

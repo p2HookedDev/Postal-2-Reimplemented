@@ -72,7 +72,7 @@ properties!(
     bCanSwim, bCanOpenDoors, bCanDoSpecial, bCanClimbLadders,
     ForwardStrafeBias, BackwardStrafeBias, CameraEffects,
     FootRot, TurnDir, HeadBone, SpineBone1, SpineBone2, FootTurning, FootStill, ViewPitch,
-    AmbientSound, SoundVolume, SoundPitch, SoundRadius, ZoneSounds,
+    AmbientSound, SoundVolume, SoundPitch, SoundRadius, SoundOcclusion, ZoneSounds,
     Region,
     TransientSoundVolume, TransientSoundRadius, ActiveParticles, TurnRightAnim, TurnLeftAnim, PhysRate, KeyPos, KeyRot,
     LookDir, SelectedItem, CheatManager, AdminManager, SizeX, SizeY, ForceRadius, ForceScale, NotifyName, DestroyTag,

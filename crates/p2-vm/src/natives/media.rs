@@ -80,7 +80,7 @@ fn play_sound<L: LoaderRef>(vm: &mut Vm<L>, this: Option<ObjectId>, args: &[Valu
     let pitch = optional_float(args, 5, 1.0) * dilation;
     let slot = if given(args, 1) { int_arg(args, 1) as u8 } else { 1 };
     let attenuate = !given(args, 6) || bool_arg(args, 6);
-    let played = PlayedSound { actor: this, sound: vm.store.object(sound).path.clone(), slot, volume, radius, pitch, attenuate, no_override: given(args, 3) && bool_arg(args, 3), flashbang: None };
+    let played = PlayedSound { actor: this, sound: vm.store.object(sound).path.clone(), slot, volume, radius, pitch, attenuate, no_override: given(args, 3) && bool_arg(args, 3), allow_pause: !given(args, 7) || bool_arg(args, 7), occlusion: crate::ESoundOcclusion::of(vm, this), flashbang: None };
     vm.subtitle_insert_sound(played.actor, &played.sound);
     vm.host.commands.push(HostCommand::Sound(played));
 }
@@ -108,6 +108,7 @@ fn play_music<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectI
         volume,
         radius: if attenuate && radius <= 0.0 { 80.0 } else { radius },
         pitch: if attenuate && given(args, 4) { float_arg(args, 4) } else { 1.0 },
+        legacy: !given(args, 7) || bool_arg(args, 7),
     };
     vm.host.commands.push(HostCommand::Music(play));
     Value::Int(vm.host.music_handle)

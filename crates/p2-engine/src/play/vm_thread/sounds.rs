@@ -46,11 +46,11 @@ impl Simulation {
                 heard.push((ZoneSound { key: (source, index), sound: None, song, volume: volume.clamp(0.0, 1.0), pitch, fade_in: float(3), fade_out: float(4) }, sound));
             }
         }
-        if heard.iter().map(|(zone_sound, _)| zone_sound.key).eq(self.zone_keys.iter().copied()) {
+        if heard.iter().map(|(zone_sound, _)| (zone_sound.key, zone_sound.volume.to_bits())).eq(self.zone_keys.iter().copied()) {
             return None;
         }
         self.zone_keys.clear();
-        self.zone_keys.extend(heard.iter().map(|(zone_sound, _)| zone_sound.key));
+        self.zone_keys.extend(heard.iter().map(|(zone_sound, _)| (zone_sound.key, zone_sound.volume.to_bits())));
         let vm = &self.vm;
         Some(heard.into_iter().map(|(zone_sound, sound)| ZoneSound { sound: sound.map(|sound| vm.store.object(sound).path.clone()), ..zone_sound }).collect())
     }
@@ -76,11 +76,16 @@ impl Simulation {
     }
 
     pub(super) fn read_audio(&mut self, frame: &mut VmFrame) {
-        let (ambient_volume, sound_volume) = (self.vm.ambient_volume(), self.vm.sound_volume());
+        let (ambient_volume, sound_volume, dilation) = (self.vm.ambient_volume(), self.vm.sound_volume(), self.vm.time_dilation());
         let mut new_paths: Vec<Arc<str>> = Vec::new();
-        let (vm, ambient_paths) = (&self.vm, &mut self.ambient_paths);
+        let (vm, ambient_paths, view) = (&self.vm, &mut self.ambient_paths, self.view.as_ref());
         for actor in vm.actors() {
             let Some(ambient) = crate::actors::ambient_actor(vm, actor) else { continue };
+            let radius = if ambient.radius > 0.0 { ambient.radius } else { p2_vm::AUDIO_DEFAULT_RADIUS };
+            if view.is_some_and(|view| (ambient.location - view.location).size() > radius * AUDIO_MAX_RADIUS_MULTIPLIER) {
+                continue;
+            }
+            let attached = view.and_then(|view| view.actor).is_some_and(|target| owner_chain_holds(vm, actor, target));
             let path = ambient_paths.entry(ambient.sound).or_insert_with(|| {
                 let path: Arc<str> = Arc::from(vm.store.object(ambient.sound).path.as_str());
                 new_paths.push(Arc::clone(&path));
@@ -88,12 +93,19 @@ impl Simulation {
             });
             let path = Arc::clone(path);
             let volume = ambient_gain(ambient.volume, ambient_volume, sound_volume);
-            frame.ambients.push((actor, crate::actors::AmbientActor { volume, ..ambient }, path));
+            frame.ambients.push((actor, crate::actors::AmbientActor { volume, pitch: ambient.pitch * dilation, attached, ..ambient }, path));
         }
         frame.zone_sounds = self.view.and_then(|view| self.zone_sounds(view.location));
         self.send_sound_files(frame, &new_paths);
         frame.audio_channels = self.vm.audio_channels();
     }
+}
+
+const LONGEST_OWNER_CHAIN: usize = 16;
+
+/// An ambient sound on the view target, or on anything it owns, plays unpositioned in retail.
+fn owner_chain_holds(vm: &Vm<Arc<Loader>>, actor: ObjectId, target: ObjectId) -> bool {
+    std::iter::successors(Some(actor), |&held| vm.store.object_of(held, Prop::Owner)).take(LONGEST_OWNER_CHAIN).any(|held| held == target)
 }
 
 pub(super) fn read_song(music_dir: &Path, song: &str) -> Option<Arc<[u8]>> {

@@ -56,7 +56,7 @@ impl<L: LoaderRef> Vm<L> {
                 let volume = (self.store.float_of(notify, Prop::Volume) * self.sound_volume()).clamp(0.0, 1.0);
                 let sound = self.store.object(sound).path.clone();
                 self.subtitle_insert_sound(Some(owner), &sound);
-                self.host.commands.push(HostCommand::Sound(PlayedSound { actor: Some(owner), sound, slot: 0, volume, radius, pitch: 1.0, attenuate: true, no_override: false, flashbang: None }));
+                self.host.commands.push(HostCommand::Sound(PlayedSound { actor: Some(owner), sound, slot: 0, volume, radius, pitch: 1.0, attenuate: true, no_override: false, allow_pause: true, occlusion: crate::ESoundOcclusion::of(self, Some(owner)), flashbang: None }));
             }
             return Ok(());
         }

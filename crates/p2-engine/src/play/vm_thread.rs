@@ -211,7 +211,7 @@ pub(super) struct Simulation {
     pub(super) zone_fogs_sent: Vec<Option<p2_render::scene::ZoneFog>>,
     pub(super) music_dir: PathBuf,
     pub(super) zone_songs: FxHashMap<String, Option<Arc<[u8]>>>,
-    pub(super) zone_keys: Vec<(ObjectId, usize)>,
+    pub(super) zone_keys: Vec<((ObjectId, usize), u32)>,
     pub(super) ambient_paths: FxHashMap<ObjectId, Arc<str>>,
     pub(super) sound_paths: FxHashSet<String>,
     pub(super) work_since: Option<(Instant, u32)>,

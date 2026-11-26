@@ -4,6 +4,10 @@ impl PlayWorld {
     pub(in crate::play) fn scene_position(&self, location: Vector) -> Vec3 {
         Vec3::from(to_bevy(location)) + self.origin
     }
+
+    pub(in crate::play) fn level_position(&self, position: Vec3) -> Vector {
+        Vector::from(to_bevy(position - self.origin))
+    }
 }
 
 /// `None` when Bevy cannot decode the file: `AudioSource::decoder` unwraps, so such a sound would panic when played.
@@ -14,7 +18,7 @@ pub(in crate::play) fn loaded_sound(path: &str, sound: p2_assets::Sound, sources
         bevy::log::warn!("sound {path}: {} file the audio decoder cannot open; not played", sound.file_type);
         return None;
     }
-    Some(LoadedSound { source: sources.add(AudioSource { bytes }), duration, looping })
+    Some(LoadedSound { source: sources.add(AudioSource { bytes: Arc::clone(&bytes) }), bytes, duration, looping })
 }
 
 pub(in crate::play) fn opens(bytes: &Arc<[u8]>) -> bool {
@@ -44,6 +48,7 @@ fn decodable(data: &[u8]) -> bool {
 #[derive(Clone)]
 pub(in crate::play) struct LoadedSound {
     pub(in crate::play) source: Handle<AudioSource>,
+    pub(in crate::play) bytes: Arc<[u8]>,
     pub(in crate::play) duration: f32,
     pub(in crate::play) looping: bool,
 }

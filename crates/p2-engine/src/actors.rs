@@ -318,6 +318,8 @@ pub struct AmbientActor {
     pub radius: f32,
     pub volume: f32,
     pub pitch: f32,
+    pub attached: bool,
+    pub occlusion: p2_vm::ESoundOcclusion,
 }
 
 pub fn ambient_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<AmbientActor> {
@@ -336,6 +338,8 @@ pub fn ambient_actor(vm: &Vm<impl LoaderRef>, actor: ObjectId) -> Option<Ambient
         radius,
         volume: f32::from(byte(Prop::SoundVolume, 128)) / 255.0,
         pitch: f32::from(byte(Prop::SoundPitch, 64)) / 64.0,
+        attached: false,
+        occlusion: p2_vm::ESoundOcclusion::from_byte(byte(Prop::SoundOcclusion, 0)),
     })
 }
 

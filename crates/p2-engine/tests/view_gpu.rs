@@ -520,6 +520,50 @@ mod monday {
         Some(())
     }
 
+    fn sinks(app: &mut App) -> Vec<(bevy::ecs::entity::Entity, f32, f32, bool, Duration)> {
+        use bevy::audio::{AudioSink, AudioSinkPlayback};
+        let world = app.world_mut();
+        world.query::<(bevy::ecs::entity::Entity, &AudioSink)>().iter(world).map(|(entity, sink)| (entity, sink.volume().to_linear(), sink.speed(), sink.is_paused(), sink.position())).collect()
+    }
+
+    fn set_paused(app: &mut App, paused: bool) -> Option<()> {
+        use p2_vm::Value;
+        app.world_mut().resource_mut::<Play>().world_mut()?.with_vm(|vm| {
+            let level = vm.level().expect("the level");
+            let pauser = vm.player().filter(|_| paused);
+            vm.store.set(level, "Pauser", Value::Object(pauser));
+        })
+    }
+
+    pub fn sound_survey() -> Option<()> {
+        let (mut app, _, _) = fight_scene(UVec2::new(640, 360), false)?;
+        let before = sinks(&mut app);
+        for _ in 0..30 {
+            app.update();
+        }
+        let after = sinks(&mut app);
+        let advancing = after.iter().filter(|(entity, .., at)| before.iter().any(|(was, .., then)| was == entity && at > then)).count();
+        let speeds: Vec<f32> = after.iter().map(|sink| sink.2).collect();
+        let loudest = after.iter().map(|sink| sink.1).fold(0.0, f32::max);
+        eprintln!("SOUND {} sinks, {advancing} advancing over 30 frames, loudest {loudest:.3}, speeds {:.4} to {:.4}", after.len(), speeds.iter().copied().fold(f32::MAX, f32::min), speeds.iter().copied().fold(0.0, f32::max));
+        assert!(advancing > 0, "no sound advanced: {after:?}");
+        set_paused(&mut app, true)?;
+        for _ in 0..20 {
+            app.update();
+        }
+        let held = sinks(&mut app);
+        let paused = held.iter().filter(|sink| sink.3).count();
+        set_paused(&mut app, false)?;
+        for _ in 0..20 {
+            app.update();
+        }
+        let resumed = sinks(&mut app);
+        let still = resumed.iter().filter(|sink| sink.3).count();
+        eprintln!("SOUND paused game: {paused} of {} sinks paused; after it: {still} of {} still paused", held.len(), resumed.len());
+        assert!(paused > 0 && still < paused, "pause {paused}, after {still}");
+        Some(())
+    }
+
     pub fn differs(a: &[u8], b: &[u8], i: usize, threshold: u8) -> bool {
         (0..3).any(|c| a[i * 4 + c].abs_diff(b[i * 4 + c]) > threshold)
     }
@@ -589,6 +633,12 @@ fn monday_fight_picture() {
 #[ignore = "benchmark: prints only; needs a GPU, the game and the player's settings file"]
 fn monday_fight_cost_by_row() {
     monday::fight_cost_by_row();
+}
+
+#[test]
+#[ignore = "needs a GPU, an audio output, the game and the player's settings file"]
+fn monday_fight_sounds_play_pan_and_pause() {
+    monday::sound_survey();
 }
 
 #[test]

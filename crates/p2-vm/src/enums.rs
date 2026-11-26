@@ -45,6 +45,33 @@ impl EPhysics {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ESoundOcclusion {
+    #[default]
+    Default = 0,
+    None = 1,
+    Bsp = 2,
+    StaticMeshes = 3,
+    All = 4,
+}
+
+impl ESoundOcclusion {
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            1 => Self::None,
+            2 => Self::Bsp,
+            3 => Self::StaticMeshes,
+            4 => Self::All,
+            _ => Self::Default,
+        }
+    }
+
+    pub fn of<L: LoaderRef>(vm: &Vm<L>, actor: Option<ObjectId>) -> Self {
+        actor.map_or(Self::Default, |actor| Self::from_byte(vm.store.byte_of(actor, Prop::SoundOcclusion)))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FluidType {

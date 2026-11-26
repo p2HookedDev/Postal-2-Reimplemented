@@ -304,7 +304,7 @@ impl<L: LoaderRef> Vm<L> {
                 if let Some(sound) = object_arg(args, 0) {
                     let volume = self.sound_volume().clamp(0.0, 1.0);
                     let sound = self.store.object(sound).path.clone();
-                    let played = crate::PlayedSound { actor: Some(this), sound, slot: 0, volume, radius: crate::natives::AUDIO_DEFAULT_RADIUS, pitch: 1.0, attenuate: false, no_override: false, flashbang: Some(float_arg(args, 1).max(0.0)) };
+                    let played = crate::PlayedSound { actor: Some(this), sound, slot: 0, volume, radius: crate::natives::AUDIO_DEFAULT_RADIUS, pitch: 1.0, attenuate: false, no_override: false, allow_pause: true, occlusion: crate::ESoundOcclusion::None, flashbang: Some(float_arg(args, 1).max(0.0)) };
                     self.subtitle_insert_sound(played.actor, &played.sound);
                     self.host.commands.push(HostCommand::Sound(played));
                 }

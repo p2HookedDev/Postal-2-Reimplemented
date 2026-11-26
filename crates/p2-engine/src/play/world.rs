@@ -438,6 +438,15 @@ impl PlayWorld {
         self.frame.view.as_ref().map(|view| view.location)
     }
 
+    pub fn view_target_velocity(&self) -> Vector {
+        self.frame.view.as_ref().and_then(|view| self.actor(view.actor?)).map_or(Vector::default(), |actor| actor.velocity)
+    }
+
+    pub fn view_target_location(&self) -> Option<Vector> {
+        let view = self.frame.view.as_ref()?;
+        Some(view.actor.and_then(|actor| self.actor(actor)).map_or(view.location, |actor| actor.location))
+    }
+
     pub fn eye_to_view_target(&self) -> Option<f32> {
         let view = self.frame.view.as_ref()?;
         Some((self.actor(view.actor?)?.location - view.location).size())
