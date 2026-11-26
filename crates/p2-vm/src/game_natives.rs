@@ -35,7 +35,7 @@ impl<L: LoaderRef> Vm<L> {
             Native::SafeToGoIntoStasis => Value::Bool(this.is_none_or(|this| self.safe_to_go_into_stasis(this, float_arg(args, 0)))),
             Native::GetGameMap => {
                 let dir = args.get(2).map_or(0, crate::interp::int);
-                Value::Str(game_map(&self.map_files(), str_arg(args, 0), str_arg(args, 1), dir))
+                Value::Str(game_map(&self.map_files(), str_arg(args, 0), str_arg(args, 1), dir).into())
             }
             Native::PointToLineDist => {
                 let Some((distance, u)) = point_to_line_dist(v(0), v(1), v(2)) else { return Ok(Some(Value::Bool(false))) };

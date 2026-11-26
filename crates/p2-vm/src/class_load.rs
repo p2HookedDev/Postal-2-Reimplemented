@@ -128,7 +128,7 @@ impl<L: LoaderRef> Vm<L> {
             V::Object(reference) if reference > 0 && editor_only(pkg, reference as usize - 1) => Value::Object(None),
             V::Object(reference) => Value::Object(self.object_ref(pkg, package, reference)),
             V::Name(name) => Value::Name(self.intern(pkg.name(name))),
-            V::Str(v) => Value::Str(v),
+            V::Str(v) => Value::Str(v.into()),
             V::Array(values) => {
                 let inner = match ty {
                     Type::Array(inner) | Type::FixedArray(inner, _) => inner.as_ref(),

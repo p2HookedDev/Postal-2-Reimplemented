@@ -132,7 +132,7 @@ impl Canvas {
         let Some(canvas) = this else { return Ok(None) };
         let float_of = |store: &ObjectStore, property: Prop| store.float_of(canvas, property);
         let string = |args: &[Value]| match args.first() {
-            Some(Value::Str(text)) => text.clone(),
+            Some(Value::Str(text)) => text.to_string(),
             _ => String::new(),
         };
         let color = |store: &mut ObjectStore| store.color_of(canvas, Prop::DrawColor).unwrap_or([255; 4]);

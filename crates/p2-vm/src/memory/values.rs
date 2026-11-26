@@ -31,7 +31,7 @@ impl MemLayouts {
             Shape::Delegate => Value::Delegate { object: object(at(0)), function: NameId(at(1)) },
             Shape::Str => match mem.heap.get(heap) {
                 Some(Heap::Str(text)) => Value::Str(text.clone()),
-                _ => Value::Str(String::new()),
+                _ => Value::Str(String::new().into()),
             },
             Shape::Array(elem) => match mem.heap.get(heap) {
                 Some(Heap::Array(array)) => {
@@ -111,7 +111,7 @@ impl MemLayouts {
                 if let Some(slot) = mem.heap.get_mut(heap) {
                     *slot = Heap::Str(match value {
                         Value::Str(text) => text,
-                        _ => String::new(),
+                        _ => String::new().into(),
                     });
                 }
             }

@@ -13,6 +13,7 @@ use crate::natives::script::random_native;
 use crate::natives::script::reflect_native;
 use crate::natives::script::state_native;
 use crate::natives::script::text_native;
+pub(crate) use crate::natives::script::pure_text;
 
 mod actor;
 mod media;
@@ -198,7 +199,7 @@ pub(crate) fn float_arg(args: &[Value], n: usize) -> f32 {
 
 pub(crate) fn str_arg(args: &[Value], n: usize) -> &str {
     match args.get(n) {
-        Some(Value::Str(text)) => text.as_str(),
+        Some(Value::Str(text)) => text,
         _ => "",
     }
 }
@@ -212,7 +213,7 @@ pub(crate) fn name_arg(args: &[Value], n: usize) -> NameId {
 
 pub(crate) fn text_arg(args: &[Value], n: usize) -> String {
     match args.get(n) {
-        Some(Value::Str(text)) => text.clone(),
+        Some(Value::Str(text)) => text.to_string(),
         _ => String::new(),
     }
 }

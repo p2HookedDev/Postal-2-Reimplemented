@@ -412,8 +412,8 @@ mod tests {
         let mem = Mem {
             words: vec![1, 0, 3, 0x3f80_0000],
             heap: vec![
-                Heap::Str("Hello, \"world\"".to_owned()),
-                Heap::Array(Array { len: 2, mem: Mem { words: vec![2, 1], heap: vec![Heap::Str(String::new())] } }),
+                Heap::Str("Hello, \"world\"".into()),
+                Heap::Array(Array { len: 2, mem: Mem { words: vec![2, 1], heap: vec![Heap::Str(String::new().into())] } }),
             ],
         };
         let state = SavedState {
@@ -476,21 +476,21 @@ mod tests {
         let empty = std::env::temp_dir();
         let loader = p2_package::Loader::new(&empty, &[]).unwrap();
         let mut vm = Vm::new(&loader);
-        let command = |vm: &mut Vm<&p2_package::Loader>, text: &str| match vm.call_native("ConsoleCommand", None, &mut [Value::Str(text.to_owned())]) {
+        let command = |vm: &mut Vm<&p2_package::Loader>, text: &str| match vm.call_native("ConsoleCommand", None, &mut [Value::Str(text.into())]) {
             Ok(Some(Value::Str(answer))) => answer,
             other => panic!("{text}: {other:?}"),
         };
-        assert_eq!(command(&mut vm, "SaveGame 3"), "0");
+        assert_eq!(command(&mut vm, "SaveGame 3"), "0".into());
         let dir = empty.join(format!("p2-save-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(save_file_name(7)), sample().encode().unwrap()).unwrap();
         vm.set_save_dir(dir.clone());
-        assert_eq!(command(&mut vm, "CHECKSAVEGAME 7"), "1");
-        assert_eq!(command(&mut vm, "CHECKSAVEGAME 8"), "0");
-        assert_eq!(command(&mut vm, "checksavegame nonsense"), "0");
+        assert_eq!(command(&mut vm, "CHECKSAVEGAME 7"), "1".into());
+        assert_eq!(command(&mut vm, "CHECKSAVEGAME 8"), "0".into());
+        assert_eq!(command(&mut vm, "checksavegame nonsense"), "0".into());
         assert!(command(&mut vm, "GETGMTIME").parse::<u64>().unwrap() > 1_700_000_000);
         assert!(vm.delete_save(7));
-        assert_eq!(command(&mut vm, "CHECKSAVEGAME 7"), "0");
+        assert_eq!(command(&mut vm, "CHECKSAVEGAME 7"), "0".into());
         assert!(dir.join("Deleted").join(save_file_name(7)).is_file());
         assert!(!vm.delete_save(7));
         std::fs::remove_dir_all(dir).unwrap();

@@ -115,7 +115,7 @@ impl<'a> Dude<'a> {
     }
 
     pub fn console(&mut self, command: &str) {
-        self.vm.call_native("ConsoleCommand", Some(self.controller), &mut [Value::Str(command.to_owned()), Value::Bool(false)]).unwrap();
+        self.vm.call_native("ConsoleCommand", Some(self.controller), &mut [Value::Str(command.into()), Value::Bool(false)]).unwrap();
     }
 
     pub fn frames(&mut self, count: usize, keys: &[&str]) {

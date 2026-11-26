@@ -10,6 +10,7 @@ pub(crate) fn operate(native: Native, args: &mut [Value]) -> Option<Value> {
         .or_else(|| assignment(native, args))
         .or_else(|| increment(native, args))
         .or_else(|| vector_out(native, args))
+        .or_else(|| crate::natives::pure_text(native, args))
 }
 
 fn scalar_operator(native: Native, args: &[Value]) -> Option<Value> {
@@ -190,7 +191,7 @@ fn assignment(native: Native, args: &mut [Value]) -> Option<Value> {
         Native::ConcatEqual_StrStr | Native::AtEqual_StrStr => {
             let (Value::Str(a), Value::Str(b)) = (&*left, &*right) else { return None };
             let separator = if native == Native::AtEqual_StrStr { " " } else { "" };
-            Value::Str(format!("{a}{separator}{b}"))
+            Value::Str(format!("{a}{separator}{b}").into())
         }
         _ => return None,
     };
@@ -267,6 +268,37 @@ mod tests {
         let mut args = [Value::Vector(Vector::new(3.0, 4.0, 0.0)), Value::Float(2.0)];
         assert_eq!(operate(Native::VSize, &mut args), Some(Value::Float(5.0)));
         assert_eq!(operate(Native::Multiply_VectorFloat, &mut args), Some(Value::Vector(Vector::new(6.0, 8.0, 0.0))));
+    }
+
+    #[test]
+    fn text_slices_match_char_by_char() {
+        let text = |value: Option<Value>| match value {
+            Some(Value::Str(text)) => text,
+            other => panic!("{other:?}"),
+        };
+        for source in ["", "MW__001__FatMale", "ÄbçДé", "a"] {
+            for start in [-2, 0, 1, 2, 4, 5, 40] {
+                for count in [-1, 0, 1, 2, 3, 100] {
+                    let (from, many) = (start.max(0) as usize, if count > 0 { count as usize } else { usize::MAX });
+                    let expected: String = source.chars().skip(from).take(many).collect();
+                    let mut args = [Value::Str(source.into()), Value::Int(start), Value::Int(count)];
+                    assert_eq!(text(operate(Native::Mid, &mut args)), expected.into(), "Mid({source:?}, {start}, {count})");
+                }
+                let mut args = [Value::Str(source.into()), Value::Int(start)];
+                assert_eq!(text(operate(Native::Mid, &mut args)), source.chars().skip(start.max(0) as usize).collect::<String>().into());
+                let left: String = source.chars().take(start.max(0) as usize).collect();
+                assert_eq!(text(operate(Native::Left, &mut args)), left.into(), "Left({source:?}, {start})");
+                let skip = source.chars().count().saturating_sub(start.max(0) as usize);
+                let right: String = source.chars().skip(skip).collect();
+                assert_eq!(text(operate(Native::Right, &mut args)), right.into(), "Right({source:?}, {start})");
+            }
+        }
+        let mut args = [Value::Str("Fat".into()), Value::Str("Male".into())];
+        assert_eq!(text(operate(Native::At_StrStr, &mut args)), "Fat Male".into());
+        assert_eq!(text(operate(Native::Concat_StrStr, &mut args)), "FatMale".into());
+        let mut args = [Value::Str("fAT".into()), Value::Str("Fat".into())];
+        assert_eq!(operate(Native::ComplementEqual_StrStr, &mut args), Some(Value::Bool(true)));
+        assert_eq!(operate(Native::SplitString, &mut args), None);
     }
 
     #[test]

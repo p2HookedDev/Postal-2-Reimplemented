@@ -47,7 +47,7 @@ impl<L: LoaderRef> Vm<L> {
                 target_class: object_arg(args, 10).map(|class| self.store.object(class).name),
                 explosion: bool_arg(args, 11),
                 class_check: match args.get(12) {
-                    Some(Value::Str(list)) => list.as_str(),
+                    Some(Value::Str(list)) => list,
                     _ => "",
                 },
                 instigator_radius: float_arg(args, 14),

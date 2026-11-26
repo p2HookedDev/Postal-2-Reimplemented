@@ -612,7 +612,7 @@ fn zero_like(value: &Value) -> Value {
         Value::Float(_) => Value::Float(0.0),
         Value::Object(_) => Value::Object(None),
         Value::Name(_) => Value::Name(NameId::NONE),
-        Value::Str(_) => Value::Str(String::new()),
+        Value::Str(_) => Value::Str(String::new().into()),
         Value::Array(_) => Value::Array(Vec::new()),
         Value::Struct(members) => Value::Struct(members.iter().map(zero_like).collect()),
         Value::Vector(_) => Value::Vector(Vector::ZERO),

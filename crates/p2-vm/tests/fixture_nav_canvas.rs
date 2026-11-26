@@ -739,7 +739,7 @@ fn draw_text_without_a_font_advances_by_eight_by_sixteen_per_character() {
     let (mut vm, canvas, _material) = canvas_alone("canvas-text");
     set_floats(&mut vm, canvas, &[("CurX", 10.0), ("CurY", 20.0)]);
 
-    vm.call_native("DrawText", Some(canvas), &mut [Value::Str("Hello".to_owned()), Value::Bool(false)]).unwrap();
+    vm.call_native("DrawText", Some(canvas), &mut [Value::Str("Hello".into()), Value::Bool(false)]).unwrap();
 
     assert_floats(&vm, canvas, &[("CurX", 50.0), ("CurY", 20.0), ("CurYL", 16.0)]);
 }
@@ -749,7 +749,7 @@ fn draw_text_with_a_line_break_returns_the_pen_and_drops_a_line() {
     let (mut vm, canvas, _material) = canvas_alone("canvas-text-break");
     set_floats(&mut vm, canvas, &[("CurX", 10.0), ("CurY", 20.0)]);
 
-    vm.call_native("DrawText", Some(canvas), &mut [Value::Str("Hello".to_owned()), Value::Bool(true)]).unwrap();
+    vm.call_native("DrawText", Some(canvas), &mut [Value::Str("Hello".into()), Value::Bool(true)]).unwrap();
 
     assert_floats(&vm, canvas, &[("CurX", 0.0), ("CurY", 36.0), ("CurYL", 16.0)]);
 }
@@ -759,7 +759,7 @@ fn draw_text_scales_its_advance_by_the_font_scale() {
     let (mut vm, canvas, _material) = canvas_alone("canvas-text-scale");
     set_floats(&mut vm, canvas, &[("FontScaleX", 2.0), ("FontScaleY", 1.5)]);
 
-    vm.call_native("DrawText", Some(canvas), &mut [Value::Str("Hello".to_owned()), Value::Bool(false)]).unwrap();
+    vm.call_native("DrawText", Some(canvas), &mut [Value::Str("Hello".into()), Value::Bool(false)]).unwrap();
 
     assert_floats(&vm, canvas, &[("CurX", 80.0), ("CurYL", 24.0)]);
 }
@@ -768,14 +768,14 @@ fn draw_text_scales_its_advance_by_the_font_scale() {
 fn string_sizes_come_back_through_the_out_arguments() {
     let (mut vm, canvas, _material) = canvas_alone("canvas-text-size");
     for native in ["StrLen", "TextSize"] {
-        let mut args = [Value::Str("abc".to_owned()), Value::Float(0.0), Value::Float(0.0)];
+        let mut args = [Value::Str("abc".into()), Value::Float(0.0), Value::Float(0.0)];
         assert_eq!(vm.call_native(native, Some(canvas), &mut args).unwrap(), None);
         assert_eq!(args[1], Value::Float(24.0), "{native}");
         assert_eq!(args[2], Value::Float(16.0), "{native}");
     }
 
     set_floats(&mut vm, canvas, &[("FontScaleX", 2.0), ("FontScaleY", 1.5)]);
-    let mut args = [Value::Str("abc".to_owned()), Value::Float(0.0), Value::Float(0.0)];
+    let mut args = [Value::Str("abc".into()), Value::Float(0.0), Value::Float(0.0)];
     vm.call_native("StrLen", Some(canvas), &mut args).unwrap();
     assert_eq!(args[1], Value::Float(48.0));
     assert_eq!(args[2], Value::Float(24.0));

@@ -107,7 +107,7 @@ impl<L: LoaderRef> Vm<L> {
     fn add_interaction(&mut self, master: ObjectId, name: &str, owner: Option<ObjectId>) -> Result<Option<ObjectId>, Error> {
         let Some(function) = self.find_object_function(master, "AddInteraction")? else { return Ok(None) };
         let Some(class) = self.store.object(master).class else { return Ok(None) };
-        let args = vec![Value::Str(name.to_owned()), Value::Object(owner)];
+        let args = vec![Value::Str(name.into()), Value::Object(owner)];
         Ok(match self.call(&function, Some(master), class, args)? {
             Some(Value::Object(interaction)) => interaction,
             _ => None,
@@ -135,7 +135,7 @@ impl<L: LoaderRef> Vm<L> {
         for c in text.chars().filter(|c| !c.is_control()) {
             let key = u8::try_from(u32::from(c)).unwrap_or(0);
             for list in self.interaction_lists(master).into_iter().flatten() {
-                let args = vec![list, Value::Byte(key), Value::Str(c.to_string())];
+                let args = vec![list, Value::Byte(key), Value::Str(c.to_string().into())];
                 if self.call(&function, Some(master), class, args)?.as_ref().is_some_and(crate::interp::truthy) {
                     break;
                 }
@@ -278,7 +278,7 @@ mod tests {
         let loader = Loader::new(&empty, &[]).unwrap();
         let mut vm = Vm::new(&loader);
         let command = |vm: &mut Vm<&Loader>, text: &str| {
-            assert_eq!(vm.call_native("ConsoleCommand", None, &mut [Value::Str(text.to_owned())]).unwrap(), Some(Value::Str(String::new())), "{text}");
+            assert_eq!(vm.call_native("ConsoleCommand", None, &mut [Value::Str(text.into())]).unwrap(), Some(Value::Str(String::new().into())), "{text}");
         };
         assert_eq!(vm.cinematics(), None);
         command(&mut vm, "CINEMATICS 1");
@@ -298,34 +298,34 @@ mod tests {
         let empty = std::env::temp_dir();
         let loader = Loader::new(&empty, &[]).unwrap();
         let mut vm = Vm::new(&loader);
-        let answer = |vm: &mut Vm<&Loader>, text: &str| match vm.call_native("ConsoleCommand", None, &mut [Value::Str(text.to_owned())]).unwrap() {
+        let answer = |vm: &mut Vm<&Loader>, text: &str| match vm.call_native("ConsoleCommand", None, &mut [Value::Str(text.into())]).unwrap() {
             Some(Value::Str(answer)) => answer,
             other => panic!("{text}: {other:?}"),
         };
-        assert_eq!(answer(&mut vm, "ISKEYDOWN 18"), "0");
-        assert_eq!(answer(&mut vm, "MENUEXCLUSIVEMODE 1"), "1");
+        assert_eq!(answer(&mut vm, "ISKEYDOWN 18"), "0".into());
+        assert_eq!(answer(&mut vm, "MENUEXCLUSIVEMODE 1"), "1".into());
         assert_eq!(vm.host.client.menu_exclusive, 1);
-        assert_eq!(answer(&mut vm, "MENUEXCLUSIVEMODE 0"), "1");
+        assert_eq!(answer(&mut vm, "MENUEXCLUSIVEMODE 0"), "1".into());
         assert_eq!(vm.host.client.menu_exclusive, 0);
-        assert_eq!(answer(&mut vm, "MENUEXCLUSIVEMODE"), "0");
+        assert_eq!(answer(&mut vm, "MENUEXCLUSIVEMODE"), "0".into());
 
         vm.set_video_modes(&[
             crate::VideoMode { width: 1024, height: 768, refresh_rate: 60, bit_depth: 32 },
             crate::VideoMode { width: 1920, height: 1080, refresh_rate: 144, bit_depth: 32 },
         ]);
-        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION INDEX=0"), "1024x768x60x32");
-        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION INDEX=1"), "1920x1080x144x32");
-        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION INDEX=2"), "");
-        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION"), "");
+        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION INDEX=0"), "1024x768x60x32".into());
+        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION INDEX=1"), "1920x1080x144x32".into());
+        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION INDEX=2"), "".into());
+        assert_eq!(answer(&mut vm, "GETSUPPORTEDRESOLUTION"), "".into());
 
-        assert_eq!(answer(&mut vm, "SETMOUSE 12 34"), "");
+        assert_eq!(answer(&mut vm, "SETMOUSE 12 34"), "".into());
         assert!(vm.host.commands.iter().any(|command| matches!(command, crate::HostCommand::SetMouse([12, 34]))));
-        assert_eq!(answer(&mut vm, "MenuCancel"), "");
+        assert_eq!(answer(&mut vm, "MenuCancel"), "".into());
 
         let exe = std::env::current_exe().unwrap();
         vm.set_save_dir(exe.parent().unwrap().to_path_buf());
         let time = answer(&mut vm, &format!("GETFILETIMESTR {}", exe.file_name().unwrap().to_str().unwrap()));
         assert_eq!((time.len(), &time[4..5], &time[10..13], &time[15..16]), (18, "-", " : ", ":"), "{time}");
-        assert_eq!(answer(&mut vm, "GETFILETIMESTR Save9999.usa"), "");
+        assert_eq!(answer(&mut vm, "GETFILETIMESTR Save9999.usa"), "".into());
     }
 }

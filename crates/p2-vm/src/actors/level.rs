@@ -11,7 +11,7 @@ impl<L: LoaderRef> Vm<L> {
         let Some(login) = self.find_object_function(game, "Login")? else { return Ok(None) };
         let mut url = crate::travel::TravelUrl::parse(options);
         self.add_default_player_options(&mut url);
-        let args = vec![Value::Str(url.portal.clone()), Value::Str(url.options_text()), Value::Str(String::new())];
+        let args = vec![Value::Str(url.portal.clone().into()), Value::Str(url.options_text().into()), Value::Str(String::new().into())];
         let Some(Value::Object(Some(player))) = self.call(&login, Some(game), class, args)? else { return Ok(None) };
         self.set_player(player)?;
         if let Some(post_login) = self.find_object_function(game, "PostLogin")? {
@@ -75,7 +75,7 @@ impl<L: LoaderRef> Vm<L> {
         let game = self.spawn(game_class, None, [None, None])?;
         self.store.set(level, Prop::Game, Value::Object(game));
         if let Some(game) = game
-            && let Err(e) = self.event(game, Event::InitGame, [Value::Str(options.to_owned()), Value::Str(String::new())])
+            && let Err(e) = self.event(game, Event::InitGame, [Value::Str(options.into()), Value::Str(String::new().into())])
         {
             errors.push((self.store.object(game).path.clone(), "InitGame", e));
         }
@@ -142,8 +142,8 @@ impl<L: LoaderRef> Vm<L> {
                 };
                 self.store.set(level, Prop::NextSwitchCountdown, Value::Float(countdown));
                 if countdown <= 0.0 {
-                    self.host.commands.push(HostCommand::Travel(url));
-                    self.store.set(level, Prop::NextURL, Value::Str(String::new()));
+                    self.host.commands.push(HostCommand::Travel(url.to_string()));
+                    self.store.set(level, Prop::NextURL, Value::Str(String::new().into()));
                 }
             }
         }

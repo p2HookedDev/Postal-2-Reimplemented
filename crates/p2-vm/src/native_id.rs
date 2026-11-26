@@ -569,6 +569,24 @@ impl Native {
                 | Self::SubtractSubtract_PreByte
                 | Self::SubtractSubtract_Int
                 | Self::SubtractSubtract_Byte
+                | Self::Concat_StrStr
+                | Self::At_StrStr
+                | Self::EqualEqual_StrStr
+                | Self::NotEqual_StrStr
+                | Self::Less_StrStr
+                | Self::Greater_StrStr
+                | Self::LessEqual_StrStr
+                | Self::GreaterEqual_StrStr
+                | Self::ComplementEqual_StrStr
+                | Self::Len
+                | Self::Caps
+                | Self::Locs
+                | Self::Left
+                | Self::Right
+                | Self::Mid
+                | Self::Asc
+                | Self::Chr
+                | Self::InStr
         )
     }
 }

@@ -154,20 +154,20 @@ fn run_game_info_options() {
     let mut vm = Vm::new(&loader);
     let class = vm.find_class("Engine", "GameInfo").unwrap();
     let game = vm.new_object(class, None);
-    let options = Value::Str("?Name=Dude?Class=Postal2Game.Dude?Difficulty=3".to_owned());
+    let options = Value::Str("?Name=Dude?Class=Postal2Game.Dude?Difficulty=3".into());
     let parse = vm.find_function(class, "ParseOption").unwrap().unwrap();
     let option = |vm: &mut Vm<&Loader>, key: &str| {
-        vm.call(&parse, Some(game), class, vec![options.clone(), Value::Str(key.to_owned())]).unwrap()
+        vm.call(&parse, Some(game), class, vec![options.clone(), Value::Str(key.into())]).unwrap()
     };
-    assert_eq!(option(&mut vm, "class"), Some(Value::Str("Postal2Game.Dude".to_owned())));
-    assert_eq!(option(&mut vm, "Name"), Some(Value::Str("Dude".to_owned())));
-    assert_eq!(option(&mut vm, "Missing"), Some(Value::Str(String::new())));
+    assert_eq!(option(&mut vm, "class"), Some(Value::Str("Postal2Game.Dude".into())));
+    assert_eq!(option(&mut vm, "Name"), Some(Value::Str("Dude".into())));
+    assert_eq!(option(&mut vm, "Missing"), Some(Value::Str(String::new().into())));
 
     let int_option = vm.find_function(class, "GetIntOption").unwrap().unwrap();
-    let args = vec![options.clone(), Value::Str("Difficulty".to_owned()), Value::Int(1)];
+    let args = vec![options.clone(), Value::Str("Difficulty".into()), Value::Int(1)];
     assert_eq!(vm.call(&int_option, Some(game), class, args).unwrap(), Some(Value::Int(3)));
     assert_eq!(vm.diagnostics.log, ["Difficulty 3"]);
-    let args = vec![options, Value::Str("Missing".to_owned()), Value::Int(7)];
+    let args = vec![options, Value::Str("Missing".into()), Value::Int(7)];
     assert_eq!(vm.call(&int_option, Some(game), class, args).unwrap(), Some(Value::Int(7)));
 }
 #[test]
@@ -671,7 +671,7 @@ fn config_values_reach_class_defaults() {
     assert_eq!(vm.get_command("ini:Engine.Engine.ViewportManager StartupFullscreen").unwrap(), fullscreen);
     let gri = vm.find_class("Engine", "GameReplicationInfo").unwrap();
     let server = system.get("Engine.GameReplicationInfo", "ServerName").unwrap().to_owned();
-    assert_eq!(vm.store.default_value(gri, "ServerName"), Some(Value::Str(server)));
+    assert_eq!(vm.store.default_value(gri, "ServerName"), Some(Value::Str(server.into())));
 }
 
 #[test]
@@ -879,13 +879,13 @@ fn startup_client_interactions() {
     let rows: Vec<f32> = ["New Game", "Load Game", "Options", "Exit"].iter().filter_map(|label| row(label)).collect();
     assert!(rows.len() == 4 && rows.windows(2).all(|w| w[1] - w[0] > 20.0), "rows {rows:?}");
     assert!(texts.contains(&"Exit") && texts.contains(&"Options"), "{texts:?}");
-    let ask = |vm: &mut Vm<&Loader>, command: &str| match vm.call_native("ConsoleCommand", Some(player), &mut [Value::Str(command.to_owned())]).unwrap() {
+    let ask = |vm: &mut Vm<&Loader>, command: &str| match vm.call_native("ConsoleCommand", Some(player), &mut [Value::Str(command.into())]).unwrap() {
         Some(Value::Str(answer)) => answer,
         other => panic!("{command}: {other:?}"),
     };
-    assert_eq!(ask(&mut vm, "BINDING2KEYSTR \"Fire\" 0"), "LeftMouse");
-    assert_eq!(ask(&mut vm, "KEYNO LeftMouse"), "1");
-    assert_eq!(ask(&mut vm, "KEYNAME 1"), "LeftMouse");
+    assert_eq!(ask(&mut vm, "BINDING2KEYSTR \"Fire\" 0"), "LeftMouse".into());
+    assert_eq!(ask(&mut vm, "KEYNO LeftMouse"), "1".into());
+    assert_eq!(ask(&mut vm, "KEYNAME 1"), "LeftMouse".into());
     assert!(!ask(&mut vm, "MOVEBIND 0").is_empty());
     let game_info = vm.find_class("Postal2Game", "P2GameInfo").unwrap();
     assert_eq!(vm.store.default_value(game_info, "bLocalizedDialog"), Some(Value::Bool(false)));
@@ -1009,7 +1009,7 @@ fn server_travel_reaches_the_host() {
         assert!(vm.tick_level(0.05).is_empty());
     }
     let level = vm.level().unwrap();
-    vm.event(level, "ServerTravel", vec![Value::Str("Bridge".to_owned()), Value::Bool(false)]).unwrap();
+    vm.event(level, "ServerTravel", vec![Value::Str("Bridge".into()), Value::Bool(false)]).unwrap();
     for _ in 0..5 {
         assert!(vm.tick_level(0.05).is_empty());
     }
@@ -1187,11 +1187,11 @@ fn get_game_map_steps_through_multiplayer_maps() {
             other => panic!("GetGameMap returned {other:?}"),
         }
     };
-    assert_eq!(game_map("DGT", "", 0), "MPDGT-Asylum.fuk");
-    assert_eq!(game_map("DGT", "MPDGT-Asylum.fuk", 1), "MPDGT-Boneyard.fuk");
-    assert_eq!(game_map("DGT", "MPDGT-Trainyard.fuk", 1), "MPDGT-Asylum.fuk");
-    assert_eq!(game_map("DGT", "MPDGT-Asylum.fuk", -1), "MPDGT-Trainyard.fuk");
-    assert_eq!(game_map("S", "MPS-Intifada.fuk", 1), "MPS-Ponderous.fuk");
+    assert_eq!(game_map("DGT", "", 0), "MPDGT-Asylum.fuk".into());
+    assert_eq!(game_map("DGT", "MPDGT-Asylum.fuk", 1), "MPDGT-Boneyard.fuk".into());
+    assert_eq!(game_map("DGT", "MPDGT-Trainyard.fuk", 1), "MPDGT-Asylum.fuk".into());
+    assert_eq!(game_map("DGT", "MPDGT-Asylum.fuk", -1), "MPDGT-Trainyard.fuk".into());
+    assert_eq!(game_map("S", "MPS-Intifada.fuk", 1), "MPS-Ponderous.fuk".into());
 }
 
 #[test]
@@ -1557,8 +1557,8 @@ fn monday_wheel_and_click_pick_a_weapon() {
     frame(&mut vm, &["LeftMouse"]);
     frame(&mut vm, &[]);
     assert_eq!(selected(&vm), -1, "the click picks the weapon and closes the selector; log {:?}", vm.diagnostics.log.iter().rev().take(8).collect::<Vec<_>>());
-    let res = vm.call_native("ConsoleCommand", Some(controller), &mut [Value::Str("GETCURRENTRES".to_owned()), Value::Bool(false)]).unwrap();
-    assert_eq!(res, Some(Value::Str("1600x900".to_owned())));
+    let res = vm.call_native("ConsoleCommand", Some(controller), &mut [Value::Str("GETCURRENTRES".into()), Value::Bool(false)]).unwrap();
+    assert_eq!(res, Some(Value::Str("1600x900".into())));
 }
 
 #[test]
@@ -1858,6 +1858,6 @@ fn console_cheat_gives_weapons() {
         seen.iter().filter(|&&item| vm.store.is_a(item, "Weapon")).count()
     };
     let before = count(&vm);
-    vm.call_native("ConsoleCommand", Some(controller), &mut [Value::Str("PackNHeat".to_owned()), Value::Bool(false)]).unwrap();
+    vm.call_native("ConsoleCommand", Some(controller), &mut [Value::Str("PackNHeat".into()), Value::Bool(false)]).unwrap();
     assert!(count(&vm) > before + 10, "{} weapons before, {} after; log {:?}", before, count(&vm), vm.diagnostics.log.iter().rev().take(8).collect::<Vec<_>>());
 }

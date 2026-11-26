@@ -418,7 +418,7 @@ impl<L: LoaderRef> Vm<L> {
         let value = match native {
             Native::Play => {
                 let file = match args.first() {
-                    Some(Value::Str(s)) => s.clone(),
+                    Some(Value::Str(s)) => s.to_string(),
                     _ => String::new(),
                 };
                 let previous = self.actor_fx.movies.get(&this).map_or((0, 0, 0), |m| (m.width, m.height, m.plays));

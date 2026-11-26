@@ -217,9 +217,9 @@ impl<L: LoaderRef> Vm<L> {
     pub(crate) fn util_native(&mut self, native: Native, this: Option<ObjectId>, args: &mut [Value]) -> Result<Option<Value>, Error> {
         let value = match native {
             Native::Floor => Value::Float(args.first().map_or(0.0, float).floor()),
-            Native::Localize => Value::Str(self.localize(&text_arg(args, 0), &text_arg(args, 1), &text_arg(args, 2))),
-            Native::GetLanguage => Value::Str(self.language()),
-            Native::GetDisplayLanguage => Value::Str(text_arg(args, 0)),
+            Native::Localize => Value::Str(self.localize(&text_arg(args, 0), &text_arg(args, 1), &text_arg(args, 2)).into()),
+            Native::GetLanguage => Value::Str(self.language().into()),
+            Native::GetDisplayLanguage => Value::Str(text_arg(args, 0).into()),
             Native::SetLanguage => {
                 self.save_setting("Engine.Engine", "Language", &text_arg(args, 0));
                 Value::Bool(true)
@@ -229,7 +229,7 @@ impl<L: LoaderRef> Vm<L> {
                 let loaded = std::fs::read(self.read_path(&text_arg(args, 1))).ok().map(|bytes| decode(&bytes));
                 let found = loaded.is_some();
                 if let Some(loaded) = loaded {
-                    set_out(args, 0, Value::Str(loaded));
+                    set_out(args, 0, Value::Str(loaded.into()));
                 }
                 Value::Bool(found)
             }
@@ -249,7 +249,7 @@ impl<L: LoaderRef> Vm<L> {
                     .collect();
                 names.sort_by_key(|name| name.to_ascii_lowercase());
                 names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-                Value::Array(names.into_iter().map(Value::Str).collect())
+                Value::Array(names.into_iter().map(|name| Value::Str(name.into())).collect())
             }
             Native::OpenLog => {
                 if let Some(this) = this {
@@ -281,38 +281,38 @@ impl<L: LoaderRef> Vm<L> {
                 self.diagnostics.log.push(format!("Error: {}", text_arg(args, 0)));
                 return Ok(None);
             }
-            Native::GetURLMap | Native::GetMapFileName => Value::Str(self.map_name.clone()),
-            Native::GetMapName => Value::Str(self.get_map_name(&text_arg(args, 0), &text_arg(args, 1), args.get(2).map_or(0, int))),
+            Native::GetURLMap | Native::GetMapFileName => Value::Str(self.map_name.clone().into()),
+            Native::GetMapName => Value::Str(self.get_map_name(&text_arg(args, 0), &text_arg(args, 1), args.get(2).map_or(0, int)).into()),
             Native::DoesMapExist => {
                 let wanted = text_arg(args, 0);
                 let at = wanted.len().wrapping_sub(".fuk".len());
                 let wanted = if wanted.get(at..).is_some_and(|end| end.eq_ignore_ascii_case(".fuk")) { &wanted[..at] } else { wanted.as_str() };
                 Value::Bool(self.map_stems().iter().any(|stem| stem.eq_ignore_ascii_case(wanted)))
             }
-            Native::GetAddressURL | Native::GetNetworkNumber => Value::Str(String::new()),
-            Native::GetPlayerNetworkAddress => Value::Str("127.0.0.1".to_owned()),
+            Native::GetAddressURL | Native::GetNetworkNumber => Value::Str(String::new().into()),
+            Native::GetPlayerNetworkAddress => Value::Str("127.0.0.1".into()),
             // The default URL's options come from `[URL]` (unverified).
-            Native::GetDefaultURL => Value::Str(self.config_value("URL", &text_arg(args, 0)).unwrap_or_default()),
+            Native::GetDefaultURL => Value::Str(self.config_value("URL", &text_arg(args, 0)).unwrap_or_default().into()),
             Native::UpdateURL => {
                 if args.get(2).is_some_and(truthy) {
                     self.save_setting("DefaultPlayer", &text_arg(args, 0), &text_arg(args, 1));
                 }
                 return Ok(None);
             }
-            Native::GetNextInt => Value::Str(self.registry_entry(&text_arg(args, 0), args.get(1).map_or(0, int)).map(|e| e.name).unwrap_or_default()),
+            Native::GetNextInt => Value::Str(self.registry_entry(&text_arg(args, 0), args.get(1).map_or(0, int)).map(|e| e.name).unwrap_or_default().into()),
             Native::GetNextIntDesc => {
                 let entry = self.registry_entry(&text_arg(args, 0), args.get(1).map_or(0, int)).unwrap_or_default();
-                set_out(args, 2, Value::Str(entry.name));
-                set_out(args, 3, Value::Str(entry.description));
+                set_out(args, 2, Value::Str(entry.name.into()));
+                set_out(args, 3, Value::Str(entry.description.into()));
                 return Ok(None);
             }
             Native::GetNextSkin => {
                 let entry = self.next_skin_entry(&text_arg(args, 0), &text_arg(args, 1), args.get(2).map_or(0, int)).unwrap_or_default();
-                set_out(args, 3, Value::Str(entry.name));
-                set_out(args, 4, Value::Str(entry.description));
+                set_out(args, 3, Value::Str(entry.name.into()));
+                set_out(args, 4, Value::Str(entry.description.into()));
                 return Ok(None);
             }
-            Native::ParseKillMessage => Value::Str(parse_kill_message(&text_arg(args, 0), &text_arg(args, 1), &text_arg(args, 2))),
+            Native::ParseKillMessage => Value::Str(parse_kill_message(&text_arg(args, 0), &text_arg(args, 1), &text_arg(args, 2)).into()),
             Native::DeleteSave => Value::Bool(self.delete_save(args.first().map_or(0, int))),
             // Retail's `LaunchDLC` answers false without a local client, taking `MenuDLCLaunch`'s failure path.
             Native::IsSteamDeck | Native::IsWorkshopBuild | Native::SteamGetAchievement | Native::LaunchDLC => Value::Bool(false),
@@ -328,7 +328,7 @@ impl<L: LoaderRef> Vm<L> {
                 }
                 return Ok(None);
             }
-            Native::PasteFromClipboard => Value::Str(CLIPBOARD.lock().map(|c| c.clone()).unwrap_or_default()),
+            Native::PasteFromClipboard => Value::Str(CLIPBOARD.lock().map(|c| c.clone()).unwrap_or_default().into()),
             _ => return Ok(None),
         };
         Ok(Some(value))
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn subtitle_index_finds_a_tag_in_any_case() {
-        let tags = Value::Array(vec![Value::Str("Intro".to_owned()), Value::Str("Outro".to_owned())]);
+        let tags = Value::Array(vec![Value::Str("Intro".into()), Value::Str("Outro".into())]);
         assert_eq!(subtitle_index(Some(&tags), "outro"), Some(1));
         assert_eq!(subtitle_index(Some(&tags), "Missing"), None);
         assert_eq!(subtitle_index(Some(&tags), ""), None);

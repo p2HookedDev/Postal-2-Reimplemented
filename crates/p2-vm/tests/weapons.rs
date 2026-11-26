@@ -291,6 +291,6 @@ fn same_name_mesh_and_animation_stay_apart() {
     assert_eq!(vm.stub(path, "SkeletalMesh"), mesh);
     assert_eq!(vm.store.name(vm.store.object(mesh).class_name), "SkeletalMesh");
     let class = vm.stub("Engine.Mesh", "Class");
-    let found = vm.call_native("DynamicLoadObject", None, &mut [Value::Str(path.to_owned()), Value::Object(Some(class)), Value::Bool(false)]).unwrap();
+    let found = vm.call_native("DynamicLoadObject", None, &mut [Value::Str(path.into()), Value::Object(Some(class)), Value::Bool(false)]).unwrap();
     assert_eq!(found, Some(Value::Object(Some(mesh))));
 }

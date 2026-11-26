@@ -135,7 +135,7 @@ impl<L: LoaderRef> Vm<L> {
             Value::Int(value) => value.to_string(),
             Value::Float(value) => format!("{value:.6}"),
             Value::Byte(value) => value.to_string(),
-            Value::Str(value) => value.clone(),
+            Value::Str(value) => value.to_string(),
             &Value::Name(name) => self.store.name(name).to_owned(),
             &Value::Object(object) => object.map_or_else(|| "None".to_owned(), |o| self.store.object(o).path.clone()),
             _ => String::new(),
@@ -446,7 +446,7 @@ impl<L: LoaderRef> Vm<L> {
                 "false" | "0" | "no" | "off" => false,
                 _ => return None,
             }),
-            Type::Str | Type::String => Value::Str(text.trim_matches('"').to_owned()),
+            Type::Str | Type::String => Value::Str(text.trim_matches('"').into()),
             Type::Name => Value::Name(self.intern(text.trim_matches('"'))),
             Type::Object | Type::Class => {
                 let (written, path) = text.split_once('\'').map_or(("", text), |(class, rest)| (class, rest.trim_end_matches('\'')));
@@ -535,7 +535,7 @@ mod tests {
         let loader = Loader::new(&empty, &[]).unwrap();
         let mut vm = Vm::new(&loader);
         let text = Type::Array(Box::new(Type::Str));
-        let strings = |items: &[&str]| Value::Array(items.iter().map(|item| Value::Str((*item).to_owned())).collect());
+        let strings = |items: &[&str]| Value::Array(items.iter().map(|item| Value::Str((*item).into())).collect());
         assert_eq!(vm.import(&text, r#"("a,b","(c)")"#), Some(strings(&["a,b", "(c)"])));
         assert_eq!(vm.import(&text, "()"), Some(strings(&[])));
         let numbers = Type::Array(Box::new(Type::Int));
@@ -588,7 +588,7 @@ mod tests {
 MusicVolume=0.1
 "));
         let play = |vm: &mut Vm<&Loader>, override_volume: f32| {
-            let handle = vm.call_native("PlayMusic", None, &mut [Value::Str("song.ogg".to_owned()), Value::Float(0.0), Value::Float(override_volume)]);
+            let handle = vm.call_native("PlayMusic", None, &mut [Value::Str("song.ogg".into()), Value::Float(0.0), Value::Float(override_volume)]);
             let volumes: Vec<f32> = vm
                 .take_commands(|command| matches!(command, HostCommand::Music(_)))
                 .filter_map(|command| if let HostCommand::Music(crate::MusicCommand::Play { volume, .. }) = command { Some(volume) } else { None })
@@ -612,23 +612,23 @@ MusicVolume=0
         let system = "[Engine.Engine]\nViewportManager=WinDrv.WindowsClient\n\
                       [WinDrv.WindowsClient]\nBrightness=0.5\nStartupFullscreen=False\nFullscreenWindowed=True\n";
         vm.add_config("System", Ini::parse(system));
-        let run = |vm: &mut Vm<&Loader>, command: &str| match vm.call_native("ConsoleCommand", None, &mut [Value::Str(command.to_owned())]) {
+        let run = |vm: &mut Vm<&Loader>, command: &str| match vm.call_native("ConsoleCommand", None, &mut [Value::Str(command.into())]) {
             Ok(Some(Value::Str(answer))) => answer,
             other => panic!("{command}: {other:?}"),
         };
-        assert_eq!(run(&mut vm, "get ini:Engine.Engine.ViewportManager Brightness"), "0.5");
+        assert_eq!(run(&mut vm, "get ini:Engine.Engine.ViewportManager Brightness"), "0.5".into());
         run(&mut vm, "set ini:Engine.Engine.ViewportManager Brightness 0.7");
         run(&mut vm, "Gamma 1.2");
-        assert_eq!(run(&mut vm, "get ini:Engine.Engine.ViewportManager Brightness"), "0.7");
+        assert_eq!(run(&mut vm, "get ini:Engine.Engine.ViewportManager Brightness"), "0.7".into());
         let saved = vm.take_changed_settings().expect("settings not changed");
         assert_eq!((saved.get("WinDrv.WindowsClient", "Brightness"), saved.get("WinDrv.WindowsClient", "Gamma")), (Some("0.7"), Some("1.2")));
         assert!(vm.take_changed_settings().is_none());
-        assert_eq!(run(&mut vm, "GetFullScreen"), "False");
+        assert_eq!(run(&mut vm, "GetFullScreen"), "False".into());
         run(&mut vm, "SetRes 1280x720x32f");
         assert_eq!(vm.take_commands(|command| matches!(command, HostCommand::Window(_))).collect::<Vec<_>>(), [HostCommand::Window(WindowRequest { size: Some([1280, 720]), fullscreen: true, borderless: true })]);
-        assert_eq!(run(&mut vm, "get ini:Engine.Engine.ViewportManager FullscreenViewportY"), "720");
+        assert_eq!(run(&mut vm, "get ini:Engine.Engine.ViewportManager FullscreenViewportY"), "720".into());
         run(&mut vm, "ToggleFullScreen");
         assert_eq!(vm.take_commands(|command| matches!(command, HostCommand::Window(_))).collect::<Vec<_>>(), [HostCommand::Window(WindowRequest { size: None, fullscreen: false, borderless: true })]);
-        assert_eq!(run(&mut vm, "GetFullScreen"), "False");
+        assert_eq!(run(&mut vm, "GetFullScreen"), "False".into());
     }
 }

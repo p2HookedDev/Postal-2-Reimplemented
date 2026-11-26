@@ -27,11 +27,11 @@ impl Simulation {
                     Some(p2_vm::Value::Float(volume)) => *volume,
                     _ => 0.0,
                 };
-                let song = song_name.and_then(|name| match self.zone_songs.get(name) {
+                let song = song_name.and_then(|name| match self.zone_songs.get(&**name) {
                     Some(song) => song.clone(),
                     None => {
                         let song = read_song(&self.music_dir, name);
-                        self.zone_songs.insert(name.clone(), song.clone());
+                        self.zone_songs.insert(name.to_string(), song.clone());
                         song
                     }
                 });

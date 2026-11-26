@@ -25,8 +25,8 @@ fn church_saves_and_loads() {
     for _ in 0..40 {
         vm.tick_level(0.05);
     }
-    let answer = vm.call_native("ConsoleCommand", None, &mut [Value::Str("SaveGame 5".to_owned())]).unwrap();
-    assert_eq!(answer, Some(Value::Str("1".to_owned())));
+    let answer = vm.call_native("ConsoleCommand", None, &mut [Value::Str("SaveGame 5".into())]).unwrap();
+    assert_eq!(answer, Some(Value::Str("1".into())));
     let save = vm
         .take_commands(|command| matches!(command, HostCommand::SaveGame { .. }))
         .find_map(|command| if let HostCommand::SaveGame { slot: 5, save } = command { Some(save) } else { None })

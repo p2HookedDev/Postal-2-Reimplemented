@@ -7,7 +7,7 @@ pub(super) fn text_native(native: Native, args: &mut [Value]) -> Result<Option<V
     let value = match native {
         Native::SplitString => {
             let (text, delim) = (str_arg(args, 0), str_arg(args, 1));
-            let pieces: Vec<Value> = if delim.is_empty() { vec![Value::Str(text.to_owned())] } else { text.split(delim).map(|p| Value::Str(p.to_owned())).collect() };
+            let pieces: Vec<Value> = if delim.is_empty() { vec![Value::Str(text.into())] } else { text.split(delim).map(|p| Value::Str(p.into())).collect() };
             let count = pieces.len() as i32;
             if let Some(slot) = args.get_mut(2) {
                 *slot = Value::Array(pieces);
@@ -19,17 +19,24 @@ pub(super) fn text_native(native: Native, args: &mut [Value]) -> Result<Option<V
             match (!delim.is_empty()).then(|| text.split_once(delim)).flatten() {
                 Some((head, rest)) => {
                     let (head, rest) = (head.to_owned(), rest.to_owned());
-                    args[0] = Value::Str(rest);
+                    args[0] = Value::Str(rest.into());
                     if let Some(slot) = args.get_mut(2) {
-                        *slot = Value::Str(head);
+                        *slot = Value::Str(head.into());
                     }
                     Value::Bool(true)
                 }
                 None => Value::Bool(false),
             }
         }
-        Native::Concat_StrStr => Value::Str([str_arg(args, 0), str_arg(args, 1)].concat()),
-        Native::At_StrStr => Value::Str(format!("{} {}", str_arg(args, 0), str_arg(args, 1))),
+        _ => return pure_text(native, args).map(Some).ok_or_else(|| Error::UnknownNative(format!("{native:?}"))),
+    };
+    Ok(Some(value))
+}
+
+pub(crate) fn pure_text(native: Native, args: &[Value]) -> Option<Value> {
+    Some(match native {
+        Native::Concat_StrStr => Value::Str([str_arg(args, 0), str_arg(args, 1)].concat().into()),
+        Native::At_StrStr => Value::Str([str_arg(args, 0), " ", str_arg(args, 1)].concat().into()),
         Native::EqualEqual_StrStr => Value::Bool(str_arg(args, 0) == str_arg(args, 1)),
         Native::NotEqual_StrStr => Value::Bool(str_arg(args, 0) != str_arg(args, 1)),
         Native::Less_StrStr => Value::Bool(str_arg(args, 0) < str_arg(args, 1)),
@@ -38,24 +45,29 @@ pub(super) fn text_native(native: Native, args: &mut [Value]) -> Result<Option<V
         Native::GreaterEqual_StrStr => Value::Bool(str_arg(args, 0) >= str_arg(args, 1)),
         Native::ComplementEqual_StrStr => Value::Bool(str_arg(args, 0).eq_ignore_ascii_case(str_arg(args, 1))),
         Native::Len => Value::Int(str_arg(args, 0).chars().count() as i32),
-        Native::Caps => Value::Str(str_arg(args, 0).to_uppercase()),
-        Native::Locs => Value::Str(str_arg(args, 0).to_lowercase()),
-        Native::Left => Value::Str(str_arg(args, 0).chars().take(int_arg(args, 1).max(0) as usize).collect()),
+        Native::Caps => Value::Str(str_arg(args, 0).to_uppercase().into()),
+        Native::Locs => Value::Str(str_arg(args, 0).to_lowercase().into()),
+        Native::Left => Value::Str(chars_from(str_arg(args, 0), 0, int_arg(args, 1).max(0) as usize).into()),
         Native::Right => {
             let text = str_arg(args, 0);
             let count = text.chars().count();
-            Value::Str(text.chars().skip(count.saturating_sub(int_arg(args, 1).max(0) as usize)).collect())
+            Value::Str(chars_from(text, count.saturating_sub(int_arg(args, 1).max(0) as usize), usize::MAX).into())
         }
         Native::Mid => {
             let count = if args.len() > 2 && int_arg(args, 2) > 0 { int_arg(args, 2) as usize } else { usize::MAX };
-            Value::Str(str_arg(args, 0).chars().skip(int_arg(args, 1).max(0) as usize).take(count).collect())
+            Value::Str(chars_from(str_arg(args, 0), int_arg(args, 1).max(0) as usize, count).into())
         }
         Native::Asc => Value::Int(str_arg(args, 0).chars().next().map_or(0, |c| c as i32)),
-        Native::Chr => Value::Str(char::from_u32(int_arg(args, 0).max(0) as u32).map(String::from).unwrap_or_default()),
+        Native::Chr => Value::Str(char::from_u32(int_arg(args, 0).max(0) as u32).map(String::from).unwrap_or_default().into()),
         Native::InStr => Value::Int(str_arg(args, 0).find(str_arg(args, 1)).map_or(-1, |at| str_arg(args, 0)[..at].chars().count() as i32)),
-        _ => return Err(Error::UnknownNative(format!("{native:?}"))),
-    };
-    Ok(Some(value))
+        _ => return None,
+    })
+}
+
+fn chars_from(text: &str, start: usize, count: usize) -> &str {
+    let byte = |text: &str, chars: usize| text.char_indices().nth(chars).map_or(text.len(), |(at, _)| at);
+    let rest = &text[byte(text, start)..];
+    &rest[..byte(rest, count)]
 }
 
 pub(super) fn random_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, args: &[Value]) -> Result<Option<Value>, Error> {
@@ -87,7 +99,7 @@ pub(super) fn reflect_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this:
             Some(e) => vm.enum_name(e, int_arg(args, 1)),
             None => NameId::NONE,
         }),
-        Native::GetPropertyText => Value::Str(this.map_or_else(String::new, |this| vm.property_text(this, str_arg(args, 0)))),
+        Native::GetPropertyText => Value::Str(this.map_or_else(String::new, |this| vm.property_text(this, str_arg(args, 0))).into()),
         Native::SetPropertyText => {
             if let Some(this) = this {
                 vm.set_property_text(this, str_arg(args, 0), str_arg(args, 1));

@@ -97,7 +97,7 @@ fn play_music<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this: Option<ObjectI
     vm.host.music_handle += 1;
     let radius = if attenuate { if given(args, 3) { float_arg(args, 3) } else { actor_float(vm, this, Prop::TransientSoundRadius) } } else { 0.0 };
     let song = match args.first() {
-        Some(Value::Str(song)) => song.clone(),
+        Some(Value::Str(song)) => song.to_string(),
         _ => String::new(),
     };
     let play = MusicCommand::Play {

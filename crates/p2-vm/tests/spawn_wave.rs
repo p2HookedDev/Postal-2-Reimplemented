@@ -43,6 +43,26 @@ fn spawn_wave_splits_script_from_host() {
     let warm = dude.vm.spawn(class, None, [Some(at(WAVE)), None]).unwrap();
     eprintln!("{class_name} ({placed} placed): first spawn {:?}, spawned {}", started.elapsed(), warm.is_some());
 
+    let mut plain = Vec::new();
+    for _ in 0..7 {
+        let started = Instant::now();
+        let bodies: Vec<_> = (0..WAVE).filter_map(|index| dude.vm.spawn(class, None, [Some(at(index)), None]).unwrap()).collect();
+        plain.push((started.elapsed(), bodies.len()));
+        clear(&mut dude.vm, bodies);
+    }
+    plain.sort();
+    eprintln!("unprofiled waves (time, spawned), fastest first: {plain:?}");
+
+    dude.vm.diagnostics.count_work = true;
+    let started = Instant::now();
+    let bodies: Vec<_> = (0..WAVE).filter_map(|index| dude.vm.spawn(class, None, [Some(at(index)), None]).unwrap()).collect();
+    let counted = started.elapsed();
+    let mut work = dude.vm.take_work_counts();
+    work.retain(|&(_, count)| count > 0);
+    eprintln!("counted wave: {} spawned in {counted:?}; work {work:?}", bodies.len());
+    dude.vm.diagnostics.count_work = false;
+    clear(&mut dude.vm, bodies);
+
     dude.vm.profile_functions(FunctionProfiling::On);
     dude.vm.take_work_counts();
     dude.vm.diagnostics.tick_profile = Some(Default::default());
@@ -84,4 +104,13 @@ fn spawn_wave_splits_script_from_host() {
     let work: Vec<String> = work.iter().take(16).map(|(name, count)| format!("{name} {count}")).collect();
     eprintln!("work: {}", work.join(", "));
     assert!(spawned > 0, "no {class_name} fit around the player");
+}
+
+fn clear(vm: &mut p2_vm::Vm<&p2_package::Loader>, bodies: Vec<p2_vm::ObjectId>) {
+    for body in bodies {
+        if let Some(controller) = object_of(vm, body, "Controller") {
+            vm.destroy(controller).unwrap();
+        }
+        vm.destroy(body).unwrap();
+    }
 }

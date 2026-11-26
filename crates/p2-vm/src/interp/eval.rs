@@ -22,7 +22,7 @@ impl<L: LoaderRef> Vm<L> {
             Expr::IntOne => Value::Int(1),
             Expr::True => Value::Bool(true),
             Expr::False => Value::Bool(false),
-            Expr::StringConst(v) | Expr::UnicodeStringConst(v) => Value::Str(v.clone()),
+            Expr::StringConst(v) | Expr::UnicodeStringConst(v) => Value::Str(v.as_str().into()),
             Expr::NameConst(name) => Value::Name(self.name_const(frame, link, *name)),
             Expr::VectorConst(v) => Value::Vector(Vector::new(v[0], v[1], v[2])),
             Expr::RotationConst(v) => Value::Rotator(Rotator::new(v[0], v[1], v[2])),
@@ -125,7 +125,7 @@ impl<L: LoaderRef> Vm<L> {
             Expr::Nothing => None,
             name => match self.eval(frame, name, context)? {
                 Value::Name(name) if name != NameId::NONE => Some(self.store.name(name).to_owned()),
-                Value::Str(name) if !name.is_empty() => Some(name),
+                Value::Str(name) if !name.is_empty() => Some(name.to_string()),
                 _ => None,
             },
         };

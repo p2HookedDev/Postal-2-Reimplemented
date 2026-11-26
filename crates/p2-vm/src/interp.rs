@@ -385,8 +385,8 @@ impl PrimCast {
 
 fn cast<L: LoaderRef>(vm: &Vm<L>, to: PrimCast, value: Value) -> Result<Value, Error> {
     let to = match to {
-        PrimCast::ToStrOr(zero) if value == Value::Int(0) => return Ok(Value::Str(zero.to_owned())),
-        PrimCast::VectorToStr if value == Value::Int(0) => return Ok(Value::Str("0.00,0.00,0.00".to_owned())),
+        PrimCast::ToStrOr(zero) if value == Value::Int(0) => return Ok(Value::Str(zero.into())),
+        PrimCast::VectorToStr if value == Value::Int(0) => return Ok(Value::Str("0.00,0.00,0.00".into())),
         PrimCast::ToStrOr(_) => PrimCast::ToStr,
         to => to,
     };
@@ -396,11 +396,11 @@ fn cast<L: LoaderRef>(vm: &Vm<L>, to: PrimCast, value: Value) -> Result<Value, E
         (PrimCast::ToBool, Value::Struct(_) | Value::Vector(_) | Value::Rotator(_)) => Value::Bool(natives::vec3(Some(&value)) != [0.0; 3].into()),
         (PrimCast::VectorToStr, Value::Struct(_) | Value::Vector(_) | Value::Rotator(_)) => {
             let Vector { x, y, z } = natives::vec3(Some(&value));
-            Value::Str(format!("{x:.2},{y:.2},{z:.2}"))
+            Value::Str(format!("{x:.2},{y:.2},{z:.2}").into())
         }
         (PrimCast::ToStr, Value::Struct(_) | Value::Vector(_) | Value::Rotator(_)) => {
             let Rotator { pitch: p, yaw: y, roll: r } = natives::rot3(Some(&value));
-            Value::Str(format!("{p},{y},{r}"))
+            Value::Str(format!("{p},{y},{r}").into())
         }
         (PrimCast::StringToVector | PrimCast::StringToRotator, Value::Str(s)) => {
             let parts: Vec<f32> = s.split(',').map(|p| p.trim().parse().unwrap_or(0.0)).collect();
@@ -416,11 +416,11 @@ fn cast<L: LoaderRef>(vm: &Vm<L>, to: PrimCast, value: Value) -> Result<Value, E
         (PrimCast::ToBool, Value::Str(s)) => Value::Bool(s.eq_ignore_ascii_case("true") || s.parse::<i32>().is_ok_and(|v| v != 0)),
         (PrimCast::ToBool, Value::Name(n)) => Value::Bool(*n != NameId::NONE),
         (PrimCast::ToBool, _) => Value::Bool(truthy(&value)),
-        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Float(v)) => Value::Str(format!("{v:.2}")),
-        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Bool(v)) => Value::Str(if *v { "True" } else { "False" }.to_owned()),
-        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Name(n)) => Value::Str(vm.store.name(*n).to_owned()),
-        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Object(o)) => Value::Str(o.map_or("None".to_owned(), |o| vm.store.object(o).path.clone())),
-        (PrimCast::ToStr | PrimCast::ToStrOr(_) | PrimCast::VectorToStr, _) => Value::Str(int(&value).to_string()),
+        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Float(v)) => Value::Str(format!("{v:.2}").into()),
+        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Bool(v)) => Value::Str(if *v { "True" } else { "False" }.into()),
+        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Name(n)) => Value::Str(vm.store.name(*n).into()),
+        (PrimCast::ToStr | PrimCast::VectorToStr, Value::Object(o)) => Value::Str(o.map_or("None".into(), |o| vm.store.object(o).path.clone()).into()),
+        (PrimCast::ToStr | PrimCast::ToStrOr(_) | PrimCast::VectorToStr, _) => Value::Str(int(&value).to_string().into()),
         (PrimCast::StringToVector | PrimCast::StringToRotator, _) => return Err(Error::Unsupported(format!("cast {to:?}"))),
         (PrimCast::Unknown(kind), _) => return Err(Error::Unsupported(format!("cast {kind:#x}"))),
     })

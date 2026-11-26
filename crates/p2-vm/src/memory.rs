@@ -85,7 +85,7 @@ pub struct Mem {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Heap {
-    Str(String),
+    Str(Arc<str>),
     Array(Array),
 }
 
@@ -136,7 +136,7 @@ impl MemLayouts {
     }
 
     fn push(&mut self, fields: Vec<Field>, words: u32, heaps: u32, source: Option<Arc<StructLayout>>) -> LayoutId {
-        let mut zero_heap = vec![Heap::Str(String::new()); heaps as usize];
+        let mut zero_heap = vec![Heap::Str(String::new().into()); heaps as usize];
         for field in &fields {
             for element in 0..field.dim {
                 let at = (field.heap + element * field.heaps) as usize;
@@ -157,7 +157,7 @@ impl MemLayouts {
 
     fn zero_heap_of(&self, shape: Shape, slots: &mut [Heap]) {
         match shape {
-            Shape::Str => slots[0] = Heap::Str(String::new()),
+            Shape::Str => slots[0] = Heap::Str(String::new().into()),
             Shape::Array(_) => slots[0] = Heap::Array(Array::default()),
             Shape::Struct(id) | Shape::Fixed(id) => slots.clone_from_slice(&self.get(id).zero_heap),
             _ => {}
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!((layout.words, layout.heaps), (9, 2));
         let zero = layouts.zero(id);
         assert_eq!(zero.words, vec![0; 9]);
-        assert_eq!(zero.heap, [Heap::Str(String::new()), Heap::Array(Array::default())]);
+        assert_eq!(zero.heap, [Heap::Str(String::new().into()), Heap::Array(Array::default())]);
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
         let mut mem = layouts.zero(id);
         let item = |label: &str, x: f32, tags: &[u32]| {
             Value::Struct(vec![
-                Value::Str(label.to_owned()),
+                Value::Str(label.into()),
                 Value::Vector(Vector::new(x, 2.0, -3.5)),
                 Value::Array(tags.iter().map(|&t| Value::Name(NameId(t))).collect()),
             ])
@@ -406,7 +406,7 @@ mod tests {
             Value::Int(-7),
             Value::Array(vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)]),
             Value::Vector(Vector::new(1.5, -0.0, 1e30)),
-            Value::Str("dude".to_owned()),
+            Value::Str("dude".into()),
             Value::Array(vec![item("a", 1.0, &[3, 4]), item("b", 9.0, &[])]),
             Value::Object(Some(ObjectId(0))),
             Value::Float(f32::MIN_POSITIVE),

@@ -8,7 +8,7 @@ pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this
     let value = match native {
         Native::ConsoleCommand => {
             let (answer, handled) = console_command(vm, str_arg(args, 0))?;
-            if this.is_some_and(|this| vm.store.is_a(this, "Interaction")) { Value::Bool(handled) } else { Value::Str(answer) }
+            if this.is_some_and(|this| vm.store.is_a(this, "Interaction")) { Value::Bool(handled) } else { Value::Str(answer.into()) }
         }
         Native::IsDemoBuild | Native::PlatformIsSteamDeck | Native::PlatformIsMacOS | Native::PlatformIsUnix | Native::IsSteamBuild => Value::Bool(false),
         Native::SteamOwnsDLC | Native::SteamOwnsGame => Value::Bool(u32::try_from(int_arg(args, 0)).is_ok_and(|app| vm.options.steam_apps.contains(&app))),
@@ -20,12 +20,12 @@ pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this
             if let Some(url) = usize::try_from(int_arg(args, 0)).ok().and_then(|n| SOCIAL_URLS.get(n)) {
                 vm.host.commands.push(HostCommand::OpenUrl((*url).to_owned()));
             }
-            Value::Str(String::new())
+            Value::Str(String::new().into())
         }
         Native::PlatformIsWindows => Value::Bool(true),
-        Native::SteamGetWorkshopStatus | Native::GetBuildDate => Value::Str(String::new()),
+        Native::SteamGetWorkshopStatus | Native::GetBuildDate => Value::Str(String::new().into()),
         // The install's country, `[Shell.ShellRootWindow] InstalledCountry` (unverified).
-        Native::GetCountryCode => Value::Str(vm.ini_name("Shell.ShellRootWindow.InstalledCountry").unwrap_or_else(|| "US".to_owned())),
+        Native::GetCountryCode => Value::Str(vm.ini_name("Shell.ShellRootWindow.InstalledCountry").unwrap_or_else(|| "US".to_owned()).into()),
         Native::SaveConfig | Native::StaticSaveConfig => {
             if let Some(this) = this {
                 vm.save_config(this, native == Native::StaticSaveConfig);
@@ -41,7 +41,7 @@ pub(super) fn platform_native<L: LoaderRef>(vm: &mut Vm<L>, native: Native, this
         }
         // The VM has no `Entry` map, so the played level stands in (unverified).
         Native::GetEntryLevel => Value::Object(vm.level()),
-        Native::GetLocalURL => Value::Str(vm.map_name.clone()),
+        Native::GetLocalURL => Value::Str(vm.map_name.clone().into()),
         // Ignores its arguments, as retail. System time: days since 2000-01-01 (X), seconds into the day (Y)
         // and milliseconds (Z).
         Native::GetMillisecondsFrom => Value::Vector(milliseconds_since_2000(vm, this).into()),
@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(owns("SteamOwnsGame", 707030), Some(Value::Bool(true)));
         assert_eq!(owns("SteamOwnsDLC", 360960), Some(Value::Bool(false)));
         assert_eq!(owns("SteamOwnsDLC", -1), Some(Value::Bool(false)));
-        assert_eq!(vm.call_native("LaunchSocialNetwork", None, &mut [Value::Byte(1)]).unwrap(), Some(Value::Str(String::new())));
+        assert_eq!(vm.call_native("LaunchSocialNetwork", None, &mut [Value::Byte(1)]).unwrap(), Some(Value::Str(String::new().into())));
         vm.call_native("SteamViewStorePage", None, &mut [Value::Int(707030)]).unwrap();
         let urls: Vec<_> = vm.take_commands(|_| true).collect();
         assert_eq!(urls, [HostCommand::OpenUrl("https://twitter.com/RWSstudios".to_owned()), HostCommand::OpenUrl("steam://store/707030".to_owned())]);

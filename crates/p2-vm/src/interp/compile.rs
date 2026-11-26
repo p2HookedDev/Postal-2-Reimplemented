@@ -231,7 +231,7 @@ impl<L: LoaderRef> Code<L> {
             Expr::IntOne => constant(Value::Int(1)),
             Expr::True => constant(Value::Bool(true)),
             Expr::False => constant(Value::Bool(false)),
-            Expr::StringConst(v) | Expr::UnicodeStringConst(v) => constant(Value::Str(v.clone())),
+            Expr::StringConst(v) | Expr::UnicodeStringConst(v) => constant(Value::Str(v.as_str().into())),
             Expr::VectorConst(v) => constant(Value::Vector(Vector::new(v[0], v[1], v[2]))),
             Expr::RotationConst(v) => constant(Value::Rotator(Rotator::new(v[0], v[1], v[2]))),
             Expr::NoObject => constant(Value::Object(None)),

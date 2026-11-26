@@ -395,6 +395,76 @@ fn monday_spawn_cost() {
 }
 #[test]
 #[ignore = "benchmark"]
+fn monday_npc_wave_cost() {
+    let Some(root) = game_dir() else { return };
+    let mut app = monday(&root, true, |_| (Vec::new(), [0.0; 2]));
+    app.world_mut().resource_mut::<Holder>().url = Some("Suburbs-3?Game=GameTypes.GameSinglePlayer".to_owned());
+    while app.world().resource::<Holder>().frame == 0 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    run(&mut app, 60);
+    app.world_mut().resource_mut::<FrameTimes>().vm_profile = p2_host::frame_times::VmProfile::TickByClass;
+    run(&mut app, 5);
+    let ms = |time: Duration| time.as_secs_f64() * 1000.0;
+    let mut wave: Vec<ObjectId> = Vec::new();
+    for round in 0..3 {
+        let mut script = Duration::ZERO;
+        let mut loads: Vec<(String, Duration)> = Vec::new();
+        app.world_mut().resource_mut::<Play>().world_mut().and_then(|world| world.with_vm(|vm| {
+            for body in wave.drain(..) {
+                if let Some(controller) = object_of(vm, body, "Controller") {
+                    let _ = vm.destroy(controller);
+                }
+                let _ = vm.destroy(body);
+            }
+            vm.diagnostics.tick_profile = Some(Default::default());
+            let person = vm.find_class("BasePeople", "Bystanders").expect("the bystanders");
+            let pawn = object_of(vm, vm.player().unwrap(), "Pawn").unwrap();
+            let at = vm.store.location(pawn);
+            let start = Instant::now();
+            for i in 0..40 {
+                let spot = [at[0] + 120.0 * (i % 8) as f32 - 420.0, at[1] + 120.0 * (i / 8) as f32 + 300.0, at[2] + 60.0];
+                let place = p2_vm::Value::Vector(spot.into());
+                if let Ok(Some(body)) = vm.spawn(person, None, [Some(place), None]) {
+                    let _ = vm.event(body, "SetupController", Vec::new());
+                    wave.push(body);
+                }
+            }
+            script = start.elapsed();
+            loads = vm.diagnostics.tick_profile.take().unwrap_or_default().into_iter().filter(|(name, _)| name.starts_with("load")).collect();
+        })).expect("a played VM");
+        app.world_mut().resource_mut::<FrameTimes>().take_slowest();
+        loads.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+        eprintln!("WAVE {round} first-use reads: {}", loads.iter().take(12).map(|(n, t)| format!("{n} {:.2}", ms(*t))).collect::<Vec<_>>().join(", "));
+        app.world_mut().resource_mut::<FrameTimes>().totals.clear();
+        let mut slowest: Option<p2_host::frame_times::FrameParts> = None;
+        for _ in 0..20 {
+            app.update();
+            if let Some(parts) = app.world_mut().resource_mut::<FrameTimes>().take_slowest()
+                && slowest.as_ref().is_none_or(|s| parts.length > s.length)
+            {
+                slowest = Some(parts);
+            }
+        }
+        let spawned = app.world().resource::<FrameTimes>().totals.get("spawned").copied().unwrap_or_default();
+        let slowest = slowest.unwrap_or_default();
+        let mut main = slowest.main.clone();
+        main.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+        let main: Vec<String> = main.iter().take(6).map(|(n, t)| format!("{n} {:.2}", ms(*t))).collect();
+        eprintln!("WAVE {round}: {} spawns and controllers in the VM {:.2} ms; host spawned {:.2} ms; slowest frame {:.2} ms: {}", wave.len(), ms(script), ms(spawned), ms(slowest.length), main.join(", "));
+        let top = |parts: &[(String, Duration)]| {
+            let mut parts = parts.to_vec();
+            parts.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+            parts.iter().take(12).map(|(n, t)| format!("{n} {:.2}", ms(*t))).collect::<Vec<_>>().join(", ")
+        };
+        eprintln!("WAVE {round} slowest frame, VM parts: {}", top(&slowest.vm.iter().map(|&(n, t)| (n.to_owned(), t)).collect::<Vec<_>>()));
+        eprintln!("WAVE {round} slowest frame, VM profile: {}", top(&slowest.profile));
+    }
+}
+
+#[test]
+#[ignore = "benchmark"]
 fn monday_main_thread_time() {
     let Some(root) = game_dir() else { return };
     let (rounds, block) = (10, 30);
