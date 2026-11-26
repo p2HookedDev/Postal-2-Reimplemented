@@ -184,7 +184,8 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var incoming: ModernLight;
     var dynamic = vec3(0.0);
     if modern {
-        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, f32(terrain.count.y), vec4(0.0), false, pool, world_lookup());
+        let flat = normalize(cross(position_dx, position_dy));
+        incoming = modern_light(vertex_output, pbr_input, sun, normal, normal, select(flat, -flat, dot(flat, normal) < 0.0), f32(terrain.count.y), vec4(0.0), false, pool, world_lookup());
         dynamic = dynamic_light(vertex_output.world_position, normal, ranges);
     }
     var color = vec3(0.0);

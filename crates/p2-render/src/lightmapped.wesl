@@ -74,7 +74,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     var alpha = color.a;
     if modern {
         let bumped = base_relief(plain, pbr_input, normal, layers.detail.z);
-        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool, world_lookup());
+        let incoming = modern_light(vertex_output, pbr_input, sun, normal, bumped, normal, layers.detail.z, layers.blend, darken, pool, world_lookup());
         let shaded = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), vec3(0.0));
         surface = shaded.rgb;
         alpha = shaded.a;

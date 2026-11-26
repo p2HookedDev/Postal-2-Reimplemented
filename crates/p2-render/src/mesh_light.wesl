@@ -47,7 +47,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     mirror = select(0.0, pool_mirror(pool), pooled);
     if is_modern(layers.detail.z) && sun_found(sun) {
         let bumped = base_relief(in, pbr_input, normal, layers.detail.z);
-        let incoming = modern_light(in, pbr_input, sun, normal, bumped, layers.detail.z, layers.blend, darken, pool, world_lookup());
+        let incoming = modern_light(in, pbr_input, sun, normal, bumped, normal, layers.detail.z, layers.blend, darken, pool, world_lookup());
         color = shade_surface(incoming, layers, color, bumped, darken, is_see_through(pbr_input.material.flags), dynamic_light(pbr_input.world_position, normal, ranges));
     } else {
         let dynamic = dynamic_light(pbr_input.world_position, normal, ranges);
@@ -67,7 +67,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         mirror = pool_mirror(pool);
         let sun = sun_index();
         if (pool.wet > 0.0 || any(pool.glow > vec3(0.0))) && is_modern(layers.detail.z) && sun_found(sun) {
-            let incoming = modern_light(in, pbr_input, sun, normal, normal, layers.detail.z, layers.blend, layers.blend.x != 0.0, pool, world_lookup());
+            let incoming = modern_light(in, pbr_input, sun, normal, normal, normal, layers.detail.z, layers.blend, layers.blend.x != 0.0, pool, world_lookup());
             color = vec4(pooled_unlit(color.rgb, wet_normal(normal, pool), incoming), color.a);
         }
     }

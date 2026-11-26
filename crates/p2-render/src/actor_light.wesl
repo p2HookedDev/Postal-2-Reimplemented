@@ -169,7 +169,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 eye_share = saturate(((*shading).reach - (*shading).free) / POKE_SPAN);
                 lookup = ShadowLookup(0.0, eye_sky(*lighting), floor(in.position.xy));
             }
-            var incoming = modern_light(in, lit_input, sun_id, normal, normal, flag, (*shading).layers.blend, darken, wounds, lookup);
+            var incoming = modern_light(in, lit_input, sun_id, normal, normal, normal, flag, (*shading).layers.blend, darken, wounds, lookup);
             if world_lit {
                 incoming.glow = vec3((*shading).glow);
             }

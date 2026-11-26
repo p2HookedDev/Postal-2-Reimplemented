@@ -14,12 +14,13 @@ import bevy_pbr::render::mesh_view_bindings::screen_space_ambient_occlusion_text
 
 const AO_STRENGTH: f32 = 0.8;
 
-const SKY_SHADOWED: f32 = 0.8;
+const SKY_SHADOWED: f32 = 0.7;
 // The sky's reflection in a sun shadow: what cast the shadow also stands in the way of a reflection towards the
 // sun's side.
 const REFLECTION_SHADOWED: f32 = 0.2;
 
-const DEFAULT_ROUGHNESS: f32 = 0.85;
+// Matches `MaterialClass::Default`; terrain and unclassed surfaces take it.
+const DEFAULT_ROUGHNESS: f32 = 0.7;
 // The sun is a disc of 0.53 degrees, which widens the highlight.
 const SUN_DISC: f32 = 0.002325;
 const GROUND_ALBEDO: vec3<f32> = vec3(0.17, 0.14, 0.11);

@@ -31,7 +31,7 @@ impl MaterialClass {
 
     pub fn roughness(self) -> f32 {
         match self {
-            Self::Default => 0.85,
+            Self::Default => 0.7,
             Self::Metal => 0.35,
             Self::TileOrGlass => 0.15,
             Self::Wood => 0.6,

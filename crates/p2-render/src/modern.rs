@@ -397,10 +397,8 @@ pub(crate) fn linear_light(color: [f32; 3]) -> [f32; 3] {
     color.map(|channel| 4.0 * channel * channel)
 }
 
-/// In Unreal units: rays of 48 units (Bevy's 0.3 m is about 15), depth texels 16 units thick (tuned by eye,
-/// unverified).
 fn sun_contact_shadows(level: u8) -> ContactShadows {
-    ContactShadows { linear_steps: if level > 1 { 16 } else { 8 }, thickness: 16.0, length: 48.0 }
+    ContactShadows { linear_steps: if level > 1 { 16 } else { 8 }, thickness: 8.0, length: 48.0 }
 }
 
 fn sun_place(direction: Vec3) -> Transform {

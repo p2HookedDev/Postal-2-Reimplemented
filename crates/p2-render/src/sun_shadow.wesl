@@ -60,6 +60,9 @@ const CONTACT_STEPS_FULL_TO: f32 = 256.0;
 const CONTACT_STEPS_FEW_FROM: f32 = 1024.0;
 const CONTACT_FEWEST_STEPS: f32 = 4.0;
 const SKY_KERNEL_TEXELS: f32 = 2.0;
+// The squared sine of a surface's tilt from the sky level's way over which the taps turn from flat to sloped.
+const SKY_FLAT_MOST: f32 = 0.005;
+const SKY_SLOPED_LEAST: f32 = 0.02;
 // The sky left under a roof, standing for the bounce no light here carries (a guess, not seen in game).
 const ROOFED_SKY: f32 = 0.1;
 
@@ -245,10 +248,12 @@ fn cascade_shadow(atlas: LevelAtlas, shade: ShadowSource, position: vec3<f32>, n
         + shadow_tap(atlas, shade, local.xy, vec2(0.0, rim), local.z, slope)
         + shadow_tap(atlas, shade, local.xy, vec2(-rim, 0.0), local.z, slope)
         + shadow_tap(atlas, shade, local.xy, vec2(0.0, -rim), local.z, slope);
-    if settled < 1e-3 {
+    // Not for the held weapon: its wide blur crosses leaf dapples the five taps can all miss or all hit, and a
+    // snap to 0 or 1 there shows as shadow-map texels.
+    if !held && settled < 1e-3 {
         return 0.0;
     }
-    if settled > 5.0 - 1e-3 {
+    if !held && settled > 5.0 - 1e-3 {
         return 1.0;
     }
 @if(SHADOW_CONTACT_HARDENING) {
@@ -408,8 +413,21 @@ fn sky_open(source: LevelSource, sun: u32, position: vec3<f32>, normal: vec3<f32
         }
         // Compared below the lift, so a ceiling that is the building's top, and the wall just under it, read roofed.
         let depth = level_local(record, vec4(moved - record.direction_to_light * (spread + record.texel_size), 1.0)).z;
+        // On a slope the taps lie along its contour and half a reach downhill, never up it: a tap up the slope reads
+        // the ground above the point as a roof, in bands that follow the height lines. Flat ground takes both
+        // diagonals. Same reach either way.
         let tap = SKY_KERNEL_TEXELS / record.size;
-        let taps = sky_tap(atlas, record, local.xy + vec2(tap, tap), depth) + sky_tap(atlas, record, local.xy + vec2(-tap, -tap), depth);
+        let across = cross(normal, record.direction_to_light);
+        let sloped = smoothstep(SKY_FLAT_MOST, SKY_SLOPED_LEAST, dot(across, across));
+        let away = normal - record.direction_to_light * dot(normal, record.direction_to_light);
+        let to_map = vec2(0.5, -0.5) * spread;
+        let along = (record.clip_from_world * vec4(across * inverseSqrt(max(dot(across, across), 1e-8)) * sqrt(2.0), 0.0)).xy * to_map;
+        let down = (record.clip_from_world * vec4(away * inverseSqrt(max(dot(away, away), 1e-8)), 0.0)).xy * to_map;
+        let step = mix(vec2(tap, tap), along, sloped);
+        let first = mix(vec2(tap, -tap), 0.5 * (down + step), sloped);
+        let second = mix(vec2(-tap, tap), 0.5 * (down - step), sloped);
+        let taps = sky_tap(atlas, record, local.xy + step, depth) + sky_tap(atlas, record, local.xy - step, depth)
+            + sky_tap(atlas, record, local.xy + first, depth) + sky_tap(atlas, record, local.xy + second, depth);
         return select(1.0, taps.x / taps.y, taps.y > 0.0);
     }
     return 1.0;

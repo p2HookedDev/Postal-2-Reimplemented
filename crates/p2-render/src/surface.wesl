@@ -66,7 +66,9 @@ fn pooled_surface(surface: vec3<f32>, pool: Pool) -> vec3<f32> {
     return vec3(mix(surface.x, max(pool.roughness, POOL_LEAST_ROUGHNESS), wet), surface.y * (1.0 - wet), -mix(abs(surface.z), POOL_REFLECTANCE, wet));
 }
 
-fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool, lookup: ShadowLookup) -> ModernLight {
+// `cast_normal` is the normal the lamp shadow lookups bias along: the drawn triangle's own where the shading normal is
+// smoothed but the shadow atlas holds the flat triangles.
+fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f32>, bumped: vec3<f32>, cast_normal: vec3<f32>, flag: f32, blend: vec4<f32>, darken: bool, pool: Pool, lookup: ShadowLookup) -> ModernLight {
     let position = pbr_input.world_position.xyz;
 @if(SCREEN_SUN)
     var seen = sun_faced(sun, normal, screen_sun(in, pbr_input.frag_coord.xy));
@@ -84,7 +86,7 @@ fn modern_light(in: VertexOutput, pbr_input: PbrInput, sun: u32, normal: vec3<f3
     }
     let gloss = (allows_gloss(flag) || standing.wet > 0.0) && !darken;
     let surface = pooled_surface(classed_surface(flag, blend), standing);
-    let lamps = lamp_light(in, position, wet_normal(bumped, standing), normal, gloss, surface, flag, lookup);
+    let lamps = lamp_light(in, position, wet_normal(bumped, standing), cast_normal, gloss, surface, flag, lookup);
     let view = (modern_bits(flag) >> DEBUG_VIEW_SHIFT) & 15u;
     return ModernLight(position, seen, ambient_occlusion(pbr_input.frag_coord.xy), gloss, lamps, surface, standing, vec3(0.0), view);
 }
